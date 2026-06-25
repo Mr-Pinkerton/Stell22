@@ -1,0 +1,34 @@
+---
+description: Конвенции TypeScript / Next.js / Prisma
+globs: **/*.ts,**/*.tsx,prisma/**/*.prisma
+alwaysApply: false
+---
+
+# Конвенции кода
+
+## TypeScript
+- `strict: true`. Без `any` (использовать `unknown` + сужение типов).
+- Бизнес-логику расчётов выносить в чистые функции (`lib/`, `server/`),
+  не смешивать с UI и доступом к БД.
+
+## Next.js
+- App Router. Серверная логика — в Server Actions / route handlers.
+- Не обращаться к Prisma из клиентских компонентов.
+- Секреты только на сервере (через `env`), не утекают в клиент.
+
+## Prisma
+- Все изменения схемы — через миграции (`prisma migrate`), не править БД руками.
+- Денежные/измерительные поля — `Decimal` с `@db.Decimal(...)`.
+- Списание остатков — внутри `prisma.$transaction` (защита от гонок).
+- Любое изменение производственной/финансовой записи — писать в `ChangeLog`.
+
+## Общее
+```ts
+// ❌ деньги во float
+const total: number = price * qty;
+
+// ✅ деньги в Decimal
+import { Prisma } from "@prisma/client";
+const total = new Prisma.Decimal(price).mul(qty);
+```
+- Понятные имена на английском в коде; комментарии — по необходимости.

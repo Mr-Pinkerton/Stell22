@@ -1,0 +1,589 @@
+// =============================================================================
+// Модель данных проекта (v1 черновик)
+// Стек: Next.js + TypeScript + PostgreSQL + Prisma
+// Главная цель: точный расчёт себестоимости изделия.
+//
+// Соглашения:
+//  - Деньги: Decimal(14,2), валюта ₽ (без НДС).
+//  - Длины (м): Decimal(12,4). Объём (м3): Decimal(14,6). Сечение (мм): Decimal(8,2).
+//  - Проценты: Decimal(7,4) (доля 0..1 или %, см. комментарий поля).
+//  - Все суммы себестоимости пересчитываются и замораживаются снапшотами.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================= ПЕРЕЧИСЛЕНИЯ ==================================
+
+enum UserRole {
+  ADMIN
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum RailType {
+  POLKA   // полка
+  KANAVKA // канавка
+}
+
+enum Sort {
+  SORT1
+  SORT2
+}
+
+enum BatchStatus {
+  IN_WORK  // в работе
+  ARCHIVED // в архиве (выработана)
+}
+
+enum NomenclatureType {
+  FASTENER  // крепёж
+  PACKAGING // упаковка
+  OTHER     // разное
+}
+
+enum ProductStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum OperationType {
+  TORCOVKA
+  PRISADKA
+  UPAKOVKA
+  HOURS // рабочие часы
+}
+
+enum FlowType {
+  INCOME  // поступление
+  EXPENSE // списание
+}
+
+enum DealStatus {
+  OPEN
+  ARCHIVED // полностью оплачена
+}
+
+enum InventoryStatus {
+  DRAFT
+  CONDUCTED // проведена
+  CLOSED    // закрыта
+}
+
+enum GoalStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum CostStatus {
+  PRELIMINARY // партия/период ещё открыты
+  FINAL       // заморожено
+}
+
+// ============================= ПОЛЬЗОВАТЕЛИ =================================
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         UserRole @default(ADMIN)
+  createdAt    DateTime @default(now())
+
+  changeLogs ChangeLog[]
+}
+
+// Работник — не аккаунт; вход в терминал = выбор ФИО + подтверждение PIN.
+model Employee {
+  id        String         @id @default(cuid())
+  fullName  String
+  birthDate DateTime?
+  pin       String // 4 цифры, НЕ уникальный, не хэшируется (только подтверждение)
+  status    EmployeeStatus @default(ACTIVE)
+
+  // Оплата
+  hourlyRate Decimal? @db.Decimal(14, 2) // почасовая ставка; если null — нет почасовой
+
+  // Сдельные расценки (если все null — работник на окладе/часах)
+  rateTorcovkaSort1   Decimal? @db.Decimal(14, 2)
+  rateTorcovkaSort2   Decimal? @db.Decimal(14, 2)
+  ratePrisadkaTorcev  Decimal? @db.Decimal(14, 2)
+  ratePrisadkaPloskt  Decimal? @db.Decimal(14, 2)
+  rateUpakovka        Decimal? @db.Decimal(14, 2)
+
+  createdAt DateTime @default(now())
+
+  operations ProductionOperation[]
+}
+
+// ============================= МАТЕРИАЛ / ЗАКУПКИ ===========================
+
+// Партия рейки.
+model Batch {
+  id           String      @id @default(cuid())
+  name         String
+  sectionWidthMm  Decimal  @db.Decimal(8, 2) // сечение — одно на партию
+  sectionHeightMm Decimal  @db.Decimal(8, 2)
+
+  // Финансы
+  purchaseCost Decimal @db.Decimal(14, 2) // закупочная (по счёту) = ИСТИНА "Стоимость партии"
+  totalCost    Decimal @db.Decimal(14, 2) // общая (закупочная + доставка из Сделок); при создании = purchaseCost
+  priceSort1   Decimal @db.Decimal(14, 2) // цена поставщика ₽/м3, сорт 1
+  priceSort2   Decimal @db.Decimal(14, 2) // цена поставщика ₽/м3, сорт 2
+
+  status       BatchStatus @default(IN_WORK)
+  purchaseDate DateTime
+  note         String?
+  customFields Json? // произвольные поля "Добавить поле" (тип/название/значение)
+
+  closedAt     DateTime? // момент заморозки себестоимости партии
+
+  createdAt    DateTime @default(now())
+
+  railLots   RailLot[]
+  operations ProductionOperation[]
+  costs      BatchCost[]
+  dealItems  DealItem[]
+}
+
+// Партия рейки: пакет или поштучная группа. Пакет = одна длина/тип/сорт.
+model RailLot {
+  id        String   @id @default(cuid())
+  batchId   String
+  batch     Batch    @relation(fields: [batchId], references: [id])
+
+  lengthM   Decimal  @db.Decimal(12, 4) // длина рейки, м
+  railType  RailType
+  sort      Sort
+
+  isPackage Boolean  @default(true) // true = пакет, false = поштучная группа
+  code      String?  @unique // код пакета (для печати этикетки), только для пакетов
+  rows      Int?     // ряды (для визуальной модели пакета)
+  layers    Int?     // слои
+
+  quantity          Int // исходное кол-во реек
+  remainingQuantity Int // текущий остаток (списывается транзакционно при торцовке)
+
+  createdAt DateTime @default(now())
+
+  operations ProductionOperation[]
+}
+
+// Простая закупка (крепёж/упаковка/разное) — приход на склад с ценой.
+model SimplePurchase {
+  id                String           @id @default(cuid())
+  nomenclatureId    String
+  nomenclature      NomenclatureItem @relation(fields: [nomenclatureId], references: [id])
+  quantity          Int
+  unitPrice         Decimal          @db.Decimal(14, 2)
+  purchaseDate      DateTime
+  createdAt         DateTime         @default(now())
+}
+
+// ============================= НОМЕНКЛАТУРА =================================
+
+// Крепёж / упаковка / разное. Цена за единицу вводится вручную.
+model NomenclatureItem {
+  id        String           @id @default(cuid())
+  name      String
+  type      NomenclatureType
+  unitPrice Decimal          @db.Decimal(14, 2)
+  status    ProductStatus    @default(ACTIVE)
+  minStock  Int? // минимальный остаток (для сигнала на дашборд)
+
+  simplePurchases SimplePurchase[]
+  productFasteners ProductFastener[]
+  productExtras    ProductExtra[]
+  packagedProducts Product[]         @relation("ProductPackaging")
+}
+
+model Detail {
+  id                String        @id @default(cuid())
+  name              String
+  lengthM           Decimal       @db.Decimal(12, 4)
+  detailType        RailType
+  sort              Sort
+  prisadkaTorcevaya Boolean       @default(false) // требуется торцевая присадка
+  prisadkaPloskost  Boolean       @default(false) // требуется присадка по плоскости
+  status            ProductStatus @default(ACTIVE)
+  minStock          Int?
+
+  productDetails ProductDetail[]
+  stocks         DetailStock[]
+}
+
+model Product {
+  id            String        @id @default(cuid())
+  name          String
+  sku           String // артикул (как в МП)
+  sort          Sort
+  salePrice     Decimal       @db.Decimal(14, 2) // цена ПРОДАЖИ (не себестоимость)
+  packagingId   String?
+  packaging     NomenclatureItem? @relation("ProductPackaging", fields: [packagingId], references: [id])
+  status        ProductStatus @default(ACTIVE)
+  minStock      Int?
+
+  details   ProductDetail[]
+  fasteners ProductFastener[]
+  extras    ProductExtra[]
+  goals     Goal[]
+  costs     ProductCost[]
+  stock     ProductStock?
+}
+
+model ProductDetail {
+  id        String  @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  detailId  String
+  detail    Detail  @relation(fields: [detailId], references: [id])
+  quantity  Int
+
+  @@unique([productId, detailId])
+}
+
+model ProductFastener {
+  id             String           @id @default(cuid())
+  productId      String
+  product        Product          @relation(fields: [productId], references: [id])
+  nomenclatureId String
+  nomenclature   NomenclatureItem @relation(fields: [nomenclatureId], references: [id])
+  quantity       Int
+}
+
+model ProductExtra {
+  id             String           @id @default(cuid())
+  productId      String
+  product        Product          @relation(fields: [productId], references: [id])
+  nomenclatureId String // позиция из таба "Разное"
+  nomenclature   NomenclatureItem @relation(fields: [nomenclatureId], references: [id])
+}
+
+// ============================= ПРОИЗВОДСТВО / ТЕРМИНАЛ ======================
+
+model ProductionOperation {
+  id         String        @id @default(cuid())
+  type       OperationType
+  employeeId String
+  employee   Employee      @relation(fields: [employeeId], references: [id])
+
+  workDate   DateTime // день операции (для статистики/ЗП)
+  createdAt  DateTime @default(now()) // время внесения с терминала
+
+  // Торцовка
+  batchId      String?
+  batch        Batch?   @relation(fields: [batchId], references: [id])
+  railLotId    String?
+  railLot      RailLot? @relation(fields: [railLotId], references: [id])
+  railsTaken   Int?     // взято реек (длина = railsTaken * railLot.lengthM)
+
+  // Часы
+  hours        Decimal? @db.Decimal(8, 2)
+
+  // Упаковка
+  productId    String?
+  productQty   Int?
+
+  // Выплата
+  isPaid Boolean   @default(false)
+  paidAt DateTime?
+
+  lines   OperationDetailLine[]
+  payment PaymentBatchItem[]
+
+  @@index([workDate])
+  @@index([employeeId, workDate])
+}
+
+// Строки деталей в операции:
+//  - TORCOVKA: произведённые детали (qty)
+//  - PRISADKA: обработанные детали + какой тип присадки сделан
+model OperationDetailLine {
+  id          String              @id @default(cuid())
+  operationId String
+  operation   ProductionOperation @relation(fields: [operationId], references: [id])
+  detailId    String
+  quantity    Int
+
+  // для PRISADKA: какой тип выполнен
+  prisadkaTorcevaya Boolean @default(false)
+  prisadkaPloskost  Boolean @default(false)
+}
+
+// Журнал изменений (аудит) — производство и финансы.
+model ChangeLog {
+  id         String   @id @default(cuid())
+  entity     String   // имя сущности
+  entityId   String
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  oldValues  Json?
+  newValues  Json?
+  changedAt  DateTime @default(now())
+
+  @@index([entity, entityId])
+}
+
+// ============================= СКЛАД ========================================
+
+// Остаток деталей по стадиям присадки. Деталь "готова", когда выполнены все
+// требуемые ей присадки. Разные сочетания выполненных присадок — разные строки.
+model DetailStock {
+  id                String  @id @default(cuid())
+  detailId          String
+  detail            Detail  @relation(fields: [detailId], references: [id])
+  torcevayaDone     Boolean @default(false)
+  ploskostDone      Boolean @default(false)
+  quantity          Int     @default(0)
+
+  @@unique([detailId, torcevayaDone, ploskostDone])
+}
+
+model ProductStock {
+  id        String  @id @default(cuid())
+  productId String  @unique
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int     @default(0)
+}
+
+// Остатки на МП (получаются по API; заглушка на старте).
+model MpStock {
+  id        String   @id @default(cuid())
+  marketplace String // OZON / WB
+  sku       String
+  quantity  Int
+  syncedAt  DateTime @default(now())
+}
+
+model Inventory {
+  id     String          @id @default(cuid())
+  date   DateTime
+  status InventoryStatus @default(DRAFT)
+  lines  InventoryLine[]
+  createdAt DateTime @default(now())
+}
+
+model InventoryLine {
+  id           String    @id @default(cuid())
+  inventoryId  String
+  inventory    Inventory @relation(fields: [inventoryId], references: [id])
+  // ссылка на номенклатуру (деталь/изделие/крепёж) — храним тип+id
+  refType      String    // DETAIL / PRODUCT / NOMENCLATURE
+  refId        String
+  accountedQty Int
+  actualQty    Int
+  deviation    Int
+  deviationSum Decimal   @db.Decimal(14, 2) // материал + ЗП
+}
+
+// ============================= ФИНАНСЫ ======================================
+
+model Account {
+  id      String  @id @default(cuid())
+  name    String
+  balance Decimal @db.Decimal(14, 2) @default(0)
+
+  cashFlows  CashFlow[]
+  statements Statement[]
+}
+
+model ArticleCategory {
+  id         String    @id @default(cuid())
+  name       String
+  isOverhead Boolean   @default(false) // "Производственные (накладные)"
+  articles   Article[]
+}
+
+model Article {
+  id          String          @id @default(cuid())
+  name        String
+  flowType    FlowType
+  categoryId  String
+  category    ArticleCategory @relation(fields: [categoryId], references: [id])
+  parentId    String?         // корневая статья (для субстатей)
+  parent      Article?        @relation("SubArticles", fields: [parentId], references: [id])
+  children    Article[]       @relation("SubArticles")
+  description String?
+
+  cashFlows CashFlow[]
+  autoRules AutoRule[]
+}
+
+model Counterparty {
+  id        String     @id @default(cuid())
+  name      String
+  cashFlows CashFlow[]
+  autoRules AutoRule[]
+}
+
+model Deal {
+  id       String     @id @default(cuid())
+  name     String
+  status   DealStatus @default(OPEN)
+  total    Decimal    @db.Decimal(14, 2) @default(0)
+  cashFlows CashFlow[]
+  items    DealItem[]
+}
+
+// Привязка закупки (партии и т.п.) к сделке.
+model DealItem {
+  id      String @id @default(cuid())
+  dealId  String
+  deal    Deal   @relation(fields: [dealId], references: [id])
+  batchId String?
+  batch   Batch? @relation(fields: [batchId], references: [id])
+}
+
+model Statement {
+  id         String   @id @default(cuid())
+  date       DateTime
+  accountId  String?
+  account    Account? @relation(fields: [accountId], references: [id])
+  fileUrl    String?
+  uploadedAt DateTime?
+  cashFlows  CashFlow[]
+}
+
+// Операция ДДС.
+model CashFlow {
+  id             String   @id @default(cuid())
+  amount         Decimal  @db.Decimal(14, 2)
+  flowType       FlowType
+  accountId      String
+  account        Account  @relation(fields: [accountId], references: [id])
+  counterpartyId String?
+  counterparty   Counterparty? @relation(fields: [counterpartyId], references: [id])
+  description    String?
+  articleId      String?
+  article        Article? @relation(fields: [articleId], references: [id])
+  dealId         String?
+  deal           Deal?    @relation(fields: [dealId], references: [id])
+  statementId    String?
+  statement      Statement? @relation(fields: [statementId], references: [id])
+  date           DateTime
+  isAutoAssigned Boolean  @default(false) // false → подсветка для ручного разнесения
+
+  @@index([date])
+}
+
+model AutoRule {
+  id             String   @id @default(cuid())
+  flowType       FlowType
+  counterpartyId String?
+  counterparty   Counterparty? @relation(fields: [counterpartyId], references: [id])
+  articleId      String?
+  article        Article? @relation(fields: [articleId], references: [id])
+  dealId         String?
+}
+
+// ============================= ЗАРПЛАТЫ / ВЫПЛАТЫ ===========================
+
+// Факт выплаты сотруднику (переносит операции в "выплачено").
+model Payment {
+  id         String   @id @default(cuid())
+  employeeId String
+  amount     Decimal  @db.Decimal(14, 2)
+  paidAt     DateTime @default(now())
+  items      PaymentBatchItem[]
+}
+
+model PaymentBatchItem {
+  id          String              @id @default(cuid())
+  paymentId   String
+  payment     Payment             @relation(fields: [paymentId], references: [id])
+  operationId String
+  operation   ProductionOperation @relation(fields: [operationId], references: [id])
+}
+
+// ============================= ЦЕЛИ =========================================
+
+model Goal {
+  id        String     @id @default(cuid())
+  name      String
+  productId String
+  product   Product    @relation(fields: [productId], references: [id])
+  quantity  Int
+  month     DateTime   // календарный месяц
+  status    GoalStatus @default(ACTIVE)
+  createdAt DateTime   @default(now())
+}
+
+// ============================= СЕБЕСТОИМОСТЬ (СНАПШОТЫ) =====================
+
+// Распределение стоимости партии по сортам (по факту произведённых деталей).
+model BatchCost {
+  id            String     @id @default(cuid())
+  batchId       String
+  batch         Batch      @relation(fields: [batchId], references: [id])
+  status        CostStatus @default(PRELIMINARY)
+
+  volumeSort1   Decimal    @db.Decimal(14, 6) // факт. объём 1 сорта (м3)
+  volumeSort2   Decimal    @db.Decimal(14, 6)
+  costSort1     Decimal    @db.Decimal(14, 2) // C * доля_1
+  costSort2     Decimal    @db.Decimal(14, 2)
+  pricePerM3Sort1 Decimal  @db.Decimal(14, 2) // с учётом отхода
+  pricePerM3Sort2 Decimal  @db.Decimal(14, 2)
+
+  calculatedAt  DateTime   @default(now())
+
+  @@index([batchId])
+}
+
+// Себестоимость изделия за период (снапшот).
+model ProductCost {
+  id            String     @id @default(cuid())
+  productId     String
+  product       Product    @relation(fields: [productId], references: [id])
+  periodStart   DateTime
+  periodEnd     DateTime
+  status        CostStatus @default(PRELIMINARY)
+
+  material      Decimal    @db.Decimal(14, 2)
+  work          Decimal    @db.Decimal(14, 2)
+  fasteners     Decimal    @db.Decimal(14, 2)
+  packaging     Decimal    @db.Decimal(14, 2)
+  extras        Decimal    @db.Decimal(14, 2)
+  direct        Decimal    @db.Decimal(14, 2) // прямая
+  overhead      Decimal    @db.Decimal(14, 2) // накладные
+  full          Decimal    @db.Decimal(14, 2) // полная
+
+  calculatedAt  DateTime   @default(now())
+
+  @@index([productId, periodStart, periodEnd])
+}
+
+// ============================= ПРОДАЖИ (МП) =================================
+
+model Sale {
+  id          String   @id @default(cuid())
+  marketplace String   // OZON / WB
+  sku         String
+  productId   String?
+  quantity    Int
+  revenue     Decimal  @db.Decimal(14, 2)
+  date        DateTime
+
+  @@index([date])
+}
+
+// ============================= НАСТРОЙКИ / КАЛЕНДАРЬ ========================
+
+model Setting {
+  key   String @id // например: waste_threshold, label_size, ...
+  value Json
+}
+
+// Производственный календарь (рабочие дни месяца для планов целей).
+model CalendarDay {
+  date        DateTime @id
+  isWorkingDay Boolean @default(true)
+}
