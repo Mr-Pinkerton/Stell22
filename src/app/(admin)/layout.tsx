@@ -8,7 +8,7 @@ export default function AdminLayout({ children }: Readonly<{ children: React.Rea
       <AppSidebar />
       <SidebarInset>
         <AppHeader />
-        <main className="flex-1 space-y-4 p-4 md:p-6">{children}</main>
+        <main className="flex-1 space-y-6 p-4 md:p-8">{children}</main>
       </SidebarInset>
     </SidebarProvider>
   );

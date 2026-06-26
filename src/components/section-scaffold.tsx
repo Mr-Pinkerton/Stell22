@@ -11,7 +11,7 @@ export function SectionScaffold({ slug }: { slug: string }) {
     <>
       <PageHeader title={item.title} canExport={item.canExport} addLabel={item.addLabel} />
       <FiltersBar {...(item.filters ?? {})} />
-      <Card>
+      <Card className="surface-card ring-0">
         <CardContent className="text-muted-foreground flex h-48 items-center justify-center text-sm">
           Раздел «{item.title}» — каркас готов, наполнение на следующих этапах
         </CardContent>

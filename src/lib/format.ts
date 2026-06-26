@@ -64,6 +64,33 @@ export function formatDate(date: Date): string {
   }).format(date);
 }
 
+const MONTH_NAMES = [
+  "Январь",
+  "Февраль",
+  "Март",
+  "Апрель",
+  "Май",
+  "Июнь",
+  "Июль",
+  "Август",
+  "Сентябрь",
+  "Октябрь",
+  "Ноябрь",
+  "Декабрь",
+];
+
+/** Месяц для фильтра, напр. "Июнь 2026". */
+export function formatFilterMonth(date: Date): string {
+  return `${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`;
+}
+
+/** Период для фильтра, напр. "01.06.2026 — 15.06.2026". */
+export function formatFilterDateRange(start: Date, end: Date): string {
+  const from = start <= end ? start : end;
+  const to = start <= end ? end : start;
+  return `${formatDate(from)} — ${formatDate(to)}`;
+}
+
 /**
  * Округление суммы до 100 ₽ по правилам математики (50 и более — вверх).
  * Используется для расчёта купюр к выдаче.

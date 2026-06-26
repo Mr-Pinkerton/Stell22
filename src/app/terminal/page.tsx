@@ -12,16 +12,26 @@ const tiles = [
 
 export default function TerminalPage() {
   return (
-    <div className="flex min-h-screen flex-col">
-      <header className="flex h-16 items-center justify-between border-b px-6">
-        <div className="text-lg font-semibold">Терминал производства</div>
+    <div className="bg-background flex min-h-screen flex-col">
+      <header className="surface-card mx-4 mt-4 flex h-16 items-center justify-between px-6 md:mx-6">
         <div className="flex items-center gap-3">
-          <span className="text-muted-foreground text-sm">Вход не выполнен</span>
-          <Button>
+          <div className="bg-brand flex size-10 items-center justify-center rounded-2xl text-sm font-bold text-white shadow-soft">
+            S
+          </div>
+          <div className="text-lg font-semibold tracking-tight">Терминал производства</div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-muted-foreground text-sm font-medium">Вход не выполнен</span>
+          <Button className="rounded-xl [&_svg]:stroke-[1.75]">
             <LogIn />
             Войти
           </Button>
-          <Button variant="ghost" nativeButton={false} render={<Link href="/dashboard" />}>
+          <Button
+            variant="ghost"
+            className="rounded-xl [&_svg]:stroke-[1.75]"
+            nativeButton={false}
+            render={<Link href="/dashboard" />}
+          >
             <ArrowLeft />В админку
           </Button>
         </div>
@@ -33,11 +43,13 @@ export default function TerminalPage() {
           return (
             <Card
               key={t.title}
-              className="hover:bg-accent flex cursor-pointer items-center justify-center transition-colors"
+              className="surface-card ring-0 transition-all hover:-translate-y-0.5 hover:shadow-soft-lg"
             >
-              <CardContent className="flex flex-col items-center gap-4 py-12">
-                <Icon className="size-12" />
-                <span className="text-xl font-medium">{t.title}</span>
+              <CardContent className="flex cursor-pointer flex-col items-center gap-4 py-12">
+                <span className="flex size-16 items-center justify-center rounded-2xl bg-muted text-muted-foreground [&_svg]:size-8 [&_svg]:stroke-[1.75]">
+                  <Icon />
+                </span>
+                <span className="text-xl font-semibold tracking-tight">{t.title}</span>
               </CardContent>
             </Card>
           );
