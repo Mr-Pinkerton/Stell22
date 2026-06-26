@@ -2,7 +2,15 @@
 // бэкендом (Часть B). UI обращается только сюда, не зная об источнике.
 // При переходе на БД заменяется реализация, интерфейс остаётся прежним.
 
-import type { Batch, Detail, Employee, NomenclatureItem, Product, RailLot } from "@/types/domain";
+import type {
+  Batch,
+  Detail,
+  Employee,
+  NomenclatureItem,
+  Product,
+  RailLot,
+  StockSnapshot,
+} from "@/types/domain";
 import * as fixtures from "@/mocks/fixtures";
 
 export interface DataProvider {
@@ -12,6 +20,7 @@ export interface DataProvider {
   getNomenclature(): Promise<NomenclatureItem[]>;
   getDetails(): Promise<Detail[]>;
   getProducts(): Promise<Product[]>;
+  getStock(): Promise<StockSnapshot>;
 }
 
 const mockProvider: DataProvider = {
@@ -32,6 +41,9 @@ const mockProvider: DataProvider = {
   },
   async getProducts() {
     return fixtures.products;
+  },
+  async getStock() {
+    return fixtures.stockSnapshot;
   },
 };
 

@@ -95,3 +95,16 @@ export interface Product {
   fastenerIds: { nomenclatureId: string; quantity: number }[];
   extraIds: string[];
 }
+
+/**
+ * Срез остатков склада для прототипа терминала (моки).
+ * В Части B заменяется реальным снимком из БД.
+ */
+export interface StockSnapshot {
+  /** detailId → кол-во ГОТОВЫХ деталей (все присадки выполнены). */
+  detailsReady: Record<string, number>;
+  /** nomenclatureId → остаток (крепёж/упаковка/разное). */
+  nomenclature: Record<string, number>;
+  /** detailId → сколько деталей ждёт каждого типа присадки. */
+  prisadkaPending: Record<string, { torcev: number; plosk: number }>;
+}
