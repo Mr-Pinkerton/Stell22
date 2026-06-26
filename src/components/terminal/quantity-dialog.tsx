@@ -44,13 +44,13 @@ function QuantityDialogBody({
   const canConfirm = numeric > 0 && !overLimit;
 
   return (
-    <DialogContent className="sm:max-w-xs" showCloseButton={false}>
+    <DialogContent className="sm:max-w-sm" showCloseButton={false}>
       <DialogHeader>
-        <DialogTitle className="text-lg">{title}</DialogTitle>
-        <p className="text-muted-foreground text-sm">{hint}</p>
+        <DialogTitle className="text-xl">{title}</DialogTitle>
+        <p className="text-muted-foreground text-base">{hint}</p>
       </DialogHeader>
 
-      <div className="bg-muted/50 flex h-16 items-center justify-center rounded-2xl text-3xl font-semibold tabular-nums">
+      <div className="bg-muted/50 flex h-20 items-center justify-center rounded-2xl text-4xl font-semibold tabular-nums">
         {value || "0"}
       </div>
       {overLimit && (
@@ -60,11 +60,11 @@ function QuantityDialogBody({
       <NumericKeypad value={value} onChange={setValue} />
 
       <div className="grid grid-cols-2 gap-2">
-        <Button variant="outline" className="h-12 rounded-xl text-base" onClick={onClose}>
+        <Button variant="outline" className="h-14 rounded-xl text-lg" onClick={onClose}>
           Отмена
         </Button>
         <Button
-          className="h-12 rounded-xl text-base"
+          className="h-14 rounded-xl text-lg"
           disabled={!canConfirm}
           onClick={() => onConfirm(numeric)}
         >

@@ -1,13 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { toast } from "sonner";
-import { Boxes, Layers, Pencil } from "lucide-react";
+import { toast } from "@/components/terminal/toast";
+import { Boxes, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { OperationTile, OperationTileRow } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { formatLength } from "@/lib/format";
 import type { Batch, Detail, RailLot, Sort } from "@/types/domain";
@@ -65,6 +64,10 @@ export function TorcovkaScreen({ data, onDone }: TorcovkaScreenProps) {
   };
 
   const selectLot = (l: RailLot) => {
+    if (l.id === lotId) {
+      setDialog({ kind: "rails" });
+      return;
+    }
     setLotId(l.id);
     setRailsTaken(0);
     setPicked({});
@@ -79,58 +82,46 @@ export function TorcovkaScreen({ data, onDone }: TorcovkaScreenProps) {
 
   return (
     <main className="flex flex-1 flex-col gap-5 p-6">
-      {/* Блок 1 — партии */}
       <Section title="Партии">
-        <TileRow>
+        <OperationTileRow>
           {batches.map((b) => (
-            <SelectTile
+            <OperationTile
               key={b.id}
               active={b.id === batchId}
-              compact={batchId != null}
               icon={<Boxes />}
               title={b.name}
               subtitle={`${b.sectionWidthMm}×${b.sectionHeightMm} мм`}
               onClick={() => selectBatch(b)}
             />
           ))}
-        </TileRow>
+        </OperationTileRow>
       </Section>
 
-      {/* Блок 2 — пакеты/рейки */}
       {batchId && (
         <Section title="Пакеты и рейки">
-          <TileRow>
+          <OperationTileRow>
             {lots.map((l) => (
-              <SelectTile
+              <OperationTile
                 key={l.id}
                 active={l.id === lotId}
-                compact={lotId != null}
                 icon={<Layers />}
                 title={l.isPackage ? `Пакет ${l.code}` : "Поштучно"}
                 subtitle={`${formatLength(l.lengthM)} · ${SORT_LABEL[l.sort]} · ост. ${l.remainingQuantity}`}
+                highlight={
+                  l.id === lotId
+                    ? { prefix: "Взято", value: railsTaken, label: "реек" }
+                    : undefined
+                }
                 onClick={() => selectLot(l)}
               />
             ))}
             {lots.length === 0 && <Empty>Нет доступных реек в партии</Empty>}
-          </TileRow>
+          </OperationTileRow>
         </Section>
       )}
 
-      {/* Блок 3 — детали */}
       {lot && (
-        <Section
-          title="Детали"
-          aside={
-            <button
-              type="button"
-              onClick={() => setDialog({ kind: "rails" })}
-              className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5 text-sm font-medium"
-            >
-              <Pencil className="size-3.5" />
-              Взято реек: {railsTaken} ({formatLength(takenLengthM)})
-            </button>
-          }
-        >
+        <Section title="Детали">
           <Tabs value={sort} onValueChange={(v) => setSort(v as Sort)}>
             <TabsList className="h-auto gap-1 rounded-xl p-1">
               {(["SORT1", "SORT2"] as Sort[]).map((s) => (
@@ -145,24 +136,26 @@ export function TorcovkaScreen({ data, onDone }: TorcovkaScreenProps) {
             </TabsList>
           </Tabs>
 
-          <TileRow wrap>
-            {detailTiles.map((d) => (
-              <SelectTile
-                key={d.id}
-                active={(picked[d.id] ?? 0) > 0}
-                icon={<Layers />}
-                title={d.name}
-                subtitle={formatLength(d.lengthM)}
-                badge={picked[d.id] ? `${picked[d.id]} шт` : undefined}
-                onClick={() => setDialog({ kind: "detail", detail: d })}
-              />
-            ))}
+          <OperationTileRow>
+            {detailTiles.map((d) => {
+              const qty = picked[d.id] ?? 0;
+              return (
+                <OperationTile
+                  key={d.id}
+                  active={qty > 0}
+                  icon={<Layers />}
+                  title={d.name}
+                  subtitle={formatLength(d.lengthM)}
+                  highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
+                  onClick={() => setDialog({ kind: "detail", detail: d })}
+                />
+              );
+            })}
             {detailTiles.length === 0 && <Empty>Нет деталей этого типа и сорта</Empty>}
-          </TileRow>
+          </OperationTileRow>
         </Section>
       )}
 
-      {/* Подвал */}
       {lot && (
         <div className="surface-card sticky bottom-4 mt-auto flex items-center justify-between gap-4 px-5 py-3 ring-0">
           <div className="text-sm">
@@ -236,59 +229,9 @@ function Section({
   );
 }
 
-function TileRow({ children, wrap }: { children: React.ReactNode; wrap?: boolean }) {
-  return (
-    <div className={cn("flex gap-3", wrap ? "flex-wrap" : "overflow-x-auto pb-1")}>{children}</div>
-  );
-}
-
-function SelectTile({
-  active,
-  compact,
-  icon,
-  title,
-  subtitle,
-  badge,
-  onClick,
-}: {
-  active?: boolean;
-  compact?: boolean;
-  icon: React.ReactNode;
-  title: string;
-  subtitle?: string;
-  badge?: string;
-  onClick: () => void;
-}) {
-  return (
-    <Card
-      className={cn(
-        "ring-0 transition-all hover:-translate-y-0.5 hover:shadow-soft-lg",
-        active ? "border-brand bg-brand/5 border-2" : "surface-card",
-      )}
-    >
-      <CardContent
-        className={cn(
-          "flex min-w-36 cursor-pointer items-center gap-3",
-          compact ? "py-3" : "flex-col py-5 text-center",
-        )}
-        onClick={onClick}
-      >
-        <span className="bg-muted text-muted-foreground flex size-10 shrink-0 items-center justify-center rounded-2xl [&_svg]:size-5 [&_svg]:stroke-[1.75]">
-          {icon}
-        </span>
-        <span className={cn(compact ? "text-left" : "")}>
-          <span className="block text-sm font-semibold">{title}</span>
-          {subtitle && <span className="text-muted-foreground block text-xs">{subtitle}</span>}
-        </span>
-        {badge && <Badge className="ml-auto">{badge}</Badge>}
-      </CardContent>
-    </Card>
-  );
-}
-
 function Empty({ children }: { children: React.ReactNode }) {
   return (
-    <div className="text-muted-foreground flex h-20 w-full items-center justify-center text-sm">
+    <div className="text-muted-foreground flex h-40 w-full shrink-0 items-center justify-center text-base">
       {children}
     </div>
   );

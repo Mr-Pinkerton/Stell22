@@ -1,11 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/components/terminal/toast";
 import { Package } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { OperationTile, OperationTileRow } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import type { Product } from "@/types/domain";
 import type { TerminalData } from "@/components/terminal/types";
@@ -42,39 +40,23 @@ export function UpakovkaScreen({ data, onDone }: UpakovkaScreenProps) {
         Изделия — сколько можно собрать
       </h2>
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+      <OperationTileRow>
         {products.map((p) => {
           const max = canAssemble(p, data);
           const disabled = max === 0;
           return (
-            <Card
+            <OperationTile
               key={p.id}
-              className={cn(
-                "surface-card ring-0 transition-all",
-                disabled
-                  ? "opacity-60"
-                  : "cursor-pointer hover:-translate-y-0.5 hover:shadow-soft-lg",
-              )}
-            >
-              <CardContent
-                className="flex flex-col gap-3 py-6"
-                onClick={() => !disabled && setDialog({ product: p, max })}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="bg-muted text-muted-foreground flex size-11 items-center justify-center rounded-2xl [&_svg]:size-5 [&_svg]:stroke-[1.75]">
-                    <Package />
-                  </span>
-                  <Badge variant={disabled ? "outline" : "default"}>{max} шт</Badge>
-                </div>
-                <div>
-                  <span className="block text-sm font-semibold">{p.name}</span>
-                  <span className="text-muted-foreground block text-xs">{p.sku}</span>
-                </div>
-              </CardContent>
-            </Card>
+              disabled={disabled}
+              icon={<Package />}
+              title={p.name}
+              subtitle={p.sku}
+              badge={`${max} шт`}
+              onClick={() => !disabled && setDialog({ product: p, max })}
+            />
           );
         })}
-      </div>
+      </OperationTileRow>
 
       <QuantityDialog
         open={dialog != null}

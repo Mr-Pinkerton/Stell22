@@ -11,6 +11,7 @@ import { TorcovkaScreen } from "@/components/terminal/torcovka-screen";
 import { PrisadkaScreen } from "@/components/terminal/prisadka-screen";
 import { UpakovkaScreen } from "@/components/terminal/upakovka-screen";
 import { HoursScreen } from "@/components/terminal/hours-screen";
+import { TerminalToaster } from "@/components/terminal/terminal-toaster";
 
 const IDLE_MS = 30_000; // автовыход по бездействию
 
@@ -80,7 +81,7 @@ export function TerminalApp() {
   const inOperation = employee != null && screen !== "home";
 
   return (
-    <div className="bg-background flex min-h-screen flex-col">
+    <div className="bg-background flex min-h-screen flex-col touch-manipulation">
       <TerminalHeader
         employee={employee}
         title={loginOpen && !employee ? "Вход в терминал" : TITLES[screen]}
@@ -117,6 +118,7 @@ export function TerminalApp() {
       ) : (
         <HoursScreen employee={employee} onDone={() => setScreen("home")} />
       )}
+      <TerminalToaster />
     </div>
   );
 }

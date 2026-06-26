@@ -1,11 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/components/terminal/toast";
 import { Drill } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { OperationTile, OperationTileRow } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import type { Detail } from "@/types/domain";
 import type { TerminalData } from "@/components/terminal/types";
@@ -45,7 +43,7 @@ function buildTiles(data: TerminalData): Tile[] {
 
     for (const kind of required) {
       const pending = pendingMap[kind];
-      if (pending <= 0) continue; // нечего присаживать
+      if (pending <= 0) continue;
       tiles.push({
         detail: d,
         kind,
@@ -74,35 +72,18 @@ export function PrisadkaScreen({ data, onDone }: PrisadkaScreenProps) {
           Нет деталей, ожидающих присадки
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+        <OperationTileRow>
           {tiles.map((t) => (
-            <Card
+            <OperationTile
               key={`${t.detail.id}-${t.kind}`}
-              className="surface-card ring-0 transition-all hover:-translate-y-0.5 hover:shadow-soft-lg"
-            >
-              <CardContent
-                className="flex cursor-pointer flex-col gap-3 py-6"
-                onClick={() => setDialog(t)}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="bg-muted text-muted-foreground flex size-11 items-center justify-center rounded-2xl [&_svg]:size-5 [&_svg]:stroke-[1.75]">
-                    <Drill />
-                  </span>
-                  <Badge
-                    variant="outline"
-                    className={cn(t.done === t.total && "border-brand/40 text-brand")}
-                  >
-                    {t.done} из {t.total}
-                  </Badge>
-                </div>
-                <div>
-                  <span className="block text-sm font-semibold">{t.label}</span>
-                  <span className="text-muted-foreground block text-xs">ожидает: {t.pending} шт</span>
-                </div>
-              </CardContent>
-            </Card>
+              icon={<Drill />}
+              title={t.label}
+              subtitle={`ожидает: ${t.pending} шт`}
+              badge={`${t.done} из ${t.total}`}
+              onClick={() => setDialog(t)}
+            />
           ))}
-        </div>
+        </OperationTileRow>
       )}
 
       <QuantityDialog

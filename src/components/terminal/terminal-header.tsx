@@ -1,7 +1,6 @@
 "use client";
 
-import Link from "next/link";
-import { ArrowLeft, LogIn, LogOut, ChevronLeft } from "lucide-react";
+import { LogIn, LogOut, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Employee } from "@/types/domain";
 
@@ -14,6 +13,9 @@ interface TerminalHeaderProps {
   onLogout: () => void;
 }
 
+const actionBtn =
+  "h-12 rounded-xl px-5 text-base font-medium [&_svg]:size-5 [&_svg]:stroke-[1.75]";
+
 export function TerminalHeader({
   employee,
   title,
@@ -22,56 +24,41 @@ export function TerminalHeader({
   onLogout,
 }: TerminalHeaderProps) {
   return (
-    <header className="surface-card mx-4 mt-4 flex h-16 items-center justify-between px-4 md:mx-6 md:px-6">
-      <div className="flex items-center gap-3">
+    <header className="surface-card mx-4 mt-4 flex h-20 items-center justify-between px-4 md:mx-6 md:px-6">
+      <div className="flex min-w-0 items-center gap-3">
         {onBack ? (
-          <Button
-            variant="ghost"
-            size="icon-lg"
-            className="rounded-xl [&_svg]:stroke-[1.75]"
-            onClick={onBack}
-          >
+          <Button variant="outline" className={actionBtn} onClick={onBack}>
             <ChevronLeft />
+            Назад
           </Button>
         ) : (
-          <div className="bg-brand flex size-10 items-center justify-center rounded-2xl text-sm font-bold text-white shadow-soft">
+          <div className="bg-brand flex size-12 shrink-0 items-center justify-center rounded-2xl text-base font-bold text-white shadow-soft">
             S
           </div>
         )}
-        <div className="text-lg font-semibold tracking-tight">{title}</div>
+        <div className="truncate text-xl font-semibold tracking-tight">{title}</div>
       </div>
 
-      <div className="flex items-center gap-3">
+      <div className="flex shrink-0 items-center gap-3">
         {employee ? (
           <>
-            <span className="hidden text-sm font-medium sm:inline">{employee.fullName}</span>
-            <Button
-              variant="outline"
-              className="rounded-xl [&_svg]:stroke-[1.75]"
-              onClick={onLogout}
-            >
+            <span className="hidden text-base font-medium md:inline">{employee.fullName}</span>
+            <Button variant="outline" className={actionBtn} onClick={onLogout}>
               <LogOut />
               Выйти
             </Button>
           </>
         ) : (
           <>
-            <span className="text-muted-foreground text-sm font-medium">Вход не выполнен</span>
-            <Button className="rounded-xl [&_svg]:stroke-[1.75]" onClick={onLoginClick}>
+            <span className="text-muted-foreground hidden text-base font-medium sm:inline">
+              Вход не выполнен
+            </span>
+            <Button className={actionBtn} onClick={onLoginClick}>
               <LogIn />
               Войти
             </Button>
           </>
         )}
-        <Button
-          variant="ghost"
-          className="rounded-xl [&_svg]:stroke-[1.75]"
-          nativeButton={false}
-          render={<Link href="/dashboard" />}
-        >
-          <ArrowLeft />
-          <span className="hidden sm:inline">В админку</span>
-        </Button>
       </div>
     </header>
   );

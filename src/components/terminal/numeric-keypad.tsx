@@ -24,20 +24,20 @@ export function NumericKeypad({ value, onChange, maxLength, className }: Numeric
   };
 
   return (
-    <div className={cn("grid grid-cols-3 gap-2", className)}>
+    <div className={cn("grid grid-cols-3 gap-3", className)}>
       {KEYS.map((key) => (
         <button
           key={key}
           type="button"
           onClick={() => press(key)}
           className={cn(
-            "flex h-16 items-center justify-center rounded-2xl text-2xl font-semibold transition-all select-none active:translate-y-px",
+            "flex h-20 items-center justify-center rounded-2xl text-3xl font-semibold select-none active:scale-[0.97] active:opacity-90",
             key === "C" || key === "back"
-              ? "bg-muted text-muted-foreground hover:bg-muted/70"
-              : "surface-card hover:shadow-soft ring-0",
+              ? "bg-muted text-muted-foreground active:bg-muted/80"
+              : "surface-card ring-0",
           )}
         >
-          {key === "back" ? <Delete className="size-6" /> : key}
+          {key === "back" ? <Delete className="size-7" /> : key}
         </button>
       ))}
     </div>

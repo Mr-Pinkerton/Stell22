@@ -1,12 +1,13 @@
 "use client";
 
-import { Scissors, Drill, Package, Clock, Cake } from "lucide-react";
+import { Drill, Package, Clock, Cake } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { Saw } from "@/components/terminal/saw-icon";
 import type { Employee } from "@/types/domain";
 import type { TerminalScreen } from "@/components/terminal/types";
 
-const TILES: { screen: TerminalScreen; title: string; icon: typeof Scissors }[] = [
-  { screen: "torcovka", title: "Торцовка", icon: Scissors },
+const TILES: { screen: TerminalScreen; title: string; icon: typeof Saw }[] = [
+  { screen: "torcovka", title: "Торцовка", icon: Saw },
   { screen: "prisadka", title: "Присадка", icon: Drill },
   { screen: "upakovka", title: "Упаковка", icon: Package },
   { screen: "hours", title: "Рабочие часы", icon: Clock },
@@ -47,22 +48,24 @@ export function HomeScreen({ employees, onSelect }: HomeScreenProps) {
         </Card>
       )}
 
-      <div className="grid flex-1 grid-cols-2 gap-6 lg:grid-cols-4">
+      <div className="grid flex-1 grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
         {TILES.map((t) => {
           const Icon = t.icon;
           return (
             <Card
               key={t.screen}
-              className="surface-card ring-0 transition-all hover:-translate-y-0.5 hover:shadow-soft-lg"
+              className="surface-card aspect-square ring-0 active:scale-[0.98] active:opacity-90"
             >
               <CardContent
-                className="flex h-full cursor-pointer flex-col items-center justify-center gap-4 py-12"
+                className="flex h-full cursor-pointer flex-col items-center justify-center gap-4 p-4"
                 onClick={() => onSelect(t.screen)}
               >
                 <span className="bg-muted text-muted-foreground flex size-16 items-center justify-center rounded-2xl [&_svg]:size-8 [&_svg]:stroke-[1.75]">
                   <Icon />
                 </span>
-                <span className="text-xl font-semibold tracking-tight">{t.title}</span>
+                <span className="text-center text-xl font-semibold tracking-tight sm:text-2xl">
+                  {t.title}
+                </span>
               </CardContent>
             </Card>
           );

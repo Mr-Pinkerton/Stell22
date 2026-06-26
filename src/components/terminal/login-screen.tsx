@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/components/terminal/toast";
 import { User, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { OperationTile, OperationTileRow } from "@/components/terminal/operation-tile";
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
 import type { Employee } from "@/types/domain";
 
@@ -35,24 +35,19 @@ export function LoginScreen({ employees, onSuccess }: LoginScreenProps) {
   if (!selected) {
     return (
       <main className="flex flex-1 flex-col items-center gap-6 p-6">
-        <h1 className="text-xl font-semibold tracking-tight">Выберите сотрудника</h1>
-        <div className="grid w-full max-w-3xl grid-cols-2 gap-4 sm:grid-cols-3">
-          {active.map((e) => (
-            <Card
-              key={e.id}
-              className="surface-card ring-0 transition-all hover:-translate-y-0.5 hover:shadow-soft-lg"
-            >
-              <CardContent
-                className="flex cursor-pointer flex-col items-center gap-3 py-8"
+        <h1 className="text-2xl font-semibold tracking-tight">Выберите сотрудника</h1>
+        <div className="w-full">
+          <OperationTileRow>
+            {active.map((e) => (
+              <OperationTile
+                key={e.id}
+                layout="person"
+                icon={<User />}
+                title={e.fullName}
                 onClick={() => setSelected(e)}
-              >
-                <span className="bg-muted text-muted-foreground flex size-14 items-center justify-center rounded-2xl [&_svg]:size-7 [&_svg]:stroke-[1.75]">
-                  <User />
-                </span>
-                <span className="text-center text-sm font-semibold">{e.fullName}</span>
-              </CardContent>
-            </Card>
-          ))}
+              />
+            ))}
+          </OperationTileRow>
         </div>
       </main>
     );
@@ -60,19 +55,18 @@ export function LoginScreen({ employees, onSuccess }: LoginScreenProps) {
 
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-6 p-6">
-      <div className="w-full max-w-xs space-y-6">
+      <div className="w-full max-w-sm space-y-6">
         <div className="space-y-1 text-center">
-          <h1 className="text-lg font-semibold tracking-tight">{selected.fullName}</h1>
-          <p className="text-muted-foreground text-sm">Введите PIN-код</p>
+          <h1 className="text-xl font-semibold tracking-tight">{selected.fullName}</h1>
+          <p className="text-muted-foreground text-base">Введите PIN-код</p>
         </div>
 
-        <div className="flex justify-center gap-3">
+        <div className="flex justify-center gap-4">
           {[0, 1, 2, 3].map((i) => (
             <span
               key={i}
               className={
-                "size-4 rounded-full transition-colors " +
-                (i < pin.length ? "bg-brand" : "bg-muted")
+                "size-5 rounded-full " + (i < pin.length ? "bg-brand" : "bg-muted")
               }
             />
           ))}
