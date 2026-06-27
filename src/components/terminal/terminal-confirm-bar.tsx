@@ -20,6 +20,7 @@ export function TerminalConfirmBar({
     <div className="surface-card sticky bottom-4 mt-auto flex items-center justify-between gap-4 px-5 py-3 ring-0">
       <div className="text-sm">{summary}</div>
       <Button
+        variant="brand"
         className="h-14 rounded-xl px-10 text-lg font-semibold"
         disabled={disabled}
         onClick={onConfirm}

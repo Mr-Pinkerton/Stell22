@@ -34,7 +34,7 @@ describe("maxDetailQuantity", () => {
         detailId: "b",
         detailLengthM: 0.6,
       }),
-    ).toBe(3); // (2.4 - 1.2) / 0.6 — qty b не вычитается
+    ).toBe(2); // (2.4 - 1.2) / 0.6 — qty b не вычитается
   });
 
   it("0 при нулевой взятой длине", () => {

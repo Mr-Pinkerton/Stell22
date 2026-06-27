@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import { ChevronDown, NotebookText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatMoney } from "@/lib/format";
 import {
   buildJournal,
@@ -61,19 +60,32 @@ export function EntriesJournal({ entries }: EntriesJournalProps) {
             </div>
           </div>
 
-          <Tabs value={period} onValueChange={(v) => setPeriod(v as JournalPeriod)}>
-            <TabsList className="h-auto gap-1.5 rounded-2xl p-1.5">
-              {(["week", "month"] as JournalPeriod[]).map((p) => (
-                <TabsTrigger
+          <div
+            className="bg-muted inline-flex shrink-0 gap-1 rounded-2xl p-1"
+            role="tablist"
+            aria-label="Период журнала"
+          >
+            {(["week", "month"] as JournalPeriod[]).map((p) => {
+              const active = period === p;
+              return (
+                <button
                   key={p}
-                  value={p}
-                  className="border-border bg-card/60 data-active:bg-card data-active:shadow-soft h-10 min-w-24 rounded-xl border px-5 text-base font-semibold data-active:border-transparent"
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setPeriod(p)}
+                  className={cn(
+                    "h-10 min-w-24 rounded-xl px-5 text-base font-semibold transition-colors",
+                    active
+                      ? "bg-card text-foreground shadow-soft"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
                 >
                   {p === "week" ? "Неделя" : "Месяц"}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {groups.length === 0 ? (
