@@ -1,0 +1,422 @@
+// Моки для отчётов (UI-прототип, Этап 2).
+
+import {
+  batches,
+  employees,
+  products,
+  railLots,
+  terminalEntries,
+} from "@/mocks/fixtures";
+import { buildPurchaseRows } from "@/lib/batch-stats";
+import type { BatchStatus, CostStatus } from "@/types/domain";
+
+export interface PurchaseReportRow {
+  id: string;
+  name: string;
+  purchaseDate: string;
+  totalCost: number;
+  volumeM3: number;
+  sortPurchasePct: { sort1: number; sort2: number };
+  sortFactPct: { sort1: number; sort2: number };
+  avgCostPerM3: number;
+  status: BatchStatus;
+}
+
+export interface CostDetailRow {
+  id: string;
+  name: string;
+  batchName: string;
+  workCost: number;
+  materialCost: number;
+  costStatus: CostStatus;
+}
+
+export interface CostProductDetailLine {
+  detailName: string;
+  lengthM: number;
+  quantity: number;
+  materialCost: number;
+  workCost: number;
+}
+
+export interface CostProductRow {
+  id: string;
+  name: string;
+  sku: string;
+  material: number;
+  materialPct: number;
+  work: number;
+  workPct: number;
+  direct: number;
+  directPct: number;
+  overhead: number;
+  overheadPct: number;
+  full: number;
+  details: CostProductDetailLine[];
+}
+
+export interface SalaryDayLine {
+  date: string;
+  hours?: number | null;
+  torcovka: number;
+  prisadka: number;
+  upakovka: number;
+  total: number;
+}
+
+export interface SalaryReportRow {
+  id: string;
+  employeeName: string;
+  amountDue: number;
+  produced: number;
+  avgPerUnit: number;
+  total: number;
+  paid: boolean;
+  paidAt?: string | null;
+  days: SalaryDayLine[];
+}
+
+export interface WasteBatchRow {
+  id: string;
+  batchName: string;
+  purchasedM: number;
+  takenM: number;
+  remainingM: number;
+  wasteTorcovkaM: number;
+  writtenOffM: number;
+  wastePct: number;
+  status: BatchStatus;
+}
+
+export interface WasteEmployeeRow {
+  id: string;
+  employeeName: string;
+  takenM: number;
+  producedM: number;
+  wasteM: number;
+  wastePct: number;
+}
+
+export interface SalesReportRow {
+  id: string;
+  productName: string;
+  sku: string;
+  soldQty: number;
+  revenue: number;
+}
+
+const purchaseBase = buildPurchaseRows(batches, railLots);
+
+const SORT_FACT_BY_BATCH: Record<string, { sort1: number; sort2: number }> = {
+  "batch-1": { sort1: 58, sort2: 42 },
+  "batch-2": { sort1: 62, sort2: 38 },
+  "batch-3": { sort1: 55, sort2: 45 },
+  "batch-4": { sort1: 70, sort2: 30 },
+  "batch-5": { sort1: 48, sort2: 52 },
+  "batch-6": { sort1: 65, sort2: 35 },
+};
+
+function sortPurchasePct(batchId: string): { sort1: number; sort2: number } {
+  const declared = SORT_FACT_BY_BATCH[batchId] ?? { sort1: 60, sort2: 40 };
+  const drift = batchId.charCodeAt(batchId.length - 1) % 5;
+  return { sort1: declared.sort1 + drift - 2, sort2: declared.sort2 - drift + 2 };
+}
+
+export const purchaseReportRows: PurchaseReportRow[] = purchaseBase.map((b) => {
+  const fact = SORT_FACT_BY_BATCH[b.id] ?? { sort1: 60, sort2: 40 };
+  const declared = sortPurchasePct(b.id);
+  const avgCostPerM3 =
+    b.stats.volumeM3 > 0 ? Math.round(b.totalCost / b.stats.volumeM3) : 0;
+
+  return {
+    id: b.id,
+    name: b.name,
+    purchaseDate: b.purchaseDate,
+    totalCost: b.totalCost,
+    volumeM3: b.stats.volumeM3,
+    sortPurchasePct: declared,
+    sortFactPct: fact,
+    avgCostPerM3,
+    status: b.status,
+  };
+});
+
+export const costDetailRows: CostDetailRow[] = [
+  {
+    id: "cd-1",
+    name: "Полка 600",
+    batchName: "Волочек 2419",
+    workCost: 8,
+    materialCost: 42,
+    costStatus: "PRELIMINARY",
+  },
+  {
+    id: "cd-2",
+    name: "Канавка 720",
+    batchName: "Сосна 3020",
+    workCost: 11,
+    materialCost: 58,
+    costStatus: "PRELIMINARY",
+  },
+  {
+    id: "cd-3",
+    name: "Полка 800",
+    batchName: "Ель 1812",
+    workCost: 9,
+    materialCost: 51,
+    costStatus: "FINAL",
+  },
+  {
+    id: "cd-4",
+    name: "Канавка 600",
+    batchName: "Бук 4025",
+    workCost: 7,
+    materialCost: 38,
+    costStatus: "FINAL",
+  },
+];
+
+export const costProductRows: CostProductRow[] = [
+  {
+    id: "cp-1",
+    name: products[0].name,
+    sku: products[0].sku,
+    material: 84,
+    materialPct: 52,
+    work: 46,
+    workPct: 29,
+    direct: 165,
+    directPct: 100,
+    overhead: 28,
+    overheadPct: 17,
+    full: 193,
+    details: [
+      {
+        detailName: "Полка 600",
+        lengthM: 0.6,
+        quantity: 2,
+        materialCost: 42,
+        workCost: 16,
+      },
+    ],
+  },
+  {
+    id: "cp-2",
+    name: products[1].name,
+    sku: products[1].sku,
+    material: 112,
+    materialPct: 48,
+    work: 68,
+    workPct: 29,
+    direct: 232,
+    directPct: 100,
+    overhead: 41,
+    overheadPct: 18,
+    full: 273,
+    details: [
+      {
+        detailName: "Полка 800",
+        lengthM: 0.8,
+        quantity: 2,
+        materialCost: 51,
+        workCost: 18,
+      },
+      {
+        detailName: "Канавка 720",
+        lengthM: 0.72,
+        quantity: 1,
+        materialCost: 58,
+        workCost: 22,
+      },
+    ],
+  },
+];
+
+function isoDateOnly(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+function buildSalaryRows(): SalaryReportRow[] {
+  const productionEmployees = employees.filter(
+    (e) => e.status === "ACTIVE" && e.id !== "emp-4",
+  );
+
+  const byEmployee = new Map<
+    string,
+    { total: number; produced: number; byDay: Map<string, SalaryDayLine> }
+  >();
+
+  for (const emp of productionEmployees) {
+    byEmployee.set(emp.id, { total: 0, produced: 0, byDay: new Map() });
+  }
+
+  for (const t of terminalEntries) {
+    const bucket = byEmployee.get(t.employeeId);
+    if (!bucket) continue;
+
+    bucket.total += t.amount;
+    if (t.type === "TORCOVKA" || t.type === "PRISADKA" || t.type === "UPAKOVKA") {
+      bucket.produced += t.quantity;
+    }
+
+    const day = isoDateOnly(t.occurredAt);
+    const line = bucket.byDay.get(day) ?? {
+      date: day,
+      hours: null,
+      torcovka: 0,
+      prisadka: 0,
+      upakovka: 0,
+      total: 0,
+    };
+
+    if (t.type === "HOURS") line.hours = (line.hours ?? 0) + t.quantity;
+    if (t.type === "TORCOVKA") line.torcovka += t.amount;
+    if (t.type === "PRISADKA") line.prisadka += t.amount;
+    if (t.type === "UPAKOVKA") line.upakovka += t.amount;
+    line.total += t.amount;
+    bucket.byDay.set(day, line);
+  }
+
+  const rows: SalaryReportRow[] = productionEmployees.map((emp) => {
+    const bucket = byEmployee.get(emp.id)!;
+    const avgPerUnit = bucket.produced > 0 ? Math.round(bucket.total / bucket.produced) : 0;
+    const days = [...bucket.byDay.values()].sort((a, b) => b.date.localeCompare(a.date));
+
+    return {
+      id: emp.id,
+      employeeName: emp.fullName,
+      amountDue: bucket.total,
+      produced: bucket.produced,
+      avgPerUnit,
+      total: bucket.total,
+      paid: emp.id === "emp-3",
+      paidAt: emp.id === "emp-3" ? "2026-06-20" : null,
+      days: days.slice(0, 14),
+    };
+  });
+
+  return rows.sort((a, b) => {
+    if (a.paid !== b.paid) return a.paid ? 1 : -1;
+    if (!a.paid && !b.paid) return b.total - a.total;
+    return (b.paidAt ?? "").localeCompare(a.paidAt ?? "");
+  });
+}
+
+export const salaryReportRows: SalaryReportRow[] = buildSalaryRows();
+
+export const wasteBatchRows: WasteBatchRow[] = [
+  {
+    id: "wb-1",
+    batchName: "Волочек 2419",
+    purchasedM: 1240,
+    takenM: 980,
+    remainingM: 180,
+    wasteTorcovkaM: 62,
+    writtenOffM: 18,
+    wastePct: 24,
+    status: "IN_WORK",
+  },
+  {
+    id: "wb-2",
+    batchName: "Сосна 3020",
+    purchasedM: 860,
+    takenM: 720,
+    remainingM: 95,
+    wasteTorcovkaM: 38,
+    writtenOffM: 7,
+    wastePct: 31,
+    status: "IN_WORK",
+  },
+  {
+    id: "wb-3",
+    batchName: "Ель 1812",
+    purchasedM: 640,
+    takenM: 610,
+    remainingM: 12,
+    wasteTorcovkaM: 14,
+    writtenOffM: 4,
+    wastePct: 18,
+    status: "ARCHIVED",
+  },
+  {
+    id: "wb-4",
+    batchName: "Бук 4025",
+    purchasedM: 520,
+    takenM: 410,
+    remainingM: 48,
+    wasteTorcovkaM: 52,
+    writtenOffM: 10,
+    wastePct: 44,
+    status: "IN_WORK",
+  },
+];
+
+export const wasteEmployeeRows: WasteEmployeeRow[] = [
+  {
+    id: "we-1",
+    employeeName: employees[0].fullName,
+    takenM: 1420,
+    producedM: 1180,
+    wasteM: 240,
+    wastePct: 17,
+  },
+  {
+    id: "we-2",
+    employeeName: employees[2].fullName,
+    takenM: 980,
+    producedM: 720,
+    wasteM: 260,
+    wastePct: 27,
+  },
+  {
+    id: "we-3",
+    employeeName: employees[1].fullName,
+    takenM: 0,
+    producedM: 0,
+    wasteM: 0,
+    wastePct: 0,
+  },
+];
+
+export const salesReportRows: SalesReportRow[] = [
+  {
+    id: "sr-1",
+    productName: products[0].name,
+    sku: products[0].sku,
+    soldQty: 124,
+    revenue: 148_800,
+  },
+  {
+    id: "sr-2",
+    productName: products[1].name,
+    sku: products[1].sku,
+    soldQty: 86,
+    revenue: 129_000,
+  },
+  {
+    id: "sr-3",
+    productName: "Полка мини",
+    sku: "ART-003",
+    soldQty: 42,
+    revenue: 33_600,
+  },
+];
+
+export function purchaseReportKpis(rows: PurchaseReportRow[]) {
+  const totalCost = rows.reduce((s, r) => s + r.totalCost, 0);
+  const totalVolume = rows.reduce((s, r) => s + r.volumeM3, 0);
+  return {
+    batchCount: rows.length,
+    totalCost,
+    totalVolume,
+    avgCostPerM3: totalVolume > 0 ? Math.round(totalCost / totalVolume) : 0,
+  };
+}
+
+export function salaryReportKpis(rows: SalaryReportRow[]) {
+  const unpaid = rows.filter((r) => !r.paid);
+  return {
+    workerCount: unpaid.length,
+    totalSalary: unpaid.reduce((s, r) => s + r.total, 0),
+  };
+}
