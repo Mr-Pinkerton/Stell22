@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { toast } from "@/components/terminal/toast";
 import { Button } from "@/components/ui/button";
+import { KeypadDisplay, KEYPAD_PANEL } from "@/components/terminal/keypad-panel";
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
 import { formatMoney } from "@/lib/format";
 import type { Employee } from "@/types/domain";
@@ -25,7 +26,7 @@ export function HoursScreen({ employee, onDone }: HoursScreenProps) {
 
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-6 p-6">
-      <div className="w-full max-w-sm space-y-5">
+      <div className={KEYPAD_PANEL}>
         <div className="space-y-1 text-center">
           <h1 className="text-xl font-semibold tracking-tight">Рабочие часы</h1>
           <p className="text-muted-foreground text-base">
@@ -33,15 +34,15 @@ export function HoursScreen({ employee, onDone }: HoursScreenProps) {
           </p>
         </div>
 
-        <div className="bg-muted/50 flex h-20 items-center justify-center rounded-2xl text-4xl font-semibold tabular-nums">
+        <KeypadDisplay
+          footerMessage={
+            rate > 0 ? `К начислению: ${formatMoney(hours * rate)}` : undefined
+          }
+          showFooterMessage={hours > 0 && rate > 0}
+          footerTone="muted"
+        >
           {value || "0"} <span className="text-muted-foreground ml-2 text-xl">ч</span>
-        </div>
-
-        {hours > 0 && rate > 0 && (
-          <p className="text-muted-foreground text-center text-base">
-            К начислению: {formatMoney(hours * rate)}
-          </p>
-        )}
+        </KeypadDisplay>
 
         <NumericKeypad value={value} onChange={setValue} />
 

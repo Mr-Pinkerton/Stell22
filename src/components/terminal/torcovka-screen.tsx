@@ -6,9 +6,10 @@ import { Boxes, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { OperationTile, OperationTileRow } from "@/components/terminal/operation-tile";
+import { OperationTile, OperationTileGrid, OperationTileRow } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { formatLength } from "@/lib/format";
+import { maxDetailQuantity, sumDetailLengthM, type TorcovkaPick } from "@/lib/torcovka";
 import type { Batch, Detail, RailLot, Sort } from "@/types/domain";
 import type { TerminalData } from "@/components/terminal/types";
 
@@ -20,6 +21,8 @@ interface TorcovkaScreenProps {
 type Dialog = { kind: "rails" } | { kind: "detail"; detail: Detail } | null;
 
 const SORT_LABEL: Record<Sort, string> = { SORT1: "1 сорт", SORT2: "2 сорт" };
+
+const RAIL_LENGTH_LIMIT_MESSAGE = "Длина деталей превышает длину взятых реек";
 
 export function TorcovkaScreen({ data, onDone }: TorcovkaScreenProps) {
   const [batchId, setBatchId] = useState<string | null>(null);
@@ -43,11 +46,15 @@ export function TorcovkaScreen({ data, onDone }: TorcovkaScreenProps) {
     );
   }, [data.details, lot, sort]);
 
+  const torcovkaPicks = useMemo((): TorcovkaPick[] => {
+    return Object.entries(picked).flatMap(([id, quantity]) => {
+      const d = data.details.find((x) => x.id === id);
+      return d && quantity > 0 ? [{ detailId: id, quantity, lengthM: d.lengthM }] : [];
+    });
+  }, [picked, data.details]);
+
   const takenLengthM = lot ? railsTaken * lot.lengthM : 0;
-  const usedLengthM = Object.entries(picked).reduce((sum, [id, qty]) => {
-    const d = data.details.find((x) => x.id === id);
-    return sum + (d ? d.lengthM * qty : 0);
-  }, 0);
+  const usedLengthM = sumDetailLengthM(torcovkaPicks);
   const wasteM = takenLengthM - usedLengthM;
   const overLength = wasteM < 0;
   const pickedCount = Object.values(picked).reduce((a, b) => a + b, 0);
@@ -122,37 +129,58 @@ export function TorcovkaScreen({ data, onDone }: TorcovkaScreenProps) {
 
       {lot && (
         <Section title="Детали">
-          <Tabs value={sort} onValueChange={(v) => setSort(v as Sort)}>
-            <TabsList className="h-auto gap-1 rounded-xl p-1">
-              {(["SORT1", "SORT2"] as Sort[]).map((s) => (
-                <TabsTrigger
-                  key={s}
-                  value={s}
-                  className="data-active:bg-card data-active:shadow-soft h-9 rounded-lg px-4"
-                >
-                  {SORT_LABEL[s]}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
+          <div className="flex flex-col gap-5">
+            <Tabs
+              value={sort}
+              onValueChange={(v) => setSort(v as Sort)}
+              className="items-center gap-4"
+            >
+              <TabsList className="h-auto gap-1.5 rounded-2xl p-1.5">
+                {(["SORT1", "SORT2"] as Sort[]).map((s) => (
+                  <TabsTrigger
+                    key={s}
+                    value={s}
+                    className="border-border bg-card/60 data-active:bg-card data-active:shadow-soft h-12 min-w-36 rounded-xl border px-8 text-lg font-semibold data-active:border-transparent"
+                  >
+                    {SORT_LABEL[s]}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
 
-          <OperationTileRow>
+            <OperationTileGrid>
             {detailTiles.map((d) => {
               const qty = picked[d.id] ?? 0;
               return (
                 <OperationTile
                   key={d.id}
+                  layout="grid"
                   active={qty > 0}
                   icon={<Layers />}
                   title={d.name}
                   subtitle={formatLength(d.lengthM)}
                   highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
                   onClick={() => setDialog({ kind: "detail", detail: d })}
+                  onClear={
+                    qty > 0
+                      ? () =>
+                          setPicked((p) => {
+                            const next = { ...p };
+                            delete next[d.id];
+                            return next;
+                          })
+                      : undefined
+                  }
                 />
               );
             })}
-            {detailTiles.length === 0 && <Empty>Нет деталей этого типа и сорта</Empty>}
-          </OperationTileRow>
+            {detailTiles.length === 0 && (
+              <div className="col-span-full">
+                <Empty>Нет деталей этого типа и сорта</Empty>
+              </div>
+            )}
+            </OperationTileGrid>
+          </div>
         </Section>
       )}
 
@@ -170,7 +198,7 @@ export function TorcovkaScreen({ data, onDone }: TorcovkaScreenProps) {
             </span>
           </div>
           <Button
-            className="h-11 rounded-xl px-6 text-base"
+            className="h-14 rounded-xl px-10 text-lg font-semibold"
             disabled={railsTaken <= 0 || pickedCount === 0 || overLength}
             onClick={confirm}
           >
@@ -195,6 +223,17 @@ export function TorcovkaScreen({ data, onDone }: TorcovkaScreenProps) {
         open={dialog?.kind === "detail"}
         title={dialog?.kind === "detail" ? dialog.detail.name : ""}
         initial={dialog?.kind === "detail" ? (picked[dialog.detail.id] ?? 0) : 0}
+        max={
+          dialog?.kind === "detail" && lot && railsTaken > 0
+            ? maxDetailQuantity({
+                takenLengthM,
+                picks: torcovkaPicks,
+                detailId: dialog.detail.id,
+                detailLengthM: dialog.detail.lengthM,
+              })
+            : undefined
+        }
+        limitMessage={RAIL_LENGTH_LIMIT_MESSAGE}
         onConfirm={(v) => {
           if (dialog?.kind === "detail") {
             setPicked((p) => ({ ...p, [dialog.detail.id]: v }));

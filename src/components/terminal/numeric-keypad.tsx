@@ -24,22 +24,25 @@ export function NumericKeypad({ value, onChange, maxLength, className }: Numeric
   };
 
   return (
-    <div className={cn("grid grid-cols-3 gap-3", className)}>
-      {KEYS.map((key) => (
-        <button
-          key={key}
-          type="button"
-          onClick={() => press(key)}
-          className={cn(
-            "flex h-20 items-center justify-center rounded-2xl text-3xl font-semibold select-none active:scale-[0.97] active:opacity-90",
-            key === "C" || key === "back"
-              ? "bg-muted text-muted-foreground active:bg-muted/80"
-              : "surface-card ring-0",
-          )}
-        >
-          {key === "back" ? <Delete className="size-7" /> : key}
-        </button>
-      ))}
+    <div className={cn("grid grid-cols-3 gap-4 p-2", className)}>
+      {KEYS.map((key) => {
+        const isDigit = key !== "C" && key !== "back";
+        return (
+          <button
+            key={key}
+            type="button"
+            onClick={() => press(key)}
+            className={cn(
+              "flex h-20 items-center justify-center rounded-2xl px-4 py-3 text-3xl font-semibold select-none active:scale-[0.97] active:opacity-90",
+              isDigit
+                ? "border-border bg-card surface-card border ring-0"
+                : "bg-muted text-muted-foreground active:bg-muted/80",
+            )}
+          >
+            {key === "back" ? <Delete className="size-7" /> : key}
+          </button>
+        );
+      })}
     </div>
   );
 }

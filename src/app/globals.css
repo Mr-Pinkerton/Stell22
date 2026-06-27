@@ -149,6 +149,29 @@
   background-color: var(--muted);
 }
 
+/** Тонкий горизонтальный скроллбар (как overlay на мобильных). */
+@utility scrollbar-thin-x {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+
+  &::-webkit-scrollbar {
+    height: 4px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border-radius: 9999px;
+  }
+
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: var(--muted-foreground);
+  }
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

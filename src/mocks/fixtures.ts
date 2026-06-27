@@ -7,7 +7,9 @@ import type {
   NomenclatureItem,
   Product,
   RailLot,
+  Sort,
   StockSnapshot,
+  RailType,
 } from "@/types/domain";
 
 export const employees: Employee[] = [
@@ -405,48 +407,88 @@ export const nomenclatureItems: NomenclatureItem[] = [
   },
 ];
 
-export const details: Detail[] = [
-  {
-    id: "det-1",
-    name: "Полка 600",
-    lengthM: 0.6,
-    detailType: "POLKA",
-    sort: "SORT1",
-    prisadkaTorcevaya: true,
-    prisadkaPloskost: false,
-    status: "ACTIVE",
-  },
-  {
-    id: "det-2",
-    name: "Канавка 720",
-    lengthM: 0.72,
-    detailType: "KANAVKA",
-    sort: "SORT2",
-    prisadkaTorcevaya: true,
-    prisadkaPloskost: true,
-    status: "ACTIVE",
-  },
-  {
-    id: "det-3",
-    name: "Полка 800",
-    lengthM: 0.8,
-    detailType: "POLKA",
-    sort: "SORT2",
-    prisadkaTorcevaya: true,
-    prisadkaPloskost: false,
-    status: "ACTIVE",
-  },
-  {
-    id: "det-4",
-    name: "Канавка 600",
-    lengthM: 0.6,
-    detailType: "KANAVKA",
-    sort: "SORT1",
-    prisadkaTorcevaya: false,
-    prisadkaPloskost: false,
-    status: "ACTIVE",
-  },
-];
+const DETAIL_TYPE_LABEL: Record<RailType, string> = {
+  POLKA: "Полка",
+  KANAVKA: "Канавка",
+};
+
+/** По 20 деталей на каждый сорт и тип рейки (для терминала торцовки). */
+function buildDetails(): Detail[] {
+  const seeds: Detail[] = [
+    {
+      id: "det-1",
+      name: "Полка 600",
+      lengthM: 0.6,
+      detailType: "POLKA",
+      sort: "SORT1",
+      prisadkaTorcevaya: true,
+      prisadkaPloskost: false,
+      status: "ACTIVE",
+    },
+    {
+      id: "det-3",
+      name: "Полка 800",
+      lengthM: 0.8,
+      detailType: "POLKA",
+      sort: "SORT2",
+      prisadkaTorcevaya: true,
+      prisadkaPloskost: false,
+      status: "ACTIVE",
+    },
+    {
+      id: "det-4",
+      name: "Канавка 600",
+      lengthM: 0.6,
+      detailType: "KANAVKA",
+      sort: "SORT1",
+      prisadkaTorcevaya: false,
+      prisadkaPloskost: false,
+      status: "ACTIVE",
+    },
+    {
+      id: "det-2",
+      name: "Канавка 720",
+      lengthM: 0.72,
+      detailType: "KANAVKA",
+      sort: "SORT2",
+      prisadkaTorcevaya: true,
+      prisadkaPloskost: true,
+      status: "ACTIVE",
+    },
+  ];
+
+  const seedsByKey = new Map(seeds.map((d) => [`${d.detailType}-${d.sort}`, d]));
+  const result: Detail[] = [];
+  let seq = 5;
+
+  for (const detailType of ["POLKA", "KANAVKA"] as RailType[]) {
+    for (const sort of ["SORT1", "SORT2"] as Sort[]) {
+      const group: Detail[] = [];
+      const seed = seedsByKey.get(`${detailType}-${sort}`);
+      if (seed) group.push(seed);
+
+      while (group.length < 20) {
+        const n = group.length + 1;
+        const lengthMm = 400 + n * 20;
+        group.push({
+          id: `det-${seq++}`,
+          name: `${DETAIL_TYPE_LABEL[detailType]} ${lengthMm}`,
+          lengthM: lengthMm / 1000,
+          detailType,
+          sort,
+          prisadkaTorcevaya: n % 2 === 1,
+          prisadkaPloskost: n % 3 === 0,
+          status: "ACTIVE",
+        });
+      }
+      result.push(...group);
+    }
+  }
+
+  return result;
+}
+
+export const details: Detail[] = buildDetails();
 
 export const products: Product[] = [
   {

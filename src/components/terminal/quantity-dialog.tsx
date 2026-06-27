@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { KeypadDisplay } from "@/components/terminal/keypad-panel";
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
 
 interface QuantityDialogProps {
@@ -13,6 +14,8 @@ interface QuantityDialogProps {
   initial?: number;
   /** Жёсткий лимит ввода (нельзя подтвердить больше). */
   max?: number;
+  /** Текст при превышении max (иначе «Доступно не более N»). */
+  limitMessage?: string;
   confirmLabel?: string;
   onConfirm: (value: number) => void;
   onClose: () => void;
@@ -33,6 +36,7 @@ function QuantityDialogBody({
   hint = "Введите количество",
   initial = 0,
   max,
+  limitMessage,
   confirmLabel = "Подтвердить",
   onConfirm,
   onClose,
@@ -42,20 +46,22 @@ function QuantityDialogBody({
   const numeric = Number(value || 0);
   const overLimit = max != null && numeric > max;
   const canConfirm = numeric > 0 && !overLimit;
+  const limitText = limitMessage ?? (max != null ? `Доступно не более ${max}` : "");
 
   return (
-    <DialogContent className="sm:max-w-sm" showCloseButton={false}>
+    <DialogContent className="gap-5 px-8 py-6 sm:max-w-[26rem]" showCloseButton={false}>
       <DialogHeader>
         <DialogTitle className="text-xl">{title}</DialogTitle>
         <p className="text-muted-foreground text-base">{hint}</p>
       </DialogHeader>
 
-      <div className="bg-muted/50 flex h-20 items-center justify-center rounded-2xl text-4xl font-semibold tabular-nums">
+      <KeypadDisplay
+        footerMessage={max != null ? limitText : undefined}
+        showFooterMessage={overLimit}
+        footerTone="error"
+      >
         {value || "0"}
-      </div>
-      {overLimit && (
-        <p className="text-destructive text-center text-sm font-medium">Доступно не более {max}</p>
-      )}
+      </KeypadDisplay>
 
       <NumericKeypad value={value} onChange={setValue} />
 

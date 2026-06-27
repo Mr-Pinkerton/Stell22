@@ -5,6 +5,7 @@ import { toast } from "@/components/terminal/toast";
 import { User, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { OperationTile, OperationTileRow } from "@/components/terminal/operation-tile";
+import { KEYPAD_PANEL } from "@/components/terminal/keypad-panel";
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
 import type { Employee } from "@/types/domain";
 
@@ -55,7 +56,7 @@ export function LoginScreen({ employees, onSuccess }: LoginScreenProps) {
 
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-6 p-6">
-      <div className="w-full max-w-sm space-y-6">
+      <div className={KEYPAD_PANEL}>
         <div className="space-y-1 text-center">
           <h1 className="text-xl font-semibold tracking-tight">{selected.fullName}</h1>
           <p className="text-muted-foreground text-base">Введите PIN-код</p>
