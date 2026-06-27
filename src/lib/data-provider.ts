@@ -10,6 +10,7 @@ import type {
   Product,
   RailLot,
   StockSnapshot,
+  TerminalEntry,
 } from "@/types/domain";
 import * as fixtures from "@/mocks/fixtures";
 
@@ -21,6 +22,8 @@ export interface DataProvider {
   getDetails(): Promise<Detail[]>;
   getProducts(): Promise<Product[]>;
   getStock(): Promise<StockSnapshot>;
+  /** Журнал внесений работника (для журнала на главном экране терминала). */
+  getEntries(employeeId: string): Promise<TerminalEntry[]>;
 }
 
 const mockProvider: DataProvider = {
@@ -44,6 +47,9 @@ const mockProvider: DataProvider = {
   },
   async getStock() {
     return fixtures.stockSnapshot;
+  },
+  async getEntries(employeeId) {
+    return fixtures.terminalEntries.filter((e) => e.employeeId === employeeId);
   },
 };
 

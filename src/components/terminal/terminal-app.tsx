@@ -108,7 +108,7 @@ export function TerminalApp() {
           </div>
         )
       ) : screen === "home" ? (
-        <HomeScreen employees={data.employees} onSelect={setScreen} />
+        <HomeScreen employees={data.employees} employee={employee} onSelect={setScreen} />
       ) : screen === "torcovka" ? (
         <TorcovkaScreen data={data} onDone={() => setScreen("home")} />
       ) : screen === "prisadka" ? (

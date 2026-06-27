@@ -1,9 +1,12 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Drill, Package, Clock, Cake } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Saw } from "@/components/terminal/saw-icon";
-import type { Employee } from "@/types/domain";
+import { EntriesJournal } from "@/components/terminal/entries-journal";
+import { dataProvider } from "@/lib/data-provider";
+import type { Employee, TerminalEntry } from "@/types/domain";
 import type { TerminalScreen } from "@/components/terminal/types";
 
 const TILES: { screen: TerminalScreen; title: string; icon: typeof Saw }[] = [
@@ -15,6 +18,7 @@ const TILES: { screen: TerminalScreen; title: string; icon: typeof Saw }[] = [
 
 interface HomeScreenProps {
   employees: Employee[];
+  employee: Employee;
   onSelect: (screen: TerminalScreen) => void;
 }
 
@@ -30,12 +34,23 @@ function birthdayPeople(employees: Employee[]): string[] {
     .map((e) => e.fullName);
 }
 
-export function HomeScreen({ employees, onSelect }: HomeScreenProps) {
+export function HomeScreen({ employees, employee, onSelect }: HomeScreenProps) {
   const birthdays = birthdayPeople(employees);
 
+  const [entries, setEntries] = useState<TerminalEntry[]>([]);
+  useEffect(() => {
+    let alive = true;
+    dataProvider.getEntries(employee.id).then((rows) => {
+      if (alive) setEntries(rows);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [employee.id]);
+
   return (
-    <main className="flex flex-1 flex-col gap-6 p-6">
-      <div className="grid flex-1 grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
+    <main className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
+      <div className="grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
         {TILES.map((t) => {
           const Icon = t.icon;
           return (
@@ -71,6 +86,8 @@ export function HomeScreen({ employees, onSelect }: HomeScreenProps) {
           </CardContent>
         </Card>
       )}
+
+      <EntriesJournal entries={entries} />
     </main>
   );
 }

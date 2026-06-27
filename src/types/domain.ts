@@ -97,6 +97,21 @@ export interface Product {
 }
 
 /**
+ * Одно внесение работника в терминале (снапшот операции для журнала).
+ * `quantity` — в натуральных единицах операции (детали/присадки/изделия/часы),
+ * `amount` — заработок ₽ за это внесение по расценкам работника (для отображения
+ * — number, как и остальные суммы в прототипе; в Части B — Decimal в БД).
+ */
+export interface TerminalEntry {
+  id: string;
+  employeeId: string;
+  type: OperationType;
+  occurredAt: string; // ISO datetime (UTC)
+  quantity: number;
+  amount: number;
+}
+
+/**
  * Срез остатков склада для прототипа терминала (моки).
  * В Части B заменяется реальным снимком из БД.
  */

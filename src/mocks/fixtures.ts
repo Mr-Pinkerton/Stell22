@@ -5,10 +5,12 @@ import type {
   Detail,
   Employee,
   NomenclatureItem,
+  OperationType,
   Product,
   RailLot,
   Sort,
   StockSnapshot,
+  TerminalEntry,
   RailType,
 } from "@/types/domain";
 
@@ -519,6 +521,87 @@ export const products: Product[] = [
     extraIds: [],
   },
 ];
+
+/**
+ * Журнал внесений терминала (моки). Генерируем ~5 недель относительно «сегодня»,
+ * чтобы было что листать в режимах «Неделя» и «Месяц». Детерминированный ГПСЧ
+ * (по индексу дня) — стабильные данные между перезагрузками.
+ */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Внесение в указанный день со смещением часа от начала рабочего дня. */
+function entry(
+  employeeId: string,
+  type: OperationType,
+  daysAgo: number,
+  hour: number,
+  quantity: number,
+  rate: number,
+): TerminalEntry {
+  const d = new Date(Date.now() - daysAgo * DAY_MS);
+  d.setHours(hour, 0, 0, 0);
+  return {
+    id: `${employeeId}-${type}-${daysAgo}-${hour}`,
+    employeeId,
+    type,
+    occurredAt: d.toISOString(),
+    quantity,
+    amount: Math.round(quantity * rate * 100) / 100,
+  };
+}
+
+function buildTerminalEntries(): TerminalEntry[] {
+  const result: TerminalEntry[] = [];
+  const emp1 = employees[0]; // сдельщик: торцовка + присадка + иногда часы
+  const emp2 = employees[1]; // окладник-упаковщик: упаковка (0 ₽) + часы
+
+  for (let daysAgo = 0; daysAgo <= 34; daysAgo++) {
+    const date = new Date(Date.now() - daysAgo * DAY_MS);
+    const weekday = date.getDay(); // 0=вс, 6=сб
+    if (weekday === 0) continue; // воскресенье — выходной
+    const rnd = mulberry32(20260600 + daysAgo);
+
+    // emp-1
+    if (rnd() > 0.12) {
+      const torc = 80 + Math.floor(rnd() * 90);
+      result.push(
+        entry(emp1.id, "TORCOVKA", daysAgo, 8, torc, emp1.rateTorcovkaSort1 ?? 0),
+      );
+      if (rnd() > 0.35) {
+        const pris = 40 + Math.floor(rnd() * 60);
+        result.push(
+          entry(emp1.id, "PRISADKA", daysAgo, 12, pris, emp1.ratePrisadkaTorcev ?? 0),
+        );
+      }
+      if (rnd() > 0.8) {
+        result.push(entry(emp1.id, "HOURS", daysAgo, 17, 2, emp1.hourlyRate ?? 0));
+      }
+    }
+
+    // emp-2
+    if (weekday !== 6 && rnd() > 0.15) {
+      const hours = 7 + Math.floor(rnd() * 3);
+      result.push(entry(emp2.id, "HOURS", daysAgo, 9, hours, emp2.hourlyRate ?? 0));
+      const pack = 30 + Math.floor(rnd() * 40);
+      result.push(entry(emp2.id, "UPAKOVKA", daysAgo, 14, pack, emp2.rateUpakovka ?? 0));
+    }
+  }
+
+  return result;
+}
+
+export const terminalEntries: TerminalEntry[] = buildTerminalEntries();
 
 /** Срез остатков для прототипа терминала. */
 export const stockSnapshot: StockSnapshot = {
