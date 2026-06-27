@@ -1,5 +1,5 @@
-import { SectionScaffold } from "@/components/section-scaffold";
+import { NomenclatureView } from "@/components/nomenclature/nomenclature-view";
 
 export default function NomenclaturePage() {
-  return <SectionScaffold slug="nomenclature" />;
+  return <NomenclatureView />;
 }

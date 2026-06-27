@@ -440,6 +440,28 @@ export const nomenclatureItems: NomenclatureItem[] = [
     status: "ACTIVE",
     minStock: 50,
   },
+  {
+    id: "nom-3",
+    name: "Инструкция",
+    type: "OTHER",
+    unitPrice: 15,
+    status: "ACTIVE",
+  },
+  {
+    id: "nom-4",
+    name: "Стикер бренда",
+    type: "OTHER",
+    unitPrice: 5,
+    status: "ACTIVE",
+  },
+  {
+    id: "nom-5",
+    name: "Шуруп 3×25",
+    type: "FASTENER",
+    unitPrice: 1.2,
+    status: "ACTIVE",
+    minStock: 300,
+  },
 ];
 
 const DETAIL_TYPE_LABEL: Record<RailType, string> = {
