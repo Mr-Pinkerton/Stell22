@@ -35,6 +35,27 @@ export const employees: Employee[] = [
     status: "ACTIVE",
     hourlyRate: 280, // упаковщик на окладе (без сдельных расценок)
   },
+  {
+    id: "emp-3",
+    fullName: "Сидоров Пётр Алексеевич",
+    birthDate: "1988-03-14",
+    pin: "9012",
+    status: "ACTIVE",
+    hourlyRate: 250,
+    rateTorcovkaSort1: 4.5,
+    rateTorcovkaSort2: 3.5,
+    ratePrisadkaTorcev: 2.5,
+    ratePrisadkaPloskt: 2.5,
+  },
+  {
+    id: "emp-4",
+    fullName: "Козлова Мария Викторовна",
+    birthDate: "1995-11-02",
+    pin: "3456",
+    status: "ARCHIVED",
+    hourlyRate: 320,
+    rateUpakovka: 18,
+  },
 ];
 
 export const batches: Batch[] = [

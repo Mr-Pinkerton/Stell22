@@ -5,6 +5,8 @@ interface PageHeaderProps {
   title: string;
   canExport?: boolean;
   addLabel?: string;
+  onAdd?: () => void;
+  onExport?: () => void;
 }
 
 const actionButtonClass =
@@ -13,19 +15,23 @@ const actionButtonClass =
 const outlineActionClass =
   "border-[#D0D5DD] bg-card hover:border-[#98A2B3] hover:bg-muted border";
 
-export function PageHeader({ title, canExport, addLabel }: PageHeaderProps) {
+export function PageHeader({ title, canExport, addLabel, onAdd, onExport }: PageHeaderProps) {
   return (
     <div className="flex items-center justify-between gap-4">
       <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
       <div className="flex gap-2">
         {canExport && (
-          <Button variant="outline" className={`${actionButtonClass} ${outlineActionClass}`}>
+          <Button
+            variant="outline"
+            className={`${actionButtonClass} ${outlineActionClass}`}
+            onClick={onExport}
+          >
             <Download />
             Экспорт
           </Button>
         )}
         {addLabel && (
-          <Button className={actionButtonClass}>
+          <Button className={actionButtonClass} onClick={onAdd}>
             <Plus />
             {addLabel}
           </Button>

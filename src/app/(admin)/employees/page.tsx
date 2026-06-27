@@ -1,5 +1,5 @@
-import { SectionScaffold } from "@/components/section-scaffold";
+import { EmployeesView } from "@/components/employees/employees-view";
 
 export default function EmployeesPage() {
-  return <SectionScaffold slug="employees" />;
+  return <EmployeesView />;
 }
