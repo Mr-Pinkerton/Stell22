@@ -26,6 +26,11 @@ interface DataTableProps<T extends { id: string }> {
 
 const cellPad = "px-4 first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
 
+/** Первый столбец — влево, остальные — по центру (заголовок и ячейки). */
+const colAlign = (index: number) => (index > 0 ? "text-center" : undefined);
+
+const headClass = "text-base font-semibold h-11 bg-card";
+
 export function DataTable<T extends { id: string }>({
   columns,
   rows,
@@ -38,8 +43,11 @@ export function DataTable<T extends { id: string }>({
       <Table>
         <TableHeader>
           <TableRow>
-            {columns.map((c) => (
-              <TableHead key={c.key} className={cn(padded && cellPad, c.className)}>
+            {columns.map((c, index) => (
+              <TableHead
+                key={c.key}
+                className={cn(padded && cellPad, headClass, colAlign(index), c.className)}
+              >
                 {c.header}
               </TableHead>
             ))}
@@ -64,8 +72,11 @@ export function DataTable<T extends { id: string }>({
                 key={row.id}
                 className={cn(index % 2 === 1 && "bg-muted/40 hover:bg-muted/55")}
               >
-                {columns.map((c) => (
-                  <TableCell key={c.key} className={cn(padded && cellPad, c.className)}>
+                {columns.map((c, index) => (
+                  <TableCell
+                    key={c.key}
+                    className={cn(padded && cellPad, colAlign(index), c.className)}
+                  >
                     {c.render
                       ? c.render(row)
                       : String((row as Record<string, unknown>)[c.key] ?? "")}

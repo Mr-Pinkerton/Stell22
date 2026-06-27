@@ -6,7 +6,7 @@ import { formatHeaderDate } from "@/lib/format";
 
 export function AppHeader() {
   return (
-    <header className="surface-card sticky top-0 z-10 mx-4 mt-4 flex h-14 items-center gap-3 px-4 md:mx-6">
+    <header className="surface-card bg-card sticky top-0 z-10 mx-4 mt-4 flex h-14 items-center gap-3 px-4 md:mx-6">
       <SidebarTrigger className="rounded-full [&_svg]:stroke-[1.75]" />
 
       <div className="text-muted-foreground flex-1 text-base font-medium">{formatHeaderDate()}</div>

@@ -5,18 +5,37 @@ const TIME_ZONE = "Europe/Moscow"; // UTC+3 без перехода на лет�
 const moneyFormatter = new Intl.NumberFormat("ru-RU", {
   style: "currency",
   currency: "RUB",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
 });
 
 const numberFormatter = new Intl.NumberFormat("ru-RU", {
   minimumFractionDigits: 0,
   maximumFractionDigits: 4,
+  useGrouping: true,
 });
 
-/** Сумма в ₽, напр. "1 234,50 ₽". */
+const groupedIntegerFormatter = new Intl.NumberFormat("ru-RU", {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
+  useGrouping: true,
+});
+
+/** Сумма в ₽, напр. "1 234 ₽" (без копеек, пробел — разделитель тысяч). */
 export function formatMoney(value: number): string {
   return moneyFormatter.format(value);
+}
+
+/** Целое число с разделителем тысяч для полей ввода, напр. "1 234 567". */
+export function formatGroupedInteger(value: number): string {
+  return groupedIntegerFormatter.format(Math.round(value));
+}
+
+/** Разбор строки поля денег: только цифры, без копеек. */
+export function parseGroupedInteger(raw: string): number | null {
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return null;
+  return Number(digits);
 }
 
 /** Длина в метрах, напр. "2,4 м". */
@@ -78,6 +97,13 @@ const MONTH_NAMES = [
   "Ноябрь",
   "Декабрь",
 ];
+
+/** Дата из ISO "2026-06-01" → "01.06.2026". */
+export function formatIsoDate(iso: string): string {
+  const [y, m, d] = iso.split("-");
+  if (!y || !m || !d) return iso;
+  return `${d.padStart(2, "0")}.${m.padStart(2, "0")}.${y}`;
+}
 
 /** Месяц для фильтра, напр. "Июнь 2026". */
 export function formatFilterMonth(date: Date): string {

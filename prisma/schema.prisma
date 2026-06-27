@@ -167,8 +167,8 @@ model RailLot {
 
   isPackage Boolean  @default(true) // true = пакет, false = поштучная группа
   code      String?  @unique // код пакета (для печати этикетки), только для пакетов
-  rows      Int?     // ряды (для визуальной модели пакета)
-  layers    Int?     // слои
+  rows      Int?     // ряды (опционально, для расчёта кол-ва)
+  layers    Int?     // слои (опционально, для расчёта кол-ва)
 
   quantity          Int // исходное кол-во реек
   remainingQuantity Int // текущий остаток (списывается транзакционно при торцовке)

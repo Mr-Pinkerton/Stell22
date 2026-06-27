@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { MoneyInput } from "@/components/ui/money-input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import type { Employee } from "@/types/domain";
@@ -165,12 +166,11 @@ export function EmployeeFormDialog({
           <FormSection title="Оплата">
             <div className="grid gap-4 sm:grid-cols-2">
               <Field id="emp-hourly" label="Почасовая — ставка в час">
-                <Input
+                <MoneyInput
                   id="emp-hourly"
                   className={narrowFieldClass}
-                  placeholder="₽/ч"
-                  inputMode="decimal"
-                  defaultValue={employee?.hourlyRate?.toString() ?? ""}
+                  suffix="₽/ч"
+                  defaultValue={employee?.hourlyRate ?? null}
                 />
               </Field>
             </div>
@@ -180,39 +180,35 @@ export function EmployeeFormDialog({
             </p>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field id="emp-t1" label="Торцовка 1 сорт">
-                <Input
+                <MoneyInput
                   id="emp-t1"
                   className={narrowFieldClass}
-                  placeholder="₽/деталь"
-                  inputMode="decimal"
-                  defaultValue={employee?.rateTorcovkaSort1?.toString() ?? ""}
+                  suffix="₽/деталь"
+                  defaultValue={employee?.rateTorcovkaSort1 ?? null}
                 />
               </Field>
               <Field id="emp-t2" label="Торцовка 2 сорт">
-                <Input
+                <MoneyInput
                   id="emp-t2"
                   className={narrowFieldClass}
-                  placeholder="₽/деталь"
-                  inputMode="decimal"
-                  defaultValue={employee?.rateTorcovkaSort2?.toString() ?? ""}
+                  suffix="₽/деталь"
+                  defaultValue={employee?.rateTorcovkaSort2 ?? null}
                 />
               </Field>
               <Field id="emp-prisadka" label="Присадка">
-                <Input
+                <MoneyInput
                   id="emp-prisadka"
                   className={narrowFieldClass}
-                  placeholder="₽/присадка"
-                  inputMode="decimal"
-                  defaultValue={prisadkaRate?.toString() ?? ""}
+                  suffix="₽/присадка"
+                  defaultValue={prisadkaRate ?? null}
                 />
               </Field>
               <Field id="emp-up" label="Упаковка">
-                <Input
+                <MoneyInput
                   id="emp-up"
                   className={narrowFieldClass}
-                  placeholder="₽/изделие"
-                  inputMode="decimal"
-                  defaultValue={employee?.rateUpakovka?.toString() ?? ""}
+                  suffix="₽/изделие"
+                  defaultValue={employee?.rateUpakovka ?? null}
                 />
               </Field>
             </div>

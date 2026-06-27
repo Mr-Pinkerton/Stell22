@@ -1,9 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Archive, ArchiveRestore, Pencil, Trash2 } from "lucide-react";
+import { AlertTriangle, PackageMinus, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { employees as mockEmployees } from "@/mocks/fixtures";
+import { batches as mockBatches, railLots as mockRailLots } from "@/mocks/fixtures";
+import { batchCostMismatchIds } from "@/mocks/purchase-flags";
+import { buildPurchaseRows, type PurchaseBatchRow } from "@/lib/batch-stats";
+import { formatIsoDate, formatLength, formatMoney, formatVolume } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
 import { DataTable, type Column } from "@/components/data-table";
@@ -11,9 +14,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { EmployeeFormDialog } from "@/components/employees/employee-form-dialog";
-import { PinCell } from "@/components/employees/pin-cell";
-import type { Employee } from "@/types/domain";
+import { BatchFormDialog } from "@/components/purchases/batch-form-dialog";
 
 const tableActionClass =
   "text-muted-foreground hover:text-foreground hover:bg-muted/60 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
@@ -21,18 +22,20 @@ const tableActionClass =
 const tableActionDestructiveClass =
   "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
-export function EmployeesView() {
+const purchaseRows = buildPurchaseRows(mockBatches, mockRailLots, batchCostMismatchIds);
+
+export function PurchasesView() {
   const [search, setSearch] = useState("");
   const [showArchive, setShowArchive] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editing, setEditing] = useState<Employee | null>(null);
+  const [editing, setEditing] = useState<PurchaseBatchRow | null>(null);
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return mockEmployees.filter((e) => {
-      if (!showArchive && e.status === "ARCHIVED") return false;
+    return purchaseRows.filter((b) => {
+      if (!showArchive && b.status === "ARCHIVED") return false;
       if (!q) return true;
-      return e.fullName.toLowerCase().includes(q);
+      return b.name.toLowerCase().includes(q);
     });
   }, [search, showArchive]);
 
@@ -41,35 +44,88 @@ export function EmployeesView() {
     setDialogOpen(true);
   };
 
-  const openEdit = (employee: Employee) => {
-    setEditing(employee);
+  const openEdit = (batch: PurchaseBatchRow) => {
+    setEditing(batch);
     setDialogOpen(true);
   };
 
-  const columns: Column<Employee>[] = [
+  const columns: Column<PurchaseBatchRow>[] = [
     {
-      key: "fullName",
-      header: "ФИО",
-      render: (row) => <span className="font-medium">{row.fullName}</span>,
+      key: "name",
+      header: "Партия",
+      render: (row) => (
+        <div className="flex items-center gap-2">
+          <span className="font-medium">{row.name}</span>
+          {row.costMismatch && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span className="text-destructive inline-flex cursor-default">
+                    <AlertTriangle className="size-4 stroke-[1.75]" />
+                  </span>
+                }
+              />
+              <TooltipContent className="max-w-xs">
+                Сумма по ценам сортов не совпадает со стоимостью партии
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+      ),
     },
     {
-      key: "pin",
-      header: "PIN-код",
-      render: (row) => <PinCell pin={row.pin} />,
+      key: "purchaseCost",
+      header: "Закупочная",
+      className: "tabular-nums",
+      render: (row) => formatMoney(row.purchaseCost),
+    },
+    {
+      key: "totalCost",
+      header: "Общая",
+      className: "tabular-nums",
+      render: (row) => (
+        <span className={row.totalCost > row.purchaseCost ? "font-medium" : undefined}>
+          {formatMoney(row.totalCost)}
+        </span>
+      ),
+    },
+    {
+      key: "railCount",
+      header: "Рейки",
+      className: "tabular-nums",
+      render: (row) => `${row.stats.railCount} шт`,
+    },
+    {
+      key: "totalLength",
+      header: "Длина",
+      className: "tabular-nums",
+      render: (row) => formatLength(row.stats.totalLengthM),
+    },
+    {
+      key: "volume",
+      header: "Объём",
+      className: "tabular-nums",
+      render: (row) => formatVolume(row.stats.volumeM3),
     },
     {
       key: "status",
       header: "Статус",
       render: (row) => (
-        <Badge variant={row.status === "ACTIVE" ? "secondary" : "outline"}>
-          {row.status === "ACTIVE" ? "Активен" : "Архив"}
+        <Badge variant={row.status === "IN_WORK" ? "secondary" : "outline"}>
+          {row.status === "IN_WORK" ? "В работе" : "Архив"}
         </Badge>
       ),
     },
     {
+      key: "purchaseDate",
+      header: "Дата",
+      className: "tabular-nums",
+      render: (row) => formatIsoDate(row.purchaseDate),
+    },
+    {
       key: "actions",
       header: "",
-      className: "w-28",
+      className: "w-32",
       render: (row) => (
         <div className="flex items-center justify-center gap-0.5">
           <Tooltip>
@@ -90,7 +146,7 @@ export function EmployeesView() {
             <TooltipContent>Изменить</TooltipContent>
           </Tooltip>
 
-          {row.status === "ACTIVE" ? (
+          {row.status === "IN_WORK" && (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -99,32 +155,14 @@ export function EmployeesView() {
                     variant="ghost"
                     size="icon-sm"
                     className={tableActionClass}
-                    aria-label="В архив"
-                    onClick={() => toast.message("В архив — прототип")}
+                    aria-label="Списать остаток"
+                    onClick={() => toast.message("Списать остаток — прототип")}
                   />
                 }
               >
-                <Archive />
+                <PackageMinus />
               </TooltipTrigger>
-              <TooltipContent>В архив</TooltipContent>
-            </Tooltip>
-          ) : (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className={tableActionClass}
-                    aria-label="Восстановить"
-                    onClick={() => toast.message("Восстановить — прототип")}
-                  />
-                }
-              >
-                <ArchiveRestore />
-              </TooltipTrigger>
-              <TooltipContent>Восстановить</TooltipContent>
+              <TooltipContent>Списать остаток</TooltipContent>
             </Tooltip>
           )}
 
@@ -153,9 +191,9 @@ export function EmployeesView() {
   return (
     <>
       <PageHeader
-        title="Сотрудники"
+        title="Закупки"
         canExport
-        addLabel="Добавить сотрудника"
+        addLabel="Добавить партию"
         onAdd={openCreate}
         onExport={() => toast.message("Экспорт — прототип")}
       />
@@ -174,18 +212,18 @@ export function EmployeesView() {
           <DataTable
             columns={columns}
             rows={rows}
-            empty="Сотрудники не найдены"
+            empty="Партии не найдены"
             className="border-0"
             padded
           />
         </CardContent>
       </Card>
 
-      <EmployeeFormDialog
+      <BatchFormDialog
         open={dialogOpen}
-        employee={editing}
+        batch={editing}
         onOpenChange={setDialogOpen}
-        onSubmit={() => toast.success(editing ? "Сохранено (прототип)" : "Сотрудник создан (прототип)")}
+        onSubmit={() => toast.success(editing ? "Партия сохранена (прототип)" : "Партия добавлена (прототип)")}
       />
     </>
   );

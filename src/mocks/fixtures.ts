@@ -131,6 +131,18 @@ export const batches: Batch[] = [
     status: "IN_WORK",
     purchaseDate: "2026-06-15",
   },
+  {
+    id: "batch-7",
+    name: "Ива 2024",
+    sectionWidthMm: 20,
+    sectionHeightMm: 30,
+    purchaseCost: 54000,
+    totalCost: 54000,
+    priceSort1: 18000,
+    priceSort2: 13000,
+    status: "ARCHIVED",
+    purchaseDate: "2025-11-20",
+  },
 ];
 
 export const railLots: RailLot[] = [
