@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { toast } from "@/components/terminal/toast";
 import { Drill } from "lucide-react";
-import { OperationTile, OperationTileRow } from "@/components/terminal/operation-tile";
+import { OperationTile, OperationTileGrid } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
+import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
 import type { Detail } from "@/types/domain";
 import type { TerminalData } from "@/components/terminal/types";
 
@@ -28,6 +29,10 @@ const KIND_LABEL: Record<PrisadkaKind, string> = {
   torcev: "торцевая",
   plosk: "по плоскости",
 };
+
+function tileKey(t: Tile): string {
+  return `${t.detail.id}-${t.kind}`;
+}
 
 function buildTiles(data: TerminalData): Tile[] {
   const tiles: Tile[] = [];
@@ -58,8 +63,18 @@ function buildTiles(data: TerminalData): Tile[] {
 }
 
 export function PrisadkaScreen({ data, onDone }: PrisadkaScreenProps) {
-  const tiles = buildTiles(data);
-  const [dialog, setDialog] = useState<Tile | null>(null);
+  const tiles = useMemo(() => buildTiles(data), [data]);
+  const [picked, setPicked] = useState<Record<string, number>>({});
+  const [dialogTile, setDialogTile] = useState<Tile | null>(null);
+
+  const pickedCount = Object.values(picked).reduce((a, b) => a + b, 0);
+  const pickedLines = Object.keys(picked).filter((k) => (picked[k] ?? 0) > 0).length;
+
+  const confirm = () => {
+    if (pickedCount === 0) return;
+    toast.success(`Присадка внесена: ${pickedCount} шт`);
+    onDone();
+  };
 
   return (
     <main className="flex flex-1 flex-col gap-5 p-6">
@@ -72,31 +87,65 @@ export function PrisadkaScreen({ data, onDone }: PrisadkaScreenProps) {
           Нет деталей, ожидающих присадки
         </div>
       ) : (
-        <OperationTileRow>
-          {tiles.map((t) => (
-            <OperationTile
-              key={`${t.detail.id}-${t.kind}`}
-              icon={<Drill />}
-              title={t.label}
-              subtitle={`ожидает: ${t.pending} шт`}
-              badge={`${t.done} из ${t.total}`}
-              onClick={() => setDialog(t)}
-            />
-          ))}
-        </OperationTileRow>
+        <>
+          <OperationTileGrid>
+            {tiles.map((t) => {
+              const key = tileKey(t);
+              const qty = picked[key] ?? 0;
+              return (
+                <OperationTile
+                  key={key}
+                  layout="grid"
+                  active={qty > 0}
+                  icon={<Drill />}
+                  title={t.detail.name}
+                  subtitle={`${KIND_LABEL[t.kind]} · ожидает ${t.pending} шт · ${t.done} из ${t.total}`}
+                  highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
+                  badge={qty === 0 ? `${t.pending} шт` : undefined}
+                  onClick={() => setDialogTile(t)}
+                  onClear={
+                    qty > 0
+                      ? () =>
+                          setPicked((p) => {
+                            const next = { ...p };
+                            delete next[key];
+                            return next;
+                          })
+                      : undefined
+                  }
+                />
+              );
+            })}
+          </OperationTileGrid>
+
+          <TerminalConfirmBar
+            summary={
+              <>
+                <span className="font-medium">{pickedCount} шт</span>
+                <span className="text-muted-foreground ml-3">
+                  {pickedLines > 0 ? `${pickedLines} поз.` : "выберите детали"}
+                </span>
+              </>
+            }
+            disabled={pickedCount === 0}
+            onConfirm={confirm}
+          />
+        </>
       )}
 
       <QuantityDialog
-        open={dialog != null}
-        title={dialog?.label ?? ""}
-        hint={dialog ? `Ожидает присадки: ${dialog.pending} шт` : ""}
-        max={dialog?.pending}
+        open={dialogTile != null}
+        title={dialogTile?.label ?? ""}
+        hint={dialogTile ? `Ожидает присадки: ${dialogTile.pending} шт` : ""}
+        initial={dialogTile ? (picked[tileKey(dialogTile)] ?? 0) : 0}
+        max={dialogTile?.pending}
         onConfirm={(v) => {
-          toast.success(`Присадка внесена: ${v} шт`);
-          setDialog(null);
-          onDone();
+          if (dialogTile) {
+            setPicked((p) => ({ ...p, [tileKey(dialogTile)]: v }));
+          }
+          setDialogTile(null);
         }}
-        onClose={() => setDialog(null)}
+        onClose={() => setDialogTile(null)}
       />
     </main>
   );

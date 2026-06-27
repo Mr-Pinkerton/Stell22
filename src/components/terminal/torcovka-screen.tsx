@@ -4,10 +4,10 @@ import { useMemo, useState } from "react";
 import { toast } from "@/components/terminal/toast";
 import { Boxes, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { OperationTile, OperationTileGrid, OperationTileRow } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
+import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
 import { formatLength } from "@/lib/format";
 import { maxDetailQuantity, sumDetailLengthM, type TorcovkaPick } from "@/lib/torcovka";
 import type { Batch, Detail, RailLot, Sort } from "@/types/domain";
@@ -185,26 +185,23 @@ export function TorcovkaScreen({ data, onDone }: TorcovkaScreenProps) {
       )}
 
       {lot && (
-        <div className="surface-card sticky bottom-4 mt-auto flex items-center justify-between gap-4 px-5 py-3 ring-0">
-          <div className="text-sm">
-            <span className="font-medium">{pickedCount} дет.</span>
-            <span
-              className={cn(
-                "ml-3",
-                overLength ? "text-destructive font-medium" : "text-muted-foreground",
-              )}
-            >
-              Отход: {formatLength(wasteM)}
-            </span>
-          </div>
-          <Button
-            className="h-14 rounded-xl px-10 text-lg font-semibold"
-            disabled={railsTaken <= 0 || pickedCount === 0 || overLength}
-            onClick={confirm}
-          >
-            Подтвердить
-          </Button>
-        </div>
+        <TerminalConfirmBar
+          summary={
+            <>
+              <span className="font-medium">{pickedCount} дет.</span>
+              <span
+                className={cn(
+                  "ml-3",
+                  overLength ? "text-destructive font-medium" : "text-muted-foreground",
+                )}
+              >
+                Отход: {formatLength(wasteM)}
+              </span>
+            </>
+          }
+          disabled={railsTaken <= 0 || pickedCount === 0 || overLength}
+          onConfirm={confirm}
+        />
       )}
 
       <QuantityDialog

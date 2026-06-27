@@ -35,19 +35,6 @@ export function HomeScreen({ employees, onSelect }: HomeScreenProps) {
 
   return (
     <main className="flex flex-1 flex-col gap-6 p-6">
-      {birthdays.length > 0 && (
-        <Card className="border-brand/30 bg-brand/5 ring-0">
-          <CardContent className="flex items-center gap-3 py-4">
-            <span className="bg-brand/15 text-brand flex size-10 items-center justify-center rounded-2xl [&_svg]:size-5 [&_svg]:stroke-[1.75]">
-              <Cake />
-            </span>
-            <p className="text-sm font-medium">
-              Сегодня день рождения у {birthdays.join(", ")} — поздравляем!
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
       <div className="grid flex-1 grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
         {TILES.map((t) => {
           const Icon = t.icon;
@@ -71,6 +58,19 @@ export function HomeScreen({ employees, onSelect }: HomeScreenProps) {
           );
         })}
       </div>
+
+      {birthdays.length > 0 && (
+        <Card className="border-brand/30 bg-brand/5 ring-0">
+          <CardContent className="flex flex-col items-center gap-3 py-5 text-center">
+            <span className="bg-brand/15 text-brand flex size-10 items-center justify-center rounded-2xl [&_svg]:size-5 [&_svg]:stroke-[1.75]">
+              <Cake />
+            </span>
+            <p className="text-sm font-medium">
+              Сегодня день рождения у {birthdays.join(", ")} — поздравляем!
+            </p>
+          </CardContent>
+        </Card>
+      )}
     </main>
   );
 }

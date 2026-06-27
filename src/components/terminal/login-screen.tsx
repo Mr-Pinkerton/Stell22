@@ -24,7 +24,9 @@ export function LoginScreen({ employees, onSuccess }: LoginScreenProps) {
     setPin(next);
     if (next.length === 4 && selected) {
       if (next === selected.pin) {
-        toast.success(`Здравствуйте, ${selected.fullName.split(" ")[0]}!`);
+        const parts = selected.fullName.split(" ");
+        const firstName = parts[1] ?? parts[0];
+        toast.success(`Здравствуйте, ${firstName}!`);
         onSuccess(selected);
       } else {
         toast.error("Неверный PIN");
