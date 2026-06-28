@@ -1,5 +1,5 @@
-import { SectionScaffold } from "@/components/section-scaffold";
+import { WarehouseView } from "@/components/warehouse/warehouse-view";
 
 export default function WarehousePage() {
-  return <SectionScaffold slug="warehouse" />;
+  return <WarehouseView />;
 }
