@@ -49,7 +49,7 @@ export function HomeScreen({ employees, employee, onSelect }: HomeScreenProps) {
   }, [employee.id]);
 
   return (
-    <main className="flex flex-1 flex-col gap-6 overflow-y-auto p-6">
+    <main className="scrollbar-thin-y flex flex-1 flex-col gap-6 overflow-y-auto p-6">
       <div className="grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
         {TILES.map((t) => {
           const Icon = t.icon;

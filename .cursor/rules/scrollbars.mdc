@@ -1,0 +1,41 @@
+---
+description: Тонкие скроллбары на всех прокручиваемых контейнерах
+globs: **/*.{tsx,css}
+alwaysApply: true
+---
+
+# Скроллбары
+
+Эталон: `src/app/globals.css` — утилиты `@utility scrollbar-thin-y` и
+`scrollbar-thin-x`. Константы-обёртки: `src/lib/scroll-classes.ts`.
+
+## Обязательно
+Любой **свой** контейнер с прокруткой (`overflow-y-auto`, `overflow-x-auto`,
+`overflow-auto`) — добавлять соответствующий класс:
+
+| Направление | Класс |
+|-------------|--------|
+| Вертикаль | `scrollbar-thin-y` |
+| Горизонталь | `scrollbar-thin-x` |
+| Оба | `scrollbar-thin-y scrollbar-thin-x` |
+
+Не оставлять «голый» `overflow-auto` без тонкого скролла.
+
+## Где уже применяется
+- Тело модалок (`form-dialog-shared`, формы закупок/сотрудников/номенклатуры)
+- Таблица ДДС (`scrollTableYClass`)
+- Панель уведомлений, горизонтальный скролл терминала
+- Обёртка `Table` в `components/ui/table.tsx` — `scrollbar-thin-x`
+
+## Исключения
+- `no-scrollbar` — только если скролл намеренно скрыт (сайдбар в свёрнутом виде)
+- Выпадающие списки shadcn (`Select`, `DropdownMenu`) — не трогать
+
+## Примеры
+
+```tsx
+import { scrollTableYClass, scrollThinY } from "@/lib/scroll-classes";
+
+<div className={scrollTableYClass}>…таблица…</div>
+<div className={cn(scrollThinY, "max-h-48")}>…список в форме…</div>
+```

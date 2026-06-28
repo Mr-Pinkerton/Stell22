@@ -24,20 +24,33 @@ export interface FiltersBarProps extends SectionFilters {
   onSearchChange?: (value: string) => void;
   archiveChecked?: boolean;
   onArchiveChange?: (checked: boolean) => void;
+  dateFilterValue?: DateFilterValue;
+  onDateFilterChange?: (value: DateFilterValue) => void;
 }
 
 export function FiltersBar({
   search,
   date,
+  dateAllTime,
   weeks,
   archive,
   searchValue,
   onSearchChange,
   archiveChecked,
   onArchiveChange,
+  dateFilterValue,
+  onDateFilterChange,
 }: FiltersBarProps) {
   const hasAny = search || date || weeks || archive;
-  const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
+  const [internalDateFilter, setInternalDateFilter] = useState<DateFilterValue>(
+    getDefaultDateFilterValue,
+  );
+  const dateFilter = dateFilterValue ?? internalDateFilter;
+
+  const setDateFilter = (value: DateFilterValue) => {
+    if (onDateFilterChange) onDateFilterChange(value);
+    else setInternalDateFilter(value);
+  };
   const [weekFilter, setWeekFilter] = useState(getDefaultWeekFilterValue);
   const [internalSearch, setInternalSearch] = useState("");
   const [internalArchive, setInternalArchive] = useState(false);
@@ -68,6 +81,19 @@ export function FiltersBar({
     setShowArchive(false);
   };
 
+  const selectAllTime = () => {
+    setDateFilter({
+      month: dateFilter.month,
+      rangeStart: null,
+      rangeEnd: null,
+      allTime: true,
+    });
+  };
+
+  const handleDateChange = (value: DateFilterValue) => {
+    setDateFilter({ ...value, allTime: false });
+  };
+
   return (
     <div className="surface-card-elevated flex flex-wrap items-end gap-4 p-4 md:p-5">
       {search && (
@@ -86,7 +112,23 @@ export function FiltersBar({
       )}
       {date && (
         <div className="grid gap-1.5">
-          <DateFilter value={dateFilter} onChange={setDateFilter} />
+          <Label className="cursor-default">Дата</Label>
+          <div className="flex flex-wrap items-center gap-2">
+            <DateFilter value={dateFilter} onChange={handleDateChange} />
+            {dateAllTime && (
+              <Button
+                type="button"
+                variant={dateFilter.allTime ? "default" : "outline"}
+                className={cn(
+                  filterActionClass,
+                  !dateFilter.allTime && "border-[#D0D5DD] bg-card hover:border-[#98A2B3] hover:bg-muted border",
+                )}
+                onClick={selectAllTime}
+              >
+                За всё время
+              </Button>
+            )}
+          </div>
         </div>
       )}
       {weeks && (

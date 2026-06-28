@@ -27,6 +27,7 @@ export interface DateFilterValue {
   month: Date;
   rangeStart: Date | null;
   rangeEnd: Date | null;
+  allTime?: boolean;
 }
 
 interface DateFilterProps {
@@ -36,10 +37,11 @@ interface DateFilterProps {
 
 function getDefaultValue(): DateFilterValue {
   const month = getCurrentMonth();
-  return { month, rangeStart: null, rangeEnd: null };
+  return { month, rangeStart: null, rangeEnd: null, allTime: false };
 }
 
 function getDisplayLabel(value: DateFilterValue): string {
+  if (value.allTime) return "За всё время";
   if (value.rangeStart && value.rangeEnd) {
     return formatFilterDateRange(value.rangeStart, value.rangeEnd);
   }
@@ -63,7 +65,11 @@ export function DateFilter({ value, onChange }: DateFilterProps) {
   const calendarDays = useMemo(() => buildCalendarMonth(viewMonth), [viewMonth]);
 
   const updateValue = (patch: Partial<DateFilterValue>) => {
-    setValue({ ...current, ...patch });
+    const next = { ...current, ...patch };
+    if (patch.allTime !== true && (patch.rangeStart !== undefined || patch.rangeEnd !== undefined || patch.month !== undefined)) {
+      next.allTime = false;
+    }
+    setValue(next);
   };
 
   const handleOpenChange = (nextOpen: boolean) => {

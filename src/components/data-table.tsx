@@ -22,6 +22,7 @@ interface DataTableProps<T extends { id: string }> {
   className?: string;
   /** Горизонтальные отступы ячеек от краёв контейнера. */
   padded?: boolean;
+  rowClassName?: (row: T, index: number) => string | undefined;
 }
 
 const cellPad = "px-4 first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
@@ -37,6 +38,7 @@ export function DataTable<T extends { id: string }>({
   empty = "Нет данных",
   className,
   padded = false,
+  rowClassName,
 }: DataTableProps<T>) {
   return (
     <div className={cn("rounded-lg border", className)}>
@@ -70,7 +72,10 @@ export function DataTable<T extends { id: string }>({
             rows.map((row, index) => (
               <TableRow
                 key={row.id}
-                className={cn(index % 2 === 1 && "bg-muted/40 hover:bg-muted/55")}
+                className={cn(
+                  index % 2 === 1 && "bg-muted/40 hover:bg-muted/55",
+                  rowClassName?.(row, index),
+                )}
               >
                 {columns.map((c, index) => (
                   <TableCell

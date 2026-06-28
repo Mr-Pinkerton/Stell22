@@ -1,0 +1,41 @@
+---
+description: Единый стиль модальных окон форм (добавление/редактирование)
+globs: **/*form-dialog*.tsx,**/finance/**
+alwaysApply: true
+---
+
+# Модальные окна форм
+
+Эталон: `src/components/purchases/batch-form-dialog.tsx`,
+`src/components/employees/employee-form-dialog.tsx`,
+`src/components/nomenclature/detail-form-dialog.tsx`.
+
+## Обязательно использовать общие модули
+- Оболочка диалога: `FormDialog`, классы — `src/components/form-dialog-shared.tsx`
+- Поля, селекты, секции: `src/components/nomenclature/form-shared.tsx`
+  (`fieldClass`, `narrowFieldClass`, `selectTriggerClass`, `formSelectContentProps`,
+  `Field`, `FormSection`)
+
+Не дублировать стили заголовка/футера/полей в каждой модалке.
+
+## Оболочка `FormDialog`
+- `DialogContent`: `gap-0 overflow-hidden p-0 sm:max-w-*`, `showCloseButton={false}`
+- Контент только при `open` (сброс состояния формы)
+- Заголовок: `border-border flex … border-b px-6 py-4`, title `text-lg font-semibold`
+- Кнопка закрытия: `FormDialogCloseButton` (`icon-action-btn`, `XIcon` 1.4rem)
+- Тело: `scrollbar-thin-y max-h-[min(70vh,32rem)] space-y-5 overflow-y-auto px-6 py-6`
+  (для длинных форм — `bodyTall`, как в форме партии)
+- Футер: `bg-muted/50 border-border !m-0 gap-2 border-t px-6 py-4 sm:justify-end`
+- Кнопки футера: `h-10 rounded-xl px-5` — «Отмена» `variant="outline"`,
+  основная **без** `variant="brand"` (оранжевая — дефолтная кнопка)
+
+## Поля ввода
+- Текст/числа: `fieldClass` на `Input`
+- Деньги: `MoneyInput` + `narrowFieldClass`, суффикс `₽` / `₽/м³` и т.д.
+- Select: `selectTriggerClass` + `formSelectContentProps`, пункты `rounded-lg cursor-pointer`
+- Сетка полей: `grid gap-4 sm:grid-cols-2`, подписи через `Field` с `*` для обязательных
+
+## Ширина
+- Простая форма (1–3 поля): `sm:max-w-md`
+- Средняя: `sm:max-w-lg`
+- Сложная (партия, сотрудник): `sm:max-w-xl` / `sm:max-w-2xl` + `bodyTall`

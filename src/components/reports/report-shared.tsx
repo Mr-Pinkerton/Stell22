@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 export function SegmentTabs<T extends string>({
@@ -5,38 +6,43 @@ export function SegmentTabs<T extends string>({
   value,
   onChange,
   ariaLabel,
+  trailing,
 }: {
   tabs: { key: T; label: string }[];
   value: T;
   onChange: (key: T) => void;
   ariaLabel: string;
+  trailing?: ReactNode;
 }) {
   return (
-    <div
-      className="bg-muted inline-flex flex-wrap gap-1 rounded-2xl p-1"
-      role="tablist"
-      aria-label={ariaLabel}
-    >
-      {tabs.map(({ key, label }) => {
-        const active = value === key;
-        return (
-          <button
-            key={key}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            onClick={() => onChange(key)}
-            className={cn(
-              "h-10 cursor-pointer rounded-xl px-4 text-sm font-semibold transition-colors",
-              active
-                ? "bg-card text-foreground shadow-soft"
-                : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {label}
-          </button>
-        );
-      })}
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div
+        className="bg-muted inline-flex flex-wrap gap-1 rounded-2xl p-1"
+        role="tablist"
+        aria-label={ariaLabel}
+      >
+        {tabs.map(({ key, label }) => {
+          const active = value === key;
+          return (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => onChange(key)}
+              className={cn(
+                "h-10 cursor-pointer rounded-xl px-4 text-sm font-semibold transition-colors",
+                active
+                  ? "bg-card text-foreground shadow-soft"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      {trailing}
     </div>
   );
 }

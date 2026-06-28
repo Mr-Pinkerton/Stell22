@@ -16,6 +16,8 @@ import {
 export interface SectionFilters {
   search?: boolean;
   date?: boolean;
+  /** Кнопка «За всё время» рядом с фильтром даты (Финансы). */
+  dateAllTime?: boolean;
   weeks?: boolean;
   archive?: boolean;
 }
@@ -83,7 +85,7 @@ export const navItems: NavItem[] = [
     icon: Wallet,
     canExport: true,
     addLabel: "Добавить",
-    filters: { date: true },
+    filters: { date: true, dateAllTime: true },
   },
   {
     slug: "production",

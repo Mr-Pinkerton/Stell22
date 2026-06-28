@@ -29,7 +29,7 @@ export const expandableNestedCellPad = "px-4 py-2.5 first:pl-5 last:pr-6 md:firs
 export const expandableNestedSurfaceClass = "bg-muted/30";
 
 export const expandableNestedTableShellClass = cn(
-  "overflow-x-auto rounded-xl border border-border",
+  "scrollbar-thin-x overflow-x-auto rounded-xl border border-border",
   expandableNestedSurfaceClass,
 );
 
