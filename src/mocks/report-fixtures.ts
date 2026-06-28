@@ -1,7 +1,22 @@
 // Моки для отчётов (UI-прототип, Этап 2).
 
-import { batches, employees, products, railLots, terminalEntries } from "@/mocks/fixtures";
+import {
+  batches,
+  details as allDetails,
+  employees,
+  nomenclatureItems,
+  products,
+  railLots,
+  terminalEntries,
+} from "@/mocks/fixtures";
+import { financeArticles, financeCashFlows } from "@/mocks/finance-fixtures";
+import { producedLines, producedProductQty } from "@/mocks/production-facts";
 import { buildPurchaseRows, sectionAreaM2 } from "@/lib/batch-stats";
+import {
+  buildCostDetailRows,
+  buildCostProductRows,
+  periodOverheadFromCashFlows,
+} from "@/lib/cost-report";
 import type { BatchStatus, CostStatus, RailType, Sort } from "@/types/domain";
 
 export interface PurchasePackageLine {
@@ -185,96 +200,30 @@ export const purchaseReportRows: PurchaseReportRow[] = purchaseBase.map((b) => {
   };
 });
 
-export const costDetailRows: CostDetailRow[] = [
-  {
-    id: "cd-1",
-    name: "Полка 600",
-    batchName: "Волочек 2419",
-    workCost: 8,
-    materialCost: 42,
-    costStatus: "PRELIMINARY",
-  },
-  {
-    id: "cd-2",
-    name: "Канавка 720",
-    batchName: "Сосна 3020",
-    workCost: 11,
-    materialCost: 58,
-    costStatus: "PRELIMINARY",
-  },
-  {
-    id: "cd-3",
-    name: "Полка 800",
-    batchName: "Ель 1812",
-    workCost: 9,
-    materialCost: 51,
-    costStatus: "FINAL",
-  },
-  {
-    id: "cd-4",
-    name: "Канавка 600",
-    batchName: "Бук 4025",
-    workCost: 7,
-    materialCost: 38,
-    costStatus: "FINAL",
-  },
-];
+const overheadArticleNames = new Set(
+  financeArticles.filter((a) => a.isOverhead).map((a) => a.name),
+);
+const periodOverhead = periodOverheadFromCashFlows(financeCashFlows, overheadArticleNames);
 
-export const costProductRows: CostProductRow[] = [
-  {
-    id: "cp-1",
-    name: products[0].name,
-    sku: products[0].sku,
-    material: 84,
-    materialPct: 52,
-    work: 46,
-    workPct: 29,
-    direct: 165,
-    directPct: 100,
-    overhead: 28,
-    overheadPct: 17,
-    full: 193,
-    details: [
-      {
-        detailName: "Полка 600",
-        lengthM: 0.6,
-        quantity: 2,
-        materialCost: 42,
-        workCost: 16,
-      },
-    ],
-  },
-  {
-    id: "cp-2",
-    name: products[1].name,
-    sku: products[1].sku,
-    material: 112,
-    materialPct: 48,
-    work: 68,
-    workPct: 29,
-    direct: 232,
-    directPct: 100,
-    overhead: 41,
-    overheadPct: 18,
-    full: 273,
-    details: [
-      {
-        detailName: "Полка 800",
-        lengthM: 0.8,
-        quantity: 2,
-        materialCost: 51,
-        workCost: 18,
-      },
-      {
-        detailName: "Канавка 720",
-        lengthM: 0.72,
-        quantity: 1,
-        materialCost: 58,
-        workCost: 22,
-      },
-    ],
-  },
-];
+// Себестоимость считается движком (lib/cost-report) на доменных данных
+// и производственных фактах (mocks/production-facts) — Этап 9.
+export const costDetailRows: CostDetailRow[] = buildCostDetailRows({
+  batches,
+  details: allDetails,
+  employees,
+  lines: producedLines,
+});
+
+export const costProductRows: CostProductRow[] = buildCostProductRows({
+  products,
+  batches,
+  details: allDetails,
+  employees,
+  nomenclature: nomenclatureItems,
+  lines: producedLines,
+  producedProductQty,
+  periodOverhead,
+});
 
 function isoDateOnly(iso: string): string {
   return iso.slice(0, 10);
