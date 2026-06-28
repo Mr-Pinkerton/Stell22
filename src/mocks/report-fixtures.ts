@@ -1,14 +1,23 @@
 // Моки для отчётов (UI-прототип, Этап 2).
 
-import {
-  batches,
-  employees,
-  products,
-  railLots,
-  terminalEntries,
-} from "@/mocks/fixtures";
-import { buildPurchaseRows } from "@/lib/batch-stats";
-import type { BatchStatus, CostStatus } from "@/types/domain";
+import { batches, employees, products, railLots, terminalEntries } from "@/mocks/fixtures";
+import { buildPurchaseRows, sectionAreaM2 } from "@/lib/batch-stats";
+import type { BatchStatus, CostStatus, RailType, Sort } from "@/types/domain";
+
+export interface PurchasePackageLine {
+  id: string;
+  code: string | null;
+  isPackage: boolean;
+  lengthM: number;
+  railType: RailType;
+  sort: Sort;
+  quantity: number;
+  remainingQuantity: number;
+  volumeM3: number;
+  rows?: number | null;
+  layers?: number | null;
+  workerName: string;
+}
 
 export interface PurchaseReportRow {
   id: string;
@@ -20,6 +29,7 @@ export interface PurchaseReportRow {
   sortFactPct: { sort1: number; sort2: number };
   avgCostPerM3: number;
   status: BatchStatus;
+  packages: PurchasePackageLine[];
 }
 
 export interface CostDetailRow {
@@ -105,8 +115,6 @@ export interface SalesReportRow {
   revenue: number;
 }
 
-const purchaseBase = buildPurchaseRows(batches, railLots);
-
 const SORT_FACT_BY_BATCH: Record<string, { sort1: number; sort2: number }> = {
   "batch-1": { sort1: 58, sort2: 42 },
   "batch-2": { sort1: 62, sort2: 38 },
@@ -122,11 +130,46 @@ function sortPurchasePct(batchId: string): { sort1: number; sort2: number } {
   return { sort1: declared.sort1 + drift - 2, sort2: declared.sort2 - drift + 2 };
 }
 
+const productionWorkers = employees.filter(
+  (e) => e.status === "ACTIVE" && e.id !== "emp-2",
+);
+
+function workerForLot(lotId: string, batchId: string): string {
+  if (productionWorkers.length === 0) return "—";
+  const seed =
+    lotId.split("").reduce((s, c) => s + c.charCodeAt(0), 0) +
+    batchId.split("").reduce((s, c) => s + c.charCodeAt(0), 0);
+  return productionWorkers[seed % productionWorkers.length]!.fullName;
+}
+
+function buildPackages(batchId: string): PurchasePackageLine[] {
+  const batch = batches.find((b) => b.id === batchId);
+  const area = batch ? sectionAreaM2(batch.sectionWidthMm, batch.sectionHeightMm) : 0;
+
+  return railLots
+    .filter((l) => l.batchId === batchId)
+    .map((lot) => ({
+      id: lot.id,
+      code: lot.code ?? null,
+      isPackage: lot.isPackage,
+      lengthM: lot.lengthM,
+      railType: lot.railType,
+      sort: lot.sort,
+      quantity: lot.quantity,
+      remainingQuantity: lot.remainingQuantity,
+      volumeM3: lot.quantity * area * lot.lengthM,
+      rows: lot.rows,
+      layers: lot.layers,
+      workerName: workerForLot(lot.id, batchId),
+    }));
+}
+
+const purchaseBase = buildPurchaseRows(batches, railLots);
+
 export const purchaseReportRows: PurchaseReportRow[] = purchaseBase.map((b) => {
   const fact = SORT_FACT_BY_BATCH[b.id] ?? { sort1: 60, sort2: 40 };
   const declared = sortPurchasePct(b.id);
-  const avgCostPerM3 =
-    b.stats.volumeM3 > 0 ? Math.round(b.totalCost / b.stats.volumeM3) : 0;
+  const avgCostPerM3 = b.stats.volumeM3 > 0 ? Math.round(b.totalCost / b.stats.volumeM3) : 0;
 
   return {
     id: b.id,
@@ -138,6 +181,7 @@ export const purchaseReportRows: PurchaseReportRow[] = purchaseBase.map((b) => {
     sortFactPct: fact,
     avgCostPerM3,
     status: b.status,
+    packages: buildPackages(b.id),
   };
 });
 
@@ -237,9 +281,7 @@ function isoDateOnly(iso: string): string {
 }
 
 function buildSalaryRows(): SalaryReportRow[] {
-  const productionEmployees = employees.filter(
-    (e) => e.status === "ACTIVE" && e.id !== "emp-4",
-  );
+  const productionEmployees = employees.filter((e) => e.status === "ACTIVE" && e.id !== "emp-4");
 
   const byEmployee = new Map<
     string,

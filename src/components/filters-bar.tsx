@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -12,6 +12,7 @@ import {
   getDefaultDateFilterValue,
   type DateFilterValue,
 } from "@/components/date-filter";
+import { WeekFilter, getDefaultWeekFilterValue } from "@/components/week-filter";
 
 const filterInputClass =
   "border-border bg-card hover:border-[#98a2b3] focus-visible:border-ring focus-visible:bg-card h-10 min-h-10 cursor-text rounded-xl border px-4";
@@ -37,8 +38,13 @@ export function FiltersBar({
 }: FiltersBarProps) {
   const hasAny = search || date || weeks || archive;
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
+  const [weekFilter, setWeekFilter] = useState(getDefaultWeekFilterValue);
   const [internalSearch, setInternalSearch] = useState("");
   const [internalArchive, setInternalArchive] = useState(false);
+
+  useEffect(() => {
+    setWeekFilter(getDefaultWeekFilterValue());
+  }, [dateFilter.month.getTime()]);
 
   const query = searchValue ?? internalSearch;
   const showArchive = archiveChecked ?? internalArchive;
@@ -57,6 +63,7 @@ export function FiltersBar({
 
   const handleReset = () => {
     setDateFilter(getDefaultDateFilterValue());
+    setWeekFilter(getDefaultWeekFilterValue());
     setQuery("");
     setShowArchive(false);
   };
@@ -83,12 +90,7 @@ export function FiltersBar({
         </div>
       )}
       {weeks && (
-        <div className="grid gap-1.5">
-          <Label htmlFor="f-week" className="cursor-default">
-            Неделя
-          </Label>
-          <Input id="f-week" placeholder="Неделя месяца" className={cn("w-40", filterInputClass)} />
-        </div>
+        <WeekFilter month={dateFilter.month} value={weekFilter} onChange={setWeekFilter} />
       )}
       {archive && (
         <label className="border-border bg-card hover:border-[#98a2b3] hover:bg-muted/40 flex h-10 cursor-pointer items-center gap-2.5 self-end rounded-xl border px-3.5 text-sm font-medium transition-colors">

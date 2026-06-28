@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -10,20 +10,36 @@ import {
   type CostProductRow,
 } from "@/mocks/report-fixtures";
 import { formatLength, formatMoney } from "@/lib/format";
+import {
+  ExpandableDetailRow,
+  ExpandableMainHeader,
+  ExpandableReportTable,
+  NestedTable,
+  NestedTableCell,
+  expandableChevronClass,
+  expandableColWidths6,
+  expandableNestedWrapClass,
+  expandableSummaryBorderClass,
+  expandableSummaryCellClass,
+} from "@/components/reports/expandable-table";
 import { SegmentTabs } from "@/components/reports/report-shared";
 import { DataTable, type Column } from "@/components/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { TableCell, TableRow } from "@/components/ui/table";
 
 type CostSubTab = "details" | "products";
+
+const PRODUCT_HEADERS = [
+  "Изделие",
+  "Материал",
+  "Работа",
+  "Прямая",
+  "Накладные",
+  "Полная",
+] as const;
+
+const PRODUCT_DETAIL_HEADERS = ["Деталь", "Длина", "Кол-во", "Материал", "Работа"];
 
 function costStatusBadge(status: CostDetailRow["costStatus"]) {
   return (
@@ -102,52 +118,32 @@ export function ReportCostTab() {
         </Card>
       ) : (
         <Card className="surface-card ring-0 overflow-hidden">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {[
-                  "Изделие",
-                  "Материал",
-                  "Работа",
-                  "Прямая",
-                  "Накладные",
-                  "Полная",
-                  "",
-                ].map((h, i) => (
-                  <TableHead
-                    key={h || "exp"}
-                    className={cn(
-                      "bg-card text-base font-semibold h-11 px-4 first:pl-5 last:pr-5",
-                      i > 0 && "text-center",
-                    )}
-                  >
-                    {h}
-                  </TableHead>
-                ))}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {costProductRows.map((row, index) => {
-                const expanded = expandedId === row.id;
-                return (
-                  <ProductCostRows
-                    key={row.id}
-                    row={row}
-                    expanded={expanded}
-                    striped={index % 2 === 1}
-                    onToggle={() => setExpandedId(expanded ? null : row.id)}
-                  />
-                );
-              })}
-            </TableBody>
-          </Table>
+          <ExpandableReportTable
+            widths={expandableColWidths6}
+            header={
+              <ExpandableMainHeader labels={PRODUCT_HEADERS} />
+            }
+          >
+            {costProductRows.map((row, index) => {
+              const expanded = expandedId === row.id;
+              return (
+                <ProductCostRowGroup
+                  key={row.id}
+                  row={row}
+                  expanded={expanded}
+                  striped={index % 2 === 1}
+                  onToggle={() => setExpandedId(expanded ? null : row.id)}
+                />
+              );
+            })}
+          </ExpandableReportTable>
         </Card>
       )}
     </div>
   );
 }
 
-function ProductCostRows({
+function ProductCostRowGroup({
   row,
   expanded,
   striped,
@@ -159,82 +155,69 @@ function ProductCostRows({
   onToggle: () => void;
 }) {
   return (
-    <>
+    <Fragment>
       <TableRow
         className={cn(
-          "cursor-pointer",
+          "cursor-pointer align-top",
           striped && "bg-muted/40",
-          expanded && "bg-muted/30",
+          expanded && "bg-muted/35",
+          "hover:bg-muted/50",
+          expanded && expandableSummaryBorderClass,
         )}
         onClick={onToggle}
       >
-        <TableCell className="px-5 py-3">
+        <TableCell className={expandableSummaryCellClass}>
           <div className="flex items-center gap-2">
             {expanded ? (
-              <ChevronDown className="text-muted-foreground size-4 shrink-0" />
+              <ChevronDown className={expandableChevronClass} />
             ) : (
-              <ChevronRight className="text-muted-foreground size-4 shrink-0" />
+              <ChevronRight className={expandableChevronClass} />
             )}
-            <div>
-              <p className="font-medium">{row.name}</p>
-              <p className="text-muted-foreground text-xs">{row.sku}</p>
+            <div className="min-w-0">
+              <p className="truncate font-medium">{row.name}</p>
+              <p className="text-muted-foreground truncate text-xs">{row.sku}</p>
             </div>
           </div>
         </TableCell>
-        <TableCell className="text-center tabular-nums">
+        <TableCell className={cn(expandableSummaryCellClass, "text-center tabular-nums")}>
           {moneyWithPct(row.material, row.materialPct)}
         </TableCell>
-        <TableCell className="text-center tabular-nums">
+        <TableCell className={cn(expandableSummaryCellClass, "text-center tabular-nums")}>
           {moneyWithPct(row.work, row.workPct)}
         </TableCell>
-        <TableCell className="text-center tabular-nums">
+        <TableCell className={cn(expandableSummaryCellClass, "text-center tabular-nums")}>
           {moneyWithPct(row.direct, row.directPct)}
         </TableCell>
-        <TableCell className="text-center tabular-nums">
+        <TableCell className={cn(expandableSummaryCellClass, "text-center tabular-nums")}>
           {moneyWithPct(row.overhead, row.overheadPct)}
         </TableCell>
-        <TableCell className="text-center font-semibold tabular-nums">
+        <TableCell className={cn(expandableSummaryCellClass, "text-center font-semibold tabular-nums")}>
           {formatMoney(row.full)}
         </TableCell>
-        <TableCell className="w-8" />
       </TableRow>
       {expanded && (
-        <TableRow className="bg-muted/20 hover:bg-muted/20">
-          <TableCell colSpan={7} className="px-5 py-4">
-            <p className="mb-3 text-sm font-semibold">Детализация по деталям</p>
-            <div className="overflow-x-auto rounded-xl border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Деталь</TableHead>
-                    <TableHead className="text-center">Длина</TableHead>
-                    <TableHead className="text-center">Кол-во</TableHead>
-                    <TableHead className="text-center">Материал</TableHead>
-                    <TableHead className="text-center">Работа</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {row.details.map((d) => (
-                    <TableRow key={`${row.id}-${d.detailName}`}>
-                      <TableCell className="font-medium">{d.detailName}</TableCell>
-                      <TableCell className="text-center tabular-nums">
-                        {formatLength(d.lengthM)}
-                      </TableCell>
-                      <TableCell className="text-center tabular-nums">{d.quantity}</TableCell>
-                      <TableCell className="text-center tabular-nums">
-                        {formatMoney(d.materialCost)}
-                      </TableCell>
-                      <TableCell className="text-center tabular-nums">
-                        {formatMoney(d.workCost)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </TableCell>
-        </TableRow>
+        <ExpandableDetailRow colSpan={6} className={cn(striped && "bg-muted/40", "bg-muted/35")}>
+          <div className={expandableNestedWrapClass}>
+            <NestedTable headers={PRODUCT_DETAIL_HEADERS} isEmpty={row.details.length === 0}>
+              {row.details.map((d) => (
+                <TableRow key={`${row.id}-${d.detailName}`}>
+                  <NestedTableCell className="font-medium">{d.detailName}</NestedTableCell>
+                  <NestedTableCell className="text-center tabular-nums">
+                    {formatLength(d.lengthM)}
+                  </NestedTableCell>
+                  <NestedTableCell className="text-center tabular-nums">{d.quantity}</NestedTableCell>
+                  <NestedTableCell className="text-center tabular-nums">
+                    {formatMoney(d.materialCost)}
+                  </NestedTableCell>
+                  <NestedTableCell className="text-center tabular-nums">
+                    {formatMoney(d.workCost)}
+                  </NestedTableCell>
+                </TableRow>
+              ))}
+            </NestedTable>
+          </div>
+        </ExpandableDetailRow>
       )}
-    </>
+    </Fragment>
   );
 }

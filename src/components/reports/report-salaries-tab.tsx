@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -11,9 +11,22 @@ import {
 } from "@/mocks/report-fixtures";
 import { formatIsoDate, formatMoney } from "@/lib/format";
 import { BanknoteTiles } from "@/components/reports/banknote-tiles";
+import {
+  ExpandableDetailRow,
+  ExpandableMainHeader,
+  ExpandableReportTable,
+  NestedTable,
+  NestedTableCell,
+  expandableChevronClass,
+  expandableColWidths6,
+  expandableNestedWrapClass,
+  expandableSummaryBorderClass,
+  expandableSummaryCellClass,
+} from "@/components/reports/expandable-table";
 import { KpiTile } from "@/components/kpi-tile";
+import { filterSelectTriggerClass } from "@/components/filter-fields";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -21,14 +34,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { TableCell, TableRow } from "@/components/ui/table";
+
+const SALARY_HEADERS = [
+  "Сотрудник",
+  "К выплате",
+  "Произведено",
+  "В среднем",
+  "Итого",
+  "",
+] as const;
+
+const SALARY_DAY_HEADERS = ["Дата", "Часы", "Торцовка", "Присадка", "Упаковка", "Итого"];
 
 export function ReportSalariesTab() {
   const [rows, setRows] = useState(salaryReportRows);
@@ -67,59 +84,43 @@ export function ReportSalariesTab() {
       </div>
 
       <Card className="surface-card ring-0 overflow-hidden">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              {[
-                "Сотрудник",
-                "К выплате",
-                "Произведено",
-                "В среднем",
-                "Итого",
-                "",
-              ].map((h, i) => (
-                <TableHead
-                  key={h || "act"}
-                  className={cn(
-                    "bg-card h-11 px-4 text-base font-semibold first:pl-5 last:pr-5",
-                    i > 0 && "text-center",
-                  )}
-                >
-                  {h}
-                </TableHead>
-              ))}
+        <ExpandableReportTable
+          widths={expandableColWidths6}
+          header={
+            <ExpandableMainHeader labels={SALARY_HEADERS} />
+          }
+        >
+          {unpaid.map((row, index) => (
+            <SalaryRowGroup
+              key={row.id}
+              row={row}
+              expanded={expandedId === row.id}
+              striped={index % 2 === 1}
+              onToggle={() => setExpandedId(expandedId === row.id ? null : row.id)}
+              onPaid={() => markPaid(row.id)}
+            />
+          ))}
+          {paid.length > 0 && (
+            <TableRow className="bg-muted/60 hover:bg-muted/60">
+              <TableCell
+                colSpan={6}
+                className="text-muted-foreground px-5 py-2 text-xs font-semibold tracking-wide uppercase"
+              >
+                Выплаченные
+              </TableCell>
             </TableRow>
-          </TableHeader>
-          <TableBody>
-            {unpaid.map((row, index) => (
-              <SalaryRows
-                key={row.id}
-                row={row}
-                expanded={expandedId === row.id}
-                striped={index % 2 === 1}
-                onToggle={() => setExpandedId(expandedId === row.id ? null : row.id)}
-                onPaid={() => markPaid(row.id)}
-              />
-            ))}
-            {paid.length > 0 && (
-              <TableRow className="bg-muted/60 hover:bg-muted/60">
-                <TableCell colSpan={6} className="text-muted-foreground px-5 py-2 text-xs font-semibold tracking-wide uppercase">
-                  Выплаченные
-                </TableCell>
-              </TableRow>
-            )}
-            {paid.map((row, index) => (
-              <SalaryRows
-                key={row.id}
-                row={row}
-                expanded={expandedId === row.id}
-                striped={index % 2 === 1}
-                onToggle={() => setExpandedId(expandedId === row.id ? null : row.id)}
-                paid
-              />
-            ))}
-          </TableBody>
-        </Table>
+          )}
+          {paid.map((row, index) => (
+            <SalaryRowGroup
+              key={row.id}
+              row={row}
+              expanded={expandedId === row.id}
+              striped={index % 2 === 1}
+              onToggle={() => setExpandedId(expandedId === row.id ? null : row.id)}
+              paid
+            />
+          ))}
+        </ExpandableReportTable>
       </Card>
 
       {billRow && (
@@ -133,7 +134,7 @@ export function ReportSalariesTab() {
               <Select value={billEmployeeId} onValueChange={(v) => setBillEmployeeId(v ?? "")}>
                 <SelectTrigger
                   id="bill-emp"
-                  className="border-border bg-card h-10 w-full min-w-[16rem] cursor-pointer rounded-xl border px-4"
+                  className={cn(filterSelectTriggerClass, "w-full min-w-[17.5rem]")}
                 >
                   <SelectValue>{billRow.employeeName}</SelectValue>
                 </SelectTrigger>
@@ -154,7 +155,7 @@ export function ReportSalariesTab() {
   );
 }
 
-function SalaryRows({
+function SalaryRowGroup({
   row,
   expanded,
   striped,
@@ -170,28 +171,43 @@ function SalaryRows({
   paid?: boolean;
 }) {
   return (
-    <>
+    <Fragment>
       <TableRow
-        className={cn("cursor-pointer", striped && "bg-muted/40", expanded && "bg-muted/30")}
+        className={cn(
+          "cursor-pointer align-top",
+          striped && "bg-muted/40",
+          expanded && "bg-muted/35",
+          "hover:bg-muted/50",
+          expanded && expandableSummaryBorderClass,
+        )}
         onClick={onToggle}
       >
-        <TableCell className="px-5 py-3">
+        <TableCell className={expandableSummaryCellClass}>
           <div className="flex items-center gap-2">
             {expanded ? (
-              <ChevronDown className="text-muted-foreground size-4 shrink-0" />
+              <ChevronDown className={expandableChevronClass} />
             ) : (
-              <ChevronRight className="text-muted-foreground size-4 shrink-0" />
+              <ChevronRight className={expandableChevronClass} />
             )}
             <span className="font-medium">{row.employeeName}</span>
           </div>
         </TableCell>
-        <TableCell className="text-center tabular-nums">{formatMoney(row.amountDue)}</TableCell>
-        <TableCell className="text-center tabular-nums">{row.produced} шт</TableCell>
-        <TableCell className="text-center tabular-nums">{formatMoney(row.avgPerUnit)}</TableCell>
-        <TableCell className="text-center font-semibold tabular-nums">
+        <TableCell className={cn(expandableSummaryCellClass, "text-center tabular-nums")}>
+          {formatMoney(row.amountDue)}
+        </TableCell>
+        <TableCell className={cn(expandableSummaryCellClass, "text-center tabular-nums")}>
+          {row.produced} шт
+        </TableCell>
+        <TableCell className={cn(expandableSummaryCellClass, "text-center tabular-nums")}>
+          {formatMoney(row.avgPerUnit)}
+        </TableCell>
+        <TableCell className={cn(expandableSummaryCellClass, "text-center font-semibold tabular-nums")}>
           {formatMoney(row.total)}
         </TableCell>
-        <TableCell className="px-4 text-center" onClick={(e) => e.stopPropagation()}>
+        <TableCell
+          className={cn(expandableSummaryCellClass, "text-center")}
+          onClick={(e) => e.stopPropagation()}
+        >
           {!paid && onPaid && (
             <Button
               type="button"
@@ -208,47 +224,33 @@ function SalaryRows({
         </TableCell>
       </TableRow>
       {expanded && (
-        <TableRow className="bg-muted/20 hover:bg-muted/20">
-          <TableCell colSpan={6} className="px-5 py-4">
-            <div className="overflow-x-auto rounded-xl border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Дата</TableHead>
-                    <TableHead className="text-center">Часы</TableHead>
-                    <TableHead className="text-center">Торцовка</TableHead>
-                    <TableHead className="text-center">Присадка</TableHead>
-                    <TableHead className="text-center">Упаковка</TableHead>
-                    <TableHead className="text-center">Итого</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {row.days.map((d) => (
-                    <TableRow key={d.date}>
-                      <TableCell>{formatIsoDate(d.date)}</TableCell>
-                      <TableCell className="text-center tabular-nums">
-                        {d.hours ? d.hours : ""}
-                      </TableCell>
-                      <TableCell className="text-center tabular-nums">
-                        {d.torcovka ? formatMoney(d.torcovka) : ""}
-                      </TableCell>
-                      <TableCell className="text-center tabular-nums">
-                        {d.prisadka ? formatMoney(d.prisadka) : ""}
-                      </TableCell>
-                      <TableCell className="text-center tabular-nums">
-                        {d.upakovka ? formatMoney(d.upakovka) : ""}
-                      </TableCell>
-                      <TableCell className="text-center font-medium tabular-nums">
-                        {formatMoney(d.total)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </TableCell>
-        </TableRow>
+        <ExpandableDetailRow colSpan={6} className={cn(striped && "bg-muted/40", "bg-muted/35")}>
+          <div className={expandableNestedWrapClass}>
+            <NestedTable headers={SALARY_DAY_HEADERS} isEmpty={row.days.length === 0}>
+              {row.days.map((d) => (
+                <TableRow key={d.date}>
+                  <NestedTableCell>{formatIsoDate(d.date)}</NestedTableCell>
+                  <NestedTableCell className="text-center tabular-nums">
+                    {d.hours ? d.hours : ""}
+                  </NestedTableCell>
+                  <NestedTableCell className="text-center tabular-nums">
+                    {d.torcovka ? formatMoney(d.torcovka) : ""}
+                  </NestedTableCell>
+                  <NestedTableCell className="text-center tabular-nums">
+                    {d.prisadka ? formatMoney(d.prisadka) : ""}
+                  </NestedTableCell>
+                  <NestedTableCell className="text-center tabular-nums">
+                    {d.upakovka ? formatMoney(d.upakovka) : ""}
+                  </NestedTableCell>
+                  <NestedTableCell className="text-center font-medium tabular-nums">
+                    {formatMoney(d.total)}
+                  </NestedTableCell>
+                </TableRow>
+              ))}
+            </NestedTable>
+          </div>
+        </ExpandableDetailRow>
       )}
-    </>
+    </Fragment>
   );
 }

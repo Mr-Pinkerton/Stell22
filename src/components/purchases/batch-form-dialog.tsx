@@ -34,7 +34,7 @@ const narrowFieldClass = cn(fieldClass, "w-full sm:max-w-none");
 
 const selectTriggerClass = cn(
   fieldClass,
-  "w-full cursor-pointer pr-8 pl-4 data-[size=default]:h-10",
+  "w-full cursor-pointer data-[size=default]:h-10",
 );
 
 const selectContentClass = "rounded-xl shadow-balanced ring-0 p-1.5";
