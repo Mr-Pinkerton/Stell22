@@ -17,6 +17,7 @@ import {
   buildCostProductRows,
   periodOverheadFromCashFlows,
 } from "@/lib/cost-report";
+import { batchWaste, employeeWaste } from "@/lib/waste";
 import type { BatchStatus, CostStatus, RailType, Sort } from "@/types/domain";
 
 export interface PurchasePackageLine {
@@ -295,79 +296,65 @@ function buildSalaryRows(): SalaryReportRow[] {
 
 export const salaryReportRows: SalaryReportRow[] = buildSalaryRows();
 
-export const wasteBatchRows: WasteBatchRow[] = [
-  {
-    id: "wb-1",
-    batchName: "Волочек 2419",
-    purchasedM: 1240,
-    takenM: 980,
-    remainingM: 180,
-    wasteTorcovkaM: 62,
-    writtenOffM: 18,
-    wastePct: 24,
-    status: "IN_WORK",
-  },
-  {
-    id: "wb-2",
-    batchName: "Сосна 3020",
-    purchasedM: 860,
-    takenM: 720,
-    remainingM: 95,
-    wasteTorcovkaM: 38,
-    writtenOffM: 7,
-    wastePct: 31,
-    status: "IN_WORK",
-  },
-  {
-    id: "wb-3",
-    batchName: "Ель 1812",
-    purchasedM: 640,
-    takenM: 610,
-    remainingM: 12,
-    wasteTorcovkaM: 14,
-    writtenOffM: 4,
-    wastePct: 18,
-    status: "ARCHIVED",
-  },
-  {
-    id: "wb-4",
-    batchName: "Бук 4025",
-    purchasedM: 520,
-    takenM: 410,
-    remainingM: 48,
-    wasteTorcovkaM: 52,
-    writtenOffM: 10,
-    wastePct: 44,
-    status: "IN_WORK",
-  },
+// Сырые входы отхода (взято/произведено/списано). Процент и производные —
+// считает движок lib/waste, чтобы числа были внутренне согласованы. В Части B
+// эти длины придут из операций терминала.
+interface WasteBatchInput {
+  id: string;
+  batchName: string;
+  purchasedM: number;
+  takenM: number;
+  producedM: number;
+  writtenOffM: number;
+  status: BatchStatus;
+}
+
+const wasteBatchInputs: WasteBatchInput[] = [
+  { id: "wb-1", batchName: "Волочек 2419", purchasedM: 1240, takenM: 980, producedM: 905, writtenOffM: 18, status: "IN_WORK" },
+  { id: "wb-2", batchName: "Сосна 3020", purchasedM: 860, takenM: 720, producedM: 560, writtenOffM: 7, status: "IN_WORK" },
+  { id: "wb-3", batchName: "Ель 1812", purchasedM: 640, takenM: 610, producedM: 560, writtenOffM: 4, status: "ARCHIVED" },
+  { id: "wb-4", batchName: "Бук 4025", purchasedM: 520, takenM: 410, producedM: 270, writtenOffM: 10, status: "IN_WORK" },
 ];
 
-export const wasteEmployeeRows: WasteEmployeeRow[] = [
-  {
-    id: "we-1",
-    employeeName: employees[0].fullName,
-    takenM: 1420,
-    producedM: 1180,
-    wasteM: 240,
-    wastePct: 17,
-  },
-  {
-    id: "we-2",
-    employeeName: employees[2].fullName,
-    takenM: 980,
-    producedM: 720,
-    wasteM: 260,
-    wastePct: 27,
-  },
-  {
-    id: "we-3",
-    employeeName: employees[1].fullName,
-    takenM: 0,
-    producedM: 0,
-    wasteM: 0,
-    wastePct: 0,
-  },
+export const wasteBatchRows: WasteBatchRow[] = wasteBatchInputs.map((b) => {
+  const w = batchWaste(b);
+  return {
+    id: b.id,
+    batchName: b.batchName,
+    purchasedM: b.purchasedM,
+    takenM: b.takenM,
+    remainingM: w.remainingM.toNumber(),
+    wasteTorcovkaM: w.wasteTorcovkaM.toNumber(),
+    writtenOffM: w.writtenOffM.toNumber(),
+    wastePct: Math.round(w.wastePct.toNumber()),
+    status: b.status,
+  };
+});
+
+interface WasteEmployeeInput {
+  id: string;
+  employeeName: string;
+  takenM: number;
+  producedM: number;
+}
+
+const wasteEmployeeInputs: WasteEmployeeInput[] = [
+  { id: "we-1", employeeName: employees[0].fullName, takenM: 1420, producedM: 1180 },
+  { id: "we-2", employeeName: employees[2].fullName, takenM: 980, producedM: 720 },
+  { id: "we-3", employeeName: employees[1].fullName, takenM: 0, producedM: 0 },
 ];
+
+export const wasteEmployeeRows: WasteEmployeeRow[] = wasteEmployeeInputs.map((e) => {
+  const w = employeeWaste(e.takenM, e.producedM);
+  return {
+    id: e.id,
+    employeeName: e.employeeName,
+    takenM: e.takenM,
+    producedM: e.producedM,
+    wasteM: w.wasteM.toNumber(),
+    wastePct: Math.round(w.wastePct.toNumber()),
+  };
+});
 
 export const salesReportRows: SalesReportRow[] = [
   {
