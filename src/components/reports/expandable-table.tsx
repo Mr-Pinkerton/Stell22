@@ -18,18 +18,39 @@ export const expandableMainHeadRowClass = "[&_tr]:border-border/30";
 export const expandableSummaryCellClass =
   "px-4 py-3 align-middle first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
 
-/** Отступы вложенной таблицы (иерархия). */
-export const expandableNestedWrapClass = "py-3 pr-5 pl-7 md:pr-6 md:pl-8";
+/** Отступы вложенной таблицы (иерархия, без своего акцента — он на строке детализации). */
+export const expandableNestedWrapClass = "py-3 pr-5 pl-5 md:pr-6 md:pl-6";
+
+export const expandableNestedWrapExpandedClass = expandableNestedWrapClass;
 
 export const expandableNestedCellPad = "px-4 py-2.5 first:pl-5 last:pr-6 md:first:pl-6";
 
-export const expandableNestedTableShellClass = "overflow-x-auto rounded-xl border bg-card";
+/** Общий фон обёртки и шапки вложенной таблицы. */
+export const expandableNestedSurfaceClass = "bg-muted/30";
 
-export const expandableNestedHeadClass = "bg-muted/30 h-10 text-sm font-semibold";
+export const expandableNestedTableShellClass = cn(
+  "overflow-x-auto rounded-xl border border-border",
+  expandableNestedSurfaceClass,
+);
+
+export const expandableNestedHeadClass = cn(
+  expandableNestedSurfaceClass,
+  "h-10 text-sm font-semibold",
+);
 
 export const expandableSummaryBorderClass = "border-border/30 border-b";
 
 export const expandableChevronClass = "size-4 shrink-0 opacity-70";
+
+/** Раскрытая группа: сводка + детализация. */
+export const expandableExpandedSummaryClass = "bg-muted/50 hover:bg-muted/50";
+
+export const expandableExpandedDetailClass = "bg-muted/50 hover:!bg-muted/50";
+
+export const expandableExpandedChevronClass = "opacity-100";
+
+/** Левый акцент раскрытой группы (сводка + вложенная таблица). */
+export const expandableExpandedAccentClass = "border-primary/25 border-l-2";
 
 /** Фиксированные доли ширины — table-fixed + colgroup, колонки не плывут. */
 export const expandableColWidths8 = [
@@ -121,7 +142,7 @@ export function NestedTable({ headers, children, empty, isEmpty }: NestedTablePr
   return (
     <div className={expandableNestedTableShellClass}>
       <Table>
-        <TableHeader>
+        <TableHeader className="[&_[data-slot=table-row]]:border-border/30">
           <TableRow>
             {headers.map((h, i) => (
               <TableHead
@@ -137,7 +158,7 @@ export function NestedTable({ headers, children, empty, isEmpty }: NestedTablePr
             ))}
           </TableRow>
         </TableHeader>
-        <TableBody>{children}</TableBody>
+        <TableBody className="bg-card">{children}</TableBody>
       </Table>
     </div>
   );
@@ -164,8 +185,11 @@ export function ExpandableDetailRow({
   className?: string;
 }) {
   return (
-    <TableRow className={cn("hover:bg-transparent", className)}>
-      <TableCell colSpan={colSpan} className="p-0">
+    <TableRow className={cn(expandableExpandedDetailClass, className)}>
+      <TableCell
+        colSpan={colSpan}
+        className={cn("p-0", expandableExpandedAccentClass)}
+      >
         {children}
       </TableCell>
     </TableRow>

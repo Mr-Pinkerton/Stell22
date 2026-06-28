@@ -19,8 +19,10 @@ import {
   NestedTableCell,
   expandableChevronClass,
   expandableColWidths6,
-  expandableNestedWrapClass,
-  expandableSummaryBorderClass,
+  expandableExpandedAccentClass,
+  expandableExpandedChevronClass,
+  expandableExpandedSummaryClass,
+  expandableNestedWrapExpandedClass,
   expandableSummaryCellClass,
 } from "@/components/reports/expandable-table";
 import { KpiTile } from "@/components/kpi-tile";
@@ -175,17 +177,16 @@ function SalaryRowGroup({
       <TableRow
         className={cn(
           "cursor-pointer align-top",
-          striped && "bg-muted/40",
-          expanded && "bg-muted/35",
-          "hover:bg-muted/50",
-          expanded && expandableSummaryBorderClass,
+          striped && !expanded && "bg-muted/40",
+          expanded && expandableExpandedSummaryClass,
+          !expanded && "hover:bg-muted/50",
         )}
         onClick={onToggle}
       >
-        <TableCell className={expandableSummaryCellClass}>
+        <TableCell className={cn(expandableSummaryCellClass, expanded && expandableExpandedAccentClass)}>
           <div className="flex items-center gap-2">
             {expanded ? (
-              <ChevronDown className={expandableChevronClass} />
+              <ChevronDown className={cn(expandableChevronClass, expandableExpandedChevronClass)} />
             ) : (
               <ChevronRight className={expandableChevronClass} />
             )}
@@ -211,7 +212,7 @@ function SalaryRowGroup({
           {!paid && onPaid && (
             <Button
               type="button"
-              variant="outline"
+              variant="brand"
               className="h-8 rounded-lg px-3 text-xs"
               onClick={onPaid}
             >
@@ -224,8 +225,8 @@ function SalaryRowGroup({
         </TableCell>
       </TableRow>
       {expanded && (
-        <ExpandableDetailRow colSpan={6} className={cn(striped && "bg-muted/40", "bg-muted/35")}>
-          <div className={expandableNestedWrapClass}>
+        <ExpandableDetailRow colSpan={6}>
+          <div className={expandableNestedWrapExpandedClass}>
             <NestedTable headers={SALARY_DAY_HEADERS} isEmpty={row.days.length === 0}>
               {row.days.map((d) => (
                 <TableRow key={d.date}>

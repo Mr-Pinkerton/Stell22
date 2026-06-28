@@ -18,8 +18,10 @@ import {
   NestedTableCell,
   expandableChevronClass,
   expandableColWidths6,
-  expandableNestedWrapClass,
-  expandableSummaryBorderClass,
+  expandableExpandedAccentClass,
+  expandableExpandedChevronClass,
+  expandableExpandedSummaryClass,
+  expandableNestedWrapExpandedClass,
   expandableSummaryCellClass,
 } from "@/components/reports/expandable-table";
 import { SegmentTabs } from "@/components/reports/report-shared";
@@ -159,17 +161,16 @@ function ProductCostRowGroup({
       <TableRow
         className={cn(
           "cursor-pointer align-top",
-          striped && "bg-muted/40",
-          expanded && "bg-muted/35",
-          "hover:bg-muted/50",
-          expanded && expandableSummaryBorderClass,
+          striped && !expanded && "bg-muted/40",
+          expanded && expandableExpandedSummaryClass,
+          !expanded && "hover:bg-muted/50",
         )}
         onClick={onToggle}
       >
-        <TableCell className={expandableSummaryCellClass}>
+        <TableCell className={cn(expandableSummaryCellClass, expanded && expandableExpandedAccentClass)}>
           <div className="flex items-center gap-2">
             {expanded ? (
-              <ChevronDown className={expandableChevronClass} />
+              <ChevronDown className={cn(expandableChevronClass, expandableExpandedChevronClass)} />
             ) : (
               <ChevronRight className={expandableChevronClass} />
             )}
@@ -196,8 +197,8 @@ function ProductCostRowGroup({
         </TableCell>
       </TableRow>
       {expanded && (
-        <ExpandableDetailRow colSpan={6} className={cn(striped && "bg-muted/40", "bg-muted/35")}>
-          <div className={expandableNestedWrapClass}>
+        <ExpandableDetailRow colSpan={6}>
+          <div className={expandableNestedWrapExpandedClass}>
             <NestedTable headers={PRODUCT_DETAIL_HEADERS} isEmpty={row.details.length === 0}>
               {row.details.map((d) => (
                 <TableRow key={`${row.id}-${d.detailName}`}>

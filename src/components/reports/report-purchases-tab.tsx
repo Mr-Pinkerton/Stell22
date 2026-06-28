@@ -18,8 +18,11 @@ import {
   NestedTableCell,
   expandableChevronClass,
   expandableColWidths8,
+  expandableExpandedAccentClass,
+  expandableExpandedChevronClass,
+  expandableExpandedSummaryClass,
   expandableNestedWrapClass,
-  expandableSummaryBorderClass,
+  expandableNestedWrapExpandedClass,
   expandableSummaryCellClass,
 } from "@/components/reports/expandable-table";
 import { KpiTile } from "@/components/kpi-tile";
@@ -119,11 +122,8 @@ export function ReportPurchasesTab({ showArchive }: ReportPurchasesTabProps) {
                     onToggle={() => setExpandedId(expanded ? null : row.id)}
                   />
                   {expanded && (
-                    <ExpandableDetailRow
-                      colSpan={8}
-                      className={cn(striped && "bg-muted/40", expanded && "bg-muted/35")}
-                    >
-                      <div className={expandableNestedWrapClass}>
+                    <ExpandableDetailRow colSpan={8}>
+                      <div className={expandableNestedWrapExpandedClass}>
                         <NestedTable
                           headers={PACKAGE_HEADERS}
                           empty="Нет пакетов в партии"
@@ -189,19 +189,19 @@ function BatchSummaryRow({
       className={cn(
         "group cursor-pointer align-top",
         archived && "text-muted-foreground/70 opacity-60",
-        striped && !archived && "bg-muted/40",
-        striped && archived && "bg-muted/25",
-        expanded && (archived ? "bg-muted/25" : "bg-muted/35"),
-        !archived && "hover:bg-muted/50",
-        archived && "hover:bg-muted/30 hover:opacity-75",
-        expanded && expandableSummaryBorderClass,
+        striped && !archived && !expanded && "bg-muted/40",
+        striped && archived && !expanded && "bg-muted/25",
+        expanded && !archived && expandableExpandedSummaryClass,
+        expanded && archived && "bg-muted/30",
+        !archived && !expanded && "hover:bg-muted/50",
+        archived && !expanded && "hover:bg-muted/30 hover:opacity-75",
       )}
       onClick={onToggle}
     >
-      <TableCell className={expandableSummaryCellClass}>
+      <TableCell className={cn(expandableSummaryCellClass, expanded && expandableExpandedAccentClass)}>
         <div className="flex items-center gap-2">
           {expanded ? (
-            <ChevronDown className={expandableChevronClass} />
+            <ChevronDown className={cn(expandableChevronClass, expandableExpandedChevronClass)} />
           ) : (
             <ChevronRight className={expandableChevronClass} />
           )}
