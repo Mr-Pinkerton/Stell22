@@ -1,5 +1,5 @@
-import { SectionScaffold } from "@/components/section-scaffold";
+import { ProductionView } from "@/components/production/production-view";
 
 export default function ProductionPage() {
-  return <SectionScaffold slug="production" />;
+  return <ProductionView />;
 }
