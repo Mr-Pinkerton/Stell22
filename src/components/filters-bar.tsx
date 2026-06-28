@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -55,9 +55,13 @@ export function FiltersBar({
   const [internalSearch, setInternalSearch] = useState("");
   const [internalArchive, setInternalArchive] = useState(false);
 
-  useEffect(() => {
+  // Сброс недели при смене месяца фильтра.
+  const monthTime = dateFilter.month.getTime();
+  const [prevMonthTime, setPrevMonthTime] = useState(monthTime);
+  if (monthTime !== prevMonthTime) {
+    setPrevMonthTime(monthTime);
     setWeekFilter(getDefaultWeekFilterValue());
-  }, [dateFilter.month.getTime()]);
+  }
 
   const query = searchValue ?? internalSearch;
   const showArchive = archiveChecked ?? internalArchive;

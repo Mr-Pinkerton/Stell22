@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import {
   defaultAppSettings,
@@ -43,11 +43,15 @@ export function SettingsParamsTab({
   const [labelW, setLabelW] = useState(String(settings.labelWidthMm));
   const [labelH, setLabelH] = useState(String(settings.labelHeightMm));
 
-  useEffect(() => {
+  // Синхронизируем поля ввода при внешней смене настроек (без set-state-in-effect).
+  const settingsKey = `${settings.wasteThresholdPct}|${settings.labelWidthMm}|${settings.labelHeightMm}`;
+  const [prevSettingsKey, setPrevSettingsKey] = useState(settingsKey);
+  if (settingsKey !== prevSettingsKey) {
+    setPrevSettingsKey(settingsKey);
     setWasteRaw(String(settings.wasteThresholdPct));
     setLabelW(String(settings.labelWidthMm));
     setLabelH(String(settings.labelHeightMm));
-  }, [settings.wasteThresholdPct, settings.labelWidthMm, settings.labelHeightMm]);
+  }
 
   const saveGeneral = () => {
     const waste = Number(wasteRaw);

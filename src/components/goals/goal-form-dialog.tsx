@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { products } from "@/mocks/fixtures";
+import { useJustOpened } from "@/hooks/use-just-opened";
 import {
   FormDialog,
 } from "@/components/form-dialog-shared";
@@ -39,12 +40,11 @@ export function GoalFormDialog({ open, onOpenChange, onSubmit }: GoalFormDialogP
   const [productId, setProductId] = useState(activeProducts[0]?.id ?? "");
   const [quantityRaw, setQuantityRaw] = useState("");
 
-  useEffect(() => {
-    if (!open) return;
+  if (useJustOpened(open)) {
     setName("");
     setProductId(activeProducts[0]?.id ?? "");
     setQuantityRaw("");
-  }, [open]);
+  }
 
   const quantity = Number(quantityRaw);
   const canSubmit =

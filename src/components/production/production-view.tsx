@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
@@ -239,14 +239,19 @@ function ProductionRowGroup({
   const editRows = useMemo(() => buildDetailEditRows(row), [row]);
   const [editQty, setEditQty] = useState<Record<number, string>>({});
 
-  useEffect(() => {
-    if (!expanded) return;
-    const next: Record<number, string> = {};
-    for (const line of editRows) {
-      next[line.index] = String(line.terminalQty);
+  // Заполняем поля редактирования при раскрытии строки (без set-state-in-effect).
+  const editKey = expanded ? `${row.id}|${row.quantity}` : null;
+  const [prevEditKey, setPrevEditKey] = useState<string | null>(null);
+  if (editKey !== prevEditKey) {
+    setPrevEditKey(editKey);
+    if (editKey) {
+      const next: Record<number, string> = {};
+      for (const line of editRows) {
+        next[line.index] = String(line.terminalQty);
+      }
+      setEditQty(next);
     }
-    setEditQty(next);
-  }, [expanded, row.id, row.quantity, editRows]);
+  }
 
   return (
     <Fragment>

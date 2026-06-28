@@ -42,21 +42,19 @@ function MoneyInput({
   const [internal, setInternal] = React.useState<number | null>(defaultValue ?? null);
   const numeric = controlled ? (valueProp ?? null) : internal;
 
-  const [text, setText] = React.useState(() => formatMoneyFieldValue(defaultValue));
+  const [text, setText] = React.useState(() =>
+    formatMoneyFieldValue(controlled ? (valueProp ?? null) : defaultValue),
+  );
 
-  React.useEffect(() => {
-    if (!controlled) {
-      const next = defaultValue ?? null;
-      setInternal(next);
-      setText(formatMoneyFieldValue(next));
-    }
-  }, [defaultValue, controlled]);
-
-  React.useEffect(() => {
-    if (controlled) {
-      setText(formatMoneyFieldValue(numeric));
-    }
-  }, [controlled, numeric]);
+  // Источник истины: для controlled — value, для uncontrolled — defaultValue.
+  // При его внешней смене переформатируем отображение (без set-state-in-effect).
+  const externalValue = controlled ? numeric : (defaultValue ?? null);
+  const [prevExternal, setPrevExternal] = React.useState(externalValue);
+  if (externalValue !== prevExternal) {
+    setPrevExternal(externalValue);
+    setText(formatMoneyFieldValue(externalValue));
+    if (!controlled) setInternal(externalValue);
+  }
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const parsed = parseGroupedInteger(e.target.value);

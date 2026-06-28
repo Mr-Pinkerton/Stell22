@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useJustOpened } from "@/hooks/use-just-opened";
 import {
   financeArticles,
   type FinanceArticle,
@@ -59,14 +60,13 @@ export function ArticleFormDialog({
   const [parentId, setParentId] = useState("");
   const [description, setDescription] = useState("");
 
-  useEffect(() => {
-    if (!open) return;
+  if (useJustOpened(open)) {
     setName("");
     setFlowType("EXPENSE");
     setCategoryName(ARTICLE_CATEGORIES[2]);
     setParentId("");
     setDescription("");
-  }, [open]);
+  }
 
   const rootArticles = useMemo(
     () => articles.filter((a) => a.flowType === flowType && !a.parentId),

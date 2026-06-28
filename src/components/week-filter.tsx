@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { buildPayWeeksForMonth } from "@/lib/pay-weeks";
 import { FILTER_SELECT_WIDTH, filterSelectTriggerClass } from "@/components/filter-fields";
 import {
@@ -29,9 +29,13 @@ export function WeekFilter({ month, value, onChange }: WeekFilterProps) {
   const selected = value ?? internal;
   const weeks = useMemo(() => buildPayWeeksForMonth(month), [month]);
 
-  useEffect(() => {
+  // Сбрасываем выбранную неделю при смене месяца (только для uncontrolled).
+  const monthTime = month.getTime();
+  const [prevMonthTime, setPrevMonthTime] = useState(monthTime);
+  if (monthTime !== prevMonthTime) {
+    setPrevMonthTime(monthTime);
     if (value === undefined) setInternal("");
-  }, [month, value]);
+  }
 
   const setSelected = (next: string) => {
     const normalized = next === ALL_WEEKS ? "" : next;

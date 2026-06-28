@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   financeArticles,
   type FinanceAutoRule,
   type FinanceCashFlowRow,
 } from "@/mocks/finance-fixtures";
+import { useJustOpened } from "@/hooks/use-just-opened";
 import {
   AutoRuleEditor,
   autoRuleEditorToRule,
@@ -41,14 +42,9 @@ export function AutoRuleFormDialog({
 }: AutoRuleFormDialogProps) {
   const [draft, setDraft] = useState<AutoRuleEditorState>(emptyAutoRuleEditorState);
 
-  useEffect(() => {
-    if (!open) return;
-    if (seed) {
-      setDraft(cashflowSeedToEditorState(seed));
-      return;
-    }
-    setDraft(emptyAutoRuleEditorState());
-  }, [open, seed]);
+  if (useJustOpened(open)) {
+    setDraft(seed ? cashflowSeedToEditorState(seed) : emptyAutoRuleEditorState());
+  }
 
   const handleSubmit = () => {
     const rule = autoRuleEditorToRule(draft);

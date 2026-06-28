@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Upload } from "lucide-react";
+import { useJustOpened } from "@/hooks/use-just-opened";
 import { cn } from "@/lib/utils";
 import {
   financeAccounts,
@@ -49,13 +50,11 @@ export function StatementUploadDialog({
   const [accountId, setAccountId] = useState("");
   const [fileName, setFileName] = useState("");
 
-  useEffect(() => {
-    if (!open) return;
+  if (useJustOpened(open)) {
     setDateText(isoToDisplayDate(todayIso()));
     setAccountId(financeAccounts[0]?.id ?? "");
     setFileName("");
-    if (fileRef.current) fileRef.current.value = "";
-  }, [open]);
+  }
 
   const canSubmit =
     parseDisplayDate(dateText) != null && accountId.length > 0 && fileName.length > 0;

@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
+import { useJustOpened } from "@/hooks/use-just-opened";
 import {
   financeAccounts,
   financeArticles,
@@ -65,8 +66,7 @@ export function CashflowFormDialog({ open, onOpenChange, onSubmit }: CashflowFor
   const [articleId, setArticleId] = useState("");
   const [dealId, setDealId] = useState("");
 
-  useEffect(() => {
-    if (!open) return;
+  if (useJustOpened(open)) {
     setDateText(isoToDisplayDate(todayIso()));
     setAmount(null);
     setFlowType("EXPENSE");
@@ -75,7 +75,7 @@ export function CashflowFormDialog({ open, onOpenChange, onSubmit }: CashflowFor
     setDescription("");
     setArticleId("");
     setDealId("");
-  }, [open]);
+  }
 
   const articles = useMemo(
     () => financeArticles.filter((a) => a.flowType === flowType),

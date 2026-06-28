@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { FormDialog } from "@/components/form-dialog-shared";
+import { useJustOpened } from "@/hooks/use-just-opened";
 import { Field, fieldClass } from "@/components/nomenclature/form-shared";
 import { Input } from "@/components/ui/input";
 import { MoneyInput } from "@/components/ui/money-input";
@@ -28,11 +29,10 @@ export function AccountFormDialog({
   const [name, setName] = useState("");
   const [balance, setBalance] = useState(0);
 
-  useEffect(() => {
-    if (!open) return;
+  if (useJustOpened(open)) {
     setName(account?.name ?? "");
     setBalance(account?.balance ?? 0);
-  }, [open, account]);
+  }
 
   const canSubmit = name.trim().length > 0;
 

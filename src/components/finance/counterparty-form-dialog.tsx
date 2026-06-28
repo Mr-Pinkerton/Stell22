@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { useJustOpened } from "@/hooks/use-just-opened";
 import type { FinanceCounterparty } from "@/mocks/finance-fixtures";
 import {
   Field,
@@ -25,9 +26,7 @@ export function CounterpartyFormDialog({
 }: CounterpartyFormDialogProps) {
   const [name, setName] = useState("");
 
-  useEffect(() => {
-    if (open) setName(counterparty?.name ?? "");
-  }, [open, counterparty]);
+  if (useJustOpened(open)) setName(counterparty?.name ?? "");
 
   const handleSubmit = () => {
     const trimmed = name.trim();

@@ -46,7 +46,6 @@ const INVENTORY_STATUS_LABEL: Record<InventoryStatus, string> = {
   CLOSED: "Закрыта",
 };
 
-const DRAFT_COL_SPAN = 6;
 const DRAFT_COL_WIDTHS = ["28%", "14%", "14%", "12%", "16%", "16%"] as const;
 
 const HISTORY_COL_SPAN = 4;

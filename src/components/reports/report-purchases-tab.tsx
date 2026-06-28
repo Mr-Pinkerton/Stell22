@@ -21,7 +21,6 @@ import {
   expandableExpandedAccentClass,
   expandableExpandedChevronClass,
   expandableExpandedSummaryClass,
-  expandableNestedWrapClass,
   expandableNestedWrapExpandedClass,
   expandableSummaryCellClass,
 } from "@/components/reports/expandable-table";
@@ -111,7 +110,6 @@ export function ReportPurchasesTab({ showArchive }: ReportPurchasesTabProps) {
             {rows.map((row, index) => {
               const archived = row.status === "ARCHIVED";
               const expanded = expandedId === row.id;
-              const striped = index % 2 === 1;
               return (
                 <Fragment key={row.id}>
                   <BatchSummaryRow

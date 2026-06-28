@@ -23,10 +23,7 @@ import { FinanceAutoRulesTab } from "@/components/finance/finance-auto-rules-tab
 import { FinanceDealsTab } from "@/components/finance/finance-deals-tab";
 import { FinanceStatementsTab } from "@/components/finance/finance-statements-tab";
 import { FinanceCounterpartiesTab } from "@/components/finance/finance-counterparties-tab";
-import {
-  AutoRuleFormDialog,
-  autoRuleValuesToRow,
-} from "@/components/finance/auto-rule-form-dialog";
+import { autoRuleValuesToRow } from "@/components/finance/auto-rule-form-dialog";
 import {
   CashflowFormDialog,
   cashflowValuesToRow,

@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { batches } from "@/mocks/fixtures";
+import { useJustOpened } from "@/hooks/use-just-opened";
 import type { FinanceDeal } from "@/mocks/finance-fixtures";
 import {
   Field,
@@ -45,17 +46,14 @@ export function DealFormDialog({ open, onOpenChange, onSubmit }: DealFormDialogP
 
   const selectedList = useMemo(() => [...selectedBatches], [selectedBatches]);
 
-  useEffect(() => {
-    if (!open) return;
+  if (useJustOpened(open)) {
     setName("");
     setNameManual(false);
     setSelectedBatches(new Set());
-  }, [open]);
+  }
 
-  useEffect(() => {
-    if (!open || nameManual) return;
-    setName(generatedDealName(selectedList));
-  }, [open, nameManual, selectedList]);
+  // Имя подставляется из выбранных закупок, пока его не правили вручную.
+  const effectiveName = nameManual ? name : generatedDealName(selectedList);
 
   const toggleBatch = (batchName: string, checked: boolean) => {
     setSelectedBatches((prev) => {
@@ -66,10 +64,10 @@ export function DealFormDialog({ open, onOpenChange, onSubmit }: DealFormDialogP
     });
   };
 
-  const canSubmit = selectedBatches.size > 0 && name.trim().length > 0;
+  const canSubmit = selectedBatches.size > 0 && effectiveName.trim().length > 0;
 
   const handleSubmit = () => {
-    const trimmed = name.trim();
+    const trimmed = effectiveName.trim();
     if (!trimmed || selectedBatches.size === 0) return;
     onSubmit?.({
       name: trimmed,
@@ -110,7 +108,7 @@ export function DealFormDialog({ open, onOpenChange, onSubmit }: DealFormDialogP
       <Field id="deal-name" label="Название сделки" required>
         <Input
           id="deal-name"
-          value={name}
+          value={effectiveName}
           onChange={(e) => {
             setNameManual(true);
             setName(e.target.value);

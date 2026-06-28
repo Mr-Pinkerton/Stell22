@@ -33,12 +33,21 @@ describe("filterProductionEntries", () => {
     const filtered = filterProductionEntries(rows, {
       allTime: false,
       month: createLocalDate(2026, 5, 1),
+      rangeStart: null,
+      rangeEnd: null,
     });
     expect(filtered.map((r) => r.id)).toEqual(["a", "b"]);
   });
 
   it("allTime возвращает все", () => {
-    expect(filterProductionEntries(rows, { allTime: true, month: new Date() })).toHaveLength(3);
+    expect(
+      filterProductionEntries(rows, {
+        allTime: true,
+        month: new Date(),
+        rangeStart: null,
+        rangeEnd: null,
+      }),
+    ).toHaveLength(3);
   });
 });
 
