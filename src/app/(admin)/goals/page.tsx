@@ -1,5 +1,5 @@
-import { SectionScaffold } from "@/components/section-scaffold";
+import { GoalsView } from "@/components/goals/goals-view";
 
 export default function GoalsPage() {
-  return <SectionScaffold slug="goals" />;
+  return <GoalsView />;
 }
