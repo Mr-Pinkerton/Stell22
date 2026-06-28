@@ -5,12 +5,15 @@ import {
   buildBatchSnapshots,
   buildCostDetailRows,
   buildCostProductRows,
+  declaredSortShares,
   detailMaterialCost,
   detailWorkCost,
+  factSortShares,
   periodOverheadFromCashFlows,
+  sortSharesToPercents,
   type ProducedLine,
 } from "./cost-report";
-import type { Batch, Detail, Employee, NomenclatureItem, Product } from "@/types/domain";
+import type { Batch, Detail, Employee, NomenclatureItem, Product, RailLot } from "@/types/domain";
 
 const employees: Employee[] = [
   {
@@ -196,6 +199,35 @@ describe("buildCostProductRows", () => {
     expect(r.overhead).toBeCloseTo(10, 2); // 100 / 10 шт
     expect(r.full).toBeCloseTo(r.direct + 10, 2);
     expect(r.directPct).toBe(100);
+  });
+});
+
+describe("declaredSortShares / factSortShares / sortSharesToPercents", () => {
+  const lot = (over: Partial<RailLot> & Pick<RailLot, "id" | "sort" | "quantity" | "lengthM">): RailLot => ({
+    batchId: "bX",
+    railType: "POLKA",
+    isPackage: true,
+    remainingQuantity: over.quantity,
+    ...over,
+  });
+
+  it("заявленное — по длине реек каждого сорта", () => {
+    const lots = [
+      lot({ id: "l1", sort: "SORT1", quantity: 100, lengthM: 2 }), // 200 м
+      lot({ id: "l2", sort: "SORT2", quantity: 100, lengthM: 1 }), // 100 м
+    ];
+    const shares = declaredSortShares(lots);
+    expect(shares.sort1.toFixed(4)).toBe("0.6667");
+    expect(sortSharesToPercents(shares)).toEqual({ sort1: 67, sort2: 33 });
+  });
+
+  it("факт — по сортам произведённых деталей", () => {
+    const shares = factSortShares(lines, details); // S1 100м, S2 40м
+    expect(sortSharesToPercents(shares)).toEqual({ sort1: 71, sort2: 29 });
+  });
+
+  it("нет данных → нули", () => {
+    expect(sortSharesToPercents(factSortShares([], details))).toEqual({ sort1: 0, sort2: 0 });
   });
 });
 

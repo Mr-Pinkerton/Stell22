@@ -17,7 +17,7 @@ import {
   sectionAreaM2,
   type Num,
 } from "@/lib/cost";
-import type { Batch, Detail, Employee, NomenclatureItem, Product } from "@/types/domain";
+import type { Batch, Detail, Employee, NomenclatureItem, Product, RailLot } from "@/types/domain";
 
 export interface ProducedLine {
   batchId: string;
@@ -137,6 +137,41 @@ export function buildBatchSnapshots(params: {
     });
   }
   return result;
+}
+
+// --------------------------- соотношение сортов -----------------------------
+
+export interface SortShares {
+  sort1: Decimal;
+  sort2: Decimal;
+}
+
+/** Заявленное соотношение сортов партии — по закупленным рейкам (сечение в доле сокращается). */
+export function declaredSortShares(lots: RailLot[]): SortShares {
+  let s1 = ZERO;
+  let s2 = ZERO;
+  for (const lot of lots) {
+    const len = D(lot.quantity).times(lot.lengthM);
+    if (lot.sort === "SORT1") s1 = s1.plus(len);
+    else s2 = s2.plus(len);
+  }
+  const total = s1.plus(s2);
+  return total.isZero() ? { sort1: ZERO, sort2: ZERO } : { sort1: s1.div(total), sort2: s2.div(total) };
+}
+
+/** Фактическое соотношение сортов — по сортам произведённых деталей. */
+export function factSortShares(lines: ProducedLine[], details: Detail[]): SortShares {
+  const detailsById = new Map(details.map((d) => [d.id, d]));
+  const { sort1, sort2 } = lengthsBySort(lines, detailsById);
+  const total = sort1.plus(sort2);
+  return total.isZero() ? { sort1: ZERO, sort2: ZERO } : { sort1: sort1.div(total), sort2: sort2.div(total) };
+}
+
+/** Доли → проценты (целые, сумма = 100 при ненулевой базе). */
+export function sortSharesToPercents(shares: SortShares): { sort1: number; sort2: number } {
+  if (shares.sort1.isZero() && shares.sort2.isZero()) return { sort1: 0, sort2: 0 };
+  const s1 = shares.sort1.times(100).toDecimalPlaces(0).toNumber();
+  return { sort1: s1, sort2: 100 - s1 };
 }
 
 /** Материал на одну деталь по конкретной партии (цена м³ с отходом × длина × сечение). */

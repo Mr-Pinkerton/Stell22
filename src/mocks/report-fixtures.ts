@@ -15,7 +15,10 @@ import { buildPurchaseRows, sectionAreaM2 } from "@/lib/batch-stats";
 import {
   buildCostDetailRows,
   buildCostProductRows,
+  declaredSortShares,
+  factSortShares,
   periodOverheadFromCashFlows,
+  sortSharesToPercents,
 } from "@/lib/cost-report";
 import { batchWaste, employeeWaste } from "@/lib/waste";
 import type { BatchStatus, CostStatus, RailType, Sort } from "@/types/domain";
@@ -131,21 +134,6 @@ export interface SalesReportRow {
   revenue: number;
 }
 
-const SORT_FACT_BY_BATCH: Record<string, { sort1: number; sort2: number }> = {
-  "batch-1": { sort1: 58, sort2: 42 },
-  "batch-2": { sort1: 62, sort2: 38 },
-  "batch-3": { sort1: 55, sort2: 45 },
-  "batch-4": { sort1: 70, sort2: 30 },
-  "batch-5": { sort1: 48, sort2: 52 },
-  "batch-6": { sort1: 65, sort2: 35 },
-};
-
-function sortPurchasePct(batchId: string): { sort1: number; sort2: number } {
-  const declared = SORT_FACT_BY_BATCH[batchId] ?? { sort1: 60, sort2: 40 };
-  const drift = batchId.charCodeAt(batchId.length - 1) % 5;
-  return { sort1: declared.sort1 + drift - 2, sort2: declared.sort2 - drift + 2 };
-}
-
 const productionWorkers = employees.filter(
   (e) => e.status === "ACTIVE" && e.id !== "emp-2",
 );
@@ -183,8 +171,15 @@ function buildPackages(batchId: string): PurchasePackageLine[] {
 const purchaseBase = buildPurchaseRows(batches, railLots);
 
 export const purchaseReportRows: PurchaseReportRow[] = purchaseBase.map((b) => {
-  const fact = SORT_FACT_BY_BATCH[b.id] ?? { sort1: 60, sort2: 40 };
-  const declared = sortPurchasePct(b.id);
+  const batchLots = railLots.filter((l) => l.batchId === b.id);
+  const batchLines = producedLines.filter((l) => l.batchId === b.id);
+
+  // Заявленное соотношение — по закупленным рейкам; факт — по сортам
+  // произведённых деталей. Без производства факт = заявленному.
+  const declared = sortSharesToPercents(declaredSortShares(batchLots));
+  const factShares = factSortShares(batchLines, allDetails);
+  const fact = batchLines.length > 0 ? sortSharesToPercents(factShares) : declared;
+
   const avgCostPerM3 = b.stats.volumeM3 > 0 ? Math.round(b.totalCost / b.stats.volumeM3) : 0;
 
   return {
