@@ -6,11 +6,13 @@ import { Package } from "lucide-react";
 import { OperationTile, OperationTileGrid } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
-import type { Product } from "@/types/domain";
+import { submitUpakovka } from "@/server/terminal";
+import type { Employee, Product } from "@/types/domain";
 import type { TerminalData } from "@/components/terminal/types";
 
 interface UpakovkaScreenProps {
   data: TerminalData;
+  employee: Employee;
   onDone: () => void;
 }
 
@@ -31,22 +33,33 @@ function canAssemble(product: Product, data: TerminalData): number {
   return limits.length ? Math.max(0, Math.min(...limits)) : 0;
 }
 
-export function UpakovkaScreen({ data, onDone }: UpakovkaScreenProps) {
+export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) {
   const products = useMemo(
     () => data.products.filter((p) => p.status === "ACTIVE"),
     [data.products],
   );
   const [picked, setPicked] = useState<Record<string, number>>({});
   const [dialogProduct, setDialogProduct] = useState<Product | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const dialogMax = dialogProduct ? canAssemble(dialogProduct, data) : 0;
   const pickedCount = Object.values(picked).reduce((a, b) => a + b, 0);
   const pickedLines = Object.keys(picked).filter((k) => (picked[k] ?? 0) > 0).length;
 
-  const confirm = () => {
-    if (pickedCount === 0) return;
-    toast.success(`Упаковано: ${pickedCount} шт`);
-    onDone();
+  const confirm = async () => {
+    if (pickedCount === 0 || submitting) return;
+    const picks = Object.entries(picked)
+      .filter(([, qty]) => qty > 0)
+      .map(([productId, quantity]) => ({ productId, quantity }));
+    setSubmitting(true);
+    try {
+      await submitUpakovka({ employeeId: employee.id, picks });
+      toast.success(`Упаковано: ${pickedCount} шт`);
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Ошибка внесения");
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -96,7 +109,7 @@ export function UpakovkaScreen({ data, onDone }: UpakovkaScreenProps) {
             </span>
           </>
         }
-        disabled={pickedCount === 0}
+        disabled={pickedCount === 0 || submitting}
         onConfirm={confirm}
       />
 

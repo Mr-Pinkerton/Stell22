@@ -6,11 +6,13 @@ import { Drill } from "lucide-react";
 import { OperationTile, OperationTileGrid } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
-import type { Detail } from "@/types/domain";
+import { submitPrisadka } from "@/server/terminal";
+import type { Detail, Employee } from "@/types/domain";
 import type { TerminalData } from "@/components/terminal/types";
 
 interface PrisadkaScreenProps {
   data: TerminalData;
+  employee: Employee;
   onDone: () => void;
 }
 
@@ -62,18 +64,29 @@ function buildTiles(data: TerminalData): Tile[] {
   return tiles;
 }
 
-export function PrisadkaScreen({ data, onDone }: PrisadkaScreenProps) {
+export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) {
   const tiles = useMemo(() => buildTiles(data), [data]);
   const [picked, setPicked] = useState<Record<string, number>>({});
   const [dialogTile, setDialogTile] = useState<Tile | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const pickedCount = Object.values(picked).reduce((a, b) => a + b, 0);
   const pickedLines = Object.keys(picked).filter((k) => (picked[k] ?? 0) > 0).length;
 
-  const confirm = () => {
-    if (pickedCount === 0) return;
-    toast.success(`Присадка внесена: ${pickedCount} шт`);
-    onDone();
+  const confirm = async () => {
+    if (pickedCount === 0 || submitting) return;
+    const picks = tiles
+      .map((t) => ({ detailId: t.detail.id, kind: t.kind, quantity: picked[tileKey(t)] ?? 0 }))
+      .filter((p) => p.quantity > 0);
+    setSubmitting(true);
+    try {
+      await submitPrisadka({ employeeId: employee.id, picks });
+      toast.success(`Присадка внесена: ${pickedCount} шт`);
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Ошибка внесения");
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -127,7 +140,7 @@ export function PrisadkaScreen({ data, onDone }: PrisadkaScreenProps) {
                 </span>
               </>
             }
-            disabled={pickedCount === 0}
+            disabled={pickedCount === 0 || submitting}
             onConfirm={confirm}
           />
         </>

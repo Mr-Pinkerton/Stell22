@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildStockSnapshot, isReady, type DetailStockRow } from "@/lib/detail-stock";
+import { allocate, buildStockSnapshot, isReady, type DetailStockRow } from "@/lib/detail-stock";
 import type { Detail } from "@/types/domain";
 
 function detail(over: Partial<Detail>): Detail {
@@ -32,6 +32,24 @@ describe("isReady", () => {
     expect(isReady(d, true, false)).toBe(false);
     expect(isReady(d, false, true)).toBe(false);
     expect(isReady(d, true, true)).toBe(true);
+  });
+});
+
+describe("allocate", () => {
+  it("берёт из первых строк по порядку", () => {
+    expect(allocate([5, 5, 5], 7)).toEqual([5, 2, 0]);
+  });
+
+  it("точное совпадение опустошает строки", () => {
+    expect(allocate([3, 4], 7)).toEqual([3, 4]);
+  });
+
+  it("нулевая потребность — ничего не берём", () => {
+    expect(allocate([10], 0)).toEqual([0]);
+  });
+
+  it("бросает при нехватке остатка", () => {
+    expect(() => allocate([2, 2], 5)).toThrow("Недостаточно остатка");
   });
 });
 

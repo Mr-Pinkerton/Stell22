@@ -277,13 +277,23 @@ export async function createSimplePurchase(values: SimplePurchaseFormValues): Pr
   if (!values.quantity || values.quantity <= 0) throw new Error("Укажите количество");
   if (values.unitPrice == null || values.unitPrice < 0) throw new Error("Укажите цену");
 
-  const created = await prisma.simplePurchase.create({
-    data: {
-      nomenclatureId: values.nomenclatureId,
-      quantity: values.quantity,
-      unitPrice: values.unitPrice,
-      purchaseDate: parseDate(values.purchaseDate),
-    },
+  const qty = values.quantity;
+  const created = await prisma.$transaction(async (tx) => {
+    const purchase = await tx.simplePurchase.create({
+      data: {
+        nomenclatureId: values.nomenclatureId,
+        quantity: qty,
+        unitPrice: values.unitPrice ?? 0,
+        purchaseDate: parseDate(values.purchaseDate),
+      },
+    });
+    // Приход на склад крепежа/упаковки/разного.
+    await tx.nomenclatureStock.upsert({
+      where: { nomenclatureId: values.nomenclatureId },
+      create: { nomenclatureId: values.nomenclatureId, quantity: qty },
+      update: { quantity: { increment: qty } },
+    });
+    return purchase;
   });
   await writeChangeLog({
     entity: "SimplePurchase",

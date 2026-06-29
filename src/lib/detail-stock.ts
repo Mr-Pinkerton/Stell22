@@ -12,13 +12,34 @@ export interface DetailStockRow {
   quantity: number;
 }
 
+type PrisadkaFlags = Pick<Detail, "prisadkaTorcevaya" | "prisadkaPloskost">;
+
 /** Требуемые детали типы присадки. */
-export function requiredPrisadki(detail: Detail): { torcev: boolean; plosk: boolean } {
+export function requiredPrisadki(detail: PrisadkaFlags): { torcev: boolean; plosk: boolean } {
   return { torcev: detail.prisadkaTorcevaya, plosk: detail.prisadkaPloskost };
 }
 
+/**
+ * Жадно распределяет списание `needed` по строкам остатка (по порядку).
+ * Возвращает массив «сколько взять из каждой строки». Бросает, если суммарного
+ * остатка не хватает (защита от ухода в минус — cost-integrity).
+ */
+export function allocate(quantities: number[], needed: number): number[] {
+  if (needed < 0) throw new Error("Отрицательное количество");
+  const total = quantities.reduce((s, q) => s + Math.max(0, q), 0);
+  if (total < needed) throw new Error("Недостаточно остатка");
+
+  let left = needed;
+  return quantities.map((q) => {
+    if (left <= 0) return 0;
+    const take = Math.min(Math.max(0, q), left);
+    left -= take;
+    return take;
+  });
+}
+
 /** Строка склада «готова», если выполнены все требуемые присадки детали. */
-export function isReady(detail: Detail, torcevDone: boolean, ploskDone: boolean): boolean {
+export function isReady(detail: PrisadkaFlags, torcevDone: boolean, ploskDone: boolean): boolean {
   const req = requiredPrisadki(detail);
   return (!req.torcev || torcevDone) && (!req.plosk || ploskDone);
 }

@@ -96,9 +96,9 @@ export function TerminalApp({ initialData }: { initialData: TerminalData }) {
       ) : screen === "torcovka" ? (
         <TorcovkaScreen data={data} employee={employee} onDone={handleOperationDone} />
       ) : screen === "prisadka" ? (
-        <PrisadkaScreen data={data} onDone={() => setScreen("home")} />
+        <PrisadkaScreen data={data} employee={employee} onDone={handleOperationDone} />
       ) : screen === "upakovka" ? (
-        <UpakovkaScreen data={data} onDone={() => setScreen("home")} />
+        <UpakovkaScreen data={data} employee={employee} onDone={handleOperationDone} />
       ) : (
         <HoursScreen employee={employee} onDone={handleOperationDone} />
       )}

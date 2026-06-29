@@ -204,6 +204,7 @@ model NomenclatureItem {
   productFasteners ProductFastener[]
   productExtras    ProductExtra[]
   packagedProducts Product[]         @relation("ProductPackaging")
+  stock            NomenclatureStock?
 }
 
 model Detail {
@@ -353,6 +354,14 @@ model ProductStock {
   productId String  @unique
   product   Product @relation(fields: [productId], references: [id])
   quantity  Int     @default(0)
+}
+
+// Остаток крепежа/упаковки/разного (приход — закупки, расход — упаковка).
+model NomenclatureStock {
+  id             String           @id @default(cuid())
+  nomenclatureId String           @unique
+  nomenclature   NomenclatureItem @relation(fields: [nomenclatureId], references: [id])
+  quantity       Int              @default(0)
 }
 
 // Остатки на МП (получаются по API; заглушка на старте).

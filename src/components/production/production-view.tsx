@@ -1,14 +1,17 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useMemo, useState, useTransition } from "react";
 import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
 import {
-  productionEntries as mockProductionEntries,
   type ProductionDetailLine,
   type ProductionEntryRow,
 } from "@/mocks/production-fixtures";
+import {
+  deleteProductionOperation,
+  updateProductionLineQuantity,
+} from "@/server/production";
 import {
   filterProductionEntries,
   formatChangeLogWhen,
@@ -81,10 +84,11 @@ interface DetailEditRow {
   terminalQty: number;
 }
 
-export function ProductionView() {
+export function ProductionView({ initialEntries }: { initialEntries: ProductionEntryRow[] }) {
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
-  const [entries, setEntries] = useState(mockProductionEntries);
+  const [entries, setEntries] = useState(initialEntries);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [, startTransition] = useTransition();
 
   const rows = useMemo(() => {
     const filtered = filterProductionEntries(entries, dateFilter);
@@ -98,9 +102,16 @@ export function ProductionView() {
       toast.error("Нельзя удалить — операция уже выплачена");
       return;
     }
-    setEntries((prev) => prev.filter((e) => e.id !== id));
-    setExpandedId((cur) => (cur === id ? null : cur));
-    toast.success("Операция удалена (прототип)");
+    startTransition(async () => {
+      try {
+        await deleteProductionOperation(id);
+        setEntries((prev) => prev.filter((e) => e.id !== id));
+        setExpandedId((cur) => (cur === id ? null : cur));
+        toast.success("Операция удалена");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Ошибка удаления");
+      }
+    });
   };
 
   const handleSaveQuantity = (id: string, lineIndex: number, newQty: number) => {
@@ -108,46 +119,15 @@ export function ProductionView() {
       toast.error("Укажите положительное количество");
       return;
     }
-
-    setEntries((prev) =>
-      prev.map((row) => {
-        if (row.id !== id || row.isPaid) return row;
-
-        const editRows = buildDetailEditRows(row);
-        const target = editRows[lineIndex];
-        if (!target || target.terminalQty === newQty) return row;
-
-        const logEntry = {
-          id: `log-${Date.now()}`,
-          changedAt: new Date().toISOString(),
-          userName: "Админ",
-          field: "Количество",
-          oldValue: String(target.terminalQty),
-          newValue: String(newQty),
-        };
-
-        let detailLines = row.detailLines;
-        if (detailLines && detailLines.length > 0) {
-          detailLines = detailLines.map((line, i) =>
-            i === lineIndex ? { ...line, quantity: newQty } : line,
-          );
-        }
-
-        const quantity =
-          detailLines && detailLines.length > 1
-            ? detailLines.reduce((sum, l) => sum + l.quantity, 0)
-            : newQty;
-
-        return {
-          ...row,
-          quantity,
-          amount: Math.round(quantity * row.unitRate * 100) / 100,
-          detailLines,
-          changeLog: [logEntry, ...row.changeLog],
-        };
-      }),
-    );
-    toast.success("Операция обновлена — пересчёт предварительной себестоимости (прототип)");
+    startTransition(async () => {
+      try {
+        const updated = await updateProductionLineQuantity(id, lineIndex, newQty);
+        setEntries((prev) => prev.map((row) => (row.id === id ? updated : row)));
+        toast.success("Операция обновлена — пересчёт предварительной себестоимости");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Ошибка сохранения");
+      }
+    });
   };
 
   return (

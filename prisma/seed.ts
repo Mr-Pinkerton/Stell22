@@ -27,7 +27,9 @@ async function main() {
     prisma.product.deleteMany(),
     prisma.railLot.deleteMany(),
     prisma.batch.deleteMany(),
+    prisma.detailStock.deleteMany(),
     prisma.detail.deleteMany(),
+    prisma.nomenclatureStock.deleteMany(),
     prisma.nomenclatureItem.deleteMany(),
     prisma.employee.deleteMany(),
     prisma.changeLog.deleteMany(),
@@ -117,6 +119,12 @@ async function main() {
       remainingQuantity: l.remainingQuantity,
     })),
   });
+
+  // Начальные остатки крепежа/упаковки на складе (как в прототипе).
+  const nomenclatureStock: Record<string, number> = { "nom-1": 800, "nom-2": 40 };
+  for (const [nomenclatureId, quantity] of Object.entries(nomenclatureStock)) {
+    await prisma.nomenclatureStock.create({ data: { nomenclatureId, quantity } });
+  }
 
   for (const p of products) {
     await prisma.product.create({

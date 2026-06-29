@@ -11,7 +11,7 @@ import type {
 } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
-import { buildStockSnapshot, type DetailStockRow } from "@/lib/detail-stock";
+import { allocate, buildStockSnapshot, isReady, type DetailStockRow } from "@/lib/detail-stock";
 import type {
   Batch,
   Detail,
@@ -128,7 +128,7 @@ function serProduct(p: ProductWithRel): Product {
 // ============================ ЧТЕНИЕ =======================================
 
 export async function getTerminalData(): Promise<TerminalData> {
-  const [employees, batches, lots, details, products, items, stockRows, purchases] =
+  const [employees, batches, lots, details, products, items, stockRows, nomStock] =
     await Promise.all([
       prisma.employee.findMany({ where: { status: "ACTIVE" }, orderBy: { fullName: "asc" } }),
       prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
@@ -137,17 +137,14 @@ export async function getTerminalData(): Promise<TerminalData> {
       prisma.product.findMany({ include: { details: true, fasteners: true, extras: true } }),
       prisma.nomenclatureItem.findMany(),
       prisma.detailStock.findMany(),
-      prisma.simplePurchase.findMany(),
+      prisma.nomenclatureStock.findMany(),
     ]);
 
   const domainDetails = details.map(serDetail);
 
-  // Склад крепежа/упаковки/разного — приход по простым закупкам (расход пока не
-  // отслеживается; уточнится при оживлении упаковки).
+  // Склад крепежа/упаковки/разного — остаток из NomenclatureStock.
   const nomenclatureStock: Record<string, number> = {};
-  for (const p of purchases) {
-    nomenclatureStock[p.nomenclatureId] = (nomenclatureStock[p.nomenclatureId] ?? 0) + p.quantity;
-  }
+  for (const s of nomStock) nomenclatureStock[s.nomenclatureId] = s.quantity;
 
   const rows: DetailStockRow[] = stockRows.map((r) => ({
     detailId: r.detailId,
@@ -232,6 +229,181 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
       },
       tx,
     );
+  });
+
+  revalidatePath("/production");
+  revalidatePath("/terminal");
+}
+
+// ============================ ПРИСАДКА =====================================
+
+export interface PrisadkaInput {
+  employeeId: string;
+  picks: { detailId: string; kind: "torcev" | "plosk"; quantity: number }[];
+}
+
+export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
+  const { employeeId } = input;
+  const picks = input.picks.filter((p) => p.quantity > 0);
+  if (!employeeId) throw new Error("Не выбран работник");
+  if (picks.length === 0) throw new Error("Не выбраны детали");
+
+  await prisma.$transaction(async (tx) => {
+    const op = await tx.productionOperation.create({
+      data: {
+        type: "PRISADKA",
+        employeeId,
+        workDate: new Date(),
+        lines: {
+          create: picks.map((p) => ({
+            detailId: p.detailId,
+            quantity: p.quantity,
+            prisadkaTorcevaya: p.kind === "torcev",
+            prisadkaPloskost: p.kind === "plosk",
+          })),
+        },
+      },
+    });
+
+    for (const pick of picks) {
+      // Источник — строки, где этот тип присадки ещё НЕ выполнен.
+      const sources = await tx.detailStock.findMany({
+        where: {
+          detailId: pick.detailId,
+          quantity: { gt: 0 },
+          ...(pick.kind === "torcev" ? { torcevayaDone: false } : { ploskostDone: false }),
+        },
+        orderBy: { id: "asc" },
+      });
+      const takes = allocate(
+        sources.map((s) => s.quantity),
+        pick.quantity,
+      ); // бросит при нехватке
+
+      for (let i = 0; i < sources.length; i++) {
+        const take = takes[i];
+        if (take <= 0) continue;
+        const src = sources[i];
+        await tx.detailStock.update({
+          where: { id: src.id },
+          data: { quantity: { decrement: take } },
+        });
+        const torcevayaDone = pick.kind === "torcev" ? true : src.torcevayaDone;
+        const ploskostDone = pick.kind === "plosk" ? true : src.ploskostDone;
+        await tx.detailStock.upsert({
+          where: {
+            detailId_torcevayaDone_ploskostDone: {
+              detailId: pick.detailId,
+              torcevayaDone,
+              ploskostDone,
+            },
+          },
+          create: { detailId: pick.detailId, torcevayaDone, ploskostDone, quantity: take },
+          update: { quantity: { increment: take } },
+        });
+      }
+    }
+
+    await writeChangeLog(
+      { entity: "ProductionOperation", entityId: op.id, newValues: { type: "PRISADKA", picks } },
+      tx,
+    );
+  });
+
+  revalidatePath("/production");
+  revalidatePath("/terminal");
+}
+
+// ============================ УПАКОВКА =====================================
+
+export interface UpakovkaInput {
+  employeeId: string;
+  picks: { productId: string; quantity: number }[];
+}
+
+export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
+  const { employeeId } = input;
+  const picks = input.picks.filter((p) => p.quantity > 0);
+  if (!employeeId) throw new Error("Не выбран работник");
+  if (picks.length === 0) throw new Error("Не выбраны изделия");
+
+  await prisma.$transaction(async (tx) => {
+    for (const pick of picks) {
+      const product = await tx.product.findUnique({
+        where: { id: pick.productId },
+        include: { details: true, fasteners: true },
+      });
+      if (!product) throw new Error("Изделие не найдено");
+
+      // Списываем готовые детали (все требуемые присадки выполнены).
+      for (const pd of product.details) {
+        const needed = pd.quantity * pick.quantity;
+        const detail = await tx.detail.findUniqueOrThrow({ where: { id: pd.detailId } });
+        const rows = (
+          await tx.detailStock.findMany({
+            where: { detailId: pd.detailId, quantity: { gt: 0 } },
+            orderBy: { id: "asc" },
+          })
+        ).filter((r) => isReady(detail, r.torcevayaDone, r.ploskostDone));
+
+        const takes = allocate(
+          rows.map((r) => r.quantity),
+          needed,
+        ); // бросит при нехватке готовых деталей
+        for (let i = 0; i < rows.length; i++) {
+          if (takes[i] > 0) {
+            await tx.detailStock.update({
+              where: { id: rows[i].id },
+              data: { quantity: { decrement: takes[i] } },
+            });
+          }
+        }
+      }
+
+      // Списываем крепёж.
+      for (const f of product.fasteners) {
+        const needed = f.quantity * pick.quantity;
+        const dec = await tx.nomenclatureStock.updateMany({
+          where: { nomenclatureId: f.nomenclatureId, quantity: { gte: needed } },
+          data: { quantity: { decrement: needed } },
+        });
+        if (dec.count === 0) throw new Error("Недостаточно крепежа на складе");
+      }
+
+      // Списываем упаковку.
+      if (product.packagingId) {
+        const dec = await tx.nomenclatureStock.updateMany({
+          where: { nomenclatureId: product.packagingId, quantity: { gte: pick.quantity } },
+          data: { quantity: { decrement: pick.quantity } },
+        });
+        if (dec.count === 0) throw new Error("Недостаточно упаковки на складе");
+      }
+
+      // Приход готовой продукции.
+      await tx.productStock.upsert({
+        where: { productId: pick.productId },
+        create: { productId: pick.productId, quantity: pick.quantity },
+        update: { quantity: { increment: pick.quantity } },
+      });
+
+      const op = await tx.productionOperation.create({
+        data: {
+          type: "UPAKOVKA",
+          employeeId,
+          workDate: new Date(),
+          productId: pick.productId,
+          productQty: pick.quantity,
+        },
+      });
+      await writeChangeLog(
+        {
+          entity: "ProductionOperation",
+          entityId: op.id,
+          newValues: { type: "UPAKOVKA", productId: pick.productId, quantity: pick.quantity },
+        },
+        tx,
+      );
+    }
   });
 
   revalidatePath("/production");
