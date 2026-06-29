@@ -1,9 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { Archive, ArchiveRestore, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { employees as mockEmployees } from "@/mocks/fixtures";
+import {
+  archiveEmployee,
+  createEmployee,
+  deleteEmployee,
+  restoreEmployee,
+  updateEmployee,
+  type EmployeeFormValues,
+} from "@/server/employees";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
 import { DataTable, type Column } from "@/components/data-table";
@@ -21,20 +28,22 @@ const tableActionClass =
 const tableActionDestructiveClass =
   "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
-export function EmployeesView() {
+export function EmployeesView({ initialEmployees }: { initialEmployees: Employee[] }) {
   const [search, setSearch] = useState("");
   const [showArchive, setShowArchive] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Employee | null>(null);
+  const [employees, setEmployees] = useState<Employee[]>(initialEmployees);
+  const [pending, startTransition] = useTransition();
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return mockEmployees.filter((e) => {
+    return employees.filter((e) => {
       if (!showArchive && e.status === "ARCHIVED") return false;
       if (!q) return true;
       return e.fullName.toLowerCase().includes(q);
     });
-  }, [search, showArchive]);
+  }, [employees, search, showArchive]);
 
   const openCreate = () => {
     setEditing(null);
@@ -45,6 +54,47 @@ export function EmployeesView() {
     setEditing(employee);
     setDialogOpen(true);
   };
+
+  const upsert = (e: Employee) =>
+    setEmployees((prev) => {
+      const i = prev.findIndex((x) => x.id === e.id);
+      if (i === -1) return [...prev, e];
+      const next = [...prev];
+      next[i] = e;
+      return next;
+    });
+
+  const handleSubmit = (values: EmployeeFormValues) =>
+    new Promise<void>((resolve) => {
+      startTransition(async () => {
+        try {
+          if (editing) {
+            upsert(await updateEmployee(editing.id, values));
+            toast.success("Сотрудник обновлён");
+          } else {
+            upsert(await createEmployee(values));
+            toast.success("Сотрудник создан");
+          }
+          setDialogOpen(false);
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Ошибка сохранения");
+        } finally {
+          resolve();
+        }
+      });
+    });
+
+  const runAction = (fn: () => Promise<Employee | void>, ok: string, removeId?: string) =>
+    startTransition(async () => {
+      try {
+        const res = await fn();
+        if (removeId) setEmployees((prev) => prev.filter((x) => x.id !== removeId));
+        else if (res) upsert(res);
+        toast.success(ok);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Ошибка операции");
+      }
+    });
 
   const columns: Column<Employee>[] = [
     {
@@ -98,10 +148,11 @@ export function EmployeesView() {
                     type="button"
                     variant="ghost"
                     size="icon-sm"
-                    className={tableActionClass}
-                    aria-label="В архив"
-                    onClick={() => toast.message("В архив — прототип")}
-                  />
+                  className={tableActionClass}
+                  aria-label="В архив"
+                  disabled={pending}
+                  onClick={() => runAction(() => archiveEmployee(row.id), "Перенесено в архив")}
+                />
                 }
               >
                 <Archive />
@@ -116,10 +167,11 @@ export function EmployeesView() {
                     type="button"
                     variant="ghost"
                     size="icon-sm"
-                    className={tableActionClass}
-                    aria-label="Восстановить"
-                    onClick={() => toast.message("Восстановить — прототип")}
-                  />
+                  className={tableActionClass}
+                  aria-label="Восстановить"
+                  disabled={pending}
+                  onClick={() => runAction(() => restoreEmployee(row.id), "Восстановлено")}
+                />
                 }
               >
                 <ArchiveRestore />
@@ -137,7 +189,8 @@ export function EmployeesView() {
                   size="icon-sm"
                   className={tableActionDestructiveClass}
                   aria-label="Удалить"
-                  onClick={() => toast.message("Удалить — прототип")}
+                  disabled={pending}
+                  onClick={() => runAction(() => deleteEmployee(row.id), "Сотрудник удалён", row.id)}
                 />
               }
             >
@@ -186,7 +239,8 @@ export function EmployeesView() {
         open={dialogOpen}
         employee={editing}
         onOpenChange={setDialogOpen}
-        onSubmit={() => toast.success(editing ? "Сохранено (прототип)" : "Сотрудник создан (прототип)")}
+        onSubmit={handleSubmit}
+        pending={pending}
       />
     </>
   );

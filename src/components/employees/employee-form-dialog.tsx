@@ -16,6 +16,7 @@ import { MoneyInput } from "@/components/ui/money-input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import type { Employee } from "@/types/domain";
+import type { EmployeeFormValues } from "@/server/employees";
 
 const fieldClass =
   "border-border bg-card hover:border-[#98a2b3] focus-visible:border-ring focus-visible:bg-card h-10 rounded-xl border px-4";
@@ -26,7 +27,18 @@ interface EmployeeFormDialogProps {
   open: boolean;
   employee?: Employee | null;
   onOpenChange: (open: boolean) => void;
-  onSubmit?: () => void;
+  onSubmit?: (values: EmployeeFormValues) => void | Promise<void>;
+  pending?: boolean;
+}
+
+/** DD.MM.YYYY → ISO yyyy-mm-dd (null, если не полная дата). */
+function displayDateToIso(display: string): string | null {
+  const digits = display.replace(/\D/g, "");
+  if (digits.length !== 8) return null;
+  const dd = digits.slice(0, 2);
+  const mm = digits.slice(2, 4);
+  const yyyy = digits.slice(4, 8);
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 function FormSection({ title, children }: { title: string; children: React.ReactNode }) {
@@ -77,38 +89,75 @@ function formatBirthDateInput(raw: string): string {
   return `${digits.slice(0, 2)}.${digits.slice(2, 4)}.${digits.slice(4)}`;
 }
 
-function BirthDateInput({ defaultValue }: { defaultValue?: string | null }) {
-  const [value, setValue] = useState(() => isoToDisplayDate(defaultValue));
-
-  return (
-    <Input
-      id="emp-birth"
-      type="text"
-      inputMode="numeric"
-      className={cn(fieldClass, "tabular-nums")}
-      placeholder="ДД.ММ.ГГГГ"
-      maxLength={10}
-      value={value}
-      onChange={(e) => setValue(formatBirthDateInput(e.target.value))}
-    />
-  );
-}
-
-/** Форма добавления/редактирования сотрудника (UI-прототип). */
+/** Форма добавления/редактирования сотрудника. */
 export function EmployeeFormDialog({
   open,
   employee,
   onOpenChange,
   onSubmit,
+  pending,
 }: EmployeeFormDialogProps) {
   const isEdit = Boolean(employee);
-  const prisadkaRate = employee?.ratePrisadkaTorcev ?? employee?.ratePrisadkaPloskt;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-xl" showCloseButton={false}>
         {open ? (
-          <>
+          <EmployeeFormBody
+            isEdit={isEdit}
+            employee={employee}
+            pending={pending}
+            onOpenChange={onOpenChange}
+            onSubmit={onSubmit}
+          />
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EmployeeFormBody({
+  isEdit,
+  employee,
+  pending,
+  onOpenChange,
+  onSubmit,
+}: {
+  isEdit: boolean;
+  employee?: Employee | null;
+  pending?: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit?: (values: EmployeeFormValues) => void | Promise<void>;
+}) {
+  const [fullName, setFullName] = useState(employee?.fullName ?? "");
+  const [birth, setBirth] = useState(() => isoToDisplayDate(employee?.birthDate));
+  const [pin, setPin] = useState(employee?.pin ?? "");
+  const [hourlyRate, setHourlyRate] = useState<number | null>(employee?.hourlyRate ?? null);
+  const [rateT1, setRateT1] = useState<number | null>(employee?.rateTorcovkaSort1 ?? null);
+  const [rateT2, setRateT2] = useState<number | null>(employee?.rateTorcovkaSort2 ?? null);
+  const [ratePrisadka, setRatePrisadka] = useState<number | null>(
+    employee?.ratePrisadkaTorcev ?? employee?.ratePrisadkaPloskt ?? null,
+  );
+  const [rateUp, setRateUp] = useState<number | null>(employee?.rateUpakovka ?? null);
+
+  const canSubmit = fullName.trim().length > 0 && !pending;
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    await onSubmit?.({
+      fullName,
+      birthDate: displayDateToIso(birth),
+      pin,
+      hourlyRate,
+      rateTorcovkaSort1: rateT1,
+      rateTorcovkaSort2: rateT2,
+      ratePrisadka,
+      rateUpakovka: rateUp,
+    });
+  };
+
+  return (
+    <>
         <div className="border-border flex items-center gap-4 border-b px-6 py-4">
           <DialogTitle className="min-w-0 flex-1 text-lg leading-tight font-semibold">
             {isEdit ? "Изменить сотрудника" : "Добавить сотрудника"}
@@ -135,11 +184,21 @@ export function EmployeeFormDialog({
                   id="emp-name"
                   className={fieldClass}
                   placeholder="Иванов Иван Иванович"
-                  defaultValue={employee?.fullName ?? ""}
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
                 />
               </Field>
               <Field id="emp-birth" label="Дата рождения" className="w-full shrink-0 sm:w-36">
-                <BirthDateInput defaultValue={employee?.birthDate} />
+                <Input
+                  id="emp-birth"
+                  type="text"
+                  inputMode="numeric"
+                  className={cn(fieldClass, "tabular-nums")}
+                  placeholder="ДД.ММ.ГГГГ"
+                  maxLength={10}
+                  value={birth}
+                  onChange={(e) => setBirth(formatBirthDateInput(e.target.value))}
+                />
               </Field>
             </div>
           </FormSection>
@@ -155,7 +214,8 @@ export function EmployeeFormDialog({
                   placeholder="4 цифры"
                   maxLength={4}
                   inputMode="numeric"
-                  defaultValue={employee?.pin ?? ""}
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
                 />
               </Field>
             </div>
@@ -170,7 +230,8 @@ export function EmployeeFormDialog({
                   id="emp-hourly"
                   className={narrowFieldClass}
                   suffix="₽/ч"
-                  defaultValue={employee?.hourlyRate ?? null}
+                  value={hourlyRate}
+                  onValueChange={setHourlyRate}
                 />
               </Field>
             </div>
@@ -184,7 +245,8 @@ export function EmployeeFormDialog({
                   id="emp-t1"
                   className={narrowFieldClass}
                   suffix="₽/деталь"
-                  defaultValue={employee?.rateTorcovkaSort1 ?? null}
+                  value={rateT1}
+                  onValueChange={setRateT1}
                 />
               </Field>
               <Field id="emp-t2" label="Торцовка 2 сорт">
@@ -192,7 +254,8 @@ export function EmployeeFormDialog({
                   id="emp-t2"
                   className={narrowFieldClass}
                   suffix="₽/деталь"
-                  defaultValue={employee?.rateTorcovkaSort2 ?? null}
+                  value={rateT2}
+                  onValueChange={setRateT2}
                 />
               </Field>
               <Field id="emp-prisadka" label="Присадка">
@@ -200,7 +263,8 @@ export function EmployeeFormDialog({
                   id="emp-prisadka"
                   className={narrowFieldClass}
                   suffix="₽/присадка"
-                  defaultValue={prisadkaRate ?? null}
+                  value={ratePrisadka}
+                  onValueChange={setRatePrisadka}
                 />
               </Field>
               <Field id="emp-up" label="Упаковка">
@@ -208,7 +272,8 @@ export function EmployeeFormDialog({
                   id="emp-up"
                   className={narrowFieldClass}
                   suffix="₽/изделие"
-                  defaultValue={employee?.rateUpakovka ?? null}
+                  value={rateUp}
+                  onValueChange={setRateUp}
                 />
               </Field>
             </div>
@@ -216,22 +281,22 @@ export function EmployeeFormDialog({
         </div>
 
         <DialogFooter className="bg-muted/50 border-border !m-0 gap-2 border-t px-6 py-4 sm:flex-row sm:justify-end">
-          <Button variant="outline" className="h-10 rounded-xl px-5" onClick={() => onOpenChange(false)}>
+          <Button
+            variant="outline"
+            className="h-10 rounded-xl px-5"
+            disabled={pending}
+            onClick={() => onOpenChange(false)}
+          >
             Отмена
           </Button>
           <Button
             className="h-10 rounded-xl px-5"
-            onClick={() => {
-              onSubmit?.();
-              onOpenChange(false);
-            }}
+            disabled={!canSubmit}
+            onClick={handleSubmit}
           >
             {isEdit ? "Сохранить" : "Создать сотрудника"}
           </Button>
         </DialogFooter>
-          </>
-        ) : null}
-      </DialogContent>
-    </Dialog>
+    </>
   );
 }

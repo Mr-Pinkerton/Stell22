@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: stell22-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: stell22
+      POSTGRES_PASSWORD: stell22
+      POSTGRES_DB: stell22
+    # 5432/5433 на хосте заняты (локальный Postgres + другой контейнер) — 5434.
+    ports:
+      - "5434:5432"
+    volumes:
+      - stell22-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stell22 -d stell22"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  stell22-db-data:
