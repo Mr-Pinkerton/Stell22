@@ -26,6 +26,8 @@ export interface FiltersBarProps extends SectionFilters {
   onArchiveChange?: (checked: boolean) => void;
   dateFilterValue?: DateFilterValue;
   onDateFilterChange?: (value: DateFilterValue) => void;
+  /** Подпись основной кнопки применения фильтров (по умолчанию «Показать»). */
+  actionLabel?: string;
 }
 
 export function FiltersBar({
@@ -40,6 +42,7 @@ export function FiltersBar({
   onArchiveChange,
   dateFilterValue,
   onDateFilterChange,
+  actionLabel = "Показать",
 }: FiltersBarProps) {
   const hasAny = search || date || weeks || archive;
   const [internalDateFilter, setInternalDateFilter] = useState<DateFilterValue>(
@@ -153,7 +156,7 @@ export function FiltersBar({
         <Button variant="ghost" className={filterActionClass} onClick={handleReset}>
           Сбросить
         </Button>
-        <Button className={filterActionClass}>Показать</Button>
+        <Button className={filterActionClass}>{actionLabel}</Button>
       </div>
     </div>
   );

@@ -408,6 +408,7 @@ export function NomenclatureView() {
         <FiltersBar
           search
           archive
+          actionLabel="Найти"
           searchValue={search}
           onSearchChange={setSearch}
           archiveChecked={showArchive}

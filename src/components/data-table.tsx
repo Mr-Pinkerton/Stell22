@@ -60,10 +60,7 @@ export function DataTable<T extends { id: string }>({
             <TableRow>
               <TableCell
                 colSpan={columns.length}
-                className={cn(
-                  "text-muted-foreground h-24 text-center",
-                  padded && cellPad,
-                )}
+                className={cn("text-muted-foreground h-24 text-center", padded && cellPad)}
               >
                 {empty}
               </TableCell>

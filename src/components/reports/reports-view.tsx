@@ -51,6 +51,7 @@ export function ReportsView() {
           date={filters.date}
           weeks={filters.weeks}
           archive={filters.archive}
+          actionLabel={activeTab === "purchases" ? "Применить" : "Показать"}
           archiveChecked={showArchive}
           onArchiveChange={setShowArchive}
         />
