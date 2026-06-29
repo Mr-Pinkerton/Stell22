@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import type { Detail, RailType, Sort } from "@/types/domain";
+import type { DetailFormValues } from "@/server/nomenclature";
 import {
   Field,
   FormSection,
@@ -37,50 +38,66 @@ interface DetailFormDialogProps {
   open: boolean;
   detail?: Detail | null;
   onOpenChange: (open: boolean) => void;
-  onSubmit?: () => void;
+  onSubmit?: (values: DetailFormValues) => void | Promise<void>;
+  pending?: boolean;
 }
 
-function LengthInput({ defaultValue }: { defaultValue?: number }) {
-  const [text, setText] = useState(() =>
-    defaultValue != null ? String(defaultValue).replace(".", ",") : "",
-  );
-
+export function DetailFormDialog({ open, detail, onOpenChange, onSubmit, pending }: DetailFormDialogProps) {
   return (
-    <div className="relative">
-      <Input
-        id="det-length"
-        type="text"
-        inputMode="decimal"
-        className={cn(narrowFieldClass, "pr-8 tabular-nums")}
-        placeholder="0,72"
-        value={text}
-        onChange={(e) => {
-          const raw = e.target.value.replace(/[^\d,]/g, "");
-          setText(raw);
-        }}
-      />
-      <span
-        className="text-muted-foreground pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-sm"
-        aria-hidden
-      >
-        м
-      </span>
-    </div>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg" showCloseButton={false}>
+        {open ? (
+          <DetailFormBody
+            detail={detail}
+            pending={pending}
+            onOpenChange={onOpenChange}
+            onSubmit={onSubmit}
+          />
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }
 
-export function DetailFormDialog({ open, detail, onOpenChange, onSubmit }: DetailFormDialogProps) {
+function DetailFormBody({
+  detail,
+  pending,
+  onOpenChange,
+  onSubmit,
+}: {
+  detail?: Detail | null;
+  pending?: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit?: (values: DetailFormValues) => void | Promise<void>;
+}) {
   const isEdit = Boolean(detail);
+  const [name, setName] = useState(detail?.name ?? "");
+  const [length, setLength] = useState(() =>
+    detail?.lengthM != null ? String(detail.lengthM).replace(".", ",") : "",
+  );
   const [detailType, setDetailType] = useState<RailType>(detail?.detailType ?? "POLKA");
   const [sort, setSort] = useState<Sort>(detail?.sort ?? "SORT1");
   const [prisadkaTorcev, setPrisadkaTorcev] = useState(detail?.prisadkaTorcevaya ?? true);
   const [prisadkaPlosk, setPrisadkaPlosk] = useState(detail?.prisadkaPloskost ?? false);
 
+  const lengthNum = length ? Number(length.replace(",", ".")) : null;
+  const canSubmit =
+    name.trim().length > 0 && lengthNum != null && lengthNum > 0 && !pending;
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    await onSubmit?.({
+      name,
+      lengthM: lengthNum,
+      detailType,
+      sort,
+      prisadkaTorcevaya: prisadkaTorcev,
+      prisadkaPloskost: prisadkaPlosk,
+    });
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg" showCloseButton={false}>
-        {open ? (
-          <>
+    <>
             <div className="border-border flex items-center gap-4 border-b px-6 py-4">
               <DialogTitle className="min-w-0 flex-1 text-lg leading-tight font-semibold">
                 {isEdit ? "Изменить деталь" : "Создание детали"}
@@ -106,12 +123,29 @@ export function DetailFormDialog({ open, detail, onOpenChange, onSubmit }: Detai
                     id="det-name"
                     className={fieldClass}
                     placeholder="Полка 720"
-                    defaultValue={detail?.name ?? ""}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
                   />
                 </Field>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field id="det-length" label="Длина детали" required>
-                    <LengthInput defaultValue={detail?.lengthM} />
+                    <div className="relative">
+                      <Input
+                        id="det-length"
+                        type="text"
+                        inputMode="decimal"
+                        className={cn(narrowFieldClass, "pr-8 tabular-nums")}
+                        placeholder="0,72"
+                        value={length}
+                        onChange={(e) => setLength(e.target.value.replace(/[^\d,]/g, ""))}
+                      />
+                      <span
+                        className="text-muted-foreground pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-sm"
+                        aria-hidden
+                      >
+                        м
+                      </span>
+                    </div>
                   </Field>
                   <Field id="det-type" label="Тип" required>
                     <Select
@@ -180,23 +214,19 @@ export function DetailFormDialog({ open, detail, onOpenChange, onSubmit }: Detai
               <Button
                 variant="outline"
                 className="h-10 rounded-xl px-5"
+                disabled={pending}
                 onClick={() => onOpenChange(false)}
               >
                 Отмена
               </Button>
               <Button
                 className="h-10 rounded-xl px-5"
-                onClick={() => {
-                  onSubmit?.();
-                  onOpenChange(false);
-                }}
+                disabled={!canSubmit}
+                onClick={handleSubmit}
               >
                 {isEdit ? "Сохранить" : "Создать деталь"}
               </Button>
             </DialogFooter>
-          </>
-        ) : null}
-      </DialogContent>
-    </Dialog>
+    </>
   );
 }

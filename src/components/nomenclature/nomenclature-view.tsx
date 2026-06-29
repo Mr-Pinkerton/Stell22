@@ -1,13 +1,28 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState, useTransition } from "react";
 import { Archive, ArchiveRestore, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
-  details as mockDetails,
-  nomenclatureItems as mockNomenclature,
-  products as mockProducts,
-} from "@/mocks/fixtures";
+  archiveDetail,
+  archiveNomenclatureItem,
+  archiveProduct,
+  createDetail,
+  createNomenclatureItem,
+  createProduct,
+  deleteDetail,
+  deleteNomenclatureItem,
+  deleteProduct,
+  restoreDetail,
+  restoreNomenclatureItem,
+  restoreProduct,
+  updateDetail,
+  updateNomenclatureItem,
+  updateProduct,
+  type DetailFormValues,
+  type NomenclatureItemFormValues,
+  type ProductFormValues,
+} from "@/server/nomenclature";
 import { formatLength, formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
@@ -153,10 +168,25 @@ function ActionsCell({
   );
 }
 
-export function NomenclatureView() {
+interface NomenclatureViewProps {
+  initialDetails: Detail[];
+  initialProducts: Product[];
+  initialItems: NomenclatureItem[];
+}
+
+export function NomenclatureView({
+  initialDetails,
+  initialProducts,
+  initialItems,
+}: NomenclatureViewProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("products");
   const [search, setSearch] = useState("");
   const [showArchive, setShowArchive] = useState(false);
+  const [pending, startTransition] = useTransition();
+
+  const [products, setProducts] = useState<Product[]>(initialProducts);
+  const [details, setDetails] = useState<Detail[]>(initialDetails);
+  const [items, setItems] = useState<NomenclatureItem[]>(initialItems);
 
   const [productDialogOpen, setProductDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -168,56 +198,98 @@ export function NomenclatureView() {
   const [editingItem, setEditingItem] = useState<NomenclatureItem | null>(null);
   const [itemDialogType, setItemDialogType] = useState<NomenclatureType>("FASTENER");
 
-  const productRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return mockProducts.filter((p) => {
-      if (!showArchive && p.status === "ARCHIVED") return false;
-      if (!q) return true;
-      return (
-        p.name.toLowerCase().includes(q) ||
-        p.sku.toLowerCase().includes(q)
-      );
-    });
-  }, [search, showArchive]);
+  const q = search.trim().toLowerCase();
+  const matchesSearch = (text: string) => !q || text.toLowerCase().includes(q);
+  const visible = (status: "ACTIVE" | "ARCHIVED") => showArchive || status !== "ARCHIVED";
 
-  const detailRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return mockDetails.filter((d) => {
-      if (!showArchive && d.status === "ARCHIVED") return false;
-      if (!q) return true;
-      return d.name.toLowerCase().includes(q);
-    });
-  }, [search, showArchive]);
+  const productRows = products.filter(
+    (p) => visible(p.status) && matchesSearch(`${p.name} ${p.sku}`),
+  );
+  const detailRows = details.filter((d) => visible(d.status) && matchesSearch(d.name));
+  const itemsByType = (type: NomenclatureType) =>
+    items.filter((n) => n.type === type && visible(n.status) && matchesSearch(n.name));
+  const fastenerRows = itemsByType("FASTENER");
+  const packagingRows = itemsByType("PACKAGING");
+  const otherRows = itemsByType("OTHER");
 
-  const fastenerRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return mockNomenclature.filter((n) => {
-      if (n.type !== "FASTENER") return false;
-      if (!showArchive && n.status === "ARCHIVED") return false;
-      if (!q) return true;
-      return n.name.toLowerCase().includes(q);
+  const upsertProduct = (p: Product) =>
+    setProducts((prev) => {
+      const i = prev.findIndex((x) => x.id === p.id);
+      if (i === -1) return [...prev, p];
+      const next = [...prev];
+      next[i] = p;
+      return next;
     });
-  }, [search, showArchive]);
+  const upsertDetail = (d: Detail) =>
+    setDetails((prev) => {
+      const i = prev.findIndex((x) => x.id === d.id);
+      if (i === -1) return [...prev, d];
+      const next = [...prev];
+      next[i] = d;
+      return next;
+    });
+  const upsertItem = (n: NomenclatureItem) =>
+    setItems((prev) => {
+      const i = prev.findIndex((x) => x.id === n.id);
+      if (i === -1) return [...prev, n];
+      const next = [...prev];
+      next[i] = n;
+      return next;
+    });
 
-  const packagingRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return mockNomenclature.filter((n) => {
-      if (n.type !== "PACKAGING") return false;
-      if (!showArchive && n.status === "ARCHIVED") return false;
-      if (!q) return true;
-      return n.name.toLowerCase().includes(q);
+  const runRow = (fn: () => Promise<unknown>, ok: string) =>
+    startTransition(async () => {
+      try {
+        await fn();
+        toast.success(ok);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Ошибка операции");
+      }
     });
-  }, [search, showArchive]);
 
-  const otherRows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return mockNomenclature.filter((n) => {
-      if (n.type !== "OTHER") return false;
-      if (!showArchive && n.status === "ARCHIVED") return false;
-      if (!q) return true;
-      return n.name.toLowerCase().includes(q);
+  const submitDialog = <T,>(
+    fn: () => Promise<T>,
+    apply: (res: T) => void,
+    ok: string,
+    close: () => void,
+  ) =>
+    new Promise<void>((resolve) => {
+      startTransition(async () => {
+        try {
+          apply(await fn());
+          toast.success(ok);
+          close();
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Ошибка сохранения");
+        } finally {
+          resolve();
+        }
+      });
     });
-  }, [search, showArchive]);
+
+  const handleProductSubmit = (values: ProductFormValues) =>
+    submitDialog(
+      () => (editingProduct ? updateProduct(editingProduct.id, values) : createProduct(values)),
+      upsertProduct,
+      editingProduct ? "Изделие сохранено" : "Изделие создано",
+      () => setProductDialogOpen(false),
+    );
+
+  const handleDetailSubmit = (values: DetailFormValues) =>
+    submitDialog(
+      () => (editingDetail ? updateDetail(editingDetail.id, values) : createDetail(values)),
+      upsertDetail,
+      editingDetail ? "Деталь сохранена" : "Деталь создана",
+      () => setDetailDialogOpen(false),
+    );
+
+  const handleItemSubmit = (values: NomenclatureItemFormValues) =>
+    submitDialog(
+      () => (editingItem ? updateNomenclatureItem(editingItem.id, values) : createNomenclatureItem(values)),
+      upsertItem,
+      editingItem ? "Позиция сохранена" : "Позиция создана",
+      () => setItemDialogOpen(false),
+    );
 
   const openCreate = () => {
     switch (activeTab) {
@@ -282,9 +354,14 @@ export function NomenclatureView() {
             setProductDialogOpen(true);
           }}
           status={row.status}
-          onArchive={() => toast.message("В архив — прототип")}
-          onRestore={() => toast.message("Восстановить — прототип")}
-          onDelete={() => toast.message("Удалить — прототип")}
+          onArchive={() => runRow(() => archiveProduct(row.id).then(upsertProduct), "Перенесено в архив")}
+          onRestore={() => runRow(() => restoreProduct(row.id).then(upsertProduct), "Восстановлено")}
+          onDelete={() =>
+            runRow(
+              () => deleteProduct(row.id).then(() => setProducts((p) => p.filter((x) => x.id !== row.id))),
+              "Изделие удалено",
+            )
+          }
         />
       ),
     },
@@ -333,9 +410,14 @@ export function NomenclatureView() {
             setDetailDialogOpen(true);
           }}
           status={row.status}
-          onArchive={() => toast.message("В архив — прототип")}
-          onRestore={() => toast.message("Восстановить — прототип")}
-          onDelete={() => toast.message("Удалить — прототип")}
+          onArchive={() => runRow(() => archiveDetail(row.id).then(upsertDetail), "Перенесено в архив")}
+          onRestore={() => runRow(() => restoreDetail(row.id).then(upsertDetail), "Восстановлено")}
+          onDelete={() =>
+            runRow(
+              () => deleteDetail(row.id).then(() => setDetails((p) => p.filter((x) => x.id !== row.id))),
+              "Деталь удалена",
+            )
+          }
         />
       ),
     },
@@ -370,9 +452,18 @@ export function NomenclatureView() {
             setItemDialogOpen(true);
           }}
           status={row.status}
-          onArchive={() => toast.message("В архив — прототип")}
-          onRestore={() => toast.message("Восстановить — прототип")}
-          onDelete={() => toast.message("Удалить — прототип")}
+          onArchive={() =>
+            runRow(() => archiveNomenclatureItem(row.id).then(upsertItem), "Перенесено в архив")
+          }
+          onRestore={() =>
+            runRow(() => restoreNomenclatureItem(row.id).then(upsertItem), "Восстановлено")
+          }
+          onDelete={() =>
+            runRow(
+              () => deleteNomenclatureItem(row.id).then(() => setItems((p) => p.filter((x) => x.id !== row.id))),
+              "Позиция удалена",
+            )
+          }
         />
       ),
     },
@@ -480,23 +571,19 @@ export function NomenclatureView() {
       <ProductFormDialog
         open={productDialogOpen}
         product={editingProduct}
+        details={details.filter((d) => d.status === "ACTIVE")}
+        items={items}
         onOpenChange={setProductDialogOpen}
-        onSubmit={() =>
-          toast.success(
-            editingProduct ? "Изделие сохранено (прототип)" : "Изделие создано (прототип)",
-          )
-        }
+        onSubmit={handleProductSubmit}
+        pending={pending}
       />
 
       <DetailFormDialog
         open={detailDialogOpen}
         detail={editingDetail}
         onOpenChange={setDetailDialogOpen}
-        onSubmit={() =>
-          toast.success(
-            editingDetail ? "Деталь сохранена (прототип)" : "Деталь создана (прототип)",
-          )
-        }
+        onSubmit={handleDetailSubmit}
+        pending={pending}
       />
 
       <NomenclatureItemFormDialog
@@ -504,11 +591,8 @@ export function NomenclatureView() {
         type={itemDialogType}
         item={editingItem}
         onOpenChange={setItemDialogOpen}
-        onSubmit={() =>
-          toast.success(
-            editingItem ? "Позиция сохранена (прототип)" : "Позиция создана (прототип)",
-          )
-        }
+        onSubmit={handleItemSubmit}
+        pending={pending}
       />
     </>
   );

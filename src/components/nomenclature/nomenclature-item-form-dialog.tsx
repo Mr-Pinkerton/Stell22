@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,6 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { MoneyInput } from "@/components/ui/money-input";
 import type { NomenclatureItem, NomenclatureType } from "@/types/domain";
+import type { NomenclatureItemFormValues } from "@/server/nomenclature";
 import { Field, FormSection, fieldClass, narrowFieldClass } from "./form-shared";
 
 const TYPE_TITLE: Record<NomenclatureType, { create: string; edit: string; submit: string }> = {
@@ -37,7 +39,8 @@ interface NomenclatureItemFormDialogProps {
   type: NomenclatureType;
   item?: NomenclatureItem | null;
   onOpenChange: (open: boolean) => void;
-  onSubmit?: () => void;
+  onSubmit?: (values: NomenclatureItemFormValues) => void | Promise<void>;
+  pending?: boolean;
 }
 
 export function NomenclatureItemFormDialog({
@@ -46,15 +49,52 @@ export function NomenclatureItemFormDialog({
   item,
   onOpenChange,
   onSubmit,
+  pending,
 }: NomenclatureItemFormDialogProps) {
-  const isEdit = Boolean(item);
-  const titles = TYPE_TITLE[type];
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-md" showCloseButton={false}>
         {open ? (
-          <>
+          <NomenclatureItemFormBody
+            type={type}
+            item={item}
+            pending={pending}
+            onOpenChange={onOpenChange}
+            onSubmit={onSubmit}
+          />
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function NomenclatureItemFormBody({
+  type,
+  item,
+  pending,
+  onOpenChange,
+  onSubmit,
+}: {
+  type: NomenclatureType;
+  item?: NomenclatureItem | null;
+  pending?: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit?: (values: NomenclatureItemFormValues) => void | Promise<void>;
+}) {
+  const isEdit = Boolean(item);
+  const titles = TYPE_TITLE[type];
+  const [name, setName] = useState(item?.name ?? "");
+  const [price, setPrice] = useState<number | null>(item?.unitPrice ?? null);
+
+  const canSubmit = name.trim().length > 0 && !pending;
+
+  const handleSubmit = async () => {
+    if (!canSubmit) return;
+    await onSubmit?.({ name, unitPrice: price, type });
+  };
+
+  return (
+    <>
             <div className="border-border flex items-center gap-4 border-b px-6 py-4">
               <DialogTitle className="min-w-0 flex-1 text-lg leading-tight font-semibold">
                 {isEdit ? titles.edit : titles.create}
@@ -80,7 +120,8 @@ export function NomenclatureItemFormDialog({
                     id="nom-name"
                     className={fieldClass}
                     placeholder="Название позиции"
-                    defaultValue={item?.name ?? ""}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
                   />
                 </Field>
                 <Field id="nom-price" label="Цена за единицу" required>
@@ -88,7 +129,8 @@ export function NomenclatureItemFormDialog({
                     id="nom-price"
                     className={narrowFieldClass}
                     suffix="₽"
-                    defaultValue={item?.unitPrice ?? null}
+                    value={price}
+                    onValueChange={setPrice}
                   />
                 </Field>
               </FormSection>
@@ -98,23 +140,19 @@ export function NomenclatureItemFormDialog({
               <Button
                 variant="outline"
                 className="h-10 rounded-xl px-5"
+                disabled={pending}
                 onClick={() => onOpenChange(false)}
               >
                 Отмена
               </Button>
               <Button
                 className="h-10 rounded-xl px-5"
-                onClick={() => {
-                  onSubmit?.();
-                  onOpenChange(false);
-                }}
+                disabled={!canSubmit}
+                onClick={handleSubmit}
               >
                 {isEdit ? "Сохранить" : titles.submit}
               </Button>
             </DialogFooter>
-          </>
-        ) : null}
-      </DialogContent>
-    </Dialog>
+    </>
   );
 }

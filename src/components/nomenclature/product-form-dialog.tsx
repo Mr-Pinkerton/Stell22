@@ -3,7 +3,6 @@
 import { useMemo, useState } from "react";
 import { Plus, Trash2, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { details as allDetails, nomenclatureItems } from "@/mocks/fixtures";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -23,7 +22,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import type { Product, Sort } from "@/types/domain";
+import type { Detail, NomenclatureItem, Product, Sort } from "@/types/domain";
+import type { ProductFormValues } from "@/server/nomenclature";
 import {
   Field,
   FormSection,
@@ -50,20 +50,46 @@ interface DraftProductDetail {
 interface ProductFormDialogProps {
   open: boolean;
   product?: Product | null;
+  /** Активные детали из БД (для выбора состава). */
+  details: Detail[];
+  /** Позиции номенклатуры (крепёж/упаковка/разное) из БД. */
+  items: NomenclatureItem[];
   onOpenChange: (open: boolean) => void;
-  onSubmit?: () => void;
+  onSubmit?: (values: ProductFormValues) => void | Promise<void>;
+  pending?: boolean;
 }
-
-const fasteners = nomenclatureItems.filter((n) => n.type === "FASTENER");
-const packagingItems = nomenclatureItems.filter((n) => n.type === "PACKAGING");
-const otherItems = nomenclatureItems.filter((n) => n.type === "OTHER");
 
 function nextId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-export function ProductFormDialog({ open, product, onOpenChange, onSubmit }: ProductFormDialogProps) {
+export function ProductFormDialog(props: ProductFormDialogProps) {
+  const { open, onOpenChange } = props;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-2xl" showCloseButton={false}>
+        {open ? <ProductFormBody {...props} /> : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ProductFormBody({
+  product,
+  details: allDetails,
+  items,
+  onOpenChange,
+  onSubmit,
+  pending,
+}: ProductFormDialogProps) {
   const isEdit = Boolean(product);
+  const fasteners = useMemo(() => items.filter((n) => n.type === "FASTENER"), [items]);
+  const packagingItems = useMemo(() => items.filter((n) => n.type === "PACKAGING"), [items]);
+  const otherItems = useMemo(() => items.filter((n) => n.type === "OTHER"), [items]);
+
+  const [name, setName] = useState(product?.name ?? "");
+  const [sku, setSku] = useState(product?.sku ?? "");
+  const [salePrice, setSalePrice] = useState<number | null>(product?.salePrice ?? null);
   const [sort, setSort] = useState<Sort | "">(product?.sort ?? "");
   const [packagingId, setPackagingId] = useState(product?.packagingId ?? "");
   const [fastenerRows, setFastenerRows] = useState<DraftFastener[]>(
@@ -90,12 +116,12 @@ export function ProductFormDialog({ open, product, onOpenChange, onSubmit }: Pro
 
   const sortDetails = useMemo(
     () => (sort ? allDetails.filter((d) => d.sort === sort && d.status === "ACTIVE") : []),
-    [sort],
+    [sort, allDetails],
   );
 
   const detailNameById = useMemo(
     () => new Map(allDetails.map((d) => [d.id, d.name])),
-    [],
+    [allDetails],
   );
 
   const addFastenerRow = () => {
@@ -127,11 +153,28 @@ export function ProductFormDialog({ open, product, onOpenChange, onSubmit }: Pro
     });
   };
 
+  const canSubmit = name.trim().length > 0 && sku.trim().length > 0 && sort !== "" && !pending;
+
+  const handleSubmit = async () => {
+    // Проверяем sort первым — это сужает тип до Sort. Кнопка и так disabled при !canSubmit.
+    if (sort === "" || !canSubmit) return;
+    await onSubmit?.({
+      name,
+      sku,
+      sort,
+      salePrice,
+      packagingId: packagingId || null,
+      details: detailRows.map((r) => ({ detailId: r.detailId, quantity: r.quantity })),
+      fasteners: fastenerRows.map((r) => ({
+        nomenclatureId: r.nomenclatureId,
+        quantity: r.quantity,
+      })),
+      extraIds: Array.from(extraIds),
+    });
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-2xl" showCloseButton={false}>
-        {open ? (
-          <>
+    <>
             <div className="border-border flex items-center gap-4 border-b px-6 py-4">
               <DialogTitle className="min-w-0 flex-1 text-lg leading-tight font-semibold">
                 {isEdit ? "Изменить изделие" : "Создание изделия"}
@@ -158,7 +201,8 @@ export function ProductFormDialog({ open, product, onOpenChange, onSubmit }: Pro
                       id="prod-name"
                       className={fieldClass}
                       placeholder="Полка настенная"
-                      defaultValue={product?.name ?? ""}
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
                     />
                   </Field>
                   <Field id="prod-sku" label="Артикул" required>
@@ -166,7 +210,8 @@ export function ProductFormDialog({ open, product, onOpenChange, onSubmit }: Pro
                       id="prod-sku"
                       className={fieldClass}
                       placeholder="ART-001"
-                      defaultValue={product?.sku ?? ""}
+                      value={sku}
+                      onChange={(e) => setSku(e.target.value)}
                     />
                   </Field>
                 </div>
@@ -196,7 +241,8 @@ export function ProductFormDialog({ open, product, onOpenChange, onSubmit }: Pro
                       id="prod-sale"
                       className={narrowFieldClass}
                       suffix="₽"
-                      defaultValue={product?.salePrice ?? null}
+                      value={salePrice}
+                      onValueChange={setSalePrice}
                     />
                   </Field>
                 </div>
@@ -437,23 +483,19 @@ export function ProductFormDialog({ open, product, onOpenChange, onSubmit }: Pro
               <Button
                 variant="outline"
                 className="h-10 rounded-xl px-5"
+                disabled={pending}
                 onClick={() => onOpenChange(false)}
               >
                 Отмена
               </Button>
               <Button
                 className="h-10 rounded-xl px-5"
-                onClick={() => {
-                  onSubmit?.();
-                  onOpenChange(false);
-                }}
+                disabled={!canSubmit}
+                onClick={handleSubmit}
               >
                 {isEdit ? "Сохранить" : "Создать изделие"}
               </Button>
             </DialogFooter>
-          </>
-        ) : null}
-      </DialogContent>
-    </Dialog>
+    </>
   );
 }
