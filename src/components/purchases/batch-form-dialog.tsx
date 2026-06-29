@@ -25,7 +25,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import type { RailType, Sort } from "@/types/domain";
+import type { NomenclatureItem, RailType, Sort } from "@/types/domain";
+import type { BatchFormValues, SimplePurchaseFormValues } from "@/server/purchases";
 
 const fieldClass =
   "border-border bg-card hover:border-[#98a2b3] focus-visible:border-ring focus-visible:bg-card h-10 rounded-xl border px-4";
@@ -74,8 +75,12 @@ interface DraftRailEntry {
 interface BatchFormDialogProps {
   open: boolean;
   batch?: PurchaseBatchRow | null;
+  /** Активная номенклатура (для простой закупки). */
+  items: NomenclatureItem[];
   onOpenChange: (open: boolean) => void;
-  onSubmit?: () => void;
+  onSubmitBatch?: (values: BatchFormValues) => void | Promise<void>;
+  onSubmitSimple?: (values: SimplePurchaseFormValues) => void | Promise<void>;
+  pending?: boolean;
 }
 
 function Field({
@@ -156,11 +161,17 @@ function SortSelect({
 
 function BatchFormBody({
   batch,
-  onSubmit,
+  items,
+  onSubmitBatch,
+  onSubmitSimple,
+  pending,
   onClose,
 }: {
   batch?: PurchaseBatchRow | null;
-  onSubmit?: () => void;
+  items: NomenclatureItem[];
+  onSubmitBatch?: (values: BatchFormValues) => void | Promise<void>;
+  onSubmitSimple?: (values: SimplePurchaseFormValues) => void | Promise<void>;
+  pending?: boolean;
   onClose: () => void;
 }) {
   const isEdit = Boolean(batch);
@@ -168,8 +179,18 @@ function BatchFormBody({
   const [addMode, setAddMode] = useState<RailAddMode>("package");
   const [entries, setEntries] = useState<DraftRailEntry[]>([]);
 
+  const [name, setName] = useState(batch?.name ?? "");
   const [sectionW, setSectionW] = useState(String(batch?.sectionWidthMm ?? ""));
   const [sectionH, setSectionH] = useState(String(batch?.sectionHeightMm ?? ""));
+  const [purchaseCost, setPurchaseCost] = useState<number | null>(batch?.purchaseCost ?? null);
+  const [priceSort1, setPriceSort1] = useState<number | null>(batch?.priceSort1 ?? null);
+  const [priceSort2, setPriceSort2] = useState<number | null>(batch?.priceSort2 ?? null);
+  const [note, setNote] = useState(batch?.note ?? "");
+
+  // Простая закупка.
+  const [simpleItemId, setSimpleItemId] = useState("");
+  const [simpleQty, setSimpleQty] = useState("");
+  const [simplePrice, setSimplePrice] = useState<number | null>(null);
 
   const [draftLength, setDraftLength] = useState("");
   const [draftType, setDraftType] = useState<RailType>("POLKA");
@@ -254,9 +275,42 @@ function BatchFormBody({
     setEntries((prev) => prev.filter((e) => e.id !== id));
   };
 
-  const handleSubmit = () => {
-    onSubmit?.();
-    onClose();
+  const canSubmitBatch =
+    name.trim().length > 0 && wMm > 0 && hMm > 0 && (purchaseCost ?? 0) > 0 && !pending;
+  const simpleQtyNum = Number(simpleQty) || 0;
+  const canSubmitSimple =
+    simpleItemId !== "" && simpleQtyNum > 0 && simplePrice != null && simplePrice >= 0 && !pending;
+  const canSubmit = kind === "simple" ? canSubmitSimple : canSubmitBatch;
+
+  const handleSubmit = async () => {
+    if (kind === "simple") {
+      if (!canSubmitSimple) return;
+      await onSubmitSimple?.({
+        nomenclatureId: simpleItemId,
+        quantity: simpleQtyNum,
+        unitPrice: simplePrice,
+      });
+      return;
+    }
+    if (!canSubmitBatch) return;
+    await onSubmitBatch?.({
+      name,
+      sectionWidthMm: wMm,
+      sectionHeightMm: hMm,
+      purchaseCost,
+      priceSort1,
+      priceSort2,
+      note,
+      rails: entries.map((e) => ({
+        mode: e.mode,
+        lengthM: e.lengthM,
+        railType: e.railType,
+        sort: e.sort,
+        quantity: e.quantity,
+        rows: e.rows ?? null,
+        layers: e.layers ?? null,
+      })),
+    });
   };
 
   return (
@@ -316,13 +370,38 @@ function BatchFormBody({
             </p>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field id="simple-name" label="Наименование" required className="sm:col-span-2">
-                <Input id="simple-name" className={fieldClass} placeholder="Из номенклатуры" />
+                <Select value={simpleItemId || undefined} onValueChange={(v) => setSimpleItemId(v ?? "")}>
+                  <SelectTrigger id="simple-name" className={selectTriggerClass}>
+                    <SelectValue placeholder="Из номенклатуры">
+                      {items.find((i) => i.id === simpleItemId)?.name ?? "Из номенклатуры"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent {...formSelectContentProps}>
+                    {items.map((i) => (
+                      <SelectItem key={i.id} value={i.id} className="cursor-pointer rounded-lg">
+                        {i.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </Field>
               <Field id="simple-qty" label="Количество" required>
-                <Input id="simple-qty" className={narrowFieldClass} placeholder="шт" inputMode="decimal" />
+                <Input
+                  id="simple-qty"
+                  className={narrowFieldClass}
+                  placeholder="шт"
+                  inputMode="decimal"
+                  value={simpleQty}
+                  onChange={(e) => setSimpleQty(e.target.value.replace(/[^\d]/g, ""))}
+                />
               </Field>
               <Field id="simple-price" label="Цена за единицу" required>
-                <MoneyInput id="simple-price" className={narrowFieldClass} />
+                <MoneyInput
+                  id="simple-price"
+                  className={narrowFieldClass}
+                  value={simplePrice}
+                  onValueChange={setSimplePrice}
+                />
               </Field>
             </div>
           </div>
@@ -340,7 +419,8 @@ function BatchFormBody({
                     id="batch-name"
                     className={fieldClass}
                     placeholder="Волочек 2419"
-                    defaultValue={batch?.name ?? ""}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
                   />
                 </Field>
                 <Field id="batch-sw" label="Сечение — ширина, мм" required>
@@ -568,7 +648,8 @@ function BatchFormBody({
                   <MoneyInput
                     id="batch-cost"
                     className={narrowFieldClass}
-                    defaultValue={batch?.purchaseCost ?? null}
+                    value={purchaseCost}
+                    onValueChange={setPurchaseCost}
                   />
                 </Field>
                 <Field id="batch-p1" label="Цена 1 сорт, ₽/м³">
@@ -576,7 +657,8 @@ function BatchFormBody({
                     id="batch-p1"
                     className={narrowFieldClass}
                     suffix="₽/м³"
-                    defaultValue={batch?.priceSort1 ?? null}
+                    value={priceSort1}
+                    onValueChange={setPriceSort1}
                   />
                 </Field>
                 <Field id="batch-p2" label="Цена 2 сорт, ₽/м³">
@@ -584,7 +666,8 @@ function BatchFormBody({
                     id="batch-p2"
                     className={narrowFieldClass}
                     suffix="₽/м³"
-                    defaultValue={batch?.priceSort2 ?? null}
+                    value={priceSort2}
+                    onValueChange={setPriceSort2}
                   />
                 </Field>
               </div>
@@ -603,7 +686,8 @@ function BatchFormBody({
                 id="batch-note"
                 className={fieldClass}
                 placeholder="Необязательно"
-                defaultValue={batch?.note ?? ""}
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
               />
             </Field>
           </>
@@ -611,10 +695,19 @@ function BatchFormBody({
       </div>
 
       <DialogFooter className="bg-muted/50 border-border !m-0 gap-2 border-t px-6 py-4 sm:flex-row sm:justify-end">
-        <Button variant="outline" className="h-10 cursor-pointer rounded-xl px-5" onClick={onClose}>
+        <Button
+          variant="outline"
+          className="h-10 cursor-pointer rounded-xl px-5"
+          disabled={pending}
+          onClick={onClose}
+        >
           Отмена
         </Button>
-        <Button className="h-10 cursor-pointer rounded-xl px-5" onClick={handleSubmit}>
+        <Button
+          className="h-10 cursor-pointer rounded-xl px-5"
+          disabled={!canSubmit}
+          onClick={handleSubmit}
+        >
           {kind === "simple"
             ? "Добавить закупку"
             : isEdit
@@ -626,7 +719,15 @@ function BatchFormBody({
   );
 }
 
-export function BatchFormDialog({ open, batch, onOpenChange, onSubmit }: BatchFormDialogProps) {
+export function BatchFormDialog({
+  open,
+  batch,
+  items,
+  onOpenChange,
+  onSubmitBatch,
+  onSubmitSimple,
+  pending,
+}: BatchFormDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-2xl" showCloseButton={false}>
@@ -634,7 +735,10 @@ export function BatchFormDialog({ open, batch, onOpenChange, onSubmit }: BatchFo
           <BatchFormBody
             key={batch?.id ?? "new"}
             batch={batch}
-            onSubmit={onSubmit}
+            items={items}
+            onSubmitBatch={onSubmitBatch}
+            onSubmitSimple={onSubmitSimple}
+            pending={pending}
             onClose={() => onOpenChange(false)}
           />
         ) : null}

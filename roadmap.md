@@ -144,7 +144,8 @@
 - [x] Сотрудники (CRUD) — server actions + ChangeLog (`src/server/employees.ts`)
 - [x] Номенклатура: детали, изделия (состав, крепёж, упаковка, чекбоксы) —
       server actions + ChangeLog (`src/server/nomenclature.ts`)
-- [ ] Закупки: партии, рейки/пакеты, простые закупки, списание остатка
+- [x] Закупки: партии, рейки/пакеты, простые закупки, списание остатка —
+      server actions + ChangeLog (`src/server/purchases.ts`)
 
 ## Этап 7. Оживление терминала и производства
 

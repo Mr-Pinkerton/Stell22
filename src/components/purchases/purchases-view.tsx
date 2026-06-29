@@ -1,11 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { AlertTriangle, PackageMinus, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { batches as mockBatches, railLots as mockRailLots } from "@/mocks/fixtures";
-import { batchCostMismatchIds } from "@/mocks/purchase-flags";
-import { buildPurchaseRows, type PurchaseBatchRow } from "@/lib/batch-stats";
+import {
+  createBatch,
+  createSimplePurchase,
+  deleteBatch,
+  updateBatch,
+  writeOffBatchRemainder,
+  type BatchFormValues,
+  type SimplePurchaseFormValues,
+} from "@/server/purchases";
+import { type PurchaseBatchRow } from "@/lib/batch-stats";
+import type { NomenclatureItem } from "@/types/domain";
 import { formatIsoDate, formatLength, formatMoney, formatVolume } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
@@ -22,22 +30,27 @@ const tableActionClass =
 const tableActionDestructiveClass =
   "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
-const purchaseRows = buildPurchaseRows(mockBatches, mockRailLots, batchCostMismatchIds);
+interface PurchasesViewProps {
+  initialRows: PurchaseBatchRow[];
+  items: NomenclatureItem[];
+}
 
-export function PurchasesView() {
+export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
   const [search, setSearch] = useState("");
   const [showArchive, setShowArchive] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<PurchaseBatchRow | null>(null);
+  const [batches, setBatches] = useState<PurchaseBatchRow[]>(initialRows);
+  const [pending, startTransition] = useTransition();
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return purchaseRows.filter((b) => {
+    return batches.filter((b) => {
       if (!showArchive && b.status === "ARCHIVED") return false;
       if (!q) return true;
       return b.name.toLowerCase().includes(q);
     });
-  }, [search, showArchive]);
+  }, [batches, search, showArchive]);
 
   const openCreate = () => {
     setEditing(null);
@@ -48,6 +61,55 @@ export function PurchasesView() {
     setEditing(batch);
     setDialogOpen(true);
   };
+
+  const upsert = (b: PurchaseBatchRow) =>
+    setBatches((prev) => {
+      const i = prev.findIndex((x) => x.id === b.id);
+      if (i === -1) return [b, ...prev];
+      const next = [...prev];
+      next[i] = b;
+      return next;
+    });
+
+  const runRow = (fn: () => Promise<unknown>, ok: string) =>
+    startTransition(async () => {
+      try {
+        await fn();
+        toast.success(ok);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Ошибка операции");
+      }
+    });
+
+  const handleBatchSubmit = (values: BatchFormValues) =>
+    new Promise<void>((resolve) => {
+      startTransition(async () => {
+        try {
+          upsert(editing ? await updateBatch(editing.id, values) : await createBatch(values));
+          toast.success(editing ? "Партия сохранена" : "Партия добавлена");
+          setDialogOpen(false);
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Ошибка сохранения");
+        } finally {
+          resolve();
+        }
+      });
+    });
+
+  const handleSimpleSubmit = (values: SimplePurchaseFormValues) =>
+    new Promise<void>((resolve) => {
+      startTransition(async () => {
+        try {
+          await createSimplePurchase(values);
+          toast.success("Закупка добавлена");
+          setDialogOpen(false);
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Ошибка сохранения");
+        } finally {
+          resolve();
+        }
+      });
+    });
 
   const columns: Column<PurchaseBatchRow>[] = [
     {
@@ -156,7 +218,10 @@ export function PurchasesView() {
                     size="icon-sm"
                     className={tableActionClass}
                     aria-label="Списать остаток"
-                    onClick={() => toast.message("Списать остаток — прототип")}
+                    disabled={pending}
+                    onClick={() =>
+                      runRow(() => writeOffBatchRemainder(row.id).then(upsert), "Остаток списан в отход")
+                    }
                   />
                 }
               >
@@ -175,7 +240,13 @@ export function PurchasesView() {
                   size="icon-sm"
                   className={tableActionDestructiveClass}
                   aria-label="Удалить"
-                  onClick={() => toast.message("Удалить — прототип")}
+                  disabled={pending}
+                  onClick={() =>
+                    runRow(
+                      () => deleteBatch(row.id).then(() => setBatches((p) => p.filter((x) => x.id !== row.id))),
+                      "Партия удалена",
+                    )
+                  }
                 />
               }
             >
@@ -223,8 +294,11 @@ export function PurchasesView() {
       <BatchFormDialog
         open={dialogOpen}
         batch={editing}
+        items={items}
         onOpenChange={setDialogOpen}
-        onSubmit={() => toast.success(editing ? "Партия сохранена (прототип)" : "Партия добавлена (прототип)")}
+        onSubmitBatch={handleBatchSubmit}
+        onSubmitSimple={handleSimpleSubmit}
+        pending={pending}
       />
     </>
   );
