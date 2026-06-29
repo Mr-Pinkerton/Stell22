@@ -116,6 +116,8 @@ export interface BatchRailInput {
 
 export interface BatchFormValues {
   name: string;
+  /** ISO yyyy-mm-dd; null → текущая дата. */
+  purchaseDate: string | null;
   sectionWidthMm: number | null;
   sectionHeightMm: number | null;
   purchaseCost: number | null;
@@ -123,6 +125,12 @@ export interface BatchFormValues {
   priceSort2: number | null;
   note: string;
   rails: BatchRailInput[];
+}
+
+function parseDate(iso: string | null): Date {
+  if (!iso) return new Date();
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
 function packageCode(): string {
@@ -148,7 +156,7 @@ export async function createBatch(values: BatchFormValues): Promise<PurchaseBatc
       priceSort1: values.priceSort1 ?? 0,
       priceSort2: values.priceSort2 ?? 0,
       status: "IN_WORK",
-      purchaseDate: new Date(),
+      purchaseDate: parseDate(values.purchaseDate),
       note: values.note.trim() || null,
       railLots: {
         create: values.rails.map((r) => ({
@@ -195,6 +203,7 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
       purchaseCost: values.purchaseCost ?? 0,
       priceSort1: values.priceSort1 ?? 0,
       priceSort2: values.priceSort2 ?? 0,
+      purchaseDate: parseDate(values.purchaseDate),
       note: values.note.trim() || null,
     },
   });
@@ -259,6 +268,8 @@ export interface SimplePurchaseFormValues {
   nomenclatureId: string;
   quantity: number | null;
   unitPrice: number | null;
+  /** ISO yyyy-mm-dd; null → текущая дата. */
+  purchaseDate: string | null;
 }
 
 export async function createSimplePurchase(values: SimplePurchaseFormValues): Promise<void> {
@@ -271,7 +282,7 @@ export async function createSimplePurchase(values: SimplePurchaseFormValues): Pr
       nomenclatureId: values.nomenclatureId,
       quantity: values.quantity,
       unitPrice: values.unitPrice,
-      purchaseDate: new Date(),
+      purchaseDate: parseDate(values.purchaseDate),
     },
   });
   await writeChangeLog({

@@ -10,11 +10,13 @@ import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
 import { formatLength } from "@/lib/format";
 import { maxDetailQuantity, sumDetailLengthM, type TorcovkaPick } from "@/lib/torcovka";
-import type { Batch, Detail, RailLot, Sort } from "@/types/domain";
+import { submitTorcovka } from "@/server/terminal";
+import type { Batch, Detail, Employee, RailLot, Sort } from "@/types/domain";
 import type { TerminalData } from "@/components/terminal/types";
 
 interface TorcovkaScreenProps {
   data: TerminalData;
+  employee: Employee;
   onDone: () => void;
 }
 
@@ -24,13 +26,14 @@ const SORT_LABEL: Record<Sort, string> = { SORT1: "1 сорт", SORT2: "2 сор
 
 const RAIL_LENGTH_LIMIT_MESSAGE = "Длина деталей превышает длину взятых реек";
 
-export function TorcovkaScreen({ data, onDone }: TorcovkaScreenProps) {
+export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) {
   const [batchId, setBatchId] = useState<string | null>(null);
   const [lotId, setLotId] = useState<string | null>(null);
   const [railsTaken, setRailsTaken] = useState(0);
   const [picked, setPicked] = useState<Record<string, number>>({});
   const [sort, setSort] = useState<Sort>("SORT1");
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const batches = data.batches.filter((b) => b.status === "IN_WORK");
   const lots = useMemo(
@@ -81,10 +84,23 @@ export function TorcovkaScreen({ data, onDone }: TorcovkaScreenProps) {
     setDialog({ kind: "rails" });
   };
 
-  const confirm = () => {
-    if (!lot || railsTaken <= 0 || pickedCount === 0 || overLength) return;
-    toast.success(`Торцовка внесена: ${pickedCount} дет., отход ${formatLength(wasteM)}`);
-    onDone();
+  const confirm = async () => {
+    if (!lot || !batchId || railsTaken <= 0 || pickedCount === 0 || overLength || submitting) return;
+    setSubmitting(true);
+    try {
+      await submitTorcovka({
+        employeeId: employee.id,
+        batchId,
+        railLotId: lot.id,
+        railsTaken,
+        picks: torcovkaPicks.map((p) => ({ detailId: p.detailId, quantity: p.quantity })),
+      });
+      toast.success(`Торцовка внесена: ${pickedCount} дет., отход ${formatLength(wasteM)}`);
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Ошибка внесения");
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -199,7 +215,7 @@ export function TorcovkaScreen({ data, onDone }: TorcovkaScreenProps) {
               </span>
             </>
           }
-          disabled={railsTaken <= 0 || pickedCount === 0 || overLength}
+          disabled={railsTaken <= 0 || pickedCount === 0 || overLength || submitting}
           onConfirm={confirm}
         />
       )}

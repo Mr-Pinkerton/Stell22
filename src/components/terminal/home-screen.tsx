@@ -5,7 +5,7 @@ import { Drill, Package, Clock, Cake } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Saw } from "@/components/terminal/saw-icon";
 import { EntriesJournal } from "@/components/terminal/entries-journal";
-import { dataProvider } from "@/lib/data-provider";
+import { getEmployeeEntries } from "@/server/terminal";
 import type { Employee, TerminalEntry } from "@/types/domain";
 import type { TerminalScreen } from "@/components/terminal/types";
 
@@ -40,7 +40,7 @@ export function HomeScreen({ employees, employee, onSelect }: HomeScreenProps) {
   const [entries, setEntries] = useState<TerminalEntry[]>([]);
   useEffect(() => {
     let alive = true;
-    dataProvider.getEntries(employee.id).then((rows) => {
+    getEmployeeEntries(employee.id).then((rows) => {
       if (alive) setEntries(rows);
     });
     return () => {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { dataProvider } from "@/lib/data-provider";
+import { getTerminalData } from "@/server/terminal";
 import type { Employee } from "@/types/domain";
 import type { TerminalData, TerminalScreen } from "@/components/terminal/types";
 import { TerminalHeader } from "@/components/terminal/terminal-header";
@@ -23,29 +23,21 @@ const TITLES: Record<TerminalScreen, string> = {
   hours: "Рабочие часы",
 };
 
-export function TerminalApp() {
-  const [data, setData] = useState<TerminalData | null>(null);
+export function TerminalApp({ initialData }: { initialData: TerminalData }) {
+  const [data, setData] = useState<TerminalData>(initialData);
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [screen, setScreen] = useState<TerminalScreen>("home");
 
-  useEffect(() => {
-    let alive = true;
-    Promise.all([
-      dataProvider.getEmployees(),
-      dataProvider.getBatches(),
-      dataProvider.getRailLots(),
-      dataProvider.getDetails(),
-      dataProvider.getProducts(),
-      dataProvider.getNomenclature(),
-      dataProvider.getStock(),
-    ]).then(([employees, batches, railLots, details, products, nomenclature, stock]) => {
-      if (alive) setData({ employees, batches, railLots, details, products, nomenclature, stock });
-    });
-    return () => {
-      alive = false;
-    };
+  // Перечитать данные после операции (изменились остатки/склад).
+  const refresh = useCallback(async () => {
+    setData(await getTerminalData());
   }, []);
+
+  const handleOperationDone = useCallback(async () => {
+    await refresh();
+    setScreen("home");
+  }, [refresh]);
 
   const logout = useCallback(() => {
     setEmployee(null);
@@ -69,14 +61,6 @@ export function TerminalApp() {
       events.forEach((e) => window.removeEventListener(e, reset));
     };
   }, [employee, logout]);
-
-  if (!data) {
-    return (
-      <div className="bg-background flex min-h-screen items-center justify-center">
-        <span className="text-muted-foreground text-sm">Загрузка терминала…</span>
-      </div>
-    );
-  }
 
   const inOperation = employee != null && screen !== "home";
 
@@ -110,13 +94,13 @@ export function TerminalApp() {
       ) : screen === "home" ? (
         <HomeScreen employees={data.employees} employee={employee} onSelect={setScreen} />
       ) : screen === "torcovka" ? (
-        <TorcovkaScreen data={data} onDone={() => setScreen("home")} />
+        <TorcovkaScreen data={data} employee={employee} onDone={handleOperationDone} />
       ) : screen === "prisadka" ? (
         <PrisadkaScreen data={data} onDone={() => setScreen("home")} />
       ) : screen === "upakovka" ? (
         <UpakovkaScreen data={data} onDone={() => setScreen("home")} />
       ) : (
-        <HoursScreen employee={employee} onDone={() => setScreen("home")} />
+        <HoursScreen employee={employee} onDone={handleOperationDone} />
       )}
       <TerminalToaster />
     </div>

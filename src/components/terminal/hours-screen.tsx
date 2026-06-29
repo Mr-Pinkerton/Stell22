@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { KeypadDisplay, KEYPAD_PANEL } from "@/components/terminal/keypad-panel";
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
 import { formatMoney } from "@/lib/format";
+import { submitHours } from "@/server/terminal";
 import type { Employee } from "@/types/domain";
 
 interface HoursScreenProps {
@@ -15,13 +16,21 @@ interface HoursScreenProps {
 
 export function HoursScreen({ employee, onDone }: HoursScreenProps) {
   const [value, setValue] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const hours = Number(value || 0);
   const rate = employee.hourlyRate ?? 0;
 
-  const submit = () => {
-    if (hours <= 0) return;
-    toast.success(`Внесено ${hours} ч`);
-    onDone();
+  const submit = async () => {
+    if (hours <= 0 || submitting) return;
+    setSubmitting(true);
+    try {
+      await submitHours(employee.id, hours);
+      toast.success(`Внесено ${hours} ч`);
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Ошибка внесения");
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -46,7 +55,11 @@ export function HoursScreen({ employee, onDone }: HoursScreenProps) {
 
         <NumericKeypad value={value} onChange={setValue} />
 
-        <Button className="h-14 w-full rounded-xl text-lg" disabled={hours <= 0} onClick={submit}>
+        <Button
+          className="h-14 w-full rounded-xl text-lg"
+          disabled={hours <= 0 || submitting}
+          onClick={submit}
+        >
           Внести
         </Button>
       </div>

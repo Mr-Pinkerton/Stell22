@@ -60,6 +60,30 @@ const SORT_LABEL: Record<Sort, string> = {
 type PurchaseKind = "batch" | "simple";
 type RailAddMode = "package" | "piece";
 
+function isoToDisplayDate(iso?: string | null): string {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  if (!y || !m || !d) return "";
+  return `${d.padStart(2, "0")}.${m.padStart(2, "0")}.${y}`;
+}
+
+function formatDateInput(raw: string): string {
+  const digits = raw.replace(/\D/g, "").slice(0, 8);
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 4) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
+  return `${digits.slice(0, 2)}.${digits.slice(2, 4)}.${digits.slice(4)}`;
+}
+
+function displayDateToIso(display: string): string | null {
+  const digits = display.replace(/\D/g, "");
+  if (digits.length !== 8) return null;
+  return `${digits.slice(4, 8)}-${digits.slice(2, 4)}-${digits.slice(0, 2)}`;
+}
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 interface DraftRailEntry {
   id: string;
   mode: RailAddMode;
@@ -180,6 +204,9 @@ function BatchFormBody({
   const [entries, setEntries] = useState<DraftRailEntry[]>([]);
 
   const [name, setName] = useState(batch?.name ?? "");
+  const [purchaseDate, setPurchaseDate] = useState(() =>
+    isoToDisplayDate(batch?.purchaseDate ?? todayIso()),
+  );
   const [sectionW, setSectionW] = useState(String(batch?.sectionWidthMm ?? ""));
   const [sectionH, setSectionH] = useState(String(batch?.sectionHeightMm ?? ""));
   const [purchaseCost, setPurchaseCost] = useState<number | null>(batch?.purchaseCost ?? null);
@@ -191,6 +218,7 @@ function BatchFormBody({
   const [simpleItemId, setSimpleItemId] = useState("");
   const [simpleQty, setSimpleQty] = useState("");
   const [simplePrice, setSimplePrice] = useState<number | null>(null);
+  const [simpleDate, setSimpleDate] = useState(() => isoToDisplayDate(todayIso()));
 
   const [draftLength, setDraftLength] = useState("");
   const [draftType, setDraftType] = useState<RailType>("POLKA");
@@ -289,12 +317,14 @@ function BatchFormBody({
         nomenclatureId: simpleItemId,
         quantity: simpleQtyNum,
         unitPrice: simplePrice,
+        purchaseDate: displayDateToIso(simpleDate),
       });
       return;
     }
     if (!canSubmitBatch) return;
     await onSubmitBatch?.({
       name,
+      purchaseDate: displayDateToIso(purchaseDate),
       sectionWidthMm: wMm,
       sectionHeightMm: hMm,
       purchaseCost,
@@ -403,6 +433,17 @@ function BatchFormBody({
                   onValueChange={setSimplePrice}
                 />
               </Field>
+              <Field id="simple-date" label="Дата закупки">
+                <Input
+                  id="simple-date"
+                  className={cn(narrowFieldClass, "tabular-nums")}
+                  inputMode="numeric"
+                  placeholder="ДД.ММ.ГГГГ"
+                  maxLength={10}
+                  value={simpleDate}
+                  onChange={(e) => setSimpleDate(formatDateInput(e.target.value))}
+                />
+              </Field>
             </div>
           </div>
         ) : (
@@ -421,6 +462,17 @@ function BatchFormBody({
                     placeholder="Волочек 2419"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
+                  />
+                </Field>
+                <Field id="batch-date" label="Дата закупки" className="sm:col-span-2">
+                  <Input
+                    id="batch-date"
+                    className={cn(narrowFieldClass, "tabular-nums")}
+                    inputMode="numeric"
+                    placeholder="ДД.ММ.ГГГГ"
+                    maxLength={10}
+                    value={purchaseDate}
+                    onChange={(e) => setPurchaseDate(formatDateInput(e.target.value))}
                   />
                 </Field>
                 <Field id="batch-sw" label="Сечение — ширина, мм" required>
