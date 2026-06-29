@@ -1,13 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { dayKey } from "@/lib/entries";
-import {
-  createEmptyInventoryDoc,
-  inventoryDocs as mockInventoryDocs,
-  type InventoryDocRow,
-} from "@/mocks/warehouse-fixtures";
+import { type InventoryDocRow } from "@/mocks/warehouse-fixtures";
+import { createInventoryDraft, type WarehouseStock } from "@/server/warehouse";
 import { PageHeader } from "@/components/page-header";
 import { SegmentTabs } from "@/components/reports/report-shared";
 import { WarehouseMpTab } from "@/components/warehouse/warehouse-mp-tab";
@@ -24,25 +20,28 @@ const TABS: { key: WarehouseTab; label: string }[] = [
   { key: "inventory", label: "Инвентаризация" },
 ];
 
-export function WarehouseView() {
-  const [activeTab, setActiveTab] = useState<WarehouseTab>("mp");
-  const [inventoryDocs, setInventoryDocs] = useState<InventoryDocRow[]>(mockInventoryDocs);
+interface WarehouseViewProps {
+  stock: WarehouseStock;
+  initialDocs: InventoryDocRow[];
+}
 
-  const hasDraft = useMemo(
-    () => inventoryDocs.some((d) => d.status === "DRAFT"),
-    [inventoryDocs],
-  );
+export function WarehouseView({ stock, initialDocs }: WarehouseViewProps) {
+  const [activeTab, setActiveTab] = useState<WarehouseTab>("mp");
+  const [inventoryDocs, setInventoryDocs] = useState<InventoryDocRow[]>(initialDocs);
+  const [pending, startTransition] = useTransition();
 
   const handleAdd = () => {
     if (activeTab === "inventory") {
-      if (hasDraft) {
-        toast.message("Уже есть черновик инвентаризации");
-        return;
-      }
-      const doc = createEmptyInventoryDoc(dayKey(new Date()));
-      setInventoryDocs((prev) => [doc, ...prev]);
-      setActiveTab("inventory");
-      toast.success("Создан черновик инвентаризации");
+      if (pending) return;
+      startTransition(async () => {
+        try {
+          const doc = await createInventoryDraft();
+          setInventoryDocs((prev) => [doc, ...prev]);
+          toast.success("Создан черновик инвентаризации");
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Ошибка создания");
+        }
+      });
       return;
     }
     toast.message("Добавление — прототип");
@@ -67,7 +66,7 @@ export function WarehouseView() {
         />
 
         {activeTab === "mp" && <WarehouseMpTab />}
-        {activeTab === "production" && <WarehouseProductionTab />}
+        {activeTab === "production" && <WarehouseProductionTab stock={stock} />}
         {activeTab === "shipments" && <WarehouseShipmentsTab />}
         {activeTab === "inventory" && (
           <WarehouseInventoryTab docs={inventoryDocs} onDocsChange={setInventoryDocs} />

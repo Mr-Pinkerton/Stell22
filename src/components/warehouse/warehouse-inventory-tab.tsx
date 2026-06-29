@@ -1,10 +1,9 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useMemo, useState, useTransition } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import {
-  inventoryDocs as mockInventoryDocs,
   type InventoryDocRow,
   type InventoryLineRow,
 } from "@/mocks/warehouse-fixtures";
@@ -12,6 +11,7 @@ import {
   inventoryDeviation,
   inventoryDeviationSum,
 } from "@/lib/warehouse-stock";
+import { conductInventory, updateInventoryLineActual } from "@/server/warehouse";
 import { formatIsoDate, formatMoney } from "@/lib/format";
 import { scrollTableYClass } from "@/lib/scroll-classes";
 import { cn } from "@/lib/utils";
@@ -57,17 +57,15 @@ const headLeftClass = cn(headClass, "text-left");
 const headCenterClass = cn(headClass, "text-center");
 
 interface WarehouseInventoryTabProps {
-  docs?: InventoryDocRow[];
-  onDocsChange?: (docs: InventoryDocRow[]) => void;
+  docs: InventoryDocRow[];
+  onDocsChange: (docs: InventoryDocRow[]) => void;
 }
 
 export function WarehouseInventoryTab({
-  docs: docsProp,
-  onDocsChange,
+  docs,
+  onDocsChange: setDocs,
 }: WarehouseInventoryTabProps) {
-  const [internalDocs, setInternalDocs] = useState(mockInventoryDocs);
-  const docs = docsProp ?? internalDocs;
-  const setDocs = onDocsChange ?? setInternalDocs;
+  const [pending, startTransition] = useTransition();
 
   const draft = useMemo(() => docs.find((d) => d.status === "DRAFT"), [docs]);
   const history = useMemo(
@@ -79,6 +77,7 @@ export function WarehouseInventoryTab({
 
   const updateDraftLine = (lineId: string, actualQty: number) => {
     if (!draft) return;
+    // Оптимистично обновляем UI, затем сохраняем в БД.
     setDocs(
       docs.map((doc) =>
         doc.id !== draft.id
@@ -91,16 +90,26 @@ export function WarehouseInventoryTab({
             },
       ),
     );
+    startTransition(async () => {
+      try {
+        await updateInventoryLineActual(lineId, actualQty);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Ошибка сохранения");
+      }
+    });
   };
 
   const conductDraft = () => {
     if (!draft) return;
-    setDocs(
-      docs.map((doc) =>
-        doc.id === draft.id ? { ...doc, status: "CONDUCTED" as const } : doc,
-      ),
-    );
-    toast.success("Инвентаризация проведена — остатки скорректированы (прототип)");
+    startTransition(async () => {
+      try {
+        const updated = await conductInventory(draft.id);
+        setDocs(docs.map((doc) => (doc.id === draft.id ? updated : doc)));
+        toast.success("Инвентаризация проведена — остатки скорректированы");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Ошибка проведения");
+      }
+    });
   };
 
   return (
@@ -118,6 +127,7 @@ export function WarehouseInventoryTab({
               type="button"
               variant="brand"
               className="h-10 rounded-xl px-5"
+              disabled={pending}
               onClick={conductDraft}
             >
               Провести

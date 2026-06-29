@@ -1,16 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent } from "@/components/ui/card";
 import { SegmentTabs } from "@/components/reports/report-shared";
-import {
-  buildDetailStockRows,
-  buildNomenclatureStockRows,
-  buildProductStockRows,
-  type DetailStockRow,
-  type ProductionStockRow,
-} from "@/lib/warehouse-stock";
+import type { DetailStockRow, ProductionStockRow } from "@/lib/warehouse-stock";
+import type { WarehouseStock } from "@/server/warehouse";
 import { cn } from "@/lib/utils";
 
 type ProductionTab = "products" | "details" | "fasteners" | "packaging" | "other";
@@ -109,14 +104,14 @@ function nomenclatureColumns(showMin: boolean): Column<ProductionStockRow>[] {
   return cols;
 }
 
-export function WarehouseProductionTab() {
+export function WarehouseProductionTab({ stock }: { stock: WarehouseStock }) {
   const [activeTab, setActiveTab] = useState<ProductionTab>("products");
 
-  const productRows = useMemo(() => buildProductStockRows(), []);
-  const detailRows = useMemo(() => buildDetailStockRows(), []);
-  const fastenerRows = useMemo(() => buildNomenclatureStockRows("FASTENER"), []);
-  const packagingRows = useMemo(() => buildNomenclatureStockRows("PACKAGING"), []);
-  const otherRows = useMemo(() => buildNomenclatureStockRows("OTHER"), []);
+  const productRows = stock.products;
+  const detailRows = stock.details;
+  const fastenerRows = stock.fasteners;
+  const packagingRows = stock.packaging;
+  const otherRows = stock.other;
 
   return (
     <div className="space-y-4">
