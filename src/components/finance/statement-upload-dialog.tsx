@@ -4,10 +4,7 @@ import { useRef, useState } from "react";
 import { Upload } from "lucide-react";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import { cn } from "@/lib/utils";
-import {
-  financeAccounts,
-  type FinanceStatementRow,
-} from "@/mocks/finance-fixtures";
+import type { FinanceAccount } from "@/mocks/finance-fixtures";
 import {
   DateFieldInput,
   Field,
@@ -34,6 +31,7 @@ export interface StatementUploadValues {
 
 interface StatementUploadDialogProps {
   open: boolean;
+  accounts: FinanceAccount[];
   onOpenChange: (open: boolean) => void;
   onSubmit?: (values: StatementUploadValues) => void;
 }
@@ -42,6 +40,7 @@ const todayIso = () => new Date().toISOString().slice(0, 10);
 
 export function StatementUploadDialog({
   open,
+  accounts,
   onOpenChange,
   onSubmit,
 }: StatementUploadDialogProps) {
@@ -52,7 +51,7 @@ export function StatementUploadDialog({
 
   if (useJustOpened(open)) {
     setDateText(isoToDisplayDate(todayIso()));
-    setAccountId(financeAccounts[0]?.id ?? "");
+    setAccountId(accounts[0]?.id ?? "");
     setFileName("");
   }
 
@@ -61,7 +60,7 @@ export function StatementUploadDialog({
 
   const handleSubmit = () => {
     const iso = parseDisplayDate(dateText);
-    const account = financeAccounts.find((a) => a.id === accountId);
+    const account = accounts.find((a) => a.id === accountId);
     if (!iso || !account || !fileName) return;
 
     onSubmit?.({
@@ -93,11 +92,11 @@ export function StatementUploadDialog({
         <Select value={accountId} onValueChange={(v) => setAccountId(v ?? "")}>
           <SelectTrigger className={selectTriggerClass}>
             <SelectValue placeholder="Выберите счёт">
-              {financeAccounts.find((a) => a.id === accountId)?.name}
+              {accounts.find((a) => a.id === accountId)?.name}
             </SelectValue>
           </SelectTrigger>
           <SelectContent {...formSelectContentProps}>
-            {financeAccounts.map((a) => (
+            {accounts.map((a) => (
               <SelectItem key={a.id} value={a.id} className="cursor-pointer rounded-lg">
                 {a.name}
               </SelectItem>
@@ -129,15 +128,4 @@ export function StatementUploadDialog({
       </Field>
     </FinanceFormDialog>
   );
-}
-
-export function statementUploadToRow(values: StatementUploadValues): FinanceStatementRow {
-  return {
-    id: `st-${Date.now()}`,
-    date: values.date,
-    accountName: values.accountName,
-    operationsCount: 0,
-    unassignedCount: 0,
-    uploaded: true,
-  };
 }

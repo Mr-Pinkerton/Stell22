@@ -1,13 +1,10 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, Pencil } from "lucide-react";
-import { toast } from "sonner";
-import { batches } from "@/mocks/fixtures";
-import {
-  financeDeals,
-  type FinanceCashFlowRow,
-  type FinanceDeal,
+import { Archive, ArchiveRestore, ChevronDown, ChevronRight, Pencil, Trash2 } from "lucide-react";
+import type {
+  FinanceCashFlowRow,
+  FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -39,7 +36,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 const COL_SPAN = 4;
-const COL_WIDTHS = ["42%", "22%", "18%", "18%"] as const;
+const COL_WIDTHS = ["38%", "20%", "18%", "24%"] as const;
 
 const cellPad = "px-4 first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
 
@@ -61,14 +58,15 @@ interface DealLine {
 }
 
 function buildDealLines(deal: FinanceDeal, cashFlows: FinanceCashFlowRow[]): DealLine[] {
-  const lines: DealLine[] = deal.batchNames.map((batchName) => {
-    const batch = batches.find((b) => b.name === batchName);
-    return {
-      source: "Закупка",
-      description: batchName,
-      amount: batch?.totalCost ?? 0,
-    };
-  });
+  const lines: DealLine[] = [];
+
+  if (deal.batchNames.length > 0) {
+    lines.push({
+      source: "Закупки",
+      description: deal.batchNames.join(", "),
+      amount: deal.purchaseTotal ?? 0,
+    });
+  }
 
   const ddsRows = cashFlows.filter((cf) => cf.dealId === deal.id);
   for (const cf of ddsRows) {
@@ -91,13 +89,19 @@ function buildDealLines(deal: FinanceDeal, cashFlows: FinanceCashFlowRow[]): Dea
 }
 
 interface FinanceDealsTabProps {
-  deals?: FinanceDeal[];
-  cashFlows?: FinanceCashFlowRow[];
+  deals: FinanceDeal[];
+  cashFlows: FinanceCashFlowRow[];
+  onEdit?: (deal: FinanceDeal) => void;
+  onArchiveToggle?: (deal: FinanceDeal) => void;
+  onDelete?: (deal: FinanceDeal) => void;
 }
 
 export function FinanceDealsTab({
-  deals = financeDeals,
-  cashFlows = [],
+  deals,
+  cashFlows,
+  onEdit,
+  onArchiveToggle,
+  onDelete,
 }: FinanceDealsTabProps) {
   const [showArchive, setShowArchive] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -128,7 +132,7 @@ export function FinanceDealsTab({
                   <TableHead className={cn(cellPad, headLeftClass)}>Сделка</TableHead>
                   <TableHead className={cn(cellPad, headCenterClass)}>Сумма</TableHead>
                   <TableHead className={cn(cellPad, headCenterClass)}>Статус</TableHead>
-                  <TableHead className={cn(cellPad, headCenterClass, "w-16")} />
+                  <TableHead className={cn(cellPad, headCenterClass)} />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -152,6 +156,9 @@ export function FinanceDealsTab({
                       onToggle={() =>
                         setExpandedId((id) => (id === row.id ? null : row.id))
                       }
+                      onEdit={onEdit}
+                      onArchiveToggle={onArchiveToggle}
+                      onDelete={onDelete}
                     />
                   ))
                 )}
@@ -170,12 +177,18 @@ function DealRowGroup({
   expanded,
   striped,
   onToggle,
+  onEdit,
+  onArchiveToggle,
+  onDelete,
 }: {
   deal: FinanceDeal;
   cashFlows: FinanceCashFlowRow[];
   expanded: boolean;
   striped: boolean;
   onToggle: () => void;
+  onEdit?: (deal: FinanceDeal) => void;
+  onArchiveToggle?: (deal: FinanceDeal) => void;
+  onDelete?: (deal: FinanceDeal) => void;
 }) {
   const lines = useMemo(() => buildDealLines(deal, cashFlows), [deal, cashFlows]);
 
@@ -219,7 +232,7 @@ function DealRowGroup({
           className={cn(expandableSummaryCellClass, "text-center")}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="flex justify-center">
+          <div className="flex justify-center gap-0.5">
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -228,13 +241,50 @@ function DealRowGroup({
                     variant="ghost"
                     size="icon"
                     className={tableActionClass}
-                    onClick={() => toast.message("Редактирование — прототип")}
+                    aria-label="Редактировать"
+                    onClick={() => onEdit?.(deal)}
                   >
                     <Pencil />
                   </Button>
                 }
               />
               <TooltipContent>Редактировать</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className={tableActionClass}
+                    aria-label={deal.status === "ARCHIVED" ? "Вернуть из архива" : "В архив"}
+                    onClick={() => onArchiveToggle?.(deal)}
+                  >
+                    {deal.status === "ARCHIVED" ? <ArchiveRestore /> : <Archive />}
+                  </Button>
+                }
+              />
+              <TooltipContent>
+                {deal.status === "ARCHIVED" ? "Вернуть из архива" : "В архив"}
+              </TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className={tableActionClass}
+                    aria-label="Удалить"
+                    onClick={() => onDelete?.(deal)}
+                  >
+                    <Trash2 />
+                  </Button>
+                }
+              />
+              <TooltipContent>Удалить</TooltipContent>
             </Tooltip>
           </div>
         </TableCell>

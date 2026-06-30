@@ -4,6 +4,9 @@ import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { D } from "@/lib/cost";
+import { batchExtraShare, batchTotalCost, dealDeliveryExtra } from "@/lib/deal-cost";
+import { recalcBatchCosts } from "@/server/cost";
 import type {
   FinanceAccount,
   FinanceArticle,
@@ -11,14 +14,23 @@ import type {
   FinanceCashFlowRow,
   FinanceCounterparty,
   FinanceDeal,
+  FinanceStatementRow,
 } from "@/mocks/finance-fixtures";
 import type { ArticleFormValues } from "@/components/finance/article-form-dialog";
 import type { AutoRuleFormValues } from "@/components/finance/auto-rule-form-dialog";
 import type { CashflowFormValues } from "@/components/finance/cashflow-form-dialog";
+import type { DealFormValues } from "@/components/finance/deal-form-dialog";
+import type { StatementUploadValues } from "@/components/finance/statement-upload-dialog";
 
 const PATH = "/finance";
 
 const OVERHEAD_CATEGORY = "Производственные (накладные)";
+
+export interface BatchOption {
+  id: string;
+  name: string;
+  status: string;
+}
 
 function num(value: Prisma.Decimal | number | null): number {
   if (value == null) return 0;
@@ -34,6 +46,8 @@ export interface FinanceData {
   deals: FinanceDeal[];
   autoRules: FinanceAutoRule[];
   cashFlows: FinanceCashFlowRow[];
+  statements: FinanceStatementRow[];
+  batchOptions: BatchOption[];
 }
 
 type ArticleWithCategory = Prisma.ArticleGetPayload<{ include: { category: true } }>;
@@ -43,6 +57,9 @@ type AutoRuleWithRefs = Prisma.AutoRuleGetPayload<{
 }>;
 type CashFlowWithRefs = Prisma.CashFlowGetPayload<{
   include: { account: true; counterparty: true; article: true; deal: true };
+}>;
+type StatementWithRefs = Prisma.StatementGetPayload<{
+  include: { account: true; cashFlows: true };
 }>;
 
 function serArticle(a: ArticleWithCategory): FinanceArticle {
@@ -57,14 +74,35 @@ function serArticle(a: ArticleWithCategory): FinanceArticle {
   };
 }
 
-function serDeal(d: DealWithItems): FinanceDeal {
+/** Расходные операции сделки сверх закупочных стоимостей партий = доставка/доп. */
+function dealExtraAndTotal(d: DealWithItems, expenseByDeal: Map<string, number>) {
+  const purchaseTotal = d.items.reduce((s, i) => s + num(i.batch?.purchaseCost ?? null), 0);
+  const expense = expenseByDeal.get(d.id) ?? 0;
+  const deliveryExtra = Math.max(0, expense - purchaseTotal);
+  return { purchaseTotal, deliveryExtra, total: purchaseTotal + deliveryExtra };
+}
+
+function serDeal(d: DealWithItems, expenseByDeal: Map<string, number>): FinanceDeal {
+  const { purchaseTotal, deliveryExtra, total } = dealExtraAndTotal(d, expenseByDeal);
   return {
     id: d.id,
     name: d.name,
     status: d.status,
-    total: num(d.total),
+    total,
+    purchaseTotal,
     batchNames: d.items.map((i) => i.batch?.name).filter((n): n is string => Boolean(n)),
-    deliveryExtra: 0, // расчёт доставки из ДДС — срез 2
+    deliveryExtra,
+  };
+}
+
+function serStatement(s: StatementWithRefs): FinanceStatementRow {
+  return {
+    id: s.id,
+    date: s.date.toISOString().slice(0, 10),
+    accountName: s.account?.name ?? null,
+    operationsCount: s.cashFlows.length,
+    unassignedCount: s.cashFlows.filter((cf) => !cf.articleId).length,
+    uploaded: s.uploadedAt != null,
   };
 }
 
@@ -97,27 +135,43 @@ function serCashFlow(cf: CashFlowWithRefs): FinanceCashFlowRow {
 }
 
 export async function getFinanceData(): Promise<FinanceData> {
-  const [accounts, articles, counterparties, deals, autoRules, cashFlows] = await Promise.all([
-    prisma.account.findMany({ orderBy: { name: "asc" } }),
-    prisma.article.findMany({ include: { category: true }, orderBy: { name: "asc" } }),
-    prisma.counterparty.findMany({ orderBy: { name: "asc" } }),
-    prisma.deal.findMany({ include: { items: { include: { batch: true } } }, orderBy: { name: "asc" } }),
-    prisma.autoRule.findMany({ include: { counterparty: true, article: true } }),
-    prisma.cashFlow.findMany({
-      include: { account: true, counterparty: true, article: true, deal: true },
-      orderBy: { date: "desc" },
-    }),
-  ]);
+  const [accounts, articles, counterparties, deals, autoRules, cashFlows, statements, batches] =
+    await Promise.all([
+      prisma.account.findMany({ orderBy: { name: "asc" } }),
+      prisma.article.findMany({ include: { category: true }, orderBy: { name: "asc" } }),
+      prisma.counterparty.findMany({ orderBy: { name: "asc" } }),
+      prisma.deal.findMany({ include: { items: { include: { batch: true } } }, orderBy: { name: "asc" } }),
+      prisma.autoRule.findMany({ include: { counterparty: true, article: true } }),
+      prisma.cashFlow.findMany({
+        include: { account: true, counterparty: true, article: true, deal: true },
+        orderBy: { date: "desc" },
+      }),
+      prisma.statement.findMany({
+        include: { account: true, cashFlows: true },
+        orderBy: { date: "desc" },
+      }),
+      prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
+    ]);
 
   const dealNameById = new Map(deals.map((d) => [d.id, d.name]));
+
+  // Сумма расходных операций по каждой сделке (для доставки/доп. расходов).
+  const expenseByDeal = new Map<string, number>();
+  for (const cf of cashFlows) {
+    if (cf.dealId && cf.flowType === "EXPENSE") {
+      expenseByDeal.set(cf.dealId, (expenseByDeal.get(cf.dealId) ?? 0) + num(cf.amount));
+    }
+  }
 
   return {
     accounts: accounts.map((a) => ({ id: a.id, name: a.name, balance: num(a.balance) })),
     articles: articles.map(serArticle),
     counterparties: counterparties.map((c) => ({ id: c.id, name: c.name })),
-    deals: deals.map(serDeal),
+    deals: deals.map((d) => serDeal(d, expenseByDeal)),
     autoRules: autoRules.map((r) => serAutoRule(r, dealNameById)),
     cashFlows: cashFlows.map(serCashFlow),
+    statements: statements.map(serStatement),
+    batchOptions: batches.map((b) => ({ id: b.id, name: b.name, status: b.status })),
   };
 }
 
@@ -379,6 +433,7 @@ export async function createCashFlow(values: CashflowFormValues): Promise<Financ
     entityId: created.id,
     newValues: { amount: values.amount, flowType: values.flowType, article: values.articleName },
   });
+  if (dealId) await syncDeal(dealId);
   revalidatePath(PATH);
   return loadCashFlow(created.id);
 }
@@ -394,6 +449,8 @@ export async function assignCashFlow(
   id: string,
   patch: CashFlowAssignPatch,
 ): Promise<FinanceCashFlowRow> {
+  const before = await prisma.cashFlow.findUnique({ where: { id } });
+
   const data: Prisma.CashFlowUncheckedUpdateInput = {};
   if (patch.counterpartyId !== undefined) data.counterpartyId = patch.counterpartyId;
   if (patch.dealId !== undefined) data.dealId = patch.dealId;
@@ -404,12 +461,195 @@ export async function assignCashFlow(
   }
   await prisma.cashFlow.update({ where: { id }, data });
   await writeChangeLog({ entity: "CashFlow", entityId: id, newValues: { ...patch } });
+
+  // Привязка/отвязка к сделке меняет её доставку → пересчёт партий.
+  const affectedDeals = new Set<string>();
+  if (before?.dealId) affectedDeals.add(before.dealId);
+  if (patch.dealId) affectedDeals.add(patch.dealId);
+  for (const dealId of affectedDeals) await syncDeal(dealId);
+
   revalidatePath(PATH);
   return loadCashFlow(id);
 }
 
 export async function deleteCashFlow(id: string): Promise<void> {
+  const before = await prisma.cashFlow.findUnique({ where: { id } });
   await prisma.cashFlow.delete({ where: { id } });
   await writeChangeLog({ entity: "CashFlow", entityId: id, oldValues: { deleted: true } });
+  if (before?.dealId) await syncDeal(before.dealId);
   revalidatePath(PATH);
+}
+
+// ============================ СДЕЛКИ → СЕБЕСТОИМОСТЬ =======================
+
+/**
+ * «Стоимость общая» партии = закупочная + доставка/доп. расходы из её сделок.
+ * Доставка сделки = расходные операции ДДС сверх суммы закупочных стоимостей
+ * привязанных партий, распределённая по партиям пропорционально закупке.
+ * Закрытые (замороженные) партии не трогаем (cost-integrity).
+ */
+async function syncBatchTotalCost(batchId: string): Promise<void> {
+  const batch = await prisma.batch.findUnique({ where: { id: batchId } });
+  if (!batch || batch.closedAt) return;
+
+  const items = await prisma.dealItem.findMany({
+    where: { batchId },
+    include: { deal: { include: { items: { include: { batch: true } }, cashFlows: true } } },
+  });
+
+  let extra = D(0);
+  for (const { deal } of items) {
+    const expense = deal.cashFlows
+      .filter((c) => c.flowType === "EXPENSE")
+      .reduce((s, c) => s.plus(D(num(c.amount))), D(0));
+    const purchaseTotal = deal.items.reduce(
+      (s, i) => s.plus(D(num(i.batch?.purchaseCost ?? null))),
+      D(0),
+    );
+    const dealExtra = dealDeliveryExtra(expense, purchaseTotal);
+    extra = extra.plus(
+      batchExtraShare(dealExtra, num(batch.purchaseCost), purchaseTotal, deal.items.length),
+    );
+  }
+
+  const newTotal = batchTotalCost(num(batch.purchaseCost), extra);
+  await prisma.batch.update({ where: { id: batchId }, data: { totalCost: newTotal.toFixed(2) } });
+  await recalcBatchCosts({ batchId });
+}
+
+/** Пересчёт суммы сделки и «Стоимости общей» её партий. */
+async function syncDeal(dealId: string): Promise<void> {
+  const deal = await prisma.deal.findUnique({
+    where: { id: dealId },
+    include: { items: { include: { batch: true } }, cashFlows: true },
+  });
+  if (!deal) return;
+
+  const expense = deal.cashFlows
+    .filter((c) => c.flowType === "EXPENSE")
+    .reduce((s, c) => s + num(c.amount), 0);
+  const purchaseTotal = deal.items.reduce((s, i) => s + num(i.batch?.purchaseCost ?? null), 0);
+  const total = purchaseTotal + Math.max(0, expense - purchaseTotal);
+
+  await prisma.deal.update({ where: { id: dealId }, data: { total: total.toFixed(2) } });
+
+  for (const item of deal.items) {
+    if (item.batchId) await syncBatchTotalCost(item.batchId);
+  }
+  revalidatePath("/purchases");
+  revalidatePath("/reports");
+}
+
+async function loadDeal(id: string): Promise<FinanceDeal> {
+  const d = await prisma.deal.findUniqueOrThrow({
+    where: { id },
+    include: { items: { include: { batch: true } }, cashFlows: true },
+  });
+  const expense = d.cashFlows
+    .filter((c) => c.flowType === "EXPENSE")
+    .reduce((s, c) => s + num(c.amount), 0);
+  return serDeal(d, new Map([[id, expense]]));
+}
+
+export async function createDeal(values: DealFormValues): Promise<FinanceDeal> {
+  const name = values.name.trim();
+  if (!name) throw new Error("Укажите название сделки");
+  if (values.batchNames.length === 0) throw new Error("Выберите хотя бы одну закупку");
+
+  const found = await prisma.batch.findMany({ where: { name: { in: values.batchNames } } });
+  const deal = await prisma.deal.create({
+    data: {
+      name,
+      status: "OPEN",
+      total: 0,
+      items: { create: found.map((b) => ({ batchId: b.id })) },
+    },
+  });
+  await writeChangeLog({
+    entity: "Deal",
+    entityId: deal.id,
+    newValues: { name, batches: values.batchNames },
+  });
+  await syncDeal(deal.id);
+  revalidatePath(PATH);
+  return loadDeal(deal.id);
+}
+
+export async function updateDeal(id: string, values: DealFormValues): Promise<FinanceDeal> {
+  const name = values.name.trim();
+  if (!name) throw new Error("Укажите название сделки");
+  if (values.batchNames.length === 0) throw new Error("Выберите хотя бы одну закупку");
+
+  const found = await prisma.batch.findMany({ where: { name: { in: values.batchNames } } });
+  const newBatchIds = new Set(found.map((b) => b.id));
+  const oldItems = await prisma.dealItem.findMany({ where: { dealId: id } });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.dealItem.deleteMany({ where: { dealId: id } });
+    await tx.deal.update({
+      where: { id },
+      data: { name, items: { create: found.map((b) => ({ batchId: b.id })) } },
+    });
+  });
+  await writeChangeLog({ entity: "Deal", entityId: id, newValues: { name, batches: values.batchNames } });
+
+  await syncDeal(id);
+  // Партии, отвязанные от сделки, тоже пересчитываем.
+  for (const item of oldItems) {
+    if (item.batchId && !newBatchIds.has(item.batchId)) await syncBatchTotalCost(item.batchId);
+  }
+  revalidatePath(PATH);
+  return loadDeal(id);
+}
+
+export async function setDealStatus(
+  id: string,
+  status: "OPEN" | "ARCHIVED",
+): Promise<FinanceDeal> {
+  await prisma.deal.update({ where: { id }, data: { status } });
+  await writeChangeLog({ entity: "Deal", entityId: id, newValues: { status } });
+  revalidatePath(PATH);
+  return loadDeal(id);
+}
+
+export async function deleteDeal(id: string): Promise<void> {
+  const items = await prisma.dealItem.findMany({ where: { dealId: id } });
+  const batchIds = items.map((i) => i.batchId).filter((b): b is string => Boolean(b));
+
+  await prisma.$transaction(async (tx) => {
+    await tx.cashFlow.updateMany({ where: { dealId: id }, data: { dealId: null } });
+    await tx.dealItem.deleteMany({ where: { dealId: id } });
+    await tx.deal.delete({ where: { id } });
+  });
+  await writeChangeLog({ entity: "Deal", entityId: id, oldValues: { deleted: true } });
+
+  for (const batchId of batchIds) await syncBatchTotalCost(batchId);
+  revalidatePath(PATH);
+}
+
+// ============================ ВЫПИСКИ ======================================
+
+export async function createStatement(values: StatementUploadValues): Promise<FinanceStatementRow> {
+  const iso = values.date;
+  if (!iso) throw new Error("Укажите дату выписки");
+  const account = values.accountName
+    ? await prisma.account.findFirst({ where: { name: values.accountName } })
+    : null;
+
+  const created = await prisma.statement.create({
+    data: {
+      date: new Date(iso),
+      accountId: account?.id ?? null,
+      fileUrl: values.fileName || null,
+      uploadedAt: new Date(),
+    },
+    include: { account: true, cashFlows: true },
+  });
+  await writeChangeLog({
+    entity: "Statement",
+    entityId: created.id,
+    newValues: { date: iso, account: values.accountName, file: values.fileName },
+  });
+  revalidatePath(PATH);
+  return serStatement(created);
 }

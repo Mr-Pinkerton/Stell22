@@ -1,7 +1,6 @@
 "use client";
 
 import { Upload } from "lucide-react";
-import { financeStatements } from "@/mocks/finance-fixtures";
 import { formatIsoDate } from "@/lib/format";
 import { DataTable, type Column } from "@/components/data-table";
 import { Badge } from "@/components/ui/badge";
@@ -11,12 +10,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import type { FinanceStatementRow } from "@/mocks/finance-fixtures";
 
 interface FinanceStatementsTabProps {
-  statements?: FinanceStatementRow[];
+  statements: FinanceStatementRow[];
   onUploadRequest?: () => void;
 }
 
 export function FinanceStatementsTab({
-  statements = financeStatements,
+  statements,
   onUploadRequest,
 }: FinanceStatementsTabProps) {
   const columns: Column<FinanceStatementRow>[] = [

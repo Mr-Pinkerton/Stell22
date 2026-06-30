@@ -19,6 +19,7 @@ import {
   financeCounterparties,
   financeDeals,
 } from "../src/mocks/finance-fixtures";
+import { batchExtraShare, batchTotalCost, dealDeliveryExtra } from "../src/lib/deal-cost";
 
 const prisma = new PrismaClient();
 
@@ -283,6 +284,30 @@ async function main() {
       isAutoAssigned: cf.isAutoAssigned,
     })),
   });
+
+  // Согласуем «Стоимость общую» партий с доставкой/доп. расходами их сделок,
+  // чтобы стартовое состояние совпадало с движком (закупка + доставка из ДДС).
+  const dealsForSync = await prisma.deal.findMany({
+    include: { items: { include: { batch: true } }, cashFlows: true },
+  });
+  for (const deal of dealsForSync) {
+    const expense = deal.cashFlows
+      .filter((c) => c.flowType === "EXPENSE")
+      .reduce((s, c) => s + Number(c.amount), 0);
+    const purchaseTotal = deal.items.reduce((s, i) => s + Number(i.batch?.purchaseCost ?? 0), 0);
+    const extra = dealDeliveryExtra(expense, purchaseTotal);
+    for (const item of deal.items) {
+      if (!item.batchId || !item.batch) continue;
+      const share = batchExtraShare(
+        extra,
+        Number(item.batch.purchaseCost),
+        purchaseTotal,
+        deal.items.length,
+      );
+      const total = batchTotalCost(Number(item.batch.purchaseCost), share);
+      await prisma.batch.update({ where: { id: item.batchId }, data: { totalCost: total.toFixed(2) } });
+    }
+  }
 
   console.log(
     `Seed готов: ${employees.length} сотр., ${nomenclatureItems.length} номенкл., ` +

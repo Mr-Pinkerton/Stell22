@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { batches } from "@/mocks/fixtures";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import type { FinanceDeal } from "@/mocks/finance-fixtures";
 import {
@@ -20,26 +19,25 @@ export interface DealFormValues {
   batchNames: string[];
 }
 
+export interface DealBatchOption {
+  id: string;
+  name: string;
+  status: string;
+}
+
 interface DealFormDialogProps {
   open: boolean;
+  batches: DealBatchOption[];
+  deal?: FinanceDeal | null;
   onOpenChange: (open: boolean) => void;
   onSubmit?: (values: DealFormValues) => void;
 }
-
-const materialBatches = batches.filter((b) => b.status !== "ARCHIVED");
 
 function generatedDealName(batchNames: string[]): string {
   return batchNames.join(" + ");
 }
 
-export function dealBatchTotal(batchNames: string[]): number {
-  return batchNames.reduce((sum, batchName) => {
-    const batch = batches.find((b) => b.name === batchName);
-    return sum + (batch?.totalCost ?? 0);
-  }, 0);
-}
-
-export function DealFormDialog({ open, onOpenChange, onSubmit }: DealFormDialogProps) {
+export function DealFormDialog({ open, batches, deal, onOpenChange, onSubmit }: DealFormDialogProps) {
   const [name, setName] = useState("");
   const [nameManual, setNameManual] = useState(false);
   const [selectedBatches, setSelectedBatches] = useState<Set<string>>(new Set());
@@ -47,10 +45,15 @@ export function DealFormDialog({ open, onOpenChange, onSubmit }: DealFormDialogP
   const selectedList = useMemo(() => [...selectedBatches], [selectedBatches]);
 
   if (useJustOpened(open)) {
-    setName("");
-    setNameManual(false);
-    setSelectedBatches(new Set());
+    setName(deal?.name ?? "");
+    setNameManual(Boolean(deal));
+    setSelectedBatches(new Set(deal?.batchNames ?? []));
   }
+
+  // Незаархивированные закупки + уже привязанные (даже если ушли в архив).
+  const materialBatches = batches.filter(
+    (b) => b.status !== "ARCHIVED" || selectedBatches.has(b.name),
+  );
 
   // Имя подставляется из выбранных закупок, пока его не правили вручную.
   const effectiveName = nameManual ? name : generatedDealName(selectedList);
@@ -79,10 +82,10 @@ export function DealFormDialog({ open, onOpenChange, onSubmit }: DealFormDialogP
   return (
     <FinanceFormDialog
       open={open}
-      title="Добавить сделку"
+      title={deal ? "Редактировать сделку" : "Добавить сделку"}
       onOpenChange={onOpenChange}
       onSubmit={handleSubmit}
-      submitLabel="Добавить"
+      submitLabel={deal ? "Сохранить" : "Добавить"}
       submitDisabled={!canSubmit}
       maxWidth="sm:max-w-lg"
       bodyTall
@@ -124,17 +127,4 @@ export function DealFormDialog({ open, onOpenChange, onSubmit }: DealFormDialogP
       </p>
     </FinanceFormDialog>
   );
-}
-
-export function dealValuesToRow(values: DealFormValues): FinanceDeal {
-  const batchesTotal = dealBatchTotal(values.batchNames);
-
-  return {
-    id: `deal-${Date.now()}`,
-    name: values.name,
-    status: "OPEN",
-    batchNames: values.batchNames,
-    deliveryExtra: 0,
-    total: batchesTotal,
-  };
 }

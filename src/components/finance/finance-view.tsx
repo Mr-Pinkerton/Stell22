@@ -4,10 +4,10 @@ import { useCallback, useMemo, useRef, useState, useTransition } from "react";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
-import {
-  financeStatements,
-  type FinanceAutoRule,
-  type FinanceCashFlowRow,
+import type {
+  FinanceAutoRule,
+  FinanceCashFlowRow,
+  FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { matchesDateFilter } from "@/lib/match-date-filter";
 import {
@@ -17,11 +17,16 @@ import {
   createAutoRule,
   createCashFlow,
   createCounterparty,
+  createDeal,
+  createStatement,
   deleteAutoRule,
   deleteCashFlow,
   deleteCounterparty,
+  deleteDeal,
+  setDealStatus,
   updateAutoRule,
   updateCounterparty,
+  updateDeal,
 } from "@/server/finance";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
@@ -36,9 +41,10 @@ import { FinanceCounterpartiesTab } from "@/components/finance/finance-counterpa
 import { CashflowFormDialog } from "@/components/finance/cashflow-form-dialog";
 import { ArticleFormDialog } from "@/components/finance/article-form-dialog";
 import {
-  StatementUploadDialog,
-  statementUploadToRow,
-} from "@/components/finance/statement-upload-dialog";
+  DealFormDialog,
+  type DealFormValues,
+} from "@/components/finance/deal-form-dialog";
+import { StatementUploadDialog } from "@/components/finance/statement-upload-dialog";
 import { Button } from "@/components/ui/button";
 
 type FinanceTab =
@@ -66,15 +72,18 @@ export function FinanceView({ data }: { data: FinanceData }) {
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
   const [, startTransition] = useTransition();
 
-  const { accounts, deals } = data;
+  const { accounts, batchOptions } = data;
   const [cashFlows, setCashFlows] = useState(data.cashFlows);
   const [articles, setArticles] = useState(data.articles);
   const [autoRules, setAutoRules] = useState(data.autoRules);
   const [counterparties, setCounterparties] = useState(data.counterparties);
-  const [statements, setStatements] = useState(financeStatements);
+  const [deals, setDeals] = useState(data.deals);
+  const [statements, setStatements] = useState(data.statements);
 
   const [cashflowDialogOpen, setCashflowDialogOpen] = useState(false);
   const [articleDialogOpen, setArticleDialogOpen] = useState(false);
+  const [dealDialogOpen, setDealDialogOpen] = useState(false);
+  const [editingDeal, setEditingDeal] = useState<FinanceDeal | null>(null);
   const [statementDialogOpen, setStatementDialogOpen] = useState(false);
   const [highlightRuleId, setHighlightRuleId] = useState<string | null>(null);
 
@@ -109,6 +118,9 @@ export function FinanceView({ data }: { data: FinanceData }) {
   const replaceRule = (rule: FinanceAutoRule) =>
     setAutoRules((prev) => prev.map((r) => (r.id === rule.id ? rule : r)));
 
+  const replaceDeal = (deal: FinanceDeal) =>
+    setDeals((prev) => prev.map((d) => (d.id === deal.id ? deal : d)));
+
   const handleAdd = () => {
     switch (activeTab) {
       case "cashflow":
@@ -132,7 +144,8 @@ export function FinanceView({ data }: { data: FinanceData }) {
         });
         break;
       case "deals":
-        toast.message("Создание сделок — следующий срез Этапа 10");
+        setEditingDeal(null);
+        setDealDialogOpen(true);
         break;
       case "statements":
         setStatementDialogOpen(true);
@@ -224,7 +237,30 @@ export function FinanceView({ data }: { data: FinanceData }) {
             }
           />
         )}
-        {activeTab === "deals" && <FinanceDealsTab deals={deals} cashFlows={cashFlows} />}
+        {activeTab === "deals" && (
+          <FinanceDealsTab
+            deals={deals}
+            cashFlows={cashFlows}
+            onEdit={(deal) => {
+              setEditingDeal(deal);
+              setDealDialogOpen(true);
+            }}
+            onArchiveToggle={(deal) =>
+              run(async () => {
+                replaceDeal(
+                  await setDealStatus(deal.id, deal.status === "ARCHIVED" ? "OPEN" : "ARCHIVED"),
+                );
+              })
+            }
+            onDelete={(deal) =>
+              run(async () => {
+                await deleteDeal(deal.id);
+                setDeals((prev) => prev.filter((d) => d.id !== deal.id));
+                toast.success("Сделка удалена");
+              })
+            }
+          />
+        )}
         {activeTab === "statements" && (
           <FinanceStatementsTab
             statements={statements}
@@ -295,13 +331,36 @@ export function FinanceView({ data }: { data: FinanceData }) {
         }
       />
 
+      <DealFormDialog
+        open={dealDialogOpen}
+        batches={batchOptions}
+        deal={editingDeal}
+        onOpenChange={setDealDialogOpen}
+        onSubmit={(values: DealFormValues) =>
+          run(async () => {
+            if (editingDeal) {
+              replaceDeal(await updateDeal(editingDeal.id, values));
+              toast.success("Сделка обновлена");
+            } else {
+              const deal = await createDeal(values);
+              setDeals((prev) => [deal, ...prev]);
+              toast.success("Сделка добавлена");
+            }
+          })
+        }
+      />
+
       <StatementUploadDialog
         open={statementDialogOpen}
+        accounts={accounts}
         onOpenChange={setStatementDialogOpen}
-        onSubmit={(values) => {
-          setStatements((prev) => [statementUploadToRow(values), ...prev]);
-          toast.success(`Выписка «${values.fileName}» загружена (прототип)`);
-        }}
+        onSubmit={(values) =>
+          run(async () => {
+            const row = await createStatement(values);
+            setStatements((prev) => [row, ...prev]);
+            toast.success(`Выписка «${values.fileName}» загружена`);
+          })
+        }
       />
     </>
   );

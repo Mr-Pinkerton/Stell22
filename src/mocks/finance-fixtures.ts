@@ -30,6 +30,8 @@ export interface FinanceDeal {
   total: number;
   batchNames: string[];
   deliveryExtra: number;
+  /** Сумма закупочных стоимостей привязанных партий (для разбивки в табе). */
+  purchaseTotal?: number;
 }
 
 export interface FinanceCashFlowRow {
