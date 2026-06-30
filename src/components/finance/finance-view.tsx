@@ -23,6 +23,7 @@ import {
   deleteCashFlow,
   deleteCounterparty,
   deleteDeal,
+  importStatement,
   setDealStatus,
   updateAutoRule,
   updateCounterparty,
@@ -72,7 +73,8 @@ export function FinanceView({ data }: { data: FinanceData }) {
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
   const [, startTransition] = useTransition();
 
-  const { accounts, batchOptions } = data;
+  const { batchOptions } = data;
+  const [accounts, setAccounts] = useState(data.accounts);
   const [cashFlows, setCashFlows] = useState(data.cashFlows);
   const [articles, setArticles] = useState(data.articles);
   const [autoRules, setAutoRules] = useState(data.autoRules);
@@ -356,9 +358,21 @@ export function FinanceView({ data }: { data: FinanceData }) {
         onOpenChange={setStatementDialogOpen}
         onSubmit={(values) =>
           run(async () => {
-            const row = await createStatement(values);
-            setStatements((prev) => [row, ...prev]);
-            toast.success(`Выписка «${values.fileName}» загружена`);
+            if (values.is1C) {
+              const res = await importStatement(values.content, values.fileName);
+              setStatements((prev) => [res.statement, ...prev]);
+              setCashFlows((prev) => [...res.newCashFlows, ...prev]);
+              setAccounts(res.accounts);
+              setCounterparties(res.counterparties);
+              toast.success(
+                `Импортировано операций: ${res.importedCount}` +
+                  (res.unassignedCount ? `, без статьи: ${res.unassignedCount}` : ""),
+              );
+            } else {
+              const row = await createStatement(values);
+              setStatements((prev) => [row, ...prev]);
+              toast.success(`Выписка «${values.fileName}» загружена`);
+            }
           })
         }
       />

@@ -7,6 +7,7 @@ import { writeChangeLog } from "@/server/change-log";
 import { D } from "@/lib/cost";
 import { batchExtraShare, batchTotalCost, dealDeliveryExtra } from "@/lib/deal-cost";
 import { recalcBatchCosts } from "@/server/cost";
+import { is1CStatement, parse1CStatement } from "@/lib/bank-statement-1c";
 import type {
   FinanceAccount,
   FinanceArticle,
@@ -652,4 +653,173 @@ export async function createStatement(values: StatementUploadValues): Promise<Fi
   });
   revalidatePath(PATH);
   return serStatement(created);
+}
+
+// ============================ ИМПОРТ ВЫПИСКИ 1С ============================
+
+export interface ImportStatementResult {
+  statement: FinanceStatementRow;
+  newCashFlows: FinanceCashFlowRow[];
+  accounts: FinanceAccount[];
+  counterparties: FinanceCounterparty[];
+  importedCount: number;
+  unassignedCount: number;
+}
+
+const last4 = (account: string) => account.slice(-4);
+
+/** Найти или создать контрагента по ИНН (приоритет) либо по названию. */
+async function resolveCounterparty(
+  tx: Prisma.TransactionClient,
+  name: string | null,
+  inn: string | null,
+  created: { id: string; name: string }[],
+): Promise<string | null> {
+  const cleanName = name?.trim() || null;
+  const cleanInn = inn?.trim() || null;
+  if (!cleanName && !cleanInn) return null;
+
+  if (cleanInn) {
+    const byInn = await tx.counterparty.findFirst({ where: { inn: cleanInn } });
+    if (byInn) return byInn.id;
+  }
+  if (cleanName) {
+    const byName = await tx.counterparty.findFirst({ where: { name: cleanName } });
+    if (byName) return byName.id;
+  }
+
+  const cp = await tx.counterparty.create({
+    data: { name: cleanName ?? `ИНН ${cleanInn}`, inn: cleanInn },
+  });
+  created.push({ id: cp.id, name: cp.name });
+  return cp.id;
+}
+
+/**
+ * Импорт банковской выписки формата 1CClientBankExchange. На вход — уже
+ * декодированный текст. Создаёт/находит счёт по номеру, заводит выписку,
+ * разносит каждую операцию (направление по нашему РасчСчёту), применяет
+ * автоправила и обновляет остаток счёта по «КонечныйОстаток».
+ */
+export async function importStatement(
+  content: string,
+  fileName: string,
+): Promise<ImportStatementResult> {
+  if (!is1CStatement(content)) {
+    throw new Error("Файл не в формате 1CClientBankExchange");
+  }
+  const parsed = parse1CStatement(content);
+  if (!parsed.accountNumber) {
+    throw new Error("В выписке не найден номер счёта (РасчСчет)");
+  }
+
+  const ourNumber = parsed.accountNumber;
+  const statementDate = parsed.dateEnd ?? parsed.dateStart ?? new Date().toISOString().slice(0, 10);
+
+  const newCounterparties: { id: string; name: string }[] = [];
+  const affectedDeals = new Set<string>();
+  let imported = 0;
+  let unassigned = 0;
+
+  const statementId = await prisma.$transaction(async (tx) => {
+    // Счёт: по номеру или создаём новый.
+    let account = await tx.account.findFirst({ where: { accountNumber: ourNumber } });
+    if (!account) {
+      account = await tx.account.create({
+        data: {
+          name: `Счёт ••${last4(ourNumber)}`,
+          accountNumber: ourNumber,
+          bik: parsed.bik,
+          balance: parsed.closingBalance != null ? parsed.closingBalance.toFixed(2) : 0,
+        },
+      });
+    } else if (parsed.bik && !account.bik) {
+      await tx.account.update({ where: { id: account.id }, data: { bik: parsed.bik } });
+    }
+
+    const statement = await tx.statement.create({
+      data: {
+        date: new Date(statementDate),
+        accountId: account.id,
+        fileUrl: fileName || null,
+        uploadedAt: new Date(),
+      },
+    });
+
+    for (const doc of parsed.documents) {
+      const isExpense = doc.payerAccount === ourNumber;
+      const flowType = isExpense ? "EXPENSE" : "INCOME";
+      const cpName = isExpense ? doc.payeeName : doc.payerName;
+      const cpInn = isExpense ? doc.payeeInn : doc.payerInn;
+      const counterpartyId = await resolveCounterparty(tx, cpName, cpInn, newCounterparties);
+      const description = doc.purpose ?? "";
+
+      const auto = await applyAutoRules({ flowType, counterpartyId, description });
+      const articleId = auto?.articleId ?? null;
+      const dealId = auto?.dealId ?? null;
+
+      await tx.cashFlow.create({
+        data: {
+          amount: doc.amount.toFixed(2),
+          flowType,
+          accountId: account.id,
+          counterpartyId,
+          description,
+          articleId,
+          dealId,
+          statementId: statement.id,
+          date: new Date(doc.date || statementDate),
+          isAutoAssigned: Boolean(articleId),
+        },
+      });
+
+      imported += 1;
+      if (!articleId) unassigned += 1;
+      if (dealId) affectedDeals.add(dealId);
+    }
+
+    // Остаток счёта берём из выписки (конечный остаток — источник истины).
+    if (parsed.closingBalance != null) {
+      await tx.account.update({
+        where: { id: account.id },
+        data: { balance: parsed.closingBalance.toFixed(2) },
+      });
+    }
+
+    return statement.id;
+  });
+
+  await writeChangeLog({
+    entity: "Statement",
+    entityId: statementId,
+    newValues: { file: fileName, account: ourNumber, operations: imported },
+  });
+
+  // Сделки, затронутые автоправилами, пересчитываем (доставка → себестоимость).
+  for (const dealId of affectedDeals) await syncDeal(dealId);
+
+  const [statement, accounts, counterparties] = await Promise.all([
+    prisma.statement.findUniqueOrThrow({
+      where: { id: statementId },
+      include: { account: true, cashFlows: true },
+    }),
+    prisma.account.findMany({ orderBy: { name: "asc" } }),
+    prisma.counterparty.findMany({ orderBy: { name: "asc" } }),
+  ]);
+
+  const newCashFlows = await prisma.cashFlow.findMany({
+    where: { statementId },
+    include: { account: true, counterparty: true, article: true, deal: true },
+    orderBy: { date: "desc" },
+  });
+
+  revalidatePath(PATH);
+  return {
+    statement: serStatement(statement),
+    newCashFlows: newCashFlows.map(serCashFlow),
+    accounts: accounts.map((a) => ({ id: a.id, name: a.name, balance: num(a.balance) })),
+    counterparties: counterparties.map((c) => ({ id: c.id, name: c.name })),
+    importedCount: imported,
+    unassignedCount: unassigned,
+  };
 }

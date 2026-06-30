@@ -397,9 +397,11 @@ model InventoryLine {
 // ============================= ФИНАНСЫ ======================================
 
 model Account {
-  id      String  @id @default(cuid())
-  name    String
-  balance Decimal @db.Decimal(14, 2) @default(0)
+  id            String  @id @default(cuid())
+  name          String
+  accountNumber String? // РасчСчет из выписки (для авто-сопоставления)
+  bik           String?
+  balance       Decimal @db.Decimal(14, 2) @default(0)
 
   cashFlows  CashFlow[]
   statements Statement[]
@@ -430,6 +432,7 @@ model Article {
 model Counterparty {
   id        String     @id @default(cuid())
   name      String
+  inn       String?    // для сопоставления из выписки и автоправил
   cashFlows CashFlow[]
   autoRules AutoRule[]
 }
