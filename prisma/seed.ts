@@ -225,7 +225,7 @@ async function main() {
   });
 
   await prisma.counterparty.createMany({
-    data: financeCounterparties.map((c) => ({ id: c.id, name: c.name })),
+    data: financeCounterparties.map((c) => ({ id: c.id, name: c.name, inn: c.inn ?? null })),
   });
 
   // Категории статей выводим из статей (id «cat-N»), накладные — флаг isOverhead.

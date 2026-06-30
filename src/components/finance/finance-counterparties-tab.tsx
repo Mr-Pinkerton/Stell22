@@ -18,8 +18,8 @@ const tableActionDestructiveClass =
 interface FinanceCounterpartiesTabProps {
   counterparties: FinanceCounterparty[];
   onRegisterCreate?: (openCreate: () => void) => void;
-  onCreate?: (name: string) => void;
-  onUpdate?: (id: string, name: string) => void;
+  onCreate?: (name: string, inn: string) => void;
+  onUpdate?: (id: string, name: string, inn: string) => void;
   onDelete?: (id: string) => void;
 }
 
@@ -53,6 +53,16 @@ export function FinanceCounterpartiesTab({
         key: "name",
         header: "Название",
         render: (row) => <span className="font-medium">{row.name}</span>,
+      },
+      {
+        key: "inn",
+        header: "ИНН",
+        render: (row) =>
+          row.inn ? (
+            <span className="tabular-nums">{row.inn}</span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          ),
       },
       {
         key: "actions",
@@ -117,9 +127,9 @@ export function FinanceCounterpartiesTab({
         open={dialogOpen}
         counterparty={editing}
         onOpenChange={setDialogOpen}
-        onSubmit={(name) => {
-          if (editing) onUpdate?.(editing.id, name);
-          else onCreate?.(name);
+        onSubmit={(name, inn) => {
+          if (editing) onUpdate?.(editing.id, name, inn);
+          else onCreate?.(name, inn);
         }}
       />
     </>

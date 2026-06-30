@@ -165,9 +165,15 @@ export async function getFinanceData(): Promise<FinanceData> {
   }
 
   return {
-    accounts: accounts.map((a) => ({ id: a.id, name: a.name, balance: num(a.balance) })),
+    accounts: accounts.map((a) => ({
+      id: a.id,
+      name: a.name,
+      balance: num(a.balance),
+      accountNumber: a.accountNumber,
+      bik: a.bik,
+    })),
     articles: articles.map(serArticle),
-    counterparties: counterparties.map((c) => ({ id: c.id, name: c.name })),
+    counterparties: counterparties.map((c) => ({ id: c.id, name: c.name, inn: c.inn })),
     deals: deals.map((d) => serDeal(d, expenseByDeal)),
     autoRules: autoRules.map((r) => serAutoRule(r, dealNameById)),
     cashFlows: cashFlows.map(serCashFlow),
@@ -178,22 +184,42 @@ export async function getFinanceData(): Promise<FinanceData> {
 
 // ============================ КОНТРАГЕНТЫ ==================================
 
-export async function createCounterparty(name: string): Promise<FinanceCounterparty> {
+export async function createCounterparty(
+  name: string,
+  inn?: string | null,
+): Promise<FinanceCounterparty> {
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Укажите название контрагента");
-  const created = await prisma.counterparty.create({ data: { name: trimmed } });
-  await writeChangeLog({ entity: "Counterparty", entityId: created.id, newValues: { name: trimmed } });
+  const innClean = inn?.trim() || null;
+  const created = await prisma.counterparty.create({ data: { name: trimmed, inn: innClean } });
+  await writeChangeLog({
+    entity: "Counterparty",
+    entityId: created.id,
+    newValues: { name: trimmed, inn: innClean },
+  });
   revalidatePath(PATH);
-  return { id: created.id, name: created.name };
+  return { id: created.id, name: created.name, inn: created.inn };
 }
 
-export async function updateCounterparty(id: string, name: string): Promise<FinanceCounterparty> {
+export async function updateCounterparty(
+  id: string,
+  name: string,
+  inn?: string | null,
+): Promise<FinanceCounterparty> {
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Укажите название контрагента");
-  const updated = await prisma.counterparty.update({ where: { id }, data: { name: trimmed } });
-  await writeChangeLog({ entity: "Counterparty", entityId: id, newValues: { name: trimmed } });
+  const innClean = inn?.trim() || null;
+  const updated = await prisma.counterparty.update({
+    where: { id },
+    data: { name: trimmed, inn: innClean },
+  });
+  await writeChangeLog({
+    entity: "Counterparty",
+    entityId: id,
+    newValues: { name: trimmed, inn: innClean },
+  });
   revalidatePath(PATH);
-  return { id: updated.id, name: updated.name };
+  return { id: updated.id, name: updated.name, inn: updated.inn };
 }
 
 export async function deleteCounterparty(id: string): Promise<void> {
@@ -664,9 +690,28 @@ export interface ImportStatementResult {
   counterparties: FinanceCounterparty[];
   importedCount: number;
   unassignedCount: number;
+  skippedCount: number;
+  warning: string | null;
 }
 
 const last4 = (account: string) => account.slice(-4);
+
+/** Детерминированный ключ операции для защиты от повторного импорта. */
+function importKeyOf(doc: {
+  docNumber: string | null;
+  date: string;
+  amount: number;
+  payerAccount: string | null;
+  payeeAccount: string | null;
+}): string {
+  return [
+    doc.docNumber ?? "",
+    doc.date,
+    doc.amount.toFixed(2),
+    doc.payerAccount ?? "",
+    doc.payeeAccount ?? "",
+  ].join("|");
+}
 
 /** Найти или создать контрагента по ИНН (приоритет) либо по названию. */
 async function resolveCounterparty(
@@ -704,6 +749,7 @@ async function resolveCounterparty(
 export async function importStatement(
   content: string,
   fileName: string,
+  bindAccountId?: string | null,
 ): Promise<ImportStatementResult> {
   if (!is1CStatement(content)) {
     throw new Error("Файл не в формате 1CClientBankExchange");
@@ -720,10 +766,17 @@ export async function importStatement(
   const affectedDeals = new Set<string>();
   let imported = 0;
   let unassigned = 0;
+  let skipped = 0;
+  let warning: string | null = null;
 
   const statementId = await prisma.$transaction(async (tx) => {
-    // Счёт: по номеру или создаём новый.
+    // Счёт: по номеру → по явной привязке → создаём новый.
     let account = await tx.account.findFirst({ where: { accountNumber: ourNumber } });
+    if (!account && bindAccountId) {
+      account = await tx.account.findUnique({ where: { id: bindAccountId } });
+    }
+    const isNewAccount = !account;
+
     if (!account) {
       account = await tx.account.create({
         data: {
@@ -733,8 +786,25 @@ export async function importStatement(
           balance: parsed.closingBalance != null ? parsed.closingBalance.toFixed(2) : 0,
         },
       });
-    } else if (parsed.bik && !account.bik) {
-      await tx.account.update({ where: { id: account.id }, data: { bik: parsed.bik } });
+    } else {
+      // Привязываем номер/БИК к существующему счёту, если их ещё нет.
+      const patch: Prisma.AccountUncheckedUpdateInput = {};
+      if (!account.accountNumber) patch.accountNumber = ourNumber;
+      if (parsed.bik && !account.bik) patch.bik = parsed.bik;
+      if (Object.keys(patch).length > 0) {
+        account = await tx.account.update({ where: { id: account.id }, data: patch });
+      }
+    }
+
+    // Сверка остатков: начальный остаток выписки должен совпасть с текущим
+    // остатком счёта (= конечный предыдущей выписки). Иначе — предупреждаем.
+    if (!isNewAccount && parsed.openingBalance != null) {
+      const current = num(account.balance);
+      if (Math.abs(current - parsed.openingBalance) > 0.01) {
+        warning =
+          `Начальный остаток выписки (${parsed.openingBalance.toFixed(2)}) не совпадает ` +
+          `с остатком счёта (${current.toFixed(2)}). Возможна пропущенная выписка.`;
+      }
     }
 
     const statement = await tx.statement.create({
@@ -747,10 +817,23 @@ export async function importStatement(
     });
 
     for (const doc of parsed.documents) {
-      const isExpense = doc.payerAccount === ourNumber;
-      const flowType = isExpense ? "EXPENSE" : "INCOME";
-      const cpName = isExpense ? doc.payeeName : doc.payerName;
-      const cpInn = isExpense ? doc.payeeInn : doc.payerInn;
+      const key = importKeyOf(doc);
+      const exists = await tx.cashFlow.findFirst({
+        where: { accountId: account.id, importKey: key },
+        select: { id: true },
+      });
+      if (exists) {
+        skipped += 1;
+        continue;
+      }
+
+      const payerOurs = doc.payerAccount === ourNumber;
+      const payeeOurs = doc.payeeAccount === ourNumber;
+      // Оба счёта наши (внутренний перевод/комиссия) — расход без контрагента.
+      const internal = payerOurs && payeeOurs;
+      const flowType = payerOurs ? "EXPENSE" : "INCOME";
+      const cpName = internal ? null : payerOurs ? doc.payeeName : doc.payerName;
+      const cpInn = internal ? null : payerOurs ? doc.payeeInn : doc.payerInn;
       const counterpartyId = await resolveCounterparty(tx, cpName, cpInn, newCounterparties);
       const description = doc.purpose ?? "";
 
@@ -770,6 +853,7 @@ export async function importStatement(
           statementId: statement.id,
           date: new Date(doc.date || statementDate),
           isAutoAssigned: Boolean(articleId),
+          importKey: key,
         },
       });
 
@@ -792,7 +876,7 @@ export async function importStatement(
   await writeChangeLog({
     entity: "Statement",
     entityId: statementId,
-    newValues: { file: fileName, account: ourNumber, operations: imported },
+    newValues: { file: fileName, account: ourNumber, operations: imported, skipped },
   });
 
   // Сделки, затронутые автоправилами, пересчитываем (доставка → себестоимость).
@@ -817,9 +901,52 @@ export async function importStatement(
   return {
     statement: serStatement(statement),
     newCashFlows: newCashFlows.map(serCashFlow),
-    accounts: accounts.map((a) => ({ id: a.id, name: a.name, balance: num(a.balance) })),
-    counterparties: counterparties.map((c) => ({ id: c.id, name: c.name })),
+    accounts: accounts.map((a) => ({
+      id: a.id,
+      name: a.name,
+      balance: num(a.balance),
+      accountNumber: a.accountNumber,
+      bik: a.bik,
+    })),
+    counterparties: counterparties.map((c) => ({ id: c.id, name: c.name, inn: c.inn })),
     importedCount: imported,
     unassignedCount: unassigned,
+    skippedCount: skipped,
+    warning,
   };
+}
+
+/** Операции конкретной выписки (для просмотра карточки). */
+export async function getStatementDetail(id: string): Promise<FinanceCashFlowRow[]> {
+  const flows = await prisma.cashFlow.findMany({
+    where: { statementId: id },
+    include: { account: true, counterparty: true, article: true, deal: true },
+    orderBy: { date: "asc" },
+  });
+  return flows.map(serCashFlow);
+}
+
+/**
+ * Откат выписки: удаляет её операции ДДС и саму выписку, пересчитывает
+ * затронутые сделки. Возвращает id удалённых операций (для очистки UI).
+ */
+export async function deleteStatement(id: string): Promise<string[]> {
+  const flows = await prisma.cashFlow.findMany({
+    where: { statementId: id },
+    select: { id: true, dealId: true },
+  });
+  const removedIds = flows.map((f) => f.id);
+  const affectedDeals = new Set(
+    flows.map((f) => f.dealId).filter((d): d is string => Boolean(d)),
+  );
+
+  await prisma.$transaction(async (tx) => {
+    await tx.cashFlow.deleteMany({ where: { statementId: id } });
+    await tx.statement.delete({ where: { id } });
+  });
+  await writeChangeLog({ entity: "Statement", entityId: id, oldValues: { deleted: true } });
+
+  for (const dealId of affectedDeals) await syncDeal(dealId);
+  revalidatePath(PATH);
+  return removedIds;
 }

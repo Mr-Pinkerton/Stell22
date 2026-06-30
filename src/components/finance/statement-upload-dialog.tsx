@@ -32,6 +32,8 @@ export interface StatementUploadValues {
   content: string;
   /** Файл распознан как 1CClientBankExchange → серверный импорт операций. */
   is1C: boolean;
+  /** Привязать выписку к выбранному счёту (если номер не распознан). */
+  bindAccountId: string | null;
 }
 
 interface StatementUploadDialogProps {
@@ -46,7 +48,10 @@ interface Preview {
   dateStart: string | null;
   dateEnd: string | null;
   operations: number;
+  matchedAccountId: string | null;
 }
+
+const CREATE_NEW = "__new__";
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
@@ -73,6 +78,7 @@ export function StatementUploadDialog({
   const [content, setContent] = useState("");
   const [is1C, setIs1C] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [bindId, setBindId] = useState<string>(CREATE_NEW);
 
   if (useJustOpened(open)) {
     setDateText(isoToDisplayDate(todayIso()));
@@ -81,6 +87,7 @@ export function StatementUploadDialog({
     setContent("");
     setIs1C(false);
     setPreview(null);
+    setBindId(CREATE_NEW);
   }
 
   const handleFile = async (file: File | undefined) => {
@@ -92,12 +99,17 @@ export function StatementUploadDialog({
     setIs1C(detected);
     if (detected) {
       const st = parse1CStatement(text);
+      const matched = st.accountNumber
+        ? accounts.find((a) => a.accountNumber === st.accountNumber)?.id ?? null
+        : null;
       setPreview({
         accountNumber: st.accountNumber,
         dateStart: st.dateStart,
         dateEnd: st.dateEnd,
         operations: st.documents.length,
+        matchedAccountId: matched,
       });
+      setBindId(CREATE_NEW);
     } else {
       setPreview(null);
     }
@@ -110,14 +122,30 @@ export function StatementUploadDialog({
 
   const handleSubmit = () => {
     if (is1C) {
-      onSubmit?.({ date: "", accountName: "", fileName, content, is1C: true });
+      const bindAccountId =
+        preview?.matchedAccountId ?? (bindId === CREATE_NEW ? null : bindId);
+      onSubmit?.({
+        date: "",
+        accountName: "",
+        fileName,
+        content,
+        is1C: true,
+        bindAccountId,
+      });
       onOpenChange(false);
       return;
     }
     const iso = parseDisplayDate(dateText);
     const account = accounts.find((a) => a.id === accountId);
     if (!iso || !account || !fileName) return;
-    onSubmit?.({ date: iso, accountName: account.name, fileName, content: "", is1C: false });
+    onSubmit?.({
+      date: iso,
+      accountName: account.name,
+      fileName,
+      content: "",
+      is1C: false,
+      bindAccountId: null,
+    });
     onOpenChange(false);
   };
 
@@ -185,14 +213,41 @@ export function StatementUploadDialog({
       {is1C && preview && (
         <div className="border-border bg-muted/30 space-y-1 rounded-lg border px-3 py-2.5 text-sm">
           <p className="text-foreground font-medium">Формат 1С распознан</p>
-          <p className="text-muted-foreground">
-            Счёт: {preview.accountNumber ?? "—"}
-          </p>
+          <p className="text-muted-foreground">Счёт: {preview.accountNumber ?? "—"}</p>
           <p className="text-muted-foreground">
             Период: {preview.dateStart ?? "—"} — {preview.dateEnd ?? "—"}
           </p>
           <p className="text-muted-foreground">Операций: {preview.operations}</p>
+          {preview.matchedAccountId && (
+            <p className="text-muted-foreground">
+              Счёт распознан: {accounts.find((a) => a.id === preview.matchedAccountId)?.name}
+            </p>
+          )}
         </div>
+      )}
+
+      {is1C && preview && !preview.matchedAccountId && (
+        <Field id="st-bind" label="Привязать к счёту">
+          <Select value={bindId} onValueChange={(v) => setBindId(v ?? CREATE_NEW)}>
+            <SelectTrigger className={selectTriggerClass}>
+              <SelectValue>
+                {bindId === CREATE_NEW
+                  ? "Создать новый счёт"
+                  : accounts.find((a) => a.id === bindId)?.name}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent {...formSelectContentProps}>
+              <SelectItem value={CREATE_NEW} className="cursor-pointer rounded-lg">
+                Создать новый счёт
+              </SelectItem>
+              {accounts.map((a) => (
+                <SelectItem key={a.id} value={a.id} className="cursor-pointer rounded-lg">
+                  {a.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
       )}
     </FinanceFormDialog>
   );

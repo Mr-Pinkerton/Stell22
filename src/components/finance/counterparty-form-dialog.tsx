@@ -15,7 +15,7 @@ interface CounterpartyFormDialogProps {
   open: boolean;
   counterparty?: FinanceCounterparty | null;
   onOpenChange: (open: boolean) => void;
-  onSubmit?: (name: string) => void;
+  onSubmit?: (name: string, inn: string) => void;
 }
 
 export function CounterpartyFormDialog({
@@ -25,13 +25,17 @@ export function CounterpartyFormDialog({
   onSubmit,
 }: CounterpartyFormDialogProps) {
   const [name, setName] = useState("");
+  const [inn, setInn] = useState("");
 
-  if (useJustOpened(open)) setName(counterparty?.name ?? "");
+  if (useJustOpened(open)) {
+    setName(counterparty?.name ?? "");
+    setInn(counterparty?.inn ?? "");
+  }
 
   const handleSubmit = () => {
     const trimmed = name.trim();
     if (!trimmed) return;
-    onSubmit?.(trimmed);
+    onSubmit?.(trimmed, inn.trim());
     onOpenChange(false);
   };
 
@@ -52,6 +56,17 @@ export function CounterpartyFormDialog({
           onChange={(e) => setName(e.target.value)}
           className={cn(fieldClass)}
           placeholder="ООО «Пример»"
+        />
+      </Field>
+
+      <Field id="cp-inn" label="ИНН">
+        <Input
+          id="cp-inn"
+          value={inn}
+          onChange={(e) => setInn(e.target.value.replace(/\D/g, ""))}
+          className={cn(fieldClass)}
+          placeholder="7700000000"
+          inputMode="numeric"
         />
       </Field>
     </FinanceFormDialog>

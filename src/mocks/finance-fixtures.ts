@@ -6,6 +6,8 @@ export interface FinanceAccount {
   id: string;
   name: string;
   balance: number;
+  accountNumber?: string | null;
+  bik?: string | null;
 }
 
 export interface FinanceArticle {
@@ -21,6 +23,7 @@ export interface FinanceArticle {
 export interface FinanceCounterparty {
   id: string;
   name: string;
+  inn?: string | null;
 }
 
 export interface FinanceDeal {
@@ -83,11 +86,11 @@ export const financeAccounts: FinanceAccount[] = [
 ];
 
 export const financeCounterparties: FinanceCounterparty[] = [
-  { id: "cp-1", name: "ООО «Лесопром»" },
-  { id: "cp-2", name: "ИП Козлов А.В." },
-  { id: "cp-3", name: "ООО «Доставка Северо-Запад»" },
-  { id: "cp-4", name: "АО «Энергосбыт»" },
-  { id: "cp-5", name: "Озон (маркетплейс)" },
+  { id: "cp-1", name: "ООО «Лесопром»", inn: "7801234567" },
+  { id: "cp-2", name: "ИП Козлов А.В.", inn: "780112345678" },
+  { id: "cp-3", name: "ООО «Доставка Северо-Запад»", inn: "7802345678" },
+  { id: "cp-4", name: "АО «Энергосбыт»", inn: "7803456789" },
+  { id: "cp-5", name: "Озон (маркетплейс)", inn: "7704217370" },
 ];
 
 export const financeArticles: FinanceArticle[] = [

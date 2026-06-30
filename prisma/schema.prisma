@@ -483,8 +483,10 @@ model CashFlow {
   statement      Statement? @relation(fields: [statementId], references: [id])
   date           DateTime
   isAutoAssigned Boolean  @default(false) // false → подсветка для ручного разнесения
+  importKey      String?  // ключ дедупликации импорта (док+дата+сумма+счёт)
 
   @@index([date])
+  @@index([accountId, importKey])
 }
 
 model AutoRule {

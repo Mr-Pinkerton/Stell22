@@ -23,6 +23,8 @@ import {
   deleteCashFlow,
   deleteCounterparty,
   deleteDeal,
+  deleteStatement,
+  getStatementDetail,
   importStatement,
   setDealStatus,
   updateAutoRule,
@@ -267,24 +269,34 @@ export function FinanceView({ data }: { data: FinanceData }) {
           <FinanceStatementsTab
             statements={statements}
             onUploadRequest={() => setStatementDialogOpen(true)}
+            onLoadDetail={(id) => getStatementDetail(id)}
+            onDelete={(id) =>
+              run(async () => {
+                const removed = await deleteStatement(id);
+                const removedSet = new Set(removed);
+                setStatements((prev) => prev.filter((s) => s.id !== id));
+                setCashFlows((prev) => prev.filter((c) => !removedSet.has(c.id)));
+                toast.success(`Выписка откачена (операций: ${removed.length})`);
+              })
+            }
           />
         )}
         {activeTab === "counterparties" && (
           <FinanceCounterpartiesTab
             counterparties={counterparties}
             onRegisterCreate={registerCounterpartyCreate}
-            onCreate={(name) =>
+            onCreate={(name, inn) =>
               run(async () => {
-                const cp = await createCounterparty(name);
+                const cp = await createCounterparty(name, inn);
                 setCounterparties((prev) =>
                   [...prev, cp].sort((a, b) => a.name.localeCompare(b.name)),
                 );
                 toast.success("Контрагент добавлен");
               })
             }
-            onUpdate={(id, name) =>
+            onUpdate={(id, name, inn) =>
               run(async () => {
-                const cp = await updateCounterparty(id, name);
+                const cp = await updateCounterparty(id, name, inn);
                 setCounterparties((prev) =>
                   prev
                     .map((c) => (c.id === id ? cp : c))
@@ -359,15 +371,21 @@ export function FinanceView({ data }: { data: FinanceData }) {
         onSubmit={(values) =>
           run(async () => {
             if (values.is1C) {
-              const res = await importStatement(values.content, values.fileName);
+              const res = await importStatement(
+                values.content,
+                values.fileName,
+                values.bindAccountId,
+              );
               setStatements((prev) => [res.statement, ...prev]);
               setCashFlows((prev) => [...res.newCashFlows, ...prev]);
               setAccounts(res.accounts);
               setCounterparties(res.counterparties);
               toast.success(
                 `Импортировано операций: ${res.importedCount}` +
-                  (res.unassignedCount ? `, без статьи: ${res.unassignedCount}` : ""),
+                  (res.unassignedCount ? `, без статьи: ${res.unassignedCount}` : "") +
+                  (res.skippedCount ? `, пропущено дублей: ${res.skippedCount}` : ""),
               );
+              if (res.warning) toast.warning(res.warning);
             } else {
               const row = await createStatement(values);
               setStatements((prev) => [row, ...prev]);
