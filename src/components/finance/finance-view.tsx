@@ -32,9 +32,16 @@ import {
   updateCounterparty,
   updateDeal,
 } from "@/server/finance";
+import { exportXlsx } from "@/lib/export-xlsx";
+import { XLSX_FMT, type XlsxSheet } from "@/lib/xlsx-types";
+import { formatIsoDate } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
 import { SegmentTabs } from "@/components/reports/report-shared";
+
+const flowTypeLabel = (t: "INCOME" | "EXPENSE") => (t === "INCOME" ? "Доход" : "Расход");
+const dealStatusLabel = (s: string) =>
+  s === "OPEN" ? "Открыта" : s === "ARCHIVED" ? "Архив" : s;
 import { FinanceKpiBlock } from "@/components/finance/finance-kpi-block";
 import { FinanceCashflowTab } from "@/components/finance/finance-cashflow-tab";
 import { FinanceArticlesTab } from "@/components/finance/finance-articles-tab";
@@ -75,6 +82,7 @@ export function FinanceView({ data }: { data: FinanceData }) {
   const [activeTab, setActiveTab] = useState<FinanceTab>("cashflow");
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
   const [, startTransition] = useTransition();
+  const [exporting, startExport] = useTransition();
 
   const { batchOptions } = data;
   const [accounts, setAccounts] = useState(data.accounts);
@@ -98,6 +106,126 @@ export function FinanceView({ data }: { data: FinanceData }) {
     () => cashFlows.filter((row) => matchesDateFilter(row.date, dateFilter)),
     [cashFlows, dateFilter],
   );
+
+  const buildFinanceSheet = (): XlsxSheet => {
+    switch (activeTab) {
+      case "articles":
+        return {
+          name: "Статьи",
+          columns: [
+            { header: "Название", key: "name", width: 28 },
+            { header: "Тип", key: "flowType", width: 12 },
+            { header: "Категория", key: "category", width: 20 },
+            { header: "Накладные", key: "overhead", width: 12 },
+          ],
+          rows: articles.map((a) => ({
+            name: a.name,
+            flowType: flowTypeLabel(a.flowType),
+            category: a.categoryName,
+            overhead: a.isOverhead ? "Да" : "Нет",
+          })),
+        };
+      case "rules":
+        return {
+          name: "Автоправила",
+          columns: [
+            { header: "Тип", key: "flowType", width: 12 },
+            { header: "Контрагент", key: "counterparty", width: 28 },
+            { header: "Логика", key: "logic", width: 10 },
+            { header: "Ключевые слова", key: "keywords", width: 28 },
+            { header: "Статья", key: "article", width: 22 },
+            { header: "Сделка", key: "deal", width: 22 },
+          ],
+          rows: autoRules.map((r) => ({
+            flowType: flowTypeLabel(r.flowType),
+            counterparty: r.counterpartyName ?? "",
+            logic: r.logicOperator,
+            keywords: r.descriptionKeywords ?? "",
+            article: r.articleName ?? "",
+            deal: r.dealName ?? "",
+          })),
+        };
+      case "deals":
+        return {
+          name: "Сделки",
+          columns: [
+            { header: "Сделка", key: "name", width: 28 },
+            { header: "Статус", key: "status", width: 12 },
+            { header: "Сумма", key: "total", numFmt: XLSX_FMT.money },
+            { header: "Доставка", key: "delivery", numFmt: XLSX_FMT.money },
+            { header: "Партии", key: "batches", width: 32 },
+          ],
+          rows: deals.map((d) => ({
+            name: d.name,
+            status: dealStatusLabel(d.status),
+            total: d.total,
+            delivery: d.deliveryExtra,
+            batches: d.batchNames.join(", "),
+          })),
+        };
+      case "statements":
+        return {
+          name: "Выписки",
+          columns: [
+            { header: "Дата", key: "date", width: 14 },
+            { header: "Счёт", key: "account", width: 28 },
+            { header: "Операций", key: "ops", numFmt: XLSX_FMT.int },
+            { header: "Без статьи", key: "unassigned", numFmt: XLSX_FMT.int },
+            { header: "Загружена", key: "uploaded", width: 12 },
+          ],
+          rows: statements.map((s) => ({
+            date: formatIsoDate(s.date),
+            account: s.accountName ?? "",
+            ops: s.operationsCount,
+            unassigned: s.unassignedCount,
+            uploaded: s.uploaded ? "Да" : "Нет",
+          })),
+        };
+      case "counterparties":
+        return {
+          name: "Контрагенты",
+          columns: [
+            { header: "Название", key: "name", width: 32 },
+            { header: "ИНН", key: "inn", width: 16 },
+          ],
+          rows: counterparties.map((c) => ({ name: c.name, inn: c.inn ?? "" })),
+        };
+      default:
+        return {
+          name: "ДДС",
+          columns: [
+            { header: "Дата", key: "date", width: 14 },
+            { header: "Тип", key: "flowType", width: 10 },
+            { header: "Сумма", key: "amount", numFmt: XLSX_FMT.money },
+            { header: "Счёт", key: "account", width: 24 },
+            { header: "Контрагент", key: "counterparty", width: 28 },
+            { header: "Описание", key: "description", width: 36 },
+            { header: "Статья", key: "article", width: 22 },
+            { header: "Сделка", key: "deal", width: 22 },
+          ],
+          rows: filteredCashFlows.map((r) => ({
+            date: formatIsoDate(r.date),
+            flowType: flowTypeLabel(r.flowType),
+            amount: r.amount,
+            account: r.accountName,
+            counterparty: r.counterpartyName ?? "",
+            description: r.description,
+            article: r.articleName ?? "",
+            deal: r.dealName ?? "",
+          })),
+        };
+    }
+  };
+
+  const handleExport = () =>
+    startExport(async () => {
+      try {
+        const sheet = buildFinanceSheet();
+        await exportXlsx(`финансы-${sheet.name.toLowerCase()}`, [sheet]);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Не удалось выгрузить");
+      }
+    });
 
   const registerCounterpartyCreate = useCallback((fn: () => void) => {
     counterpartyCreateRef.current = fn;
@@ -178,7 +306,8 @@ export function FinanceView({ data }: { data: FinanceData }) {
       <PageHeader
         title="Финансы"
         canExport
-        onExport={() => toast.message("Экспорт — прототип")}
+        exporting={exporting}
+        onExport={handleExport}
       />
 
       <div className="space-y-4">

@@ -24,6 +24,8 @@ import {
   type ProductFormValues,
 } from "@/server/nomenclature";
 import { formatLength, formatMoney } from "@/lib/format";
+import { exportXlsx } from "@/lib/export-xlsx";
+import { XLSX_FMT, type XlsxSheet } from "@/lib/xlsx-types";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
@@ -183,6 +185,7 @@ export function NomenclatureView({
   const [search, setSearch] = useState("");
   const [showArchive, setShowArchive] = useState(false);
   const [pending, startTransition] = useTransition();
+  const [exporting, startExport] = useTransition();
 
   const [products, setProducts] = useState<Product[]>(initialProducts);
   const [details, setDetails] = useState<Detail[]>(initialDetails);
@@ -211,6 +214,82 @@ export function NomenclatureView({
   const fastenerRows = itemsByType("FASTENER");
   const packagingRows = itemsByType("PACKAGING");
   const otherRows = itemsByType("OTHER");
+
+  const statusText = (s: "ACTIVE" | "ARCHIVED") => (s === "ACTIVE" ? "Активен" : "Архив");
+
+  const buildExportSheet = (): XlsxSheet => {
+    if (activeTab === "products") {
+      return {
+        name: "Изделия",
+        columns: [
+          { header: "Название", key: "name", width: 28 },
+          { header: "Артикул", key: "sku" },
+          { header: "Сорт", key: "sort", width: 12 },
+          { header: "Детали, шт", key: "details", numFmt: XLSX_FMT.int },
+          { header: "Статус", key: "status", width: 14 },
+        ],
+        rows: productRows.map((p) => ({
+          name: p.name,
+          sku: p.sku,
+          sort: SORT_SHORT[p.sort],
+          details: p.details.reduce((sum, d) => sum + d.quantity, 0),
+          status: statusText(p.status),
+        })),
+      };
+    }
+    if (activeTab === "details") {
+      return {
+        name: "Детали",
+        columns: [
+          { header: "Название", key: "name", width: 28 },
+          { header: "Длина", key: "length", numFmt: XLSX_FMT.length },
+          { header: "Тип", key: "type", width: 14 },
+          { header: "Присадка", key: "prisadka", width: 24 },
+          { header: "Сорт", key: "sort", width: 12 },
+          { header: "Статус", key: "status", width: 14 },
+        ],
+        rows: detailRows.map((d) => ({
+          name: d.name,
+          length: d.lengthM,
+          type: RAIL_TYPE_LABEL[d.detailType],
+          prisadka: formatPrisadka(d),
+          sort: SORT_SHORT[d.sort],
+          status: statusText(d.status),
+        })),
+      };
+    }
+    const labelByTab: Record<"fasteners" | "packaging" | "other", string> = {
+      fasteners: "Крепёж",
+      packaging: "Упаковка",
+      other: "Разное",
+    };
+    const itemRows = (
+      activeTab === "fasteners" ? fastenerRows : activeTab === "packaging" ? packagingRows : otherRows
+    ) as NomenclatureItem[];
+    return {
+      name: labelByTab[activeTab as "fasteners" | "packaging" | "other"],
+      columns: [
+        { header: "Название", key: "name", width: 28 },
+        { header: "Цена за ед.", key: "unitPrice", numFmt: XLSX_FMT.money },
+        { header: "Статус", key: "status", width: 14 },
+      ],
+      rows: itemRows.map((n) => ({
+        name: n.name,
+        unitPrice: n.unitPrice,
+        status: statusText(n.status),
+      })),
+    };
+  };
+
+  const handleExport = () =>
+    startExport(async () => {
+      try {
+        const sheet = buildExportSheet();
+        await exportXlsx(`номенклатура-${sheet.name.toLowerCase()}`, [sheet]);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Не удалось выгрузить");
+      }
+    });
 
   const upsertProduct = (p: Product) =>
     setProducts((prev) => {
@@ -490,9 +569,10 @@ export function NomenclatureView({
       <PageHeader
         title="Номенклатура"
         canExport
+        exporting={exporting}
         addLabel={ADD_LABELS[activeTab]}
         onAdd={openCreate}
-        onExport={() => toast.message("Экспорт — прототип")}
+        onExport={handleExport}
       />
 
       <div className="space-y-4">

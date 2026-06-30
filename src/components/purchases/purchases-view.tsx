@@ -18,6 +18,8 @@ import { closeBatch } from "@/server/cost";
 import { type PurchaseBatchRow } from "@/lib/batch-stats";
 import type { NomenclatureItem } from "@/types/domain";
 import { formatIsoDate, formatLength, formatMoney, formatVolume } from "@/lib/format";
+import { exportXlsx } from "@/lib/export-xlsx";
+import { XLSX_FMT } from "@/lib/xlsx-types";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
 import { DataTable, type Column } from "@/components/data-table";
@@ -45,6 +47,7 @@ export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
   const [editing, setEditing] = useState<PurchaseBatchRow | null>(null);
   const [batches, setBatches] = useState<PurchaseBatchRow[]>(initialRows);
   const [pending, startTransition] = useTransition();
+  const [exporting, startExport] = useTransition();
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -54,6 +57,39 @@ export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
       return b.name.toLowerCase().includes(q);
     });
   }, [batches, search, showArchive]);
+
+  const handleExport = () =>
+    startExport(async () => {
+      try {
+        await exportXlsx("закупки", [
+          {
+            name: "Закупки",
+            columns: [
+              { header: "Партия", key: "name", width: 28 },
+              { header: "Закупочная", key: "purchaseCost", numFmt: XLSX_FMT.money },
+              { header: "Общая", key: "totalCost", numFmt: XLSX_FMT.money },
+              { header: "Рейки, шт", key: "railCount", numFmt: XLSX_FMT.int },
+              { header: "Длина", key: "totalLength", numFmt: XLSX_FMT.length },
+              { header: "Объём", key: "volume", numFmt: XLSX_FMT.volume, width: 16 },
+              { header: "Статус", key: "status", width: 12 },
+              { header: "Дата", key: "purchaseDate", width: 14 },
+            ],
+            rows: rows.map((b) => ({
+              name: b.name,
+              purchaseCost: b.purchaseCost,
+              totalCost: b.totalCost,
+              railCount: b.stats.railCount,
+              totalLength: b.stats.totalLengthM,
+              volume: b.stats.volumeM3,
+              status: b.status === "IN_WORK" ? "В работе" : "Архив",
+              purchaseDate: formatIsoDate(b.purchaseDate),
+            })),
+          },
+        ]);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Не удалось выгрузить");
+      }
+    });
 
   const openCreate = () => {
     setEditing(null);
@@ -330,9 +366,10 @@ export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
       <PageHeader
         title="Закупки"
         canExport
+        exporting={exporting}
         addLabel="Добавить партию"
         onAdd={openCreate}
-        onExport={() => toast.message("Экспорт — прототип")}
+        onExport={handleExport}
       />
 
       <FiltersBar

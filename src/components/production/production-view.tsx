@@ -21,6 +21,8 @@ import {
   sortProductionEntries,
 } from "@/lib/production-entries";
 import { formatIsoDate, formatLength, formatMoney } from "@/lib/format";
+import { exportXlsx } from "@/lib/export-xlsx";
+import { XLSX_FMT } from "@/lib/xlsx-types";
 import { scrollTableYClass } from "@/lib/scroll-classes";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
@@ -89,11 +91,45 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
   const [entries, setEntries] = useState(initialEntries);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
+  const [exporting, startExport] = useTransition();
 
   const rows = useMemo(() => {
     const filtered = filterProductionEntries(entries, dateFilter);
     return sortProductionEntries(filtered);
   }, [entries, dateFilter]);
+
+  const handleExport = () =>
+    startExport(async () => {
+      try {
+        await exportXlsx("производство", [
+          {
+            name: "Производство",
+            columns: [
+              { header: "Дата", key: "date", width: 14 },
+              { header: "Время", key: "time", width: 10 },
+              { header: "ФИО", key: "employee", width: 28 },
+              { header: "Операция", key: "operation", width: 16 },
+              { header: "Партия", key: "batch", width: 24 },
+              { header: "Кол-во", key: "quantity", numFmt: XLSX_FMT.int },
+              { header: "Сумма", key: "amount", numFmt: XLSX_FMT.money },
+              { header: "Статус", key: "status", width: 16 },
+            ],
+            rows: rows.map((r) => ({
+              date: formatIsoDate(r.workDate),
+              time: formatEntryTime(r.createdAt),
+              employee: r.employeeName,
+              operation: OPERATION_TYPE_LABEL[r.type],
+              batch: r.batchName ?? "",
+              quantity: r.quantity,
+              amount: r.amount,
+              status: r.isPaid ? "Выплачено" : "Не выплачено",
+            })),
+          },
+        ]);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Не удалось выгрузить");
+      }
+    });
 
   const handleDelete = (id: string) => {
     const row = entries.find((e) => e.id === id);
@@ -135,8 +171,9 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
       <PageHeader
         title="Производство"
         canExport
+        exporting={exporting}
         addLabel="Добавить"
-        onExport={() => toast.message("Экспорт — прототип")}
+        onExport={handleExport}
         onAdd={() => toast.message("Добавление операции — прототип")}
       />
 

@@ -13,6 +13,7 @@ import {
 } from "@/server/employees";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
+import { exportXlsx } from "@/lib/export-xlsx";
 import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -35,6 +36,7 @@ export function EmployeesView({ initialEmployees }: { initialEmployees: Employee
   const [editing, setEditing] = useState<Employee | null>(null);
   const [employees, setEmployees] = useState<Employee[]>(initialEmployees);
   const [pending, startTransition] = useTransition();
+  const [exporting, startExport] = useTransition();
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -44,6 +46,29 @@ export function EmployeesView({ initialEmployees }: { initialEmployees: Employee
       return e.fullName.toLowerCase().includes(q);
     });
   }, [employees, search, showArchive]);
+
+  const handleExport = () =>
+    startExport(async () => {
+      try {
+        await exportXlsx("сотрудники", [
+          {
+            name: "Сотрудники",
+            columns: [
+              { header: "ФИО", key: "fullName", width: 32 },
+              { header: "PIN-код", key: "pin", width: 12 },
+              { header: "Статус", key: "status", width: 14 },
+            ],
+            rows: rows.map((e) => ({
+              fullName: e.fullName,
+              pin: e.pin,
+              status: e.status === "ACTIVE" ? "Активен" : "Архив",
+            })),
+          },
+        ]);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Не удалось выгрузить");
+      }
+    });
 
   const openCreate = () => {
     setEditing(null);
@@ -208,9 +233,10 @@ export function EmployeesView({ initialEmployees }: { initialEmployees: Employee
       <PageHeader
         title="Сотрудники"
         canExport
+        exporting={exporting}
         addLabel="Добавить сотрудника"
         onAdd={openCreate}
-        onExport={() => toast.message("Экспорт — прототип")}
+        onExport={handleExport}
       />
 
       <FiltersBar
