@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { AlertTriangle, PackageMinus, Pencil, Trash2 } from "lucide-react";
+import { AlertTriangle, Lock, PackageMinus, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   createBatch,
@@ -12,6 +12,7 @@ import {
   type BatchFormValues,
   type SimplePurchaseFormValues,
 } from "@/server/purchases";
+import { closeBatch } from "@/server/cost";
 import { type PurchaseBatchRow } from "@/lib/batch-stats";
 import type { NomenclatureItem } from "@/types/domain";
 import { formatIsoDate, formatLength, formatMoney, formatVolume } from "@/lib/format";
@@ -187,7 +188,7 @@ export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
     {
       key: "actions",
       header: "",
-      className: "w-32",
+      className: "w-40",
       render: (row) => (
         <div className="flex items-center justify-center gap-0.5">
           <Tooltip>
@@ -228,6 +229,32 @@ export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
                 <PackageMinus />
               </TooltipTrigger>
               <TooltipContent>Списать остаток</TooltipContent>
+            </Tooltip>
+          )}
+
+          {row.status === "IN_WORK" && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className={tableActionClass}
+                    aria-label="Закрыть партию"
+                    disabled={pending}
+                    onClick={() =>
+                      runRow(
+                        () => closeBatch(row.id).then(() => upsert({ ...row, status: "ARCHIVED" })),
+                        "Партия закрыта, себестоимость заморожена",
+                      )
+                    }
+                  />
+                }
+              >
+                <Lock />
+              </TooltipTrigger>
+              <TooltipContent>Закрыть партию (заморозить себестоимость)</TooltipContent>
             </Tooltip>
           )}
 

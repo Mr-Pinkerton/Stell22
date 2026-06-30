@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { Batch as PrismaBatch, RailLot as PrismaRailLot } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { recalcBatchCosts } from "@/server/cost";
 import { sectionAreaM2, type PurchaseBatchRow } from "@/lib/batch-stats";
 import type { NomenclatureItem, RailType, Sort } from "@/types/domain";
 
@@ -214,7 +215,12 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
     oldValues: { name: before.name, purchaseCost: num(before.purchaseCost) },
     newValues: { name: updated.name, purchaseCost: num(updated.purchaseCost) },
   });
+
+  // Стоимость/сечение/цены сортов влияют на распределение — пересчёт (если открыта).
+  await recalcBatchCosts({ batchId: id });
+
   revalidatePath(PATH);
+  revalidatePath("/reports");
   return loadRow(id);
 }
 

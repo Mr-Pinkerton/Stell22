@@ -10,6 +10,7 @@ import { ReportCostTab } from "@/components/reports/report-cost-tab";
 import { ReportSalariesTab } from "@/components/reports/report-salaries-tab";
 import { ReportWasteTab } from "@/components/reports/report-waste-tab";
 import { ReportSalesTab } from "@/components/reports/report-sales-tab";
+import type { CostReport } from "@/server/cost";
 
 type ReportTab = "purchases" | "cost" | "salaries" | "waste" | "sales";
 
@@ -32,7 +33,7 @@ const TAB_FILTERS: Record<
   sales: { date: true },
 };
 
-export function ReportsView() {
+export function ReportsView({ cost }: { cost: CostReport }) {
   const [activeTab, setActiveTab] = useState<ReportTab>("purchases");
   const [showArchive, setShowArchive] = useState(false);
 
@@ -64,7 +65,7 @@ export function ReportsView() {
         />
 
         {activeTab === "purchases" && <ReportPurchasesTab showArchive={showArchive} />}
-        {activeTab === "cost" && <ReportCostTab />}
+        {activeTab === "cost" && <ReportCostTab details={cost.details} products={cost.products} />}
         {activeTab === "salaries" && <ReportSalariesTab />}
         {activeTab === "waste" && <ReportWasteTab showArchive={showArchive} />}
         {activeTab === "sales" && <ReportSalesTab />}

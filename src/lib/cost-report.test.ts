@@ -10,6 +10,8 @@ import {
   detailWorkCost,
   factSortShares,
   periodOverheadFromCashFlows,
+  producedLinesFromOperations,
+  producedProductQtyFromOperations,
   sortSharesToPercents,
   type ProducedLine,
 } from "./cost-report";
@@ -228,6 +230,73 @@ describe("declaredSortShares / factSortShares / sortSharesToPercents", () => {
 
   it("нет данных → нули", () => {
     expect(sortSharesToPercents(factSortShares([], details))).toEqual({ sort1: 0, sort2: 0 });
+  });
+});
+
+describe("producedLinesFromOperations", () => {
+  it("берёт детали только из ТОРЦОВКИ и привязывает к партии", () => {
+    const rows = producedLinesFromOperations([
+      {
+        type: "TORCOVKA",
+        batchId: "bX",
+        productId: null,
+        productQty: null,
+        lines: [
+          { detailId: "dA", quantity: 100 },
+          { detailId: "dB", quantity: 50 },
+        ],
+      },
+      // присадка/упаковка/часы не дают произведённых деталей по партии
+      {
+        type: "PRISADKA",
+        batchId: null,
+        productId: null,
+        productQty: null,
+        lines: [{ detailId: "dA", quantity: 999 }],
+      },
+      {
+        type: "UPAKOVKA",
+        batchId: null,
+        productId: "p1",
+        productQty: 7,
+        lines: [],
+      },
+    ]);
+    expect(rows).toEqual([
+      { batchId: "bX", detailId: "dA", quantity: 100 },
+      { batchId: "bX", detailId: "dB", quantity: 50 },
+    ]);
+  });
+
+  it("суммирует дубликаты (партия × деталь) из разных операций", () => {
+    const rows = producedLinesFromOperations([
+      { type: "TORCOVKA", batchId: "bX", productId: null, productQty: null, lines: [{ detailId: "dA", quantity: 30 }] },
+      { type: "TORCOVKA", batchId: "bX", productId: null, productQty: null, lines: [{ detailId: "dA", quantity: 20 }] },
+      { type: "TORCOVKA", batchId: "bY", productId: null, productQty: null, lines: [{ detailId: "dA", quantity: 5 }] },
+    ]);
+    expect(rows).toEqual([
+      { batchId: "bX", detailId: "dA", quantity: 50 },
+      { batchId: "bY", detailId: "dA", quantity: 5 },
+    ]);
+  });
+
+  it("игнорирует ТОРЦОВКУ без партии", () => {
+    const rows = producedLinesFromOperations([
+      { type: "TORCOVKA", batchId: null, productId: null, productQty: null, lines: [{ detailId: "dA", quantity: 10 }] },
+    ]);
+    expect(rows).toEqual([]);
+  });
+});
+
+describe("producedProductQtyFromOperations", () => {
+  it("суммирует productQty по УПАКОВКЕ", () => {
+    const qty = producedProductQtyFromOperations([
+      { type: "UPAKOVKA", batchId: null, productId: "p1", productQty: 10, lines: [] },
+      { type: "UPAKOVKA", batchId: null, productId: "p1", productQty: 5, lines: [] },
+      { type: "UPAKOVKA", batchId: null, productId: "p2", productQty: 3, lines: [] },
+      { type: "TORCOVKA", batchId: "bX", productId: null, productQty: null, lines: [] },
+    ]);
+    expect(qty).toEqual({ p1: 15, p2: 3 });
   });
 });
 

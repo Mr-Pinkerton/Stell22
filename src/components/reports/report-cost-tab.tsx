@@ -3,12 +3,7 @@
 import { Fragment, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  costDetailRows,
-  costProductRows,
-  type CostDetailRow,
-  type CostProductRow,
-} from "@/mocks/report-fixtures";
+import type { CostDetailRow, CostProductRow } from "@/lib/cost-report";
 import { formatLength, formatMoney } from "@/lib/format";
 import {
   ExpandableDetailRow,
@@ -60,7 +55,13 @@ function moneyWithPct(value: number, pct: number) {
   );
 }
 
-export function ReportCostTab() {
+export function ReportCostTab({
+  details,
+  products,
+}: {
+  details: CostDetailRow[];
+  products: CostProductRow[];
+}) {
   const [subTab, setSubTab] = useState<CostSubTab>("details");
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -111,7 +112,7 @@ export function ReportCostTab() {
           <CardContent className="p-0">
             <DataTable
               columns={detailColumns}
-              rows={costDetailRows}
+              rows={details}
               empty="Детали за период не найдены"
               className="border-0"
               padded
@@ -126,7 +127,7 @@ export function ReportCostTab() {
               <ExpandableMainHeader labels={PRODUCT_HEADERS} />
             }
           >
-            {costProductRows.map((row, index) => {
+            {products.map((row, index) => {
               const expanded = expandedId === row.id;
               return (
                 <ProductCostRowGroup

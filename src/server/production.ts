@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { recalcBatchCosts } from "@/server/cost";
 import { dayKey } from "@/lib/entries";
 import type {
   ProductionChangeLogEntry,
@@ -251,7 +252,11 @@ export async function updateProductionLineQuantity(
     );
   });
 
+  // Изменился объём произведённого по партии — пересчёт её себестоимости.
+  if (op.batchId) await recalcBatchCosts({ batchId: op.batchId });
+
   revalidatePath(PATH);
+  revalidatePath("/reports");
   return reloadRow(id);
 }
 
@@ -305,5 +310,9 @@ export async function deleteProductionOperation(id: string): Promise<void> {
     );
   });
 
+  // Возврат произведённого по партии — пересчёт её себестоимости.
+  if (op.batchId) await recalcBatchCosts({ batchId: op.batchId });
+
   revalidatePath(PATH);
+  revalidatePath("/reports");
 }

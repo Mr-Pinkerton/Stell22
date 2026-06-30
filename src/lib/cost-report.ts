@@ -27,6 +27,46 @@ export interface ProducedLine {
 
 const ZERO = D(0);
 
+// --------------------- производственные факты из операций -------------------
+
+/** Минимальное представление операции для расчёта произведённого. */
+export interface OperationForCost {
+  type: "TORCOVKA" | "PRISADKA" | "UPAKOVKA" | "HOURS";
+  batchId: string | null;
+  productId: string | null;
+  productQty: number | null;
+  lines: { detailId: string; quantity: number }[];
+}
+
+/**
+ * Произведённые детали по партиям — из операций ТОРЦОВКИ (строки деталей).
+ * Учёт строго по партии-источнику (cost-integrity): каждая деталь привязана
+ * к своей партии. Дубликаты (партия × деталь) суммируются.
+ */
+export function producedLinesFromOperations(ops: OperationForCost[]): ProducedLine[] {
+  const acc = new Map<string, ProducedLine>();
+  for (const op of ops) {
+    if (op.type !== "TORCOVKA" || !op.batchId) continue;
+    for (const line of op.lines) {
+      const key = `${op.batchId}::${line.detailId}`;
+      const existing = acc.get(key);
+      if (existing) existing.quantity += line.quantity;
+      else acc.set(key, { batchId: op.batchId, detailId: line.detailId, quantity: line.quantity });
+    }
+  }
+  return [...acc.values()];
+}
+
+/** Произведено готовых изделий за период — из операций УПАКОВКИ (productQty). */
+export function producedProductQtyFromOperations(ops: OperationForCost[]): Record<string, number> {
+  const qty: Record<string, number> = {};
+  for (const op of ops) {
+    if (op.type !== "UPAKOVKA" || !op.productId) continue;
+    qty[op.productId] = (qty[op.productId] ?? 0) + (op.productQty ?? 0);
+  }
+  return qty;
+}
+
 // --------------------------- средние расценки -------------------------------
 
 export interface AvgRates {

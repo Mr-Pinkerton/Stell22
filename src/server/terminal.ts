@@ -11,6 +11,7 @@ import type {
 } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { recalcBatchCosts } from "@/server/cost";
 import { allocate, buildStockSnapshot, isReady, type DetailStockRow } from "@/lib/detail-stock";
 import type {
   Batch,
@@ -231,8 +232,12 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
     );
   });
 
+  // Произведённые детали меняют распределение стоимости партии по сортам.
+  await recalcBatchCosts({ batchId });
+
   revalidatePath("/production");
   revalidatePath("/terminal");
+  revalidatePath("/reports");
 }
 
 // ============================ ПРИСАДКА =====================================
