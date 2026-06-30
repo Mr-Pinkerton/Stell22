@@ -1,14 +1,11 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useMemo, useState, useTransition } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import {
-  salaryReportKpis,
-  salaryReportRows,
-  type SalaryReportRow,
-} from "@/mocks/report-fixtures";
+import { salaryReportKpis, type SalaryReportRow } from "@/mocks/report-fixtures";
+import { markEmployeePaid } from "@/server/payroll";
 import { formatIsoDate, formatMoney } from "@/lib/format";
 import { BanknoteTiles } from "@/components/reports/banknote-tiles";
 import {
@@ -49,33 +46,31 @@ const SALARY_HEADERS = [
 
 const SALARY_DAY_HEADERS = ["Дата", "Часы", "Торцовка", "Присадка", "Упаковка", "Итого"];
 
-export function ReportSalariesTab() {
-  const [rows, setRows] = useState(salaryReportRows);
+export function ReportSalariesTab({ initialRows }: { initialRows: SalaryReportRow[] }) {
+  const [rows, setRows] = useState(initialRows);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [billEmployeeId, setBillEmployeeId] = useState(
-    () => salaryReportRows.find((r) => !r.paid)?.id ?? salaryReportRows[0]?.id ?? "",
+    () => initialRows.find((r) => !r.paid)?.id ?? initialRows[0]?.id ?? "",
   );
+  const [isPending, startTransition] = useTransition();
 
   const kpis = useMemo(() => salaryReportKpis(rows), [rows]);
   const unpaid = rows.filter((r) => !r.paid);
   const paid = rows.filter((r) => r.paid);
   const billRow = rows.find((r) => r.id === billEmployeeId) ?? unpaid[0];
 
-  const markPaid = (id: string) => {
-    setRows((prev) =>
-      prev
-        .map((r) =>
-          r.id === id
-            ? { ...r, paid: true, paidAt: new Date().toISOString().slice(0, 10) }
-            : r,
-        )
-        .sort((a, b) => {
-          if (a.paid !== b.paid) return a.paid ? 1 : -1;
-          if (!a.paid && !b.paid) return b.total - a.total;
-          return (b.paidAt ?? "").localeCompare(a.paidAt ?? "");
-        }),
-    );
-    toast.success("Выплачено (прототип)");
+  const markPaid = (row: SalaryReportRow) => {
+    const employeeId = row.id.replace(/^unpaid:/, "");
+    startTransition(async () => {
+      try {
+        const fresh = await markEmployeePaid(employeeId);
+        setRows(fresh);
+        setBillEmployeeId(fresh.find((r) => !r.paid)?.id ?? fresh[0]?.id ?? "");
+        toast.success("Выплата проведена");
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Не удалось провести выплату");
+      }
+    });
   };
 
   return (
@@ -99,7 +94,8 @@ export function ReportSalariesTab() {
               expanded={expandedId === row.id}
               striped={index % 2 === 1}
               onToggle={() => setExpandedId(expandedId === row.id ? null : row.id)}
-              onPaid={() => markPaid(row.id)}
+              onPaid={() => markPaid(row)}
+              pending={isPending}
             />
           ))}
           {paid.length > 0 && (
@@ -164,6 +160,7 @@ function SalaryRowGroup({
   onToggle,
   onPaid,
   paid = false,
+  pending = false,
 }: {
   row: SalaryReportRow;
   expanded: boolean;
@@ -171,6 +168,7 @@ function SalaryRowGroup({
   onToggle: () => void;
   onPaid?: () => void;
   paid?: boolean;
+  pending?: boolean;
 }) {
   return (
     <Fragment>
@@ -214,6 +212,7 @@ function SalaryRowGroup({
               type="button"
               variant="brand"
               className="h-8 rounded-lg px-3 text-xs"
+              disabled={pending}
               onClick={onPaid}
             >
               Выплачено

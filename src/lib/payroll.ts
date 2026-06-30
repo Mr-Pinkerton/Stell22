@@ -95,3 +95,78 @@ export function avgPerUnit(totalAmount: Num, producedQty: Num): Decimal {
   if (qty.isZero()) return D(0);
   return D(totalAmount).div(qty);
 }
+
+// -----------------------------------------------------------------------------
+// Заработок за одну операцию терминала — единый источник для журнала
+// производства (server/production) и отчёта ЗП (server/payroll). Сумма и
+// количество считаются по типу операции и расценкам работника.
+// -----------------------------------------------------------------------------
+
+export type OperationKind = "TORCOVKA" | "PRISADKA" | "UPAKOVKA" | "HOURS";
+
+/** Расценки работника, разложенные по типам (₽). */
+export interface OperationRates {
+  hourly: number;
+  torcovkaSort1: number;
+  torcovkaSort2: number;
+  prisadkaTorcev: number;
+  prisadkaPlosk: number;
+  upakovka: number;
+}
+
+/** Строка операции: кол-во и признаки (сорт детали / виды присадки). */
+export interface OperationLineInput {
+  quantity: number;
+  sort?: "SORT1" | "SORT2";
+  prisadkaTorcevaya?: boolean;
+  prisadkaPloskost?: boolean;
+}
+
+export interface OperationEarningInput {
+  type: OperationKind;
+  rates: OperationRates;
+  hours?: number | null;
+  productQty?: number | null;
+  lines?: OperationLineInput[];
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Сумма и количество за операцию:
+ *  - HOURS: часы × ставка;
+ *  - UPAKOVKA: изделия × расценка упаковки;
+ *  - TORCOVKA: Σ(кол-во × расценка по сорту детали);
+ *  - PRISADKA: Σ(кол-во × (торцевая? + плоскостная?)).
+ */
+export function operationEarning(op: OperationEarningInput): {
+  quantity: number;
+  amount: number;
+} {
+  const r = op.rates;
+  const lines = op.lines ?? [];
+  let quantity = 0;
+  let amount = 0;
+
+  if (op.type === "HOURS") {
+    quantity = op.hours ?? 0;
+    amount = quantity * r.hourly;
+  } else if (op.type === "UPAKOVKA") {
+    quantity = op.productQty ?? 0;
+    amount = quantity * r.upakovka;
+  } else if (op.type === "TORCOVKA") {
+    for (const l of lines) {
+      quantity += l.quantity;
+      amount += l.quantity * (l.sort === "SORT2" ? r.torcovkaSort2 : r.torcovkaSort1);
+    }
+  } else {
+    for (const l of lines) {
+      quantity += l.quantity;
+      amount +=
+        l.quantity *
+        ((l.prisadkaTorcevaya ? r.prisadkaTorcev : 0) + (l.prisadkaPloskost ? r.prisadkaPlosk : 0));
+    }
+  }
+
+  return { quantity, amount: round2(amount) };
+}

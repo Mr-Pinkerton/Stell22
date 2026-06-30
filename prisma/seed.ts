@@ -190,6 +190,34 @@ async function main() {
     });
   }
 
+  // ===================== ПРОИЗВОДСТВО (демо: часы) =========================
+  // Только операции типа HOURS — они не затрагивают склад и движок
+  // себестоимости, поэтому безопасны для seed. Дают наглядный отчёт ЗП
+  // и позволяют проверить «Выплачено». Сдельные операции вносятся с терминала.
+  const hourLogs: { employeeId: string; date: string; hours: number }[] = [
+    { employeeId: "emp-1", date: "2026-06-22", hours: 8 },
+    { employeeId: "emp-1", date: "2026-06-23", hours: 8 },
+    { employeeId: "emp-1", date: "2026-06-24", hours: 7.5 },
+    { employeeId: "emp-1", date: "2026-06-25", hours: 8 },
+    { employeeId: "emp-1", date: "2026-06-26", hours: 8 },
+    { employeeId: "emp-2", date: "2026-06-22", hours: 8 },
+    { employeeId: "emp-2", date: "2026-06-23", hours: 8 },
+    { employeeId: "emp-2", date: "2026-06-24", hours: 8 },
+    { employeeId: "emp-2", date: "2026-06-25", hours: 6 },
+    { employeeId: "emp-3", date: "2026-06-24", hours: 8 },
+    { employeeId: "emp-3", date: "2026-06-25", hours: 8 },
+    { employeeId: "emp-3", date: "2026-06-26", hours: 8 },
+  ];
+  await prisma.productionOperation.createMany({
+    data: hourLogs.map((h) => ({
+      type: "HOURS" as const,
+      employeeId: h.employeeId,
+      workDate: new Date(h.date),
+      hours: h.hours,
+      isPaid: false,
+    })),
+  });
+
   // ============================ ФИНАНСЫ ====================================
 
   await prisma.account.createMany({
@@ -312,7 +340,8 @@ async function main() {
   console.log(
     `Seed готов: ${employees.length} сотр., ${nomenclatureItems.length} номенкл., ` +
       `${details.length} дет., ${batches.length} партий, ${railLots.length} реек, ${products.length} изделий, ` +
-      `${financeAccounts.length} счетов, ${financeArticles.length} статей, ${financeCashFlows.length} операций ДДС.`,
+      `${financeAccounts.length} счетов, ${financeArticles.length} статей, ${financeCashFlows.length} операций ДДС, ` +
+      `${hourLogs.length} операций часов.`,
   );
 }
 

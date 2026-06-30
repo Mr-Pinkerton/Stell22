@@ -3,12 +3,23 @@ import {
   avgPerUnit,
   hasPieceRates,
   hourlyEarning,
+  operationEarning,
   pieceworkEarning,
   salaryPerOperation,
   totalSalary,
   type OperationCounts,
+  type OperationRates,
   type PieceRates,
 } from "./payroll";
+
+const opRates: OperationRates = {
+  hourly: 300,
+  torcovkaSort1: 5,
+  torcovkaSort2: 4,
+  prisadkaTorcev: 3,
+  prisadkaPlosk: 3,
+  upakovka: 20,
+};
 
 const pieceRates: PieceRates = {
   torcovkaSort1: 8,
@@ -86,5 +97,53 @@ describe("avgPerUnit", () => {
   });
   it("0 при нулевом производстве", () => {
     expect(avgPerUnit(2180, 0).toNumber()).toBe(0);
+  });
+});
+
+describe("operationEarning", () => {
+  it("HOURS: часы × ставка", () => {
+    expect(operationEarning({ type: "HOURS", rates: opRates, hours: 8 })).toEqual({
+      quantity: 8,
+      amount: 2400,
+    });
+  });
+
+  it("UPAKOVKA: изделия × расценка упаковки", () => {
+    expect(operationEarning({ type: "UPAKOVKA", rates: opRates, productQty: 15 })).toEqual({
+      quantity: 15,
+      amount: 300,
+    });
+  });
+
+  it("TORCOVKA: суммирует по сортам деталей", () => {
+    const res = operationEarning({
+      type: "TORCOVKA",
+      rates: opRates,
+      lines: [
+        { quantity: 10, sort: "SORT1" },
+        { quantity: 5, sort: "SORT2" },
+      ],
+    });
+    // 10*5 + 5*4 = 70
+    expect(res).toEqual({ quantity: 15, amount: 70 });
+  });
+
+  it("PRISADKA: торцевая и/или плоскостная", () => {
+    const res = operationEarning({
+      type: "PRISADKA",
+      rates: opRates,
+      lines: [
+        { quantity: 4, prisadkaTorcevaya: true, prisadkaPloskost: true },
+        { quantity: 2, prisadkaTorcevaya: true },
+      ],
+    });
+    // 4*(3+3) + 2*3 = 24 + 6 = 30
+    expect(res).toEqual({ quantity: 6, amount: 30 });
+  });
+
+  it("округляет сумму до 2 знаков", () => {
+    // 333.333 × 3 = 999.999 → 1000.00
+    const res = operationEarning({ type: "HOURS", rates: { ...opRates, hourly: 333.333 }, hours: 3 });
+    expect(res.amount).toBe(1000);
   });
 });

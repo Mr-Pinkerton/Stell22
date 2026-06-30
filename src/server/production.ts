@@ -5,6 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { recalcBatchCosts } from "@/server/cost";
+import { operationEarning } from "@/lib/payroll";
 import { dayKey } from "@/lib/entries";
 import type {
   ProductionChangeLogEntry,
@@ -47,28 +48,27 @@ interface RefMaps {
 
 function computeAmount(op: OpFull, maps: RefMaps): { quantity: number; amount: number } {
   const r = maps.empRates.get(op.employeeId);
-  let quantity = 0;
-  let amount = 0;
   if (!r) return { quantity: 0, amount: 0 };
 
-  if (op.type === "HOURS") {
-    quantity = num(op.hours);
-    amount = quantity * r.hourly;
-  } else if (op.type === "UPAKOVKA") {
-    quantity = op.productQty ?? 0;
-    amount = quantity * r.up;
-  } else if (op.type === "TORCOVKA") {
-    for (const l of op.lines) {
-      quantity += l.quantity;
-      amount += l.quantity * (maps.detail.get(l.detailId)?.sort === "SORT2" ? r.t2 : r.t1);
-    }
-  } else {
-    for (const l of op.lines) {
-      quantity += l.quantity;
-      amount += l.quantity * ((l.prisadkaTorcevaya ? r.pt : 0) + (l.prisadkaPloskost ? r.pp : 0));
-    }
-  }
-  return { quantity, amount: round2(amount) };
+  return operationEarning({
+    type: op.type,
+    rates: {
+      hourly: r.hourly,
+      torcovkaSort1: r.t1,
+      torcovkaSort2: r.t2,
+      prisadkaTorcev: r.pt,
+      prisadkaPlosk: r.pp,
+      upakovka: r.up,
+    },
+    hours: num(op.hours),
+    productQty: op.productQty ?? 0,
+    lines: op.lines.map((l) => ({
+      quantity: l.quantity,
+      sort: maps.detail.get(l.detailId)?.sort,
+      prisadkaTorcevaya: l.prisadkaTorcevaya,
+      prisadkaPloskost: l.prisadkaPloskost,
+    })),
+  });
 }
 
 function serializeRow(op: OpFull, maps: RefMaps): ProductionEntryRow {
