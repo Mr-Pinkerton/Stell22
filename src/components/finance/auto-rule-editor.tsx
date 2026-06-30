@@ -1,11 +1,11 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import {
-  financeCounterparties,
-  type AutoRuleLogic,
-  type FinanceArticle,
-  type FinanceAutoRule,
+import type {
+  AutoRuleLogic,
+  FinanceArticle,
+  FinanceAutoRule,
+  FinanceCounterparty,
 } from "@/mocks/finance-fixtures";
 import { fieldClass, formSelectContentProps, selectTriggerClass } from "@/components/nomenclature/form-shared";
 import { Input } from "@/components/ui/input";
@@ -71,6 +71,7 @@ export type AutoRuleEditorState = Pick<
 interface AutoRuleEditorProps {
   value: AutoRuleEditorState;
   articles: FinanceArticle[];
+  counterparties: FinanceCounterparty[];
   onChange: (patch: Partial<AutoRuleEditorState>) => void;
   className?: string;
   /** Поле ключевых слов — id для связи с label в модалке. */
@@ -80,6 +81,7 @@ interface AutoRuleEditorProps {
 export function AutoRuleEditor({
   value,
   articles,
+  counterparties,
   onChange,
   className,
   keywordsInputId = "auto-rule-keywords",
@@ -87,7 +89,7 @@ export function AutoRuleEditor({
   const rowArticles = articles.filter((a) => a.flowType === value.flowType);
 
   const counterpartyId =
-    financeCounterparties.find((c) => c.name === value.counterpartyName)?.id ?? "";
+    counterparties.find((c) => c.name === value.counterpartyName)?.id ?? "";
   const articleId = rowArticles.find((a) => a.name === value.articleName)?.id ?? "";
 
   return (
@@ -126,7 +128,7 @@ export function AutoRuleEditor({
       <Select
         value={counterpartyId}
         onValueChange={(v) => {
-          const cp = financeCounterparties.find((c) => c.id === v);
+          const cp = counterparties.find((c) => c.id === v);
           onChange({ counterpartyName: cp?.name ?? null });
         }}
       >
@@ -139,7 +141,7 @@ export function AutoRuleEditor({
           <SelectItem value="" className="cursor-pointer rounded-lg text-sm">
             Любой
           </SelectItem>
-          {financeCounterparties.map((c) => (
+          {counterparties.map((c) => (
             <SelectItem key={c.id} value={c.id} className="cursor-pointer rounded-lg text-sm">
               {c.name}
             </SelectItem>

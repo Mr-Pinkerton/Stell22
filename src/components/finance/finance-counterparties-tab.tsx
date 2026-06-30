@@ -2,11 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
-import { toast } from "sonner";
-import {
-  financeCounterparties,
-  type FinanceCounterparty,
-} from "@/mocks/finance-fixtures";
+import type { FinanceCounterparty } from "@/mocks/finance-fixtures";
 import { DataTable, type Column } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,11 +16,20 @@ const tableActionDestructiveClass =
   "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
 interface FinanceCounterpartiesTabProps {
+  counterparties: FinanceCounterparty[];
   onRegisterCreate?: (openCreate: () => void) => void;
+  onCreate?: (name: string) => void;
+  onUpdate?: (id: string, name: string) => void;
+  onDelete?: (id: string) => void;
 }
 
-export function FinanceCounterpartiesTab({ onRegisterCreate }: FinanceCounterpartiesTabProps) {
-  const [rows, setRows] = useState(financeCounterparties);
+export function FinanceCounterpartiesTab({
+  counterparties,
+  onRegisterCreate,
+  onCreate,
+  onUpdate,
+  onDelete,
+}: FinanceCounterpartiesTabProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<FinanceCounterparty | null>(null);
 
@@ -79,10 +84,7 @@ export function FinanceCounterpartiesTab({ onRegisterCreate }: FinanceCounterpar
                     variant="ghost"
                     size="icon"
                     className={tableActionDestructiveClass}
-                    onClick={() => {
-                      setRows((prev) => prev.filter((r) => r.id !== row.id));
-                      toast.success("Контрагент удалён (прототип)");
-                    }}
+                    onClick={() => onDelete?.(row.id)}
                   >
                     <Trash2 />
                   </Button>
@@ -94,7 +96,7 @@ export function FinanceCounterpartiesTab({ onRegisterCreate }: FinanceCounterpar
         ),
       },
     ],
-    [],
+    [onDelete],
   );
 
   return (
@@ -103,7 +105,7 @@ export function FinanceCounterpartiesTab({ onRegisterCreate }: FinanceCounterpar
         <CardContent className="p-0">
           <DataTable
             columns={columns}
-            rows={rows}
+            rows={counterparties}
             empty="Контрагентов нет"
             className="border-0"
             padded
@@ -116,15 +118,8 @@ export function FinanceCounterpartiesTab({ onRegisterCreate }: FinanceCounterpar
         counterparty={editing}
         onOpenChange={setDialogOpen}
         onSubmit={(name) => {
-          if (editing) {
-            setRows((prev) =>
-              prev.map((r) => (r.id === editing.id ? { ...r, name } : r)),
-            );
-            toast.success("Контрагент обновлён (прототип)");
-          } else {
-            setRows((prev) => [...prev, { id: `cp-${Date.now()}`, name }]);
-            toast.success("Контрагент добавлен (прототип)");
-          }
+          if (editing) onUpdate?.(editing.id, name);
+          else onCreate?.(name);
         }}
       />
     </>

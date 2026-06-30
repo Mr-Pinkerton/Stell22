@@ -1,11 +1,11 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import {
-  financeCounterparties,
-  financeDeals,
-  type FinanceArticle,
-  type FinanceCashFlowRow,
+import type {
+  FinanceArticle,
+  FinanceCashFlowRow,
+  FinanceCounterparty,
+  FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { formSelectContentProps } from "@/components/nomenclature/form-shared";
 import {
@@ -24,26 +24,28 @@ const inlineSelectTriggerAmberClass = cn(
   "text-amber-700 data-placeholder:text-amber-700",
 );
 
-interface CashflowInlineAssignProps {
-  row: FinanceCashFlowRow;
-  articles: FinanceArticle[];
-  onAssign: (patch: Partial<FinanceCashFlowRow>) => void;
+/** Патч разнесения по id (резолв на сервере). */
+export interface CashflowAssignPatch {
+  counterpartyId?: string | null;
+  articleId?: string | null;
+  dealId?: string | null;
 }
 
 export function CashflowCounterpartySelect({
   row,
+  counterparties,
   onAssign,
-}: Omit<CashflowInlineAssignProps, "articles">) {
-  const counterpartyId =
-    financeCounterparties.find((c) => c.name === row.counterpartyName)?.id ?? "";
+}: {
+  row: FinanceCashFlowRow;
+  counterparties: FinanceCounterparty[];
+  onAssign: (patch: CashflowAssignPatch) => void;
+}) {
+  const counterpartyId = counterparties.find((c) => c.name === row.counterpartyName)?.id ?? "";
 
   return (
     <Select
       value={counterpartyId}
-      onValueChange={(v) => {
-        const cp = financeCounterparties.find((c) => c.id === v);
-        onAssign({ counterpartyName: cp?.name ?? null });
-      }}
+      onValueChange={(v) => onAssign({ counterpartyId: v || null })}
     >
       <SelectTrigger className={inlineSelectTriggerClass}>
         <SelectValue placeholder="—">{row.counterpartyName ?? "—"}</SelectValue>
@@ -52,7 +54,7 @@ export function CashflowCounterpartySelect({
         <SelectItem value="" className="cursor-pointer rounded-lg text-xs">
           —
         </SelectItem>
-        {financeCounterparties.map((c) => (
+        {counterparties.map((c) => (
           <SelectItem key={c.id} value={c.id} className="cursor-pointer rounded-lg text-xs">
             {c.name}
           </SelectItem>
@@ -62,20 +64,22 @@ export function CashflowCounterpartySelect({
   );
 }
 
-export function CashflowArticleSelect({ row, articles, onAssign }: CashflowInlineAssignProps) {
+export function CashflowArticleSelect({
+  row,
+  articles,
+  onAssign,
+}: {
+  row: FinanceCashFlowRow;
+  articles: FinanceArticle[];
+  onAssign: (patch: CashflowAssignPatch) => void;
+}) {
   const rowArticles = articles.filter((a) => a.flowType === row.flowType);
   const articleId = rowArticles.find((a) => a.name === row.articleName)?.id ?? "";
 
   return (
     <Select
       value={articleId}
-      onValueChange={(v) => {
-        const article = rowArticles.find((a) => a.id === v);
-        onAssign({
-          articleName: article?.name ?? null,
-          isAutoAssigned: Boolean(article),
-        });
-      }}
+      onValueChange={(v) => onAssign({ articleId: v || null })}
     >
       <SelectTrigger
         className={row.articleName ? inlineSelectTriggerClass : inlineSelectTriggerAmberClass}
@@ -98,20 +102,19 @@ export function CashflowArticleSelect({ row, articles, onAssign }: CashflowInlin
   );
 }
 
-export function CashflowDealSelect({ row, onAssign }: Omit<CashflowInlineAssignProps, "articles">) {
-  const dealId = row.dealId ?? financeDeals.find((d) => d.name === row.dealName)?.id ?? "";
+export function CashflowDealSelect({
+  row,
+  deals,
+  onAssign,
+}: {
+  row: FinanceCashFlowRow;
+  deals: FinanceDeal[];
+  onAssign: (patch: CashflowAssignPatch) => void;
+}) {
+  const dealId = row.dealId ?? deals.find((d) => d.name === row.dealName)?.id ?? "";
 
   return (
-    <Select
-      value={dealId}
-      onValueChange={(v) => {
-        const deal = financeDeals.find((d) => d.id === v);
-        onAssign({
-          dealId: deal?.id ?? null,
-          dealName: deal?.name ?? null,
-        });
-      }}
-    >
+    <Select value={dealId} onValueChange={(v) => onAssign({ dealId: v || null })}>
       <SelectTrigger className={inlineSelectTriggerClass}>
         <SelectValue placeholder="—">{row.dealName ?? "—"}</SelectValue>
       </SelectTrigger>
@@ -119,7 +122,7 @@ export function CashflowDealSelect({ row, onAssign }: Omit<CashflowInlineAssignP
         <SelectItem value="" className="cursor-pointer rounded-lg text-xs">
           —
         </SelectItem>
-        {financeDeals
+        {deals
           .filter((d) => d.status === "OPEN")
           .map((d) => (
             <SelectItem key={d.id} value={d.id} className="cursor-pointer rounded-lg text-xs">

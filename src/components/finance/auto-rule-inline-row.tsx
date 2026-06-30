@@ -2,13 +2,18 @@
 
 import { Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { FinanceArticle, FinanceAutoRule } from "@/mocks/finance-fixtures";
+import type {
+  FinanceArticle,
+  FinanceAutoRule,
+  FinanceCounterparty,
+} from "@/mocks/finance-fixtures";
 import { AutoRuleEditor } from "@/components/finance/auto-rule-editor";
 import { Button } from "@/components/ui/button";
 
 interface AutoRuleInlineRowProps {
   rule: FinanceAutoRule;
   articles: FinanceArticle[];
+  counterparties: FinanceCounterparty[];
   highlighted?: boolean;
   onChange: (patch: Partial<FinanceAutoRule>) => void;
   onDelete: () => void;
@@ -17,6 +22,7 @@ interface AutoRuleInlineRowProps {
 export function AutoRuleInlineRow({
   rule,
   articles,
+  counterparties,
   highlighted,
   onChange,
   onDelete,
@@ -31,6 +37,7 @@ export function AutoRuleInlineRow({
       <AutoRuleEditor
         value={rule}
         articles={articles}
+        counterparties={counterparties}
         onChange={onChange}
         className="min-w-0 flex-1"
       />

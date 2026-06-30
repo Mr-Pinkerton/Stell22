@@ -3,12 +3,12 @@
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useJustOpened } from "@/hooks/use-just-opened";
-import {
-  financeAccounts,
-  financeArticles,
-  financeCounterparties,
-  financeDeals,
-  type FinanceCashFlowRow,
+import type {
+  FinanceAccount,
+  FinanceArticle,
+  FinanceCashFlowRow,
+  FinanceCounterparty,
+  FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import {
   DateFieldInput,
@@ -45,6 +45,10 @@ export interface CashflowFormValues {
 
 interface CashflowFormDialogProps {
   open: boolean;
+  accounts: FinanceAccount[];
+  counterparties: FinanceCounterparty[];
+  articles: FinanceArticle[];
+  deals: FinanceDeal[];
   onOpenChange: (open: boolean) => void;
   onSubmit?: (values: CashflowFormValues) => void;
 }
@@ -56,7 +60,15 @@ const amountFieldClass = cn(
   "border-tag-blue hover:border-tag-blue focus-visible:border-tag-blue",
 );
 
-export function CashflowFormDialog({ open, onOpenChange, onSubmit }: CashflowFormDialogProps) {
+export function CashflowFormDialog({
+  open,
+  accounts,
+  counterparties,
+  articles: allArticles,
+  deals,
+  onOpenChange,
+  onSubmit,
+}: CashflowFormDialogProps) {
   const [dateText, setDateText] = useState("");
   const [amount, setAmount] = useState<number | null>(null);
   const [flowType, setFlowType] = useState<"INCOME" | "EXPENSE">("EXPENSE");
@@ -70,7 +82,7 @@ export function CashflowFormDialog({ open, onOpenChange, onSubmit }: CashflowFor
     setDateText(isoToDisplayDate(todayIso()));
     setAmount(null);
     setFlowType("EXPENSE");
-    setAccountId(financeAccounts[0]?.id ?? "");
+    setAccountId(accounts[0]?.id ?? "");
     setCounterpartyId("");
     setDescription("");
     setArticleId("");
@@ -78,8 +90,8 @@ export function CashflowFormDialog({ open, onOpenChange, onSubmit }: CashflowFor
   }
 
   const articles = useMemo(
-    () => financeArticles.filter((a) => a.flowType === flowType),
-    [flowType],
+    () => allArticles.filter((a) => a.flowType === flowType),
+    [allArticles, flowType],
   );
 
   const canSubmit =
@@ -93,10 +105,10 @@ export function CashflowFormDialog({ open, onOpenChange, onSubmit }: CashflowFor
     const iso = parseDisplayDate(dateText);
     if (!iso || amount == null || amount <= 0) return;
 
-    const account = financeAccounts.find((a) => a.id === accountId);
-    const counterparty = financeCounterparties.find((c) => c.id === counterpartyId);
+    const account = accounts.find((a) => a.id === accountId);
+    const counterparty = counterparties.find((c) => c.id === counterpartyId);
     const article = articles.find((a) => a.id === articleId);
-    const deal = financeDeals.find((d) => d.id === dealId);
+    const deal = deals.find((d) => d.id === dealId);
 
     onSubmit?.({
       date: iso,
@@ -168,11 +180,11 @@ export function CashflowFormDialog({ open, onOpenChange, onSubmit }: CashflowFor
           <Select value={accountId} onValueChange={(v) => setAccountId(v ?? "")}>
             <SelectTrigger className={selectTriggerClass}>
               <SelectValue placeholder="Выберите счёт">
-                {financeAccounts.find((a) => a.id === accountId)?.name}
+                {accounts.find((a) => a.id === accountId)?.name}
               </SelectValue>
             </SelectTrigger>
             <SelectContent {...formSelectContentProps}>
-              {financeAccounts.map((a) => (
+              {accounts.map((a) => (
                 <SelectItem key={a.id} value={a.id} className="cursor-pointer rounded-lg">
                   {a.name}
                 </SelectItem>
@@ -188,7 +200,7 @@ export function CashflowFormDialog({ open, onOpenChange, onSubmit }: CashflowFor
             <SelectTrigger className={selectTriggerClass}>
               <SelectValue placeholder="Не указан">
                 {counterpartyId
-                  ? financeCounterparties.find((c) => c.id === counterpartyId)?.name
+                  ? counterparties.find((c) => c.id === counterpartyId)?.name
                   : "Не указан"}
               </SelectValue>
             </SelectTrigger>
@@ -196,7 +208,7 @@ export function CashflowFormDialog({ open, onOpenChange, onSubmit }: CashflowFor
               <SelectItem value="" className="cursor-pointer rounded-lg">
                 Не указан
               </SelectItem>
-              {financeCounterparties.map((c) => (
+              {counterparties.map((c) => (
                 <SelectItem key={c.id} value={c.id} className="cursor-pointer rounded-lg">
                   {c.name}
                 </SelectItem>
@@ -243,7 +255,7 @@ export function CashflowFormDialog({ open, onOpenChange, onSubmit }: CashflowFor
           <SelectTrigger className={selectTriggerClass}>
             <SelectValue placeholder="Без сделки">
               {dealId
-                ? financeDeals.find((d) => d.id === dealId)?.name
+                ? deals.find((d) => d.id === dealId)?.name
                 : "Без сделки"}
             </SelectValue>
           </SelectTrigger>
@@ -251,7 +263,7 @@ export function CashflowFormDialog({ open, onOpenChange, onSubmit }: CashflowFor
             <SelectItem value="" className="cursor-pointer rounded-lg">
               Без сделки
             </SelectItem>
-            {financeDeals
+            {deals
               .filter((d) => d.status === "OPEN")
               .map((d) => (
                 <SelectItem key={d.id} value={d.id} className="cursor-pointer rounded-lg">

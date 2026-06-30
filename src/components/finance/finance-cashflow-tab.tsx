@@ -1,13 +1,14 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   groupCashFlowsByDate,
   type FinanceArticle,
   type FinanceCashFlowRow,
+  type FinanceCounterparty,
+  type FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { scrollTableYClass } from "@/lib/scroll-classes";
 import { formatIsoDate, formatMoney } from "@/lib/format";
@@ -15,6 +16,7 @@ import {
   CashflowArticleSelect,
   CashflowCounterpartySelect,
   CashflowDealSelect,
+  type CashflowAssignPatch,
 } from "@/components/finance/cashflow-inline-assign";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -64,14 +66,20 @@ function rowHighlightClass(row: FinanceCashFlowRow) {
 interface FinanceCashflowTabProps {
   rows: FinanceCashFlowRow[];
   articles: FinanceArticle[];
-  onRowUpdate?: (id: string, patch: Partial<FinanceCashFlowRow>) => void;
+  counterparties: FinanceCounterparty[];
+  deals: FinanceDeal[];
+  onAssign?: (id: string, patch: CashflowAssignPatch) => void;
+  onDelete?: (id: string) => void;
   onAutoRuleCreated?: (values: AutoRuleFormValues) => void;
 }
 
 export function FinanceCashflowTab({
   rows,
   articles,
-  onRowUpdate,
+  counterparties,
+  deals,
+  onAssign,
+  onDelete,
   onAutoRuleCreated,
 }: FinanceCashflowTabProps) {
   const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
@@ -84,8 +92,8 @@ export function FinanceCashflowTab({
     setRuleDialogOpen(true);
   };
 
-  const assignRow = (row: FinanceCashFlowRow, patch: Partial<FinanceCashFlowRow>) => {
-    onRowUpdate?.(row.id, patch);
+  const assignRow = (row: FinanceCashFlowRow, patch: CashflowAssignPatch) => {
+    onAssign?.(row.id, patch);
   };
 
   return (
@@ -160,6 +168,7 @@ export function FinanceCashflowTab({
                           <TableCell className={cn(cellPad, "align-middle text-center")}>
                             <CashflowCounterpartySelect
                               row={row}
+                              counterparties={counterparties}
                               onAssign={(patch) => assignRow(row, patch)}
                             />
                           </TableCell>
@@ -178,6 +187,7 @@ export function FinanceCashflowTab({
                           <TableCell className={cn(cellPad, "align-middle text-center")}>
                             <CashflowDealSelect
                               row={row}
+                              deals={deals}
                               onAssign={(patch) => assignRow(row, patch)}
                             />
                           </TableCell>
@@ -209,25 +219,8 @@ export function FinanceCashflowTab({
                                       variant="ghost"
                                       size="icon"
                                       className={tableActionClass}
-                                      onClick={() =>
-                                        toast.message("Редактирование — прототип")
-                                      }
-                                    >
-                                      <Pencil />
-                                    </Button>
-                                  }
-                                />
-                                <TooltipContent>Редактировать</TooltipContent>
-                              </Tooltip>
-                              <Tooltip>
-                                <TooltipTrigger
-                                  render={
-                                    <Button
-                                      type="button"
-                                      variant="ghost"
-                                      size="icon"
-                                      className={tableActionClass}
-                                      onClick={() => toast.message("Удаление — прототип")}
+                                      aria-label="Удалить"
+                                      onClick={() => onDelete?.(row.id)}
                                     >
                                       <Trash2 />
                                     </Button>
@@ -252,6 +245,7 @@ export function FinanceCashflowTab({
         open={ruleDialogOpen}
         seed={ruleSeed}
         articles={articles}
+        counterparties={counterparties}
         onOpenChange={setRuleDialogOpen}
         onSubmit={onAutoRuleCreated}
       />

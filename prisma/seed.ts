@@ -11,6 +11,14 @@ import {
   products,
   railLots,
 } from "../src/mocks/fixtures";
+import {
+  financeAccounts,
+  financeArticles,
+  financeAutoRules,
+  financeCashFlows,
+  financeCounterparties,
+  financeDeals,
+} from "../src/mocks/finance-fixtures";
 
 const prisma = new PrismaClient();
 
@@ -19,17 +27,43 @@ function toDate(iso?: string | null): Date | null {
 }
 
 async function main() {
-  // Чистим в порядке, обратном зависимостям (FK).
+  // Полный сброс к состоянию прототипа. Порядок строго от детей к родителям (FK).
   await prisma.$transaction([
+    // выплаты / снапшоты себестоимости
+    prisma.paymentBatchItem.deleteMany(),
+    prisma.payment.deleteMany(),
+    prisma.batchCost.deleteMany(),
+    prisma.productCost.deleteMany(),
+    // производство
+    prisma.operationDetailLine.deleteMany(),
+    prisma.productionOperation.deleteMany(),
+    // финансы (cashflow ссылается на счёт/статью/сделку/контрагента/выписку)
+    prisma.cashFlow.deleteMany(),
+    prisma.autoRule.deleteMany(),
+    prisma.statement.deleteMany(),
+    prisma.dealItem.deleteMany(),
+    prisma.deal.deleteMany(),
+    prisma.article.deleteMany(),
+    prisma.articleCategory.deleteMany(),
+    prisma.counterparty.deleteMany(),
+    prisma.account.deleteMany(),
+    // планы / инвентаризация / остатки
+    prisma.goal.deleteMany(),
+    prisma.inventoryLine.deleteMany(),
+    prisma.inventory.deleteMany(),
+    prisma.mpStock.deleteMany(),
+    prisma.productStock.deleteMany(),
+    prisma.detailStock.deleteMany(),
+    prisma.nomenclatureStock.deleteMany(),
+    prisma.simplePurchase.deleteMany(),
+    // каталог
     prisma.productExtra.deleteMany(),
     prisma.productFastener.deleteMany(),
     prisma.productDetail.deleteMany(),
     prisma.product.deleteMany(),
     prisma.railLot.deleteMany(),
     prisma.batch.deleteMany(),
-    prisma.detailStock.deleteMany(),
     prisma.detail.deleteMany(),
-    prisma.nomenclatureStock.deleteMany(),
     prisma.nomenclatureItem.deleteMany(),
     prisma.employee.deleteMany(),
     prisma.changeLog.deleteMany(),
@@ -155,9 +189,105 @@ async function main() {
     });
   }
 
+  // ============================ ФИНАНСЫ ====================================
+
+  await prisma.account.createMany({
+    data: financeAccounts.map((a) => ({ id: a.id, name: a.name, balance: a.balance })),
+  });
+
+  await prisma.counterparty.createMany({
+    data: financeCounterparties.map((c) => ({ id: c.id, name: c.name })),
+  });
+
+  // Категории статей выводим из статей (id «cat-N»), накладные — флаг isOverhead.
+  const categoryByName = new Map<string, { id: string; isOverhead: boolean }>();
+  let categoryIndex = 1;
+  for (const a of financeArticles) {
+    const existing = categoryByName.get(a.categoryName);
+    if (existing) {
+      if (a.isOverhead) existing.isOverhead = true;
+    } else {
+      categoryByName.set(a.categoryName, { id: `cat-${categoryIndex++}`, isOverhead: a.isOverhead });
+    }
+  }
+  await prisma.articleCategory.createMany({
+    data: [...categoryByName.entries()].map(([name, c]) => ({
+      id: c.id,
+      name,
+      isOverhead: c.isOverhead,
+    })),
+  });
+
+  // Статьи: сначала корневые, затем субстатьи (self-FK parentId).
+  const articlesRootFirst = [...financeArticles].sort((a, b) =>
+    a.parentId === b.parentId ? 0 : a.parentId ? 1 : -1,
+  );
+  await prisma.article.createMany({
+    data: articlesRootFirst.map((a) => ({
+      id: a.id,
+      name: a.name,
+      flowType: a.flowType,
+      categoryId: categoryByName.get(a.categoryName)!.id,
+      parentId: a.parentId,
+      description: a.description ?? null,
+    })),
+  });
+
+  await prisma.deal.createMany({
+    data: financeDeals.map((d) => ({
+      id: d.id,
+      name: d.name,
+      status: d.status,
+      total: d.total,
+    })),
+  });
+
+  // Привязка партий к сделкам (по имени партии).
+  const batchIdByName = new Map(batches.map((b) => [b.name, b.id]));
+  const dealItems = financeDeals.flatMap((d) =>
+    d.batchNames
+      .map((name) => batchIdByName.get(name))
+      .filter((id): id is string => Boolean(id))
+      .map((batchId) => ({ dealId: d.id, batchId })),
+  );
+  if (dealItems.length > 0) await prisma.dealItem.createMany({ data: dealItems });
+
+  const dealIdByName = new Map(financeDeals.map((d) => [d.name, d.id]));
+  const articleIdByName = new Map(financeArticles.map((a) => [a.name, a.id]));
+  const counterpartyIdByName = new Map(financeCounterparties.map((c) => [c.name, c.id]));
+  const accountIdByName = new Map(financeAccounts.map((a) => [a.name, a.id]));
+
+  await prisma.autoRule.createMany({
+    data: financeAutoRules.map((r) => ({
+      id: r.id,
+      flowType: r.flowType,
+      counterpartyId: r.counterpartyName ? counterpartyIdByName.get(r.counterpartyName) ?? null : null,
+      articleId: r.articleName ? articleIdByName.get(r.articleName) ?? null : null,
+      dealId: r.dealName ? dealIdByName.get(r.dealName) ?? null : null,
+      logicOperator: r.logicOperator,
+      descriptionKeywords: r.descriptionKeywords,
+    })),
+  });
+
+  await prisma.cashFlow.createMany({
+    data: financeCashFlows.map((cf) => ({
+      id: cf.id,
+      amount: cf.amount,
+      flowType: cf.flowType,
+      accountId: accountIdByName.get(cf.accountName)!,
+      counterpartyId: cf.counterpartyName ? counterpartyIdByName.get(cf.counterpartyName) ?? null : null,
+      description: cf.description,
+      articleId: cf.articleName ? articleIdByName.get(cf.articleName) ?? null : null,
+      dealId: cf.dealId,
+      date: new Date(cf.date),
+      isAutoAssigned: cf.isAutoAssigned,
+    })),
+  });
+
   console.log(
     `Seed готов: ${employees.length} сотр., ${nomenclatureItems.length} номенкл., ` +
-      `${details.length} дет., ${batches.length} партий, ${railLots.length} реек, ${products.length} изделий.`,
+      `${details.length} дет., ${batches.length} партий, ${railLots.length} реек, ${products.length} изделий, ` +
+      `${financeAccounts.length} счетов, ${financeArticles.length} статей, ${financeCashFlows.length} операций ДДС.`,
   );
 }
 

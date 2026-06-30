@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import {
-  financeArticles,
-  type FinanceAutoRule,
-  type FinanceCashFlowRow,
+import type {
+  FinanceArticle,
+  FinanceAutoRule,
+  FinanceCashFlowRow,
+  FinanceCounterparty,
 } from "@/mocks/finance-fixtures";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import {
@@ -28,7 +29,8 @@ export interface AutoRuleFormValues {
 interface AutoRuleFormDialogProps {
   open: boolean;
   seed?: FinanceCashFlowRow | null;
-  articles?: typeof financeArticles;
+  articles: FinanceArticle[];
+  counterparties: FinanceCounterparty[];
   onOpenChange: (open: boolean) => void;
   onSubmit?: (values: AutoRuleFormValues) => void;
 }
@@ -36,7 +38,8 @@ interface AutoRuleFormDialogProps {
 export function AutoRuleFormDialog({
   open,
   seed,
-  articles = financeArticles,
+  articles,
+  counterparties,
   onOpenChange,
   onSubmit,
 }: AutoRuleFormDialogProps) {
@@ -77,6 +80,7 @@ export function AutoRuleFormDialog({
       <AutoRuleEditor
         value={draft}
         articles={articles}
+        counterparties={counterparties}
         onChange={(patch) => setDraft((prev) => ({ ...prev, ...patch }))}
         keywordsInputId="auto-rule-dialog-keywords"
       />

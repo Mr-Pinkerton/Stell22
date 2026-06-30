@@ -492,6 +492,9 @@ model AutoRule {
   articleId      String?
   article        Article? @relation(fields: [articleId], references: [id])
   dealId         String?
+  // Связь «контрагент И/ИЛИ ключевые слова описания»; ключевые слова — текст.
+  logicOperator       String  @default("AND") // AND / OR
+  descriptionKeywords String?
 }
 
 // ============================= ЗАРПЛАТЫ / ВЫПЛАТЫ ===========================

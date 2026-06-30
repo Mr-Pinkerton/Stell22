@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { cn } from "@/lib/utils";
-import { financeArticles, type FinanceArticle } from "@/mocks/finance-fixtures";
+import type { FinanceArticle } from "@/mocks/finance-fixtures";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -127,10 +127,10 @@ function ArticleSection({
 }
 
 interface FinanceArticlesTabProps {
-  articles?: FinanceArticle[];
+  articles: FinanceArticle[];
 }
 
-export function FinanceArticlesTab({ articles = financeArticles }: FinanceArticlesTabProps) {
+export function FinanceArticlesTab({ articles }: FinanceArticlesTabProps) {
   return (
     <div className="space-y-8">
       <ArticleSection title="Поступления" flowType="INCOME" articles={articles} />

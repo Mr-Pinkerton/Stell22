@@ -1,15 +1,19 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { toast } from "sonner";
-import { financeAutoRules, financeArticles, type FinanceArticle, type FinanceAutoRule } from "@/mocks/finance-fixtures";
+import type {
+  FinanceArticle,
+  FinanceAutoRule,
+  FinanceCounterparty,
+} from "@/mocks/finance-fixtures";
 import { scrollTableYClass } from "@/lib/scroll-classes";
 import { AutoRuleInlineRow } from "@/components/finance/auto-rule-inline-row";
 import { Card, CardContent } from "@/components/ui/card";
 
 interface FinanceAutoRulesTabProps {
-  rules?: FinanceAutoRule[];
-  articles?: FinanceArticle[];
+  rules: FinanceAutoRule[];
+  articles: FinanceArticle[];
+  counterparties: FinanceCounterparty[];
   highlightRuleId?: string | null;
   onHighlightDone?: () => void;
   onRuleUpdate?: (id: string, patch: Partial<FinanceAutoRule>) => void;
@@ -17,8 +21,9 @@ interface FinanceAutoRulesTabProps {
 }
 
 export function FinanceAutoRulesTab({
-  rules = financeAutoRules,
-  articles = financeArticles,
+  rules,
+  articles,
+  counterparties,
   highlightRuleId,
   onHighlightDone,
   onRuleUpdate,
@@ -56,12 +61,10 @@ export function FinanceAutoRulesTab({
                   <AutoRuleInlineRow
                     rule={rule}
                     articles={articles}
+                    counterparties={counterparties}
                     highlighted={highlightRuleId === rule.id}
                     onChange={(patch) => onRuleUpdate?.(rule.id, patch)}
-                    onDelete={() => {
-                      onRuleDelete?.(rule.id);
-                      toast.success("Автоправило удалено (прототип)");
-                    }}
+                    onDelete={() => onRuleDelete?.(rule.id)}
                   />
                 </div>
               ))}

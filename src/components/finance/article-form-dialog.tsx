@@ -3,10 +3,7 @@
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useJustOpened } from "@/hooks/use-just-opened";
-import {
-  financeArticles,
-  type FinanceArticle,
-} from "@/mocks/finance-fixtures";
+import type { FinanceArticle } from "@/mocks/finance-fixtures";
 import {
   Field,
   FinanceFormDialog,
@@ -43,14 +40,14 @@ export interface ArticleFormValues {
 
 interface ArticleFormDialogProps {
   open: boolean;
-  articles?: FinanceArticle[];
+  articles: FinanceArticle[];
   onOpenChange: (open: boolean) => void;
   onSubmit?: (values: ArticleFormValues) => void;
 }
 
 export function ArticleFormDialog({
   open,
-  articles = financeArticles,
+  articles,
   onOpenChange,
   onSubmit,
 }: ArticleFormDialogProps) {

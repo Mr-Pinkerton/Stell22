@@ -1,18 +1,28 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, useTransition } from "react";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
 import {
-  financeArticles,
-  financeAutoRules,
-  financeCashFlows,
-  financeDeals,
   financeStatements,
-  createEmptyAutoRule,
+  type FinanceAutoRule,
+  type FinanceCashFlowRow,
 } from "@/mocks/finance-fixtures";
 import { matchesDateFilter } from "@/lib/match-date-filter";
+import {
+  type FinanceData,
+  assignCashFlow,
+  createArticle,
+  createAutoRule,
+  createCashFlow,
+  createCounterparty,
+  deleteAutoRule,
+  deleteCashFlow,
+  deleteCounterparty,
+  updateAutoRule,
+  updateCounterparty,
+} from "@/server/finance";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
 import { SegmentTabs } from "@/components/reports/report-shared";
@@ -23,16 +33,8 @@ import { FinanceAutoRulesTab } from "@/components/finance/finance-auto-rules-tab
 import { FinanceDealsTab } from "@/components/finance/finance-deals-tab";
 import { FinanceStatementsTab } from "@/components/finance/finance-statements-tab";
 import { FinanceCounterpartiesTab } from "@/components/finance/finance-counterparties-tab";
-import { autoRuleValuesToRow } from "@/components/finance/auto-rule-form-dialog";
-import {
-  CashflowFormDialog,
-  cashflowValuesToRow,
-} from "@/components/finance/cashflow-form-dialog";
-import {
-  ArticleFormDialog,
-  articleValuesToRow,
-} from "@/components/finance/article-form-dialog";
-import { DealFormDialog, dealValuesToRow } from "@/components/finance/deal-form-dialog";
+import { CashflowFormDialog } from "@/components/finance/cashflow-form-dialog";
+import { ArticleFormDialog } from "@/components/finance/article-form-dialog";
 import {
   StatementUploadDialog,
   statementUploadToRow,
@@ -59,19 +61,20 @@ const TABS: { key: FinanceTab; label: string }[] = [
 const tabActionButtonClass =
   "h-10 shrink-0 cursor-pointer rounded-xl px-5 [&_svg]:stroke-[1.75]";
 
-export function FinanceView() {
+export function FinanceView({ data }: { data: FinanceData }) {
   const [activeTab, setActiveTab] = useState<FinanceTab>("cashflow");
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
+  const [, startTransition] = useTransition();
 
-  const [cashFlows, setCashFlows] = useState(financeCashFlows);
-  const [articles, setArticles] = useState(financeArticles);
-  const [autoRules, setAutoRules] = useState(financeAutoRules);
-  const [deals, setDeals] = useState(financeDeals);
+  const { accounts, deals } = data;
+  const [cashFlows, setCashFlows] = useState(data.cashFlows);
+  const [articles, setArticles] = useState(data.articles);
+  const [autoRules, setAutoRules] = useState(data.autoRules);
+  const [counterparties, setCounterparties] = useState(data.counterparties);
   const [statements, setStatements] = useState(financeStatements);
 
   const [cashflowDialogOpen, setCashflowDialogOpen] = useState(false);
   const [articleDialogOpen, setArticleDialogOpen] = useState(false);
-  const [dealDialogOpen, setDealDialogOpen] = useState(false);
   const [statementDialogOpen, setStatementDialogOpen] = useState(false);
   const [highlightRuleId, setHighlightRuleId] = useState<string | null>(null);
 
@@ -86,6 +89,26 @@ export function FinanceView() {
     counterpartyCreateRef.current = fn;
   }, []);
 
+  /** Обёртка server action: ловит ошибки и показывает тост. */
+  const run = useCallback(
+    (fn: () => Promise<void>) => {
+      startTransition(async () => {
+        try {
+          await fn();
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Не удалось выполнить операцию");
+        }
+      });
+    },
+    [startTransition],
+  );
+
+  const replaceCashFlow = (row: FinanceCashFlowRow) =>
+    setCashFlows((prev) => prev.map((r) => (r.id === row.id ? row : r)));
+
+  const replaceRule = (rule: FinanceAutoRule) =>
+    setAutoRules((prev) => prev.map((r) => (r.id === rule.id ? rule : r)));
+
   const handleAdd = () => {
     switch (activeTab) {
       case "cashflow":
@@ -94,14 +117,22 @@ export function FinanceView() {
       case "articles":
         setArticleDialogOpen(true);
         break;
-      case "rules": {
-        const rule = createEmptyAutoRule();
-        setAutoRules((prev) => [rule, ...prev]);
-        setHighlightRuleId(rule.id);
+      case "rules":
+        run(async () => {
+          const rule = await createAutoRule({
+            flowType: "EXPENSE",
+            counterpartyName: null,
+            logicOperator: "AND",
+            descriptionKeywords: null,
+            articleName: null,
+            dealName: null,
+          });
+          setAutoRules((prev) => [rule, ...prev]);
+          setHighlightRuleId(rule.id);
+        });
         break;
-      }
       case "deals":
-        setDealDialogOpen(true);
+        toast.message("Создание сделок — следующий срез Этапа 10");
         break;
       case "statements":
         setStatementDialogOpen(true);
@@ -128,7 +159,7 @@ export function FinanceView() {
           onDateFilterChange={setDateFilter}
         />
 
-        <FinanceKpiBlock rows={filteredCashFlows} />
+        <FinanceKpiBlock rows={filteredCashFlows} accounts={accounts} articles={articles} />
 
         <SegmentTabs
           ariaLabel="Финансы"
@@ -147,15 +178,27 @@ export function FinanceView() {
           <FinanceCashflowTab
             rows={filteredCashFlows}
             articles={articles}
-            onRowUpdate={(id, patch) => {
-              setCashFlows((prev) =>
-                prev.map((row) => (row.id === id ? { ...row, ...patch } : row)),
-              );
-            }}
-            onAutoRuleCreated={(values) => {
-              setAutoRules((prev) => [autoRuleValuesToRow(values), ...prev]);
-              toast.success("Автоправило сохранено (прототип)");
-            }}
+            counterparties={counterparties}
+            deals={deals}
+            onAssign={(id, patch) =>
+              run(async () => {
+                replaceCashFlow(await assignCashFlow(id, patch));
+              })
+            }
+            onDelete={(id) =>
+              run(async () => {
+                await deleteCashFlow(id);
+                setCashFlows((prev) => prev.filter((r) => r.id !== id));
+                toast.success("Операция удалена");
+              })
+            }
+            onAutoRuleCreated={(values) =>
+              run(async () => {
+                const rule = await createAutoRule(values);
+                setAutoRules((prev) => [rule, ...prev]);
+                toast.success("Автоправило сохранено");
+              })
+            }
           />
         )}
         {activeTab === "articles" && <FinanceArticlesTab articles={articles} />}
@@ -163,22 +206,25 @@ export function FinanceView() {
           <FinanceAutoRulesTab
             rules={autoRules}
             articles={articles}
+            counterparties={counterparties}
             highlightRuleId={highlightRuleId}
             onHighlightDone={() => setHighlightRuleId(null)}
-            onRuleUpdate={(id, patch) => {
-              setAutoRules((prev) =>
-                prev.map((rule) => (rule.id === id ? { ...rule, ...patch } : rule)),
-              );
-            }}
-            onRuleDelete={(id) => {
-              setAutoRules((prev) => prev.filter((rule) => rule.id !== id));
-              if (highlightRuleId === id) setHighlightRuleId(null);
-            }}
+            onRuleUpdate={(id, patch) =>
+              run(async () => {
+                replaceRule(await updateAutoRule(id, patch));
+              })
+            }
+            onRuleDelete={(id) =>
+              run(async () => {
+                await deleteAutoRule(id);
+                setAutoRules((prev) => prev.filter((rule) => rule.id !== id));
+                if (highlightRuleId === id) setHighlightRuleId(null);
+                toast.success("Автоправило удалено");
+              })
+            }
           />
         )}
-        {activeTab === "deals" && (
-          <FinanceDealsTab deals={deals} cashFlows={cashFlows} />
-        )}
+        {activeTab === "deals" && <FinanceDealsTab deals={deals} cashFlows={cashFlows} />}
         {activeTab === "statements" && (
           <FinanceStatementsTab
             statements={statements}
@@ -186,36 +232,67 @@ export function FinanceView() {
           />
         )}
         {activeTab === "counterparties" && (
-          <FinanceCounterpartiesTab onRegisterCreate={registerCounterpartyCreate} />
+          <FinanceCounterpartiesTab
+            counterparties={counterparties}
+            onRegisterCreate={registerCounterpartyCreate}
+            onCreate={(name) =>
+              run(async () => {
+                const cp = await createCounterparty(name);
+                setCounterparties((prev) =>
+                  [...prev, cp].sort((a, b) => a.name.localeCompare(b.name)),
+                );
+                toast.success("Контрагент добавлен");
+              })
+            }
+            onUpdate={(id, name) =>
+              run(async () => {
+                const cp = await updateCounterparty(id, name);
+                setCounterparties((prev) =>
+                  prev
+                    .map((c) => (c.id === id ? cp : c))
+                    .sort((a, b) => a.name.localeCompare(b.name)),
+                );
+                toast.success("Контрагент обновлён");
+              })
+            }
+            onDelete={(id) =>
+              run(async () => {
+                await deleteCounterparty(id);
+                setCounterparties((prev) => prev.filter((c) => c.id !== id));
+                toast.success("Контрагент удалён");
+              })
+            }
+          />
         )}
       </div>
 
       <CashflowFormDialog
         open={cashflowDialogOpen}
+        accounts={accounts}
+        counterparties={counterparties}
+        articles={articles}
+        deals={deals}
         onOpenChange={setCashflowDialogOpen}
-        onSubmit={(values) => {
-          setCashFlows((prev) => [...prev, cashflowValuesToRow(values)]);
-          toast.success("Операция добавлена (прототип)");
-        }}
+        onSubmit={(values) =>
+          run(async () => {
+            const row = await createCashFlow(values);
+            setCashFlows((prev) => [row, ...prev]);
+            toast.success("Операция добавлена");
+          })
+        }
       />
 
       <ArticleFormDialog
         open={articleDialogOpen}
         articles={articles}
         onOpenChange={setArticleDialogOpen}
-        onSubmit={(values) => {
-          setArticles((prev) => [...prev, articleValuesToRow(values)]);
-          toast.success("Статья добавлена (прототип)");
-        }}
-      />
-
-      <DealFormDialog
-        open={dealDialogOpen}
-        onOpenChange={setDealDialogOpen}
-        onSubmit={(values) => {
-          setDeals((prev) => [dealValuesToRow(values), ...prev]);
-          toast.success("Сделка добавлена (прототип)");
-        }}
+        onSubmit={(values) =>
+          run(async () => {
+            const article = await createArticle(values);
+            setArticles((prev) => [...prev, article]);
+            toast.success("Статья добавлена");
+          })
+        }
       />
 
       <StatementUploadDialog

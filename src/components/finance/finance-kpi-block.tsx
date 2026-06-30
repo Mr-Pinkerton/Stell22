@@ -6,9 +6,8 @@ import {
   financeExpenseChart,
   financePeriodExpense,
   financePeriodIncome,
-  financeAccounts,
-  financeArticles,
-  financeCashFlows,
+  type FinanceAccount,
+  type FinanceArticle,
   type FinanceCashFlowRow,
 } from "@/mocks/finance-fixtures";
 import { formatMoney } from "@/lib/format";
@@ -17,14 +16,16 @@ import { KpiTile } from "@/components/kpi-tile";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface FinanceKpiBlockProps {
-  rows?: FinanceCashFlowRow[];
+  rows: FinanceCashFlowRow[];
+  accounts: FinanceAccount[];
+  articles: FinanceArticle[];
 }
 
-export function FinanceKpiBlock({ rows = financeCashFlows }: FinanceKpiBlockProps) {
-  const balance = useMemo(() => financeAccountBalance(financeAccounts), []);
+export function FinanceKpiBlock({ rows, accounts, articles }: FinanceKpiBlockProps) {
+  const balance = useMemo(() => financeAccountBalance(accounts), [accounts]);
   const income = useMemo(() => financePeriodIncome(rows), [rows]);
   const expense = useMemo(() => financePeriodExpense(rows), [rows]);
-  const chart = useMemo(() => financeExpenseChart(rows, financeArticles), [rows]);
+  const chart = useMemo(() => financeExpenseChart(rows, articles), [rows, articles]);
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_minmax(11rem,13rem)]">
