@@ -1,9 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
-import { createGoalRow, goalRows as mockGoalRows, type GoalRow } from "@/mocks/goals-fixtures";
+import type { GoalRow } from "@/mocks/goals-fixtures";
+import { createGoal, type GoalProductOption } from "@/server/goals";
 import {
   countWorkingDaysInMonth,
   dailyPlan,
@@ -25,20 +27,34 @@ function formatPlanValue(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }
 
-export function GoalsView() {
+export function GoalsView({
+  initialGoals,
+  products,
+}: {
+  initialGoals: GoalRow[];
+  products: GoalProductOption[];
+}) {
+  const router = useRouter();
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
-  const [goals, setGoals] = useState<GoalRow[]>(mockGoalRows);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
 
   const { active, past } = useMemo(
-    () => splitGoalsForView(goals, dateFilter),
-    [goals, dateFilter],
+    () => splitGoalsForView(initialGoals, dateFilter),
+    [initialGoals, dateFilter],
   );
 
   const handleCreate = (values: GoalFormValues) => {
-    const row = createGoalRow(values);
-    setGoals((prev) => [row, ...prev]);
-    toast.success("Цель добавлена (прототип)");
+    startTransition(async () => {
+      const res = await createGoal(values);
+      if (res.ok) {
+        toast.success("Цель добавлена");
+        setDialogOpen(false);
+        router.refresh();
+      } else {
+        toast.error(res.error);
+      }
+    });
   };
 
   return (
@@ -93,6 +109,8 @@ export function GoalsView() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         onSubmit={handleCreate}
+        products={products}
+        submitDisabled={pending}
       />
     </>
   );

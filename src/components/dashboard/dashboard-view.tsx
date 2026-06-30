@@ -22,6 +22,7 @@ import {
 } from "@/lib/dashboard-metrics";
 import { formatMoney } from "@/lib/format";
 import { createLocalDate } from "@/lib/dates";
+import type { DashboardSource } from "@/server/dashboard";
 import { KpiTile } from "@/components/kpi-tile";
 import {
   DashboardPeriodFilter,
@@ -35,7 +36,7 @@ import {
   DashboardWorkersTable,
 } from "@/components/dashboard/dashboard-tables";
 
-export function DashboardView() {
+export function DashboardView({ source }: { source: DashboardSource }) {
   const [mode, setMode] = useState<DashboardPeriodMode>("month");
   const [customRange, setCustomRange] = useState<DateFilterValue>(getDefaultDashboardCustomRange);
 
@@ -57,15 +58,18 @@ export function DashboardView() {
 
   const prevPeriod = useMemo(() => previousDashboardPeriod(period), [period]);
 
-  const kpi = useMemo(() => buildDashboardKpi(period, prevPeriod), [period, prevPeriod]);
-  const alerts = useMemo(() => buildDashboardAlerts(), []);
-  const goals = useMemo(() => buildGoalProgress(), []);
-  const workers = useMemo(() => buildTopWorkers(), []);
-  const batches = useMemo(() => buildBatchRemainders(), []);
-  const productionChart = useMemo(() => buildProductionWeekBars(period), [period]);
-  const revenueChart = useMemo(() => buildRevenueWeekSeries(period), [period]);
-  const expenseChart = useMemo(() => buildExpenseSlices(period), [period]);
-  const wasteChart = useMemo(() => buildWasteByDay(period), [period]);
+  const kpi = useMemo(() => buildDashboardKpi(source, period, prevPeriod), [source, period, prevPeriod]);
+  const alerts = useMemo(() => buildDashboardAlerts(source), [source]);
+  const goals = useMemo(() => buildGoalProgress(source), [source]);
+  const workers = useMemo(() => buildTopWorkers(source), [source]);
+  const batches = useMemo(() => buildBatchRemainders(source), [source]);
+  const productionChart = useMemo(() => buildProductionWeekBars(source, period), [source, period]);
+  const revenueChart = useMemo(
+    () => buildRevenueWeekSeries(source, period, prevPeriod),
+    [source, period, prevPeriod],
+  );
+  const expenseChart = useMemo(() => buildExpenseSlices(source, period), [source, period]);
+  const wasteChart = useMemo(() => buildWasteByDay(source, period), [source, period]);
 
   return (
     <div className="space-y-6">

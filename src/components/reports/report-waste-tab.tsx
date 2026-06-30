@@ -1,12 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import {
-  wasteBatchRows,
-  wasteEmployeeRows,
-  type WasteBatchRow,
-  type WasteEmployeeRow,
-} from "@/mocks/report-fixtures";
+import type { WasteBatchRow, WasteEmployeeRow } from "@/mocks/report-fixtures";
 import { formatLength } from "@/lib/format";
 import { SegmentTabs, wastePercentClass } from "@/components/reports/report-shared";
 import { DataTable, type Column } from "@/components/data-table";
@@ -17,14 +12,16 @@ type WasteSubTab = "batches" | "employees";
 
 interface ReportWasteTabProps {
   showArchive: boolean;
+  batches: WasteBatchRow[];
+  employees: WasteEmployeeRow[];
 }
 
-export function ReportWasteTab({ showArchive }: ReportWasteTabProps) {
+export function ReportWasteTab({ showArchive, batches, employees }: ReportWasteTabProps) {
   const [subTab, setSubTab] = useState<WasteSubTab>("batches");
 
   const batchRows = useMemo(
-    () => wasteBatchRows.filter((r) => showArchive || r.status !== "ARCHIVED"),
-    [showArchive],
+    () => batches.filter((r) => showArchive || r.status !== "ARCHIVED"),
+    [showArchive, batches],
   );
 
   const batchColumns: Column<WasteBatchRow>[] = [
@@ -141,7 +138,7 @@ export function ReportWasteTab({ showArchive }: ReportWasteTabProps) {
           ) : (
             <DataTable
               columns={employeeColumns}
-              rows={wasteEmployeeRows}
+              rows={employees}
               empty="Данные не найдены"
               className="border-0"
               padded

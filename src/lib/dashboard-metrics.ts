@@ -3,31 +3,19 @@ import {
   buildStandardWeeksInPeriod,
   isDateInDashboardPeriod,
 } from "@/lib/dashboard-period";
-import { goalCompletionPercent } from "@/lib/goals";
+import { formatGoalMonthIso, goalCompletionPercent } from "@/lib/goals";
 import {
   financeAccountBalance,
-  financeAccounts,
-  financeArticles,
-  financeCashFlows,
   financeExpenseChart,
   financePeriodExpense,
   financePeriodIncome,
   financeUnassignedCount,
+  type ExpenseChartSlice,
   type FinanceCashFlowRow,
 } from "@/mocks/finance-fixtures";
-import { goalRows } from "@/mocks/goals-fixtures";
-import { batchCostMismatchIds } from "@/mocks/purchase-flags";
-import {
-  salaryReportRows,
-  wasteBatchRows,
-  wasteEmployeeRows,
-} from "@/mocks/report-fixtures";
-import { defaultAppSettings, minStockRows } from "@/mocks/settings-fixtures";
-import { terminalEntries } from "@/mocks/fixtures";
-import { productStock } from "@/mocks/warehouse-fixtures";
-import { formatGoalMonthIso } from "@/lib/goals";
+import { defaultAppSettings } from "@/mocks/settings-fixtures";
 import { formatMoney } from "@/lib/format";
-import type { TerminalEntry } from "@/types/domain";
+import type { DashboardSource, ProductionEntry } from "@/server/dashboard";
 
 export interface DashboardKpi {
   productionQty: number;
@@ -89,16 +77,17 @@ export interface DashboardWasteDay {
   pct: number;
 }
 
+function rangePeriod(start: Date, end: Date): DashboardPeriod {
+  return { mode: "custom", start, end };
+}
+
 function filterCashFlows(period: DashboardPeriod, rows: FinanceCashFlowRow[]): FinanceCashFlowRow[] {
   return rows.filter((r) => isDateInDashboardPeriod(r.date, period));
 }
 
-function productionQty(entries: TerminalEntry[], period: DashboardPeriod): number {
+function productionQty(entries: ProductionEntry[], period: DashboardPeriod): number {
   return entries
-    .filter(
-      (e) =>
-        e.type === "UPAKOVKA" && isDateInDashboardPeriod(e.occurredAt.slice(0, 10), period),
-    )
+    .filter((e) => isDateInDashboardPeriod(e.occurredAt.slice(0, 10), period))
     .reduce((sum, e) => sum + e.quantity, 0);
 }
 
@@ -117,17 +106,17 @@ export function productionKpiColorClass(ratio: number): string {
 }
 
 export function buildDashboardKpi(
+  source: DashboardSource,
   period: DashboardPeriod,
   prev: DashboardPeriod,
-  entries: TerminalEntry[] = terminalEntries,
 ): DashboardKpi {
-  const currentRows = filterCashFlows(period, financeCashFlows);
-  const prevRows = filterCashFlows(prev, financeCashFlows);
+  const currentRows = filterCashFlows(period, source.cashFlows);
+  const prevRows = filterCashFlows(prev, source.cashFlows);
 
-  const productionQtyCurrent = productionQty(entries, period);
-  const productionQtyPrev = productionQty(entries, prev);
+  const productionQtyCurrent = productionQty(source.production, period);
+  const productionQtyPrev = productionQty(source.production, prev);
 
-  const activeGoals = goalRows.filter(
+  const activeGoals = source.goals.filter(
     (g) => g.status === "ACTIVE" && g.month === formatGoalMonthIso(period.start),
   );
   const planQty = activeGoals.reduce((s, g) => s + g.quantity, 0) || 1;
@@ -146,13 +135,13 @@ export function buildDashboardKpi(
     incomeDelta: income - incomePrev,
     expense,
     expenseDelta: expense - expensePrev,
-    accountBalance: financeAccountBalance(financeAccounts),
+    accountBalance: financeAccountBalance(source.accounts),
   };
 }
 
-export function buildDashboardAlerts(): DashboardAlert[] {
+export function buildDashboardAlerts(source: DashboardSource): DashboardAlert[] {
   const alerts: DashboardAlert[] = [];
-  const unassigned = financeUnassignedCount(financeCashFlows);
+  const unassigned = financeUnassignedCount(source.cashFlows);
 
   if (unassigned > 0) {
     alerts.push({
@@ -165,7 +154,7 @@ export function buildDashboardAlerts(): DashboardAlert[] {
     });
   }
 
-  if (batchCostMismatchIds.size > 0) {
+  if (source.batchCostMismatchIds.length > 0) {
     alerts.push({
       id: "batch-cost",
       severity: 85,
@@ -176,7 +165,9 @@ export function buildDashboardAlerts(): DashboardAlert[] {
     });
   }
 
-  const highWaste = wasteBatchRows.find((b) => b.wastePct > defaultAppSettings.wasteThresholdPct);
+  const highWaste = source.waste.batches.find(
+    (b) => b.wastePct > defaultAppSettings.wasteThresholdPct,
+  );
   if (highWaste) {
     alerts.push({
       id: "waste-high",
@@ -188,28 +179,19 @@ export function buildDashboardAlerts(): DashboardAlert[] {
     });
   }
 
-  const lowStock = minStockRows.find((row) => {
-    if (row.kind === "PRODUCT") {
-      const key = row.id.replace("ms-prod-", "prod-");
-      return (productStock[key] ?? 0) < row.minStock;
-    }
-    return false;
-  });
-  if (lowStock) {
+  if (source.lowStockName) {
     alerts.push({
       id: "stock-low",
       severity: 75,
       title: "Низкие остатки на складе",
-      description: `${lowStock.name} ниже минимума`,
+      description: `${source.lowStockName} ниже минимума`,
       href: "/warehouse",
       tone: "amber",
     });
   }
 
-  const atRiskGoal = goalRows.find(
-    (g) =>
-      g.status === "ACTIVE" &&
-      goalCompletionPercent(g.producedQty, g.quantity) < 50,
+  const atRiskGoal = source.goals.find(
+    (g) => g.status === "ACTIVE" && goalCompletionPercent(g.producedQty, g.quantity) < 50,
   );
   if (atRiskGoal) {
     alerts.push({
@@ -222,24 +204,18 @@ export function buildDashboardAlerts(): DashboardAlert[] {
     });
   }
 
-  alerts.push({
-    id: "material-days",
-    severity: 60,
-    title: "Материала хватит на 12 дней",
-    description: "По статистике последних 7 дней",
-    href: "/purchases",
-    tone: "blue",
-  });
-
   return alerts.sort((a, b) => b.severity - a.severity);
 }
 
-export function buildGoalProgress(now: Date = new Date()): DashboardGoalProgress[] {
+export function buildGoalProgress(
+  source: DashboardSource,
+  now: Date = new Date(),
+): DashboardGoalProgress[] {
   const monthIso = formatGoalMonthIso(now);
   const day = now.getDate();
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
 
-  return goalRows
+  return source.goals
     .filter((g) => g.status === "ACTIVE" && g.month === monthIso)
     .map((g) => {
       const pct = goalCompletionPercent(g.producedQty, g.quantity);
@@ -255,10 +231,10 @@ export function buildGoalProgress(now: Date = new Date()): DashboardGoalProgress
     });
 }
 
-export function buildTopWorkers(limit = 5): DashboardWorkerRow[] {
-  const wasteMap = new Map(wasteEmployeeRows.map((w) => [w.employeeName, w.wastePct]));
+export function buildTopWorkers(source: DashboardSource, limit = 5): DashboardWorkerRow[] {
+  const wasteMap = new Map(source.waste.employees.map((w) => [w.employeeName, w.wastePct]));
 
-  return [...salaryReportRows]
+  return [...source.salary]
     .sort((a, b) => b.produced - a.produced)
     .slice(0, limit)
     .map((row) => ({
@@ -270,47 +246,82 @@ export function buildTopWorkers(limit = 5): DashboardWorkerRow[] {
     }));
 }
 
-export function buildBatchRemainders(): DashboardBatchRemainder[] {
-  return wasteBatchRows
+export function buildBatchRemainders(source: DashboardSource): DashboardBatchRemainder[] {
+  return source.waste.batches
     .filter((b) => b.status === "IN_WORK")
     .map((b) => ({
       id: b.id,
       name: b.batchName,
-      remainingPct: Math.round((b.remainingM / b.purchasedM) * 100),
+      remainingPct: b.purchasedM > 0 ? Math.round((b.remainingM / b.purchasedM) * 100) : 0,
     }))
     .sort((a, b) => a.remainingPct - b.remainingPct);
 }
 
-export function buildProductionWeekBars(period: DashboardPeriod): DashboardWeekBar[] {
-  const planPerWeek = 120;
-  return buildStandardWeeksInPeriod(period).map((week, i) => ({
+/** Недельный план = месячная цель активных целей / число недель месяца. */
+function weeklyPlanForPeriod(source: DashboardSource, period: DashboardPeriod): number {
+  const monthlyTarget = source.goals
+    .filter((g) => g.status === "ACTIVE" && g.month === formatGoalMonthIso(period.start))
+    .reduce((s, g) => s + g.quantity, 0);
+  const monthStart = new Date(period.start.getFullYear(), period.start.getMonth(), 1);
+  const monthEnd = new Date(period.start.getFullYear(), period.start.getMonth() + 1, 0);
+  const monthWeeks = buildStandardWeeksInPeriod(rangePeriod(monthStart, monthEnd)).length || 1;
+  return Math.round(monthlyTarget / monthWeeks);
+}
+
+export function buildProductionWeekBars(
+  source: DashboardSource,
+  period: DashboardPeriod,
+): DashboardWeekBar[] {
+  const plan = weeklyPlanForPeriod(source, period);
+  return buildStandardWeeksInPeriod(period).map((week) => ({
     label: week.label,
-    fact: 80 + i * 15 + (i % 2) * 10,
-    plan: planPerWeek + (i % 3) * 20,
+    fact: productionQty(source.production, rangePeriod(week.start, week.end)),
+    plan,
   }));
 }
 
-export function buildRevenueWeekSeries(period: DashboardPeriod): DashboardRevenueWeek[] {
-  return buildStandardWeeksInPeriod(period).map((week, i) => ({
-    label: week.label,
-    fact: 180_000 + i * 25_000,
-    prevMonth: 160_000 + i * 22_000,
-  }));
+export function buildRevenueWeekSeries(
+  source: DashboardSource,
+  period: DashboardPeriod,
+  prev: DashboardPeriod,
+): DashboardRevenueWeek[] {
+  const prevWeeks = buildStandardWeeksInPeriod(prev);
+  return buildStandardWeeksInPeriod(period).map((week, i) => {
+    const prevWeek = prevWeeks[i];
+    return {
+      label: week.label,
+      fact: financePeriodIncome(filterCashFlows(rangePeriod(week.start, week.end), source.cashFlows)),
+      prevMonth: prevWeek
+        ? financePeriodIncome(
+            filterCashFlows(rangePeriod(prevWeek.start, prevWeek.end), source.cashFlows),
+          )
+        : 0,
+    };
+  });
 }
 
-export function buildWasteByDay(period: DashboardPeriod): DashboardWasteDay[] {
+export function buildWasteByDay(
+  source: DashboardSource,
+  period: DashboardPeriod,
+): DashboardWasteDay[] {
+  const byDay = new Map(source.torcovkaDays.map((d) => [d.date, d]));
   const days: DashboardWasteDay[] = [];
   let cursor = new Date(period.start);
   let i = 0;
   while (cursor <= period.end && i < 14) {
     const iso = cursor.toISOString().slice(0, 10);
-    days.push({ date: iso.slice(8, 10) + "." + iso.slice(5, 7), pct: 18 + (i % 5) * 4 });
+    const d = byDay.get(iso);
+    const pct = d && d.takenM > 0 ? Math.round(((d.takenM - d.producedM) / d.takenM) * 100) : 0;
+    days.push({ date: iso.slice(8, 10) + "." + iso.slice(5, 7), pct: Math.max(0, pct) });
     cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
     i += 1;
   }
   return days;
 }
 
-export function buildExpenseSlices(period: DashboardPeriod) {
-  return financeExpenseChart(filterCashFlows(period, financeCashFlows), financeArticles);
+export function buildExpenseSlices(
+  source: DashboardSource,
+  period: DashboardPeriod,
+): ExpenseChartSlice[] {
+  return financeExpenseChart(filterCashFlows(period, source.cashFlows), source.articles);
 }

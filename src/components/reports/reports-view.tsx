@@ -11,7 +11,8 @@ import { ReportSalariesTab } from "@/components/reports/report-salaries-tab";
 import { ReportWasteTab } from "@/components/reports/report-waste-tab";
 import { ReportSalesTab } from "@/components/reports/report-sales-tab";
 import type { CostReport } from "@/server/cost";
-import type { SalaryReportRow } from "@/mocks/report-fixtures";
+import type { WasteReport } from "@/server/reports";
+import type { PurchaseReportRow, SalaryReportRow } from "@/mocks/report-fixtures";
 
 type ReportTab = "purchases" | "cost" | "salaries" | "waste" | "sales";
 
@@ -34,7 +35,17 @@ const TAB_FILTERS: Record<
   sales: { date: true },
 };
 
-export function ReportsView({ cost, salary }: { cost: CostReport; salary: SalaryReportRow[] }) {
+export function ReportsView({
+  cost,
+  salary,
+  purchases,
+  waste,
+}: {
+  cost: CostReport;
+  salary: SalaryReportRow[];
+  purchases: PurchaseReportRow[];
+  waste: WasteReport;
+}) {
   const [activeTab, setActiveTab] = useState<ReportTab>("purchases");
   const [showArchive, setShowArchive] = useState(false);
 
@@ -65,10 +76,18 @@ export function ReportsView({ cost, salary }: { cost: CostReport; salary: Salary
           onChange={setActiveTab}
         />
 
-        {activeTab === "purchases" && <ReportPurchasesTab showArchive={showArchive} />}
+        {activeTab === "purchases" && (
+          <ReportPurchasesTab showArchive={showArchive} initialRows={purchases} />
+        )}
         {activeTab === "cost" && <ReportCostTab details={cost.details} products={cost.products} />}
         {activeTab === "salaries" && <ReportSalariesTab initialRows={salary} />}
-        {activeTab === "waste" && <ReportWasteTab showArchive={showArchive} />}
+        {activeTab === "waste" && (
+          <ReportWasteTab
+            showArchive={showArchive}
+            batches={waste.batches}
+            employees={waste.employees}
+          />
+        )}
         {activeTab === "sales" && <ReportSalesTab />}
       </div>
     </>

@@ -132,13 +132,28 @@ export interface CostReport {
 }
 
 /**
- * Отчёт себестоимости на реальных данных производства (Этап 9).
+ * Сумма накладных периода: расходные операции ДДС (EXPENSE) по статьям,
+ * чья категория помечена «Производственные (накладные)» (isOverhead).
+ * ЗП производства в накладные НЕ входит — она в сдельных операциях, не в ДДС
+ * по накладным статьям (cost-integrity: без двойного счёта).
+ * Период пока не фильтруется — берём всё накопленное (предварительно).
+ */
+export async function getPeriodOverhead(db: Db = prisma): Promise<Decimal> {
+  const flows = await db.cashFlow.findMany({
+    where: { flowType: "EXPENSE", article: { category: { isOverhead: true } } },
+    select: { amount: true },
+  });
+  return flows.reduce((sum, f) => sum.plus(dec(f.amount)), D(0));
+}
+
+/**
+ * Отчёт себестоимости на реальных данных производства (Этап 9 + 12).
  * Произведённые детали — из операций ТОРЦОВКИ, изделия — из УПАКОВКИ.
- * Накладные = 0 (распределение производственных расходов — Этап 10/12),
- * поэтому полная себестоимость = прямой.
+ * Накладные распределяются пропорционально прямой себестоимости периода
+ * (см. «МОДЕЛЬ СЕБЕСТОИМОСТИ» в v2). Полная = прямая + накладные.
  */
 export async function getCostReport(): Promise<CostReport> {
-  const [batches, details, employees, items, products, ops] = await Promise.all([
+  const [batches, details, employees, items, products, ops, periodOverhead] = await Promise.all([
     prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
     prisma.detail.findMany(),
     prisma.employee.findMany(),
@@ -148,6 +163,7 @@ export async function getCostReport(): Promise<CostReport> {
       where: { type: { in: ["TORCOVKA", "UPAKOVKA"] } },
       include: { lines: true },
     }),
+    getPeriodOverhead(),
   ]);
 
   const opsForCost = ops.map(toOperationForCost);
@@ -173,7 +189,7 @@ export async function getCostReport(): Promise<CostReport> {
       nomenclature: items.map(serItem),
       lines,
       producedProductQty,
-      periodOverhead: 0,
+      periodOverhead,
     }),
   };
 }

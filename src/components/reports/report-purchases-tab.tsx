@@ -5,7 +5,6 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   purchaseReportKpis,
-  purchaseReportRows,
   type PurchasePackageLine,
   type PurchaseReportRow,
 } from "@/mocks/report-fixtures";
@@ -32,6 +31,7 @@ import type { RailType, Sort } from "@/types/domain";
 
 interface ReportPurchasesTabProps {
   showArchive: boolean;
+  initialRows: PurchaseReportRow[];
 }
 
 const RAIL_TYPE_LABEL: Record<RailType, string> = {
@@ -75,13 +75,12 @@ function packageTitle(pkg: PurchasePackageLine) {
   return "Поштучно";
 }
 
-export function ReportPurchasesTab({ showArchive }: ReportPurchasesTabProps) {
+export function ReportPurchasesTab({ showArchive, initialRows }: ReportPurchasesTabProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const rows = useMemo(
-    () =>
-      purchaseReportRows.filter((r) => showArchive || r.status !== "ARCHIVED"),
-    [showArchive],
+    () => initialRows.filter((r) => showArchive || r.status !== "ARCHIVED"),
+    [showArchive, initialRows],
   );
 
   const kpis = useMemo(() => purchaseReportKpis(rows), [rows]);

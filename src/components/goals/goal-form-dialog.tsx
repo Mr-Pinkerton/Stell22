@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { products } from "@/mocks/fixtures";
+import type { GoalProductOption } from "@/server/goals";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import {
   FormDialog,
@@ -31,11 +31,17 @@ interface GoalFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit: (values: GoalFormValues) => void;
+  products: GoalProductOption[];
+  submitDisabled?: boolean;
 }
 
-const activeProducts = products.filter((p) => p.status === "ACTIVE");
-
-export function GoalFormDialog({ open, onOpenChange, onSubmit }: GoalFormDialogProps) {
+export function GoalFormDialog({
+  open,
+  onOpenChange,
+  onSubmit,
+  products: activeProducts,
+  submitDisabled,
+}: GoalFormDialogProps) {
   const [name, setName] = useState("");
   const [productId, setProductId] = useState(activeProducts[0]?.id ?? "");
   const [quantityRaw, setQuantityRaw] = useState("");
@@ -81,7 +87,7 @@ export function GoalFormDialog({ open, onOpenChange, onSubmit }: GoalFormDialogP
       onOpenChange={onOpenChange}
       title="Создать цель"
       submitLabel="Добавить цель"
-      submitDisabled={!canSubmit}
+      submitDisabled={!canSubmit || submitDisabled}
       onSubmit={handleSubmit}
     >
       <Field id="goal-name" label="Название цели" required>

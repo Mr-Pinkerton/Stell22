@@ -155,8 +155,8 @@ async function main() {
     })),
   });
 
-  // Начальные остатки крепежа/упаковки на складе (как в прототипе).
-  const nomenclatureStock: Record<string, number> = { "nom-1": 800, "nom-2": 40 };
+  // Начальные остатки крепежа/упаковки на складе (с запасом под демо-упаковку).
+  const nomenclatureStock: Record<string, number> = { "nom-1": 2000, "nom-2": 200 };
   for (const [nomenclatureId, quantity] of Object.entries(nomenclatureStock)) {
     await prisma.nomenclatureStock.create({ data: { nomenclatureId, quantity } });
   }
@@ -190,10 +190,192 @@ async function main() {
     });
   }
 
-  // ===================== ПРОИЗВОДСТВО (демо: часы) =========================
-  // Только операции типа HOURS — они не затрагивают склад и движок
-  // себестоимости, поэтому безопасны для seed. Дают наглядный отчёт ЗП
-  // и позволяют проверить «Выплачено». Сдельные операции вносятся с терминала.
+  // ===================== ПРОИЗВОДСТВО (демо-операции) ======================
+  // Связный набор операций с соблюдением целостности склада и логики стадий
+  // (как с терминала): торцовка снимает рейки и приходует сырые детали,
+  // присадка переводит детали по стадиям, упаковка списывает готовые детали +
+  // крепёж/упаковку и приходует ГП. Метры произведённого < взятых (отход ~12%).
+  // В Части B эти данные заменятся реальными внесениями терминала.
+
+  const addRawStock = (detailId: string, qty: number) =>
+    prisma.detailStock.upsert({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId,
+          torcevayaDone: false,
+          ploskostDone: false,
+        },
+      },
+      create: { detailId, torcevayaDone: false, ploskostDone: false, quantity: qty },
+      update: { quantity: { increment: qty } },
+    });
+
+  const moveStock = async (
+    detailId: string,
+    from: { t: boolean; p: boolean },
+    to: { t: boolean; p: boolean },
+    qty: number,
+  ) => {
+    await prisma.detailStock.update({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId,
+          torcevayaDone: from.t,
+          ploskostDone: from.p,
+        },
+      },
+      data: { quantity: { decrement: qty } },
+    });
+    await prisma.detailStock.upsert({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId,
+          torcevayaDone: to.t,
+          ploskostDone: to.p,
+        },
+      },
+      create: { detailId, torcevayaDone: to.t, ploskostDone: to.p, quantity: qty },
+      update: { quantity: { increment: qty } },
+    });
+  };
+
+  const torcovka = async (o: {
+    employeeId: string;
+    batchId: string;
+    railLotId: string;
+    railsTaken: number;
+    date: string;
+    lines: { detailId: string; quantity: number }[];
+  }) => {
+    await prisma.railLot.update({
+      where: { id: o.railLotId },
+      data: { remainingQuantity: { decrement: o.railsTaken } },
+    });
+    await prisma.productionOperation.create({
+      data: {
+        type: "TORCOVKA",
+        employeeId: o.employeeId,
+        batchId: o.batchId,
+        railLotId: o.railLotId,
+        railsTaken: o.railsTaken,
+        workDate: new Date(o.date),
+        lines: { create: o.lines },
+      },
+    });
+    for (const l of o.lines) await addRawStock(l.detailId, l.quantity);
+  };
+
+  await torcovka({ employeeId: "emp-1", batchId: "batch-1", railLotId: "lot-1", railsTaken: 40, date: "2026-06-23", lines: [{ detailId: "det-1", quantity: 140 }] });
+  await torcovka({ employeeId: "emp-1", batchId: "batch-1", railLotId: "lot-3", railsTaken: 30, date: "2026-06-24", lines: [{ detailId: "det-4", quantity: 132 }] });
+  await torcovka({ employeeId: "emp-3", batchId: "batch-1", railLotId: "lot-2", railsTaken: 30, date: "2026-06-24", lines: [{ detailId: "det-3", quantity: 79 }] });
+  await torcovka({ employeeId: "emp-3", batchId: "batch-2", railLotId: "lot-8", railsTaken: 40, date: "2026-06-25", lines: [{ detailId: "det-1", quantity: 158 }] });
+  await torcovka({ employeeId: "emp-1", batchId: "batch-2", railLotId: "lot-11", railsTaken: 15, date: "2026-06-26", lines: [{ detailId: "det-2", quantity: 58 }] });
+
+  const prisadka = async (o: {
+    employeeId: string;
+    detailId: string;
+    kind: "torcev" | "plosk";
+    quantity: number;
+    date: string;
+    from: { t: boolean; p: boolean };
+  }) => {
+    const to =
+      o.kind === "torcev" ? { t: true, p: o.from.p } : { t: o.from.t, p: true };
+    await prisma.productionOperation.create({
+      data: {
+        type: "PRISADKA",
+        employeeId: o.employeeId,
+        workDate: new Date(o.date),
+        lines: {
+          create: [
+            {
+              detailId: o.detailId,
+              quantity: o.quantity,
+              prisadkaTorcevaya: o.kind === "torcev",
+              prisadkaPloskost: o.kind === "plosk",
+            },
+          ],
+        },
+      },
+    });
+    await moveStock(o.detailId, o.from, to, o.quantity);
+  };
+
+  await prisadka({ employeeId: "emp-1", detailId: "det-1", kind: "torcev", quantity: 200, date: "2026-06-26", from: { t: false, p: false } });
+  await prisadka({ employeeId: "emp-3", detailId: "det-3", kind: "torcev", quantity: 60, date: "2026-06-26", from: { t: false, p: false } });
+  await prisadka({ employeeId: "emp-1", detailId: "det-2", kind: "torcev", quantity: 55, date: "2026-06-27", from: { t: false, p: false } });
+  await prisadka({ employeeId: "emp-1", detailId: "det-2", kind: "plosk", quantity: 50, date: "2026-06-27", from: { t: true, p: false } });
+
+  const upakovka = async (o: {
+    employeeId: string;
+    productId: string;
+    quantity: number;
+    date: string;
+    details: { detailId: string; ready: { t: boolean; p: boolean }; per: number }[];
+    fasteners: { nomenclatureId: string; per: number }[];
+    packagingId: string;
+  }) => {
+    for (const d of o.details) {
+      await prisma.detailStock.update({
+        where: {
+          detailId_torcevayaDone_ploskostDone: {
+            detailId: d.detailId,
+            torcevayaDone: d.ready.t,
+            ploskostDone: d.ready.p,
+          },
+        },
+        data: { quantity: { decrement: d.per * o.quantity } },
+      });
+    }
+    for (const f of o.fasteners) {
+      await prisma.nomenclatureStock.update({
+        where: { nomenclatureId: f.nomenclatureId },
+        data: { quantity: { decrement: f.per * o.quantity } },
+      });
+    }
+    await prisma.nomenclatureStock.update({
+      where: { nomenclatureId: o.packagingId },
+      data: { quantity: { decrement: o.quantity } },
+    });
+    await prisma.productStock.upsert({
+      where: { productId: o.productId },
+      create: { productId: o.productId, quantity: o.quantity },
+      update: { quantity: { increment: o.quantity } },
+    });
+    await prisma.productionOperation.create({
+      data: {
+        type: "UPAKOVKA",
+        employeeId: o.employeeId,
+        productId: o.productId,
+        productQty: o.quantity,
+        workDate: new Date(o.date),
+      },
+    });
+  };
+
+  await upakovka({
+    employeeId: "emp-2",
+    productId: "prod-1",
+    quantity: 90,
+    date: "2026-06-29",
+    details: [{ detailId: "det-1", ready: { t: true, p: false }, per: 2 }],
+    fasteners: [{ nomenclatureId: "nom-1", per: 8 }],
+    packagingId: "nom-2",
+  });
+  await upakovka({
+    employeeId: "emp-2",
+    productId: "prod-2",
+    quantity: 30,
+    date: "2026-06-29",
+    details: [
+      { detailId: "det-3", ready: { t: true, p: false }, per: 2 },
+      { detailId: "det-2", ready: { t: true, p: true }, per: 1 },
+    ],
+    fasteners: [{ nomenclatureId: "nom-1", per: 12 }],
+    packagingId: "nom-2",
+  });
+
+  // Часы (почасовая ЗП) — без влияния на склад.
   const hourLogs: { employeeId: string; date: string; hours: number }[] = [
     { employeeId: "emp-1", date: "2026-06-22", hours: 8 },
     { employeeId: "emp-1", date: "2026-06-23", hours: 8 },
@@ -216,6 +398,17 @@ async function main() {
       hours: h.hours,
       isPaid: false,
     })),
+  });
+
+  // ===================== ЦЕЛИ ==============================================
+  // Активные на июнь 2026 (факт — из операций упаковки этого месяца) и архив мая.
+  await prisma.goal.createMany({
+    data: [
+      { name: "Июнь — полки настенные", productId: "prod-1", quantity: 300, month: new Date(2026, 5, 1), status: "ACTIVE" },
+      { name: "Июнь — угловые", productId: "prod-2", quantity: 180, month: new Date(2026, 5, 1), status: "ACTIVE" },
+      { name: "Май — полки", productId: "prod-1", quantity: 280, month: new Date(2026, 4, 1), status: "ARCHIVED" },
+      { name: "Май — угловые", productId: "prod-2", quantity: 150, month: new Date(2026, 4, 1), status: "ARCHIVED" },
+    ],
   });
 
   // ============================ ФИНАНСЫ ====================================
@@ -341,7 +534,7 @@ async function main() {
     `Seed готов: ${employees.length} сотр., ${nomenclatureItems.length} номенкл., ` +
       `${details.length} дет., ${batches.length} партий, ${railLots.length} реек, ${products.length} изделий, ` +
       `${financeAccounts.length} счетов, ${financeArticles.length} статей, ${financeCashFlows.length} операций ДДС, ` +
-      `${hourLogs.length} операций часов.`,
+      `5 торцовок + 4 присадки + 2 упаковки + ${hourLogs.length} часов.`,
   );
 }
 
