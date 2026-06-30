@@ -1,17 +1,19 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { AlertTriangle, Lock, PackageMinus, Pencil, Trash2 } from "lucide-react";
+import { AlertTriangle, Lock, PackageMinus, Pencil, Printer, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   createBatch,
   createSimplePurchase,
   deleteBatch,
+  getBatchLabels,
   updateBatch,
   writeOffBatchRemainder,
   type BatchFormValues,
   type SimplePurchaseFormValues,
 } from "@/server/purchases";
+import { printPackageLabels } from "@/lib/print-labels";
 import { closeBatch } from "@/server/cost";
 import { type PurchaseBatchRow } from "@/lib/batch-stats";
 import type { NomenclatureItem } from "@/types/domain";
@@ -79,6 +81,22 @@ export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
         toast.success(ok);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Ошибка операции");
+      }
+    });
+
+  const handlePrintLabels = (row: PurchaseBatchRow) =>
+    startTransition(async () => {
+      try {
+        const labels = await getBatchLabels(row.id);
+        if (labels.length === 0) {
+          toast.message("В партии нет пакетов с кодами");
+          return;
+        }
+        if (!printPackageLabels(labels)) {
+          toast.error("Не удалось открыть окно печати (разрешите всплывающие окна)");
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Ошибка печати");
       }
     });
 
@@ -255,6 +273,27 @@ export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
                 <Lock />
               </TooltipTrigger>
               <TooltipContent>Закрыть партию (заморозить себестоимость)</TooltipContent>
+            </Tooltip>
+          )}
+
+          {row.stats.packageCount > 0 && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    className={tableActionClass}
+                    aria-label="Печать этикеток"
+                    disabled={pending}
+                    onClick={() => handlePrintLabels(row)}
+                  />
+                }
+              >
+                <Printer />
+              </TooltipTrigger>
+              <TooltipContent>Печать этикеток пакетов</TooltipContent>
             </Tooltip>
           )}
 

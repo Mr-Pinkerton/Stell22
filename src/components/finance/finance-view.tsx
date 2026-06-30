@@ -26,6 +26,7 @@ import {
   deleteStatement,
   getStatementDetail,
   importStatement,
+  reapplyAutoRules,
   setDealStatus,
   updateAutoRule,
   updateCounterparty,
@@ -122,6 +123,18 @@ export function FinanceView({ data }: { data: FinanceData }) {
   const replaceRule = (rule: FinanceAutoRule) =>
     setAutoRules((prev) => prev.map((r) => (r.id === rule.id ? rule : r)));
 
+  const handleReapply = () =>
+    run(async () => {
+      const res = await reapplyAutoRules();
+      if (res.assigned > 0) {
+        const map = new Map(res.updated.map((r) => [r.id, r]));
+        setCashFlows((prev) => prev.map((r) => map.get(r.id) ?? r));
+        toast.success(`Разнесено по правилам: ${res.assigned}`);
+      } else {
+        toast.message("Нет неразнесённых операций под правила");
+      }
+    });
+
   const replaceDeal = (deal: FinanceDeal) =>
     setDeals((prev) => prev.map((d) => (d.id === deal.id ? deal : d)));
 
@@ -184,10 +197,21 @@ export function FinanceView({ data }: { data: FinanceData }) {
           value={activeTab}
           onChange={setActiveTab}
           trailing={
-            <Button className={tabActionButtonClass} onClick={handleAdd}>
-              <Plus />
-              Добавить
-            </Button>
+            <div className="flex items-center gap-2">
+              {activeTab === "rules" && (
+                <Button
+                  variant="outline"
+                  className={tabActionButtonClass}
+                  onClick={handleReapply}
+                >
+                  Разнести по правилам
+                </Button>
+              )}
+              <Button className={tabActionButtonClass} onClick={handleAdd}>
+                <Plus />
+                Добавить
+              </Button>
+            </div>
           }
         />
 

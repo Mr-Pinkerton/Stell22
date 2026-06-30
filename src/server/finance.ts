@@ -403,6 +403,52 @@ async function applyAutoRules(cf: {
   return null;
 }
 
+export interface ReapplyAutoRulesResult {
+  ok: boolean;
+  assigned: number;
+  updated: FinanceCashFlowRow[];
+}
+
+/**
+ * Массовое авторазнесение: прогоняет автоправила по уже импортированным
+ * НЕразнесённым операциям (articleId IS NULL) и проставляет статью/сделку.
+ * Запускается кнопкой после правки правил или импорта. Ручные операции с
+ * выбранной статьёй не трогаются.
+ */
+export async function reapplyAutoRules(): Promise<ReapplyAutoRulesResult> {
+  const pending = await prisma.cashFlow.findMany({ where: { articleId: null } });
+  const updatedIds: string[] = [];
+  const dealsToSync = new Set<string>();
+
+  for (const cf of pending) {
+    const auto = await applyAutoRules({
+      flowType: cf.flowType,
+      counterpartyId: cf.counterpartyId,
+      description: cf.description ?? "",
+    });
+    if (!auto?.articleId) continue;
+
+    const dealId = cf.dealId ?? auto.dealId;
+    await prisma.cashFlow.update({
+      where: { id: cf.id },
+      data: { articleId: auto.articleId, dealId, isAutoAssigned: true },
+    });
+    if (auto.dealId && !cf.dealId) dealsToSync.add(auto.dealId);
+    updatedIds.push(cf.id);
+  }
+
+  for (const d of dealsToSync) await syncDeal(d);
+  if (updatedIds.length > 0) revalidatePath(PATH);
+
+  const updated = updatedIds.length
+    ? await prisma.cashFlow.findMany({
+        where: { id: { in: updatedIds } },
+        include: { account: true, counterparty: true, article: true, deal: true },
+      })
+    : [];
+  return { ok: true, assigned: updatedIds.length, updated: updated.map(serCashFlow) };
+}
+
 async function loadCashFlow(id: string): Promise<FinanceCashFlowRow> {
   const cf = await prisma.cashFlow.findUniqueOrThrow({
     where: { id },

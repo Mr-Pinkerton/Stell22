@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
-import { type InventoryDocRow } from "@/mocks/warehouse-fixtures";
+import { type InventoryDocRow, type MpStockRow } from "@/mocks/warehouse-fixtures";
 import { createInventoryDraft, type WarehouseStock } from "@/server/warehouse";
 import { PageHeader } from "@/components/page-header";
 import { SegmentTabs } from "@/components/reports/report-shared";
@@ -23,9 +23,10 @@ const TABS: { key: WarehouseTab; label: string }[] = [
 interface WarehouseViewProps {
   stock: WarehouseStock;
   initialDocs: InventoryDocRow[];
+  mpStock: MpStockRow[];
 }
 
-export function WarehouseView({ stock, initialDocs }: WarehouseViewProps) {
+export function WarehouseView({ stock, initialDocs, mpStock }: WarehouseViewProps) {
   const [activeTab, setActiveTab] = useState<WarehouseTab>("mp");
   const [inventoryDocs, setInventoryDocs] = useState<InventoryDocRow[]>(initialDocs);
   const [pending, startTransition] = useTransition();
@@ -65,7 +66,7 @@ export function WarehouseView({ stock, initialDocs }: WarehouseViewProps) {
           onChange={setActiveTab}
         />
 
-        {activeTab === "mp" && <WarehouseMpTab />}
+        {activeTab === "mp" && <WarehouseMpTab rows={mpStock} />}
         {activeTab === "production" && <WarehouseProductionTab stock={stock} />}
         {activeTab === "shipments" && <WarehouseShipmentsTab />}
         {activeTab === "inventory" && (

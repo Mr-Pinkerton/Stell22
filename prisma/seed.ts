@@ -52,6 +52,7 @@ async function main() {
     prisma.goal.deleteMany(),
     prisma.inventoryLine.deleteMany(),
     prisma.inventory.deleteMany(),
+    prisma.sale.deleteMany(),
     prisma.mpStock.deleteMany(),
     prisma.productStock.deleteMany(),
     prisma.detailStock.deleteMany(),
@@ -408,6 +409,36 @@ async function main() {
       { name: "Июнь — угловые", productId: "prod-2", quantity: 180, month: new Date(2026, 5, 1), status: "ACTIVE" },
       { name: "Май — полки", productId: "prod-1", quantity: 280, month: new Date(2026, 4, 1), status: "ARCHIVED" },
       { name: "Май — угловые", productId: "prod-2", quantity: 150, month: new Date(2026, 4, 1), status: "ARCHIVED" },
+    ],
+  });
+
+  // ===================== ПРОДАЖИ / ОСТАТКИ МП (стартовый снимок) ============
+  // Имитация уже полученных с маркетплейсов данных; обновляется кнопкой
+  // «Синхронизировать» (server/marketplace — заглушка вместо Ozon/WB API).
+  const priceById = new Map(products.map((p) => [p.id, p.salePrice]));
+  const saleSeed: { mp: string; productId: string; sku: string; qty: number; date: string }[] = [
+    { mp: "OZON", productId: "prod-1", sku: "ART-001", qty: 48, date: "2026-06-10" },
+    { mp: "OZON", productId: "prod-2", sku: "ART-002", qty: 22, date: "2026-06-14" },
+    { mp: "WB", productId: "prod-1", sku: "ART-001", qty: 31, date: "2026-06-12" },
+    { mp: "WB", productId: "prod-2", sku: "ART-002", qty: 18, date: "2026-06-18" },
+    { mp: "OZON", productId: "prod-1", sku: "ART-001", qty: 27, date: "2026-06-24" },
+  ];
+  await prisma.sale.createMany({
+    data: saleSeed.map((s) => ({
+      marketplace: s.mp,
+      sku: s.sku,
+      productId: s.productId,
+      quantity: s.qty,
+      revenue: (priceById.get(s.productId) ?? 0) * s.qty,
+      date: new Date(s.date),
+    })),
+  });
+  await prisma.mpStock.createMany({
+    data: [
+      { marketplace: "OZON", sku: "ART-001", quantity: 28 },
+      { marketplace: "OZON", sku: "ART-002", quantity: 12 },
+      { marketplace: "WB", sku: "ART-001", quantity: 15 },
+      { marketplace: "WB", sku: "ART-002", quantity: 7 },
     ],
   });
 

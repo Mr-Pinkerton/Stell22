@@ -12,7 +12,7 @@ import { ReportWasteTab } from "@/components/reports/report-waste-tab";
 import { ReportSalesTab } from "@/components/reports/report-sales-tab";
 import type { CostReport } from "@/server/cost";
 import type { WasteReport } from "@/server/reports";
-import type { PurchaseReportRow, SalaryReportRow } from "@/mocks/report-fixtures";
+import type { PurchaseReportRow, SalaryReportRow, SalesReportRow } from "@/mocks/report-fixtures";
 
 type ReportTab = "purchases" | "cost" | "salaries" | "waste" | "sales";
 
@@ -40,11 +40,13 @@ export function ReportsView({
   salary,
   purchases,
   waste,
+  sales,
 }: {
   cost: CostReport;
   salary: SalaryReportRow[];
   purchases: PurchaseReportRow[];
   waste: WasteReport;
+  sales: SalesReportRow[];
 }) {
   const [activeTab, setActiveTab] = useState<ReportTab>("purchases");
   const [showArchive, setShowArchive] = useState(false);
@@ -88,7 +90,7 @@ export function ReportsView({
             employees={waste.employees}
           />
         )}
-        {activeTab === "sales" && <ReportSalesTab />}
+        {activeTab === "sales" && <ReportSalesTab rows={sales} />}
       </div>
     </>
   );

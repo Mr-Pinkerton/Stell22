@@ -1,11 +1,11 @@
 "use client";
 
-import { salesReportRows, type SalesReportRow } from "@/mocks/report-fixtures";
+import type { SalesReportRow } from "@/mocks/report-fixtures";
 import { formatMoney } from "@/lib/format";
 import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent } from "@/components/ui/card";
 
-export function ReportSalesTab() {
+export function ReportSalesTab({ rows }: { rows: SalesReportRow[] }) {
   const columns: Column<SalesReportRow>[] = [
     {
       key: "productName",
@@ -44,7 +44,7 @@ export function ReportSalesTab() {
       <CardContent className="p-0">
         <DataTable
           columns={columns}
-          rows={salesReportRows}
+          rows={rows}
           empty="Продажи за период не найдены"
           className="border-0"
           padded

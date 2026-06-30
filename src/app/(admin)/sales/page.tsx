@@ -1,9 +1,9 @@
-import { SectionScaffold } from "@/components/section-scaffold";
+import { SalesView } from "@/components/sales/sales-view";
+import { getSalesData } from "@/server/marketplace";
 
-// Раздел осознанно оставлен заглушкой до подключения API маркетплейсов
-// (Ozon/WB): пока неизвестен реальный формат отдаваемых данных, финальная
-// таблица и фильтры проектируются по факту ответа API (Этап 13 roadmap).
-// Готовая таблица под спеку уже есть в reports/report-sales-tab.tsx.
-export default function SalesPage() {
-  return <SectionScaffold slug="sales" />;
+export const dynamic = "force-dynamic";
+
+export default async function SalesPage() {
+  const data = await getSalesData();
+  return <SalesView data={data} />;
 }

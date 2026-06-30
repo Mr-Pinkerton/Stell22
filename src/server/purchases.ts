@@ -138,6 +138,31 @@ function packageCode(): string {
   return `PKG-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
 }
 
+const RAIL_TYPE_LABEL: Record<RailType, string> = { POLKA: "Полка", KANAVKA: "Канавка" };
+const SORT_LABEL: Record<Sort, string> = { SORT1: "Сорт 1", SORT2: "Сорт 2" };
+
+export interface PackageLabelData {
+  code: string;
+  title: string;
+  subtitle: string;
+}
+
+/** Этикетки пакетов партии (коды + параметры рейки) для печати. */
+export async function getBatchLabels(batchId: string): Promise<PackageLabelData[]> {
+  const batch = await prisma.batch.findUnique({
+    where: { id: batchId },
+    include: { railLots: { where: { isPackage: true }, orderBy: { code: "asc" } } },
+  });
+  if (!batch) return [];
+  return batch.railLots
+    .filter((l) => l.code)
+    .map((l) => ({
+      code: l.code as string,
+      title: batch.name,
+      subtitle: `${RAIL_TYPE_LABEL[l.railType as RailType]} · ${SORT_LABEL[l.sort as Sort]} · ${num(l.lengthM)} м · ${l.quantity} шт`,
+    }));
+}
+
 function validateBatch(v: BatchFormValues) {
   if (!v.name.trim()) throw new Error("Название партии обязательно");
   if (!v.sectionWidthMm || !v.sectionHeightMm) throw new Error("Укажите сечение рейки");
