@@ -1,5 +1,9 @@
 import { SettingsView } from "@/components/settings/settings-view";
+import { getChangeLogs } from "@/server/audit";
 
-export default function SettingsPage() {
-  return <SettingsView />;
+export const dynamic = "force-dynamic";
+
+export default async function SettingsPage() {
+  const logs = await getChangeLogs();
+  return <SettingsView logs={logs} />;
 }

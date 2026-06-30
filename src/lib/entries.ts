@@ -2,8 +2,8 @@
 // дням и итоги. Без UI и доступа к данным — легко тестировать.
 
 import type { OperationType, TerminalEntry } from "@/types/domain";
+import { dayKeyInProjectTz } from "@/lib/format";
 
-const TIME_ZONE = "Europe/Moscow"; // UTC+3, как в lib/format.ts
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type JournalPeriod = "week" | "month";
@@ -26,13 +26,7 @@ export interface DayGroup {
 
 /** Ключ дня (YYYY-MM-DD) в зоне проекта для произвольной даты/ISO-строки. */
 export function dayKey(date: Date | string): string {
-  const d = typeof date === "string" ? new Date(date) : date;
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d);
+  return dayKeyInProjectTz(date);
 }
 
 /** Внесения за скользящее окно [now - N дней, now]. */

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { ChevronDown, NotebookText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Card, CardContent } from "@/components/ui/card";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, TIME_ZONE } from "@/lib/format";
 import {
   buildJournal,
   dayKey,
@@ -14,7 +14,6 @@ import {
 } from "@/lib/entries";
 import type { OperationType, TerminalEntry } from "@/types/domain";
 
-const TIME_ZONE = "Europe/Moscow";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 const TYPE_LABEL: Record<OperationType, string> = {

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { syncMarketplaces, type SalesData } from "@/server/marketplace";
 import type { SalesReportRow } from "@/mocks/report-fixtures";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, formatIsoDateTime } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { KpiTile } from "@/components/kpi-tile";
 import { DataTable, type Column } from "@/components/data-table";
@@ -44,7 +44,7 @@ const columns: Column<SalesReportRow>[] = [
 
 function formatSyncedAt(iso: string | null): string {
   if (!iso) return "ещё не синхронизировано";
-  return `обновлено ${new Date(iso).toLocaleString("ru-RU")}`;
+  return `обновлено ${formatIsoDateTime(iso)}`;
 }
 
 export function SalesView({ data }: { data: SalesData }) {

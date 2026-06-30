@@ -7,6 +7,7 @@ import {
   minStockRows as mockMinStockRows,
   type AppSettings,
   type MinStockRow,
+  type SystemLogRow,
 } from "@/mocks/settings-fixtures";
 import { financeAccounts, type FinanceAccount } from "@/mocks/finance-fixtures";
 import { PageHeader } from "@/components/page-header";
@@ -25,7 +26,7 @@ const TABS: { key: SettingsTab; label: string }[] = [
   { key: "accounts", label: "Счета" },
 ];
 
-export function SettingsView() {
+export function SettingsView({ logs }: { logs: SystemLogRow[] }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("params");
   const [settings, setSettings] = useState<AppSettings>(defaultAppSettings);
   const [minStock, setMinStock] = useState<MinStockRow[]>(mockMinStockRows);
@@ -62,7 +63,7 @@ export function SettingsView() {
         />
 
         {activeTab === "api" && <SettingsApiTab />}
-        {activeTab === "logs" && <SettingsLogsTab />}
+        {activeTab === "logs" && <SettingsLogsTab rows={logs} />}
         {activeTab === "params" && (
           <SettingsParamsTab
             settings={settings}

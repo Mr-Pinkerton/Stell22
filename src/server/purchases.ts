@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { Batch as PrismaBatch, RailLot as PrismaRailLot } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
-import { recalcBatchCosts } from "@/server/cost";
+import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { sectionAreaM2, type PurchaseBatchRow } from "@/lib/batch-stats";
 import type { NomenclatureItem, RailType, Sort } from "@/types/domain";
 
@@ -242,28 +242,38 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
   });
 
   // Стоимость/сечение/цены сортов влияют на распределение — пересчёт (если открыта).
-  await recalcBatchCosts({ batchId: id });
+  await enqueueRecalcBatchCosts(id);
 
   revalidatePath(PATH);
   revalidatePath("/reports");
   return loadRow(id);
 }
 
-/** Списать остаток партии в отход: обнуляем остатки всех реек. */
+/** Списать остаток партии в отход: обнуляем остатки всех реек (атомарно). */
 export async function writeOffBatchRemainder(id: string): Promise<PurchaseBatchRow> {
-  const lots = await prisma.railLot.findMany({ where: { batchId: id } });
-  const remaining = lots.reduce((s, l) => s + l.remainingQuantity, 0);
-  if (remaining <= 0) throw new Error("Остаток уже нулевой");
+  // Чтение остатка, обнуление и запись в журнал — одной транзакцией, чтобы
+  // параллельная торцовка не разошлась с журналом.
+  await prisma.$transaction(async (tx) => {
+    const lots = await tx.railLot.findMany({
+      where: { batchId: id },
+      select: { remainingQuantity: true },
+    });
+    const remaining = lots.reduce((s, l) => s + l.remainingQuantity, 0);
+    if (remaining <= 0) throw new Error("Остаток уже нулевой");
 
-  await prisma.railLot.updateMany({
-    where: { batchId: id, remainingQuantity: { gt: 0 } },
-    data: { remainingQuantity: 0 },
-  });
-  await writeChangeLog({
-    entity: "Batch",
-    entityId: id,
-    oldValues: { remainingRails: remaining },
-    newValues: { remainingRails: 0, writeOff: "отход" },
+    await tx.railLot.updateMany({
+      where: { batchId: id, remainingQuantity: { gt: 0 } },
+      data: { remainingQuantity: 0 },
+    });
+    await writeChangeLog(
+      {
+        entity: "Batch",
+        entityId: id,
+        oldValues: { remainingRails: remaining },
+        newValues: { remainingRails: 0, writeOff: "отход" },
+      },
+      tx,
+    );
   });
   revalidatePath(PATH);
   return loadRow(id);

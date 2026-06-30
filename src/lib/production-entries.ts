@@ -2,8 +2,7 @@ import type { DateFilterValue } from "@/components/date-filter";
 import { matchesDateFilter } from "@/lib/match-date-filter";
 import type { ProductionEntryRow } from "@/mocks/production-fixtures";
 import type { OperationType } from "@/types/domain";
-
-const TIME_ZONE = "Europe/Moscow";
+import { TIME_ZONE } from "@/lib/format";
 
 export const OPERATION_TYPE_LABEL: Record<OperationType, string> = {
   TORCOVKA: "Торцовка",

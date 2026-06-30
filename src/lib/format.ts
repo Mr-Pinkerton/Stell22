@@ -1,6 +1,6 @@
 // Форматирование денег, измерений и дат. Часовой пояс проекта — UTC+3.
 
-const TIME_ZONE = "Europe/Moscow"; // UTC+3 без перехода на летнее время
+export const TIME_ZONE = "Europe/Moscow"; // UTC+3 без перехода на летнее время
 
 const moneyFormatter = new Intl.NumberFormat("ru-RU", {
   style: "currency",
@@ -81,6 +81,36 @@ export function formatDate(date: Date): string {
     month: "2-digit",
     year: "numeric",
   }).format(date);
+}
+
+/** Дата и время в зоне проекта, напр. "04.06.2026, 14:30". */
+export function formatDateTime(date: Date): string {
+  return new Intl.DateTimeFormat("ru-RU", {
+    timeZone: TIME_ZONE,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+/** Дата и время из ISO-строки в зоне проекта; пустую/битую строку отдаёт как есть. */
+export function formatIsoDateTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : formatDateTime(d);
+}
+
+/** Ключ дня `YYYY-MM-DD` в зоне проекта (сортируемый, для группировок). */
+export function dayKeyInProjectTz(date: Date | string = new Date()): string {
+  const d = typeof date === "string" ? new Date(date) : date;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
 }
 
 const MONTH_NAMES = [

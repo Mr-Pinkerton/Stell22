@@ -3,17 +3,13 @@
 import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import {
-  LOG_LEVEL_LABEL,
-  systemLogRows,
-  type LogLevel,
-  type SystemLogRow,
-} from "@/mocks/settings-fixtures";
+import { LOG_LEVEL_LABEL, type LogLevel, type SystemLogRow } from "@/mocks/settings-fixtures";
 import { cn } from "@/lib/utils";
+import { TIME_ZONE } from "@/lib/format";
 
 function formatLogTime(iso: string): string {
   return new Intl.DateTimeFormat("ru-RU", {
-    timeZone: "Europe/Moscow",
+    timeZone: TIME_ZONE,
     day: "2-digit",
     month: "2-digit",
     hour: "2-digit",
@@ -65,10 +61,10 @@ const columns: Column<SystemLogRow>[] = [
 ];
 
 interface SettingsLogsTabProps {
-  rows?: SystemLogRow[];
+  rows: SystemLogRow[];
 }
 
-export function SettingsLogsTab({ rows = systemLogRows }: SettingsLogsTabProps) {
+export function SettingsLogsTab({ rows }: SettingsLogsTabProps) {
   return (
     <Card className="surface-card ring-0">
       <CardContent className="p-0">

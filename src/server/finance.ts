@@ -6,7 +6,7 @@ import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { D } from "@/lib/cost";
 import { batchExtraShare, batchTotalCost, dealDeliveryExtra } from "@/lib/deal-cost";
-import { recalcBatchCosts } from "@/server/cost";
+import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { is1CStatement, parse1CStatement } from "@/lib/bank-statement-1c";
 import type {
   FinanceAccount,
@@ -438,7 +438,14 @@ export async function reapplyAutoRules(): Promise<ReapplyAutoRulesResult> {
   }
 
   for (const d of dealsToSync) await syncDeal(d);
-  if (updatedIds.length > 0) revalidatePath(PATH);
+  if (updatedIds.length > 0) {
+    await writeChangeLog({
+      entity: "CashFlow",
+      entityId: "reapply",
+      newValues: { reappliedCount: updatedIds.length, ids: updatedIds },
+    });
+    revalidatePath(PATH);
+  }
 
   const updated = updatedIds.length
     ? await prisma.cashFlow.findMany({
@@ -587,7 +594,7 @@ async function syncBatchTotalCost(batchId: string): Promise<void> {
 
   const newTotal = batchTotalCost(num(batch.purchaseCost), extra);
   await prisma.batch.update({ where: { id: batchId }, data: { totalCost: newTotal.toFixed(2) } });
-  await recalcBatchCosts({ batchId });
+  await enqueueRecalcBatchCosts(batchId);
 }
 
 /** Пересчёт суммы сделки и «Стоимости общей» её партий. */

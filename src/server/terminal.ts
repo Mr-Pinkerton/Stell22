@@ -11,7 +11,7 @@ import type {
 } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
-import { recalcBatchCosts } from "@/server/cost";
+import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { allocate, buildStockSnapshot, isReady, type DetailStockRow } from "@/lib/detail-stock";
 import type {
   Batch,
@@ -233,7 +233,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
   });
 
   // Произведённые детали меняют распределение стоимости партии по сортам.
-  await recalcBatchCosts({ batchId });
+  await enqueueRecalcBatchCosts(batchId);
 
   revalidatePath("/production");
   revalidatePath("/terminal");
@@ -289,10 +289,14 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
         const take = takes[i];
         if (take <= 0) continue;
         const src = sources[i];
-        await tx.detailStock.update({
-          where: { id: src.id },
+        // Атомарное списание с защитой от гонки: если параллельная транзакция
+        // уже увела остаток ниже take — count === 0 и весь $transaction откатится
+        // (нельзя в минус — cost-integrity).
+        const dec = await tx.detailStock.updateMany({
+          where: { id: src.id, quantity: { gte: take } },
           data: { quantity: { decrement: take } },
         });
+        if (dec.count === 0) throw new Error("Недостаточно остатка деталей для присадки");
         const torcevayaDone = pick.kind === "torcev" ? true : src.torcevayaDone;
         const ploskostDone = pick.kind === "plosk" ? true : src.ploskostDone;
         await tx.detailStock.upsert({
@@ -357,10 +361,12 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
         ); // бросит при нехватке готовых деталей
         for (let i = 0; i < rows.length; i++) {
           if (takes[i] > 0) {
-            await tx.detailStock.update({
-              where: { id: rows[i].id },
+            // Условное списание: при гонке (остаток ушёл ниже) откат транзакции.
+            const dec = await tx.detailStock.updateMany({
+              where: { id: rows[i].id, quantity: { gte: takes[i] } },
               data: { quantity: { decrement: takes[i] } },
             });
+            if (dec.count === 0) throw new Error("Недостаточно готовых деталей для упаковки");
           }
         }
       }

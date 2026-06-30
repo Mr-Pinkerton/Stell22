@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  dayKeyInProjectTz,
+  formatDateTime,
   formatGroupedInteger,
+  formatIsoDateTime,
   formatLength,
   formatMoney,
   parseGroupedInteger,
@@ -34,6 +37,32 @@ describe("formatMoney", () => {
     expect(formatted).toMatch(/1[\s\u00a0\u202f]?234[\s\u00a0\u202f]?567/);
     expect(formatted).not.toMatch(/,\d{2}/);
     expect(formatted).toContain("₽");
+  });
+});
+
+describe("formatDateTime / formatIsoDateTime (UTC+3)", () => {
+  it("показывает дату-время в зоне проекта (UTC+3)", () => {
+    // 2026-06-30T10:00:00Z → 13:00 по Москве.
+    const d = new Date("2026-06-30T10:00:00.000Z");
+    expect(formatDateTime(d)).toBe("30.06.2026, 13:00");
+  });
+
+  it("formatIsoDateTime разбирает ISO и применяет зону", () => {
+    expect(formatIsoDateTime("2026-06-30T21:30:00.000Z")).toBe("01.07.2026, 00:30");
+  });
+
+  it("пустую/битую строку отдаёт как есть", () => {
+    expect(formatIsoDateTime(null)).toBe("");
+    expect(formatIsoDateTime("")).toBe("");
+    expect(formatIsoDateTime("не дата")).toBe("не дата");
+  });
+});
+
+describe("dayKeyInProjectTz", () => {
+  it("ключ дня в зоне проекта учитывает сдвиг UTC+3", () => {
+    // 23:30 UTC = 02:30 следующего дня по Москве.
+    expect(dayKeyInProjectTz("2026-06-30T23:30:00.000Z")).toBe("2026-07-01");
+    expect(dayKeyInProjectTz("2026-06-30T10:00:00.000Z")).toBe("2026-06-30");
   });
 });
 

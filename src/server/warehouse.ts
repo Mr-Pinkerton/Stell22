@@ -187,6 +187,11 @@ export async function createInventoryDraft(): Promise<InventoryDocRow> {
     },
     include: { lines: true },
   });
+  await writeChangeLog({
+    entity: "Inventory",
+    entityId: doc.id,
+    newValues: { status: "DRAFT", lines: lines.length },
+  });
   revalidatePath(PATH);
   return serializeDoc(doc);
 }
@@ -204,6 +209,12 @@ export async function updateInventoryLineActual(
   if (line.inventory.status !== "DRAFT") throw new Error("Инвентаризация уже проведена");
 
   await prisma.inventoryLine.update({ where: { id: lineId }, data: { actualQty } });
+  await writeChangeLog({
+    entity: "InventoryLine",
+    entityId: lineId,
+    oldValues: { actualQty: line.actualQty },
+    newValues: { actualQty },
+  });
   revalidatePath(PATH);
 }
 
@@ -260,18 +271,24 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
       });
     }
 
-    return tx.inventory.update({
+    const result = await tx.inventory.update({
       where: { id: docId },
       data: { status: "CONDUCTED" },
       include: { lines: true },
     });
+    // Лог внутри транзакции — аудит атомарен с коррекцией остатков.
+    await writeChangeLog(
+      {
+        entity: "Inventory",
+        entityId: docId,
+        oldValues: { status: "DRAFT" },
+        newValues: { status: "CONDUCTED", lines: doc.lines.length },
+      },
+      tx,
+    );
+    return result;
   });
 
-  await writeChangeLog({
-    entity: "Inventory",
-    entityId: docId,
-    newValues: { status: "CONDUCTED", lines: doc.lines.length },
-  });
   revalidatePath(PATH);
   return serializeDoc(updated);
 }
