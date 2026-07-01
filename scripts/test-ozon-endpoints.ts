@@ -35,7 +35,9 @@ async function main() {
   ] as const) {
     try {
       const r = await fn();
-      console.log(`${name}: OK ${r.length}`);
+      const n = "data" in r && Array.isArray(r.data) ? r.data.length : (r as { length: number }).length;
+      const w = "warnings" in r && r.warnings.length ? ` (${r.warnings.join("; ")})` : "";
+      console.log(`${name}: OK ${n}${w}`);
     } catch (e) {
       console.log(`${name}: FAIL`, e instanceof Error ? e.message.slice(0, 200) : e);
     }

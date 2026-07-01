@@ -44,8 +44,12 @@ async function main() {
   console.log("Тестовый контур:", payload.t ? "да" : "нет");
   console.log("Категории:", scopes.length ? scopes.join(", ") : "(не удалось разобрать)");
   console.log(
-    "Для синхронизации нужны: Статистика, Аналитика —",
+    "Для синхронизации: Статистика + Аналитика —",
     scopes.includes("Статистика") && scopes.includes("Аналитика") ? "OK" : "НЕ ХВАТАЕТ",
+  );
+  console.log(
+    "Поставки FBW (supplies-api):",
+    scopes.includes("Поставки") ? "OK" : "НЕ ХВАТАЕТ — добавьте категорию «Поставки»",
   );
 
   await prisma.$disconnect();

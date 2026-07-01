@@ -1,10 +1,10 @@
 /**
- * Проверка сохранённого токена WB: чтение из Setting + один запрос к Statistics API.
- * Запуск: npx tsx scripts/check-wb-token.ts
+ * Проверка сохранённого токена WB.
+ * npx tsx scripts/check-wb-token.ts
  */
 import { prisma } from "../src/server/db";
 import { SETTING_PREFIX } from "../src/lib/api-credentials";
-import { fetchWbSalesWithMeta } from "../src/lib/wb-api";
+import { fetchWbIncomes, fetchWbNmIdMapFromOrders, fetchWbSalesWithMeta, fetchWbStocks } from "../src/lib/wb-api";
 import { MarketplaceApiError } from "../src/lib/marketplace-http";
 
 async function main() {
@@ -21,47 +21,56 @@ async function main() {
   console.log(`OK: токен в БД сохранён (${token.length} символов, начало: ${token.slice(0, 8)}…)`);
 
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  try {
-    const { sales, nmIdToSku } = await fetchWbSalesWithMeta(token, since);
-    console.log(`OK: Statistics API /supplier/sales — ${sales.length} строк за 7 дней`);
-    console.log(`    nmId→артикул в карте: ${nmIdToSku.size}`);
-    if (sales.length > 0) {
-      const sample = sales[0];
-      console.log(
-        `    пример: saleID=${sample.saleID}, sku=${sample.supplierArticle}, цена=${sample.finishedPrice}`,
-      );
-    }
-  } catch (err) {
-    if (err instanceof MarketplaceApiError) {
-      console.log(`FAIL: Statistics API /sales — ${err.message}`);
-      if (err.status === 401) {
-        console.log("     Возможно неверный токен или нет категории Statistics.");
-      }
-      if (err.status === 403) {
-        console.log("     Токен без доступа к Statistics API.");
-      }
-    } else {
-      console.log(`FAIL: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    process.exit(1);
-  }
+  let hadFailure = false;
 
   try {
-    const { fetchWbIncomes } = await import("../src/lib/wb-api");
-    const incomes = await fetchWbIncomes(token, since);
+    const { data: incomes, warnings } = await fetchWbIncomes(token, since);
     console.log(`OK: поставки FBW — ${incomes.length} строк`);
+    for (const w of warnings) console.log(`    WARN: ${w}`);
   } catch (err) {
+    hadFailure = true;
     if (err instanceof MarketplaceApiError) {
-      console.log(`WARN: поставки FBW — ${err.message}`);
+      console.log(`FAIL: поставки FBW — ${err.message.slice(0, 200)}`);
       if (err.status === 401) {
         console.log("     Нужен токен с категорией Supplies (supplies-api.wildberries.ru).");
       }
     } else {
-      console.log(`WARN: поставки — ${err instanceof Error ? err.message : String(err)}`);
+      console.log(`FAIL: поставки — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  try {
+    const { sales, nmIdToSku } = await fetchWbSalesWithMeta(token, since);
+    console.log(`OK: Statistics /sales — ${sales.length} строк, nmId→sku: ${nmIdToSku.size}`);
+  } catch (err) {
+    if (err instanceof MarketplaceApiError && err.status === 429) {
+      console.log(`WARN: Statistics /sales — rate limit (429), повторите позже`);
+    } else if (err instanceof MarketplaceApiError) {
+      hadFailure = true;
+      console.log(`FAIL: Statistics /sales — ${err.message.slice(0, 200)}`);
+    } else {
+      hadFailure = true;
+      console.log(`FAIL: sales — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  try {
+    const ordersMap = await fetchWbNmIdMapFromOrders(token, since).catch(
+      () => new Map<number, string>(),
+    );
+    const { data: stocks, warnings } = await fetchWbStocks(token, ordersMap);
+    console.log(`OK: Analytics /stocks — ${stocks.length} SKU`);
+    for (const w of warnings) console.log(`    WARN: ${w}`);
+  } catch (err) {
+    if (err instanceof MarketplaceApiError && err.status === 429) {
+      console.log(`WARN: Analytics /stocks — rate limit (429)`);
+    } else {
+      console.log(`WARN: остатки — ${err instanceof Error ? err.message.slice(0, 200) : err}`);
     }
   }
 
   await prisma.$disconnect();
+  if (hadFailure) process.exit(1);
 }
 
 main().catch((e) => {

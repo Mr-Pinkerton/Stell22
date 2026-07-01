@@ -40,11 +40,9 @@ saleID (S… — продажа, R… — возврат), srid, gNumber
 Те же поля + `isCancel`, `cancelDate`. Заказы ≠ выкупы.
 
 ### Остатки — `POST /api/analytics/v1/stocks-report/wb-warehouses`
-(старый `GET /api/v1/supplier/stocks` отключён). Поля:
-```
-nmId, supplierArticle, barcode, warehouseName,
-quantity, inWayToClient, inWayFromClient, quantityFull
-```
+(старый `GET /api/v1/supplier/stocks` отключён). В ответе `vendorCode` / `nmID`
+и `quantity` или `metrics.stockCount`. SKU берём из `vendorCode`; если нет —
+из карты nmId→артикул (продажи или заказы Statistics API).
 
 ### Поставки на склад WB (FBW)
 Старый `GET /api/v1/supplier/incomes` (Statistics) **снят** (404).

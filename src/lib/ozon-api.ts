@@ -2,7 +2,7 @@
 // См. docs/marketplace-api.md.
 
 import type { OzonPostingRaw, OzonStockRaw, OzonSupplyOrderRaw } from "@/lib/marketplace-map";
-import { fetchJson, MarketplaceApiError, sleep } from "@/lib/marketplace-http";
+import { fetchJson, MarketplaceApiError, sleep, type MpFetchResult } from "@/lib/marketplace-http";
 
 const OZON_BASE = "https://api-seller.ozon.ru";
 const PAGE_LIMIT = 1000;
@@ -215,8 +215,9 @@ async function fetchOzonSupplyOrderIdsByStates(
   to: Date,
   states: readonly string[],
   maxOrders: number,
-): Promise<number[]> {
+): Promise<{ ids: number[]; warnings: string[] }> {
   const ids: number[] = [];
+  const warnings: string[] = [];
   let lastId: string | undefined;
 
   for (let page = 0; page < MAX_PAGES; page++) {
@@ -245,14 +246,22 @@ async function fetchOzonSupplyOrderIdsByStates(
     await sleep(300);
   }
 
-  return [...new Set(ids)].slice(0, maxOrders);
+  const unique = [...new Set(ids)];
+  const truncated = unique.length > maxOrders;
+  if (truncated) {
+    warnings.push(
+      `Ozon/поставки: в API ${unique.length} заявок, обработано ${maxOrders} (лимит sync)`,
+    );
+  }
+
+  return { ids: unique.slice(0, maxOrders), warnings };
 }
 
 async function fetchOzonSupplyOrderIds(
   creds: OzonCredentials,
   since: Date,
   to: Date,
-): Promise<number[]> {
+): Promise<{ ids: number[]; warnings: string[] }> {
   return fetchOzonSupplyOrderIdsByStates(
     creds,
     since,
@@ -271,13 +280,14 @@ export async function fetchOzonCancelledSupplyOrderIds(
   since: Date,
   to: Date,
 ): Promise<number[]> {
-  return fetchOzonSupplyOrderIdsByStates(
+  const { ids } = await fetchOzonSupplyOrderIdsByStates(
     creds,
     since,
     to,
     OZON_SUPPLY_CANCELLED_STATES,
     OZON_CANCELLED_MAX_ORDERS,
   );
+  return ids;
 }
 
 interface OzonBundleItem {
@@ -312,9 +322,9 @@ export async function fetchOzonSupplyOrders(
   creds: OzonCredentials,
   since: Date,
   to: Date,
-): Promise<OzonSupplyOrderRaw[]> {
-  const orderIds = await fetchOzonSupplyOrderIds(creds, since, to);
-  if (orderIds.length === 0) return [];
+): Promise<MpFetchResult<OzonSupplyOrderRaw[]>> {
+  const { ids: orderIds, warnings } = await fetchOzonSupplyOrderIds(creds, since, to);
+  if (orderIds.length === 0) return { data: [], warnings };
 
   const orders: OzonSupplyGetOrder[] = [];
   const getChunk = 50;
@@ -345,7 +355,7 @@ export async function fetchOzonSupplyOrders(
     const raw = mapOzonSupplyGetToRaw(order, bundleItems);
     if (raw) out.push(raw);
   }
-  return out;
+  return { data: out, warnings };
 }
 
 interface V4StockItem {

@@ -44,3 +44,9 @@ export async function fetchJson<T>(
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/** Результат fetch с предупреждениями (лимиты, частичные данные). */
+export interface MpFetchResult<T> {
+  data: T;
+  warnings: string[];
+}

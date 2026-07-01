@@ -24,9 +24,11 @@ import {
 } from "@/lib/ozon-api";
 import {
   fetchWbIncomes,
+  fetchWbNmIdMapFromOrders,
   fetchWbSalesWithMeta,
   fetchWbStocks,
   isWbConfigured,
+  mergeWbNmIdMaps,
 } from "@/lib/wb-api";
 import type { SalesReportRow } from "@/mocks/report-fixtures";
 import type { Marketplace, MpStockRow, ShipmentRow, ShipmentStatus } from "@/mocks/warehouse-fixtures";
@@ -328,11 +330,11 @@ async function fetchMarketplaceData(
     let nmIdToSku = new Map<number, string>();
 
     try {
-      const { sales: wbSalesRaw, nmIdToSku: map } = await fetchWbSalesWithMeta(
+      const { sales: wbSalesRaw, nmIdToSku: salesMap } = await fetchWbSalesWithMeta(
         creds["wb.token"],
         since,
       );
-      nmIdToSku = map;
+      nmIdToSku = salesMap;
       wbSales.push(...wbSalesRaw.map(mapWbSale));
       wb.sales = wbSales.length;
     } catch (err) {
@@ -340,7 +342,11 @@ async function fetchMarketplaceData(
     }
 
     try {
-      const wbIncomes = await fetchWbIncomes(creds["wb.token"], since);
+      const { data: wbIncomes, warnings: incomeWarnings } = await fetchWbIncomes(
+        creds["wb.token"],
+        since,
+      );
+      warnings.push(...incomeWarnings);
       wbSupplies.push(...wbIncomes.map(mapWbIncome));
       wb.supplies = wbSupplies.length;
     } catch (err) {
@@ -348,7 +354,18 @@ async function fetchMarketplaceData(
     }
 
     try {
-      const wbStocksRaw = await fetchWbStocks(creds["wb.token"], nmIdToSku);
+      let ordersMap = new Map<number, string>();
+      if (nmIdToSku.size === 0) {
+        ordersMap = await fetchWbNmIdMapFromOrders(creds["wb.token"], since).catch(
+          () => new Map<number, string>(),
+        );
+      }
+      const skuMap = mergeWbNmIdMaps(nmIdToSku, ordersMap);
+      const { data: wbStocksRaw, warnings: stockWarnings } = await fetchWbStocks(
+        creds["wb.token"],
+        skuMap,
+      );
+      warnings.push(...stockWarnings);
       wbStocks.push(...wbStocksRaw.map(mapWbStock));
       wb.stocks = wbStocks.length;
       stockReplace.wb = true;
@@ -383,7 +400,12 @@ async function fetchMarketplaceData(
     }
 
     try {
-      const ozonSuppliesRaw = await fetchOzonSupplyOrders(ozonCredsNonNull, since, to);
+      const { data: ozonSuppliesRaw, warnings: supplyWarnings } = await fetchOzonSupplyOrders(
+        ozonCredsNonNull,
+        since,
+        to,
+      );
+      warnings.push(...supplyWarnings);
       ozonSupplies.push(...ozonSuppliesRaw.flatMap(mapOzonSupplyOrder));
       ozon.supplies = ozonSupplies.length;
     } catch (err) {
