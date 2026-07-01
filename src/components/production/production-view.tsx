@@ -35,6 +35,8 @@ import {
   expandableExpandedDetailClass,
   expandableExpandedSummaryClass,
   expandableNestedWrapExpandedClass,
+  expandableColWidths5ChangeLog,
+  expandableColWidths5Detail,
   expandableSummaryCellClass,
   NestedTable,
   NestedTableCell,
@@ -179,6 +181,7 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
 
       <FiltersBar
         date
+        dateAllTime
         dateFilterValue={dateFilter}
         onDateFilterChange={setDateFilter}
       />
@@ -393,7 +396,13 @@ function ProductionEntryDetail({
         <span className="font-semibold tabular-nums">{formatMoney(row.amount)}</span>
       </p>
 
-      <NestedTable headers={[...DETAIL_HEADERS]} isEmpty={editRows.length === 0} empty="Нет строк">
+      <NestedTable
+        headers={[...DETAIL_HEADERS]}
+        colWidths={expandableColWidths5Detail}
+        centerFrom={2}
+        isEmpty={editRows.length === 0}
+        empty="Нет строк"
+      >
         {editRows.map((line) => {
           const raw = editQty[line.index] ?? String(line.terminalQty);
           const parsed = Number(raw);
@@ -458,6 +467,8 @@ function ProductionEntryDetail({
           <p className="text-sm font-semibold">Журнал изменений</p>
           <NestedTable
             headers={[...CHANGE_LOG_HEADERS]}
+            colWidths={expandableColWidths5ChangeLog}
+            centerFrom={2}
             isEmpty={row.changeLog.length === 0}
             empty="Изменений не было"
           >
@@ -466,12 +477,16 @@ function ProductionEntryDetail({
                 <NestedTableCell className="whitespace-nowrap tabular-nums">
                   {formatChangeLogWhen(log.changedAt)}
                 </NestedTableCell>
-                <NestedTableCell>{log.userName}</NestedTableCell>
-                <NestedTableCell className="text-center">{log.field}</NestedTableCell>
-                <NestedTableCell className="text-center tabular-nums">
+                <NestedTableCell className="whitespace-normal">
+                  {log.userName}
+                </NestedTableCell>
+                <NestedTableCell className="text-center whitespace-normal">
+                  {log.field}
+                </NestedTableCell>
+                <NestedTableCell className="text-center tabular-nums whitespace-normal">
                   {log.oldValue}
                 </NestedTableCell>
-                <NestedTableCell className="text-center tabular-nums">
+                <NestedTableCell className="text-center tabular-nums whitespace-normal">
                   {log.newValue}
                 </NestedTableCell>
               </TableRow>

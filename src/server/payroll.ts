@@ -5,6 +5,8 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { maybeFreezeBatch } from "@/server/cost";
+import { notifyEvent } from "@/server/notifications";
+import { formatMoney } from "@/lib/format";
 import { operationEarning } from "@/lib/payroll";
 import { dayKey } from "@/lib/entries";
 import type { SalaryDayLine, SalaryReportRow } from "@/mocks/report-fixtures";
@@ -216,6 +218,17 @@ export async function markEmployeePaid(employeeId: string): Promise<SalaryReport
     for (const batchId of torcovkaBatchIds) {
       await maybeFreezeBatch(tx, batchId);
     }
+
+    await notifyEvent(
+      {
+        key: `event:salary-paid:${payment.id}`,
+        title: `Зарплата — ${maps.employeeName.get(employeeId) ?? "сотрудник"}`,
+        message: `Выплачено ${formatMoney(amount)} за ${opIds.length} операций`,
+        tone: "SUCCESS",
+        href: "/reports",
+      },
+      tx,
+    );
   });
 
   revalidatePath(PATH);

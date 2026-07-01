@@ -2,9 +2,12 @@ import { LogOut } from "lucide-react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { NotificationsPanel } from "@/components/notifications-panel";
+import { getNotifications } from "@/server/notifications";
 import { formatHeaderDate } from "@/lib/format";
 
-export function AppHeader() {
+export async function AppHeader() {
+  const notifications = await getNotifications();
+
   return (
     <header className="surface-card bg-card sticky top-0 z-10 mx-4 mt-4 flex h-14 items-center gap-3 px-4 md:mx-6">
       <SidebarTrigger className="rounded-full [&_svg]:stroke-[1.75]" />
@@ -13,7 +16,7 @@ export function AppHeader() {
 
       <span className="text-sm font-semibold">Администратор</span>
 
-      <NotificationsPanel />
+      <NotificationsPanel initialNotifications={notifications} />
 
       <Button
         variant="outline"

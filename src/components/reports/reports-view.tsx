@@ -216,6 +216,7 @@ export function ReportsView({
       <div className="space-y-4">
         <FiltersBar
           date={filters.date}
+          dateAllTime={filters.date}
           weeks={filters.weeks}
           archive={filters.archive}
           actionLabel={activeTab === "purchases" ? "Применить" : "Показать"}

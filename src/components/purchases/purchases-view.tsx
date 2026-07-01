@@ -18,6 +18,10 @@ import { type PurchaseBatchRow } from "@/lib/batch-stats";
 import type { NomenclatureItem } from "@/types/domain";
 import { formatIsoDate, formatLength, formatMoney, formatVolume } from "@/lib/format";
 import { exportXlsx } from "@/lib/export-xlsx";
+import {
+  dataTableArchivedRowClass,
+  partitionActiveArchived,
+} from "@/lib/table-archive";
 import { XLSX_FMT } from "@/lib/xlsx-types";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
@@ -50,11 +54,12 @@ export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return batches.filter((b) => {
+    const filtered = batches.filter((b) => {
       if (!showArchive && b.status === "ARCHIVED") return false;
       if (!q) return true;
       return b.name.toLowerCase().includes(q);
     });
+    return partitionActiveArchived(filtered, (b) => b.status === "ARCHIVED");
   }, [batches, search, showArchive]);
 
   const handleExport = () =>
@@ -226,11 +231,17 @@ export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
     {
       key: "status",
       header: "Статус",
-      render: (row) => (
-        <Badge variant={row.status === "IN_WORK" ? "secondary" : "outline"}>
-          {row.status === "IN_WORK" ? "В работе" : "Архив"}
-        </Badge>
-      ),
+      render: (row) => {
+        const archived = row.status === "ARCHIVED";
+        return (
+          <Badge
+            variant={row.status === "IN_WORK" ? "secondary" : "outline"}
+            className={archived ? "opacity-80" : undefined}
+          >
+            {row.status === "IN_WORK" ? "В работе" : "Архив"}
+          </Badge>
+        );
+      },
     },
     {
       key: "purchaseDate",
@@ -366,6 +377,9 @@ export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
             empty="Партии не найдены"
             className="border-0"
             padded
+            rowClassName={(row, index) =>
+              dataTableArchivedRowClass(row, index, (r) => r.status === "ARCHIVED")
+            }
           />
         </CardContent>
       </Card>

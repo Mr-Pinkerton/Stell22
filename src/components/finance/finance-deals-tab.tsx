@@ -7,6 +7,10 @@ import type {
   FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { formatMoney } from "@/lib/format";
+import {
+  expandableArchivedSummaryRowClass,
+  partitionActiveArchived,
+} from "@/lib/table-archive";
 import { cn } from "@/lib/utils";
 import { scrollTableYClass } from "@/lib/scroll-classes";
 import {
@@ -15,7 +19,6 @@ import {
   expandableExpandedAccentClass,
   expandableExpandedChevronClass,
   expandableExpandedDetailClass,
-  expandableExpandedSummaryClass,
   expandableNestedWrapExpandedClass,
   expandableSummaryCellClass,
   NestedTable,
@@ -106,10 +109,10 @@ export function FinanceDealsTab({
   const [showArchive, setShowArchive] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const rows = useMemo(
-    () => deals.filter((d) => showArchive || d.status !== "ARCHIVED"),
-    [deals, showArchive],
-  );
+  const rows = useMemo(() => {
+    const filtered = deals.filter((d) => showArchive || d.status !== "ARCHIVED");
+    return partitionActiveArchived(filtered, (d) => d.status === "ARCHIVED");
+  }, [deals, showArchive]);
 
   return (
     <div className="space-y-4">
@@ -192,14 +195,14 @@ function DealRowGroup({
 }) {
   const lines = useMemo(() => buildDealLines(deal, cashFlows), [deal, cashFlows]);
 
+  const archived = deal.status === "ARCHIVED";
+
   return (
     <Fragment>
       <TableRow
         className={cn(
           "cursor-pointer align-middle",
-          striped && !expanded && "bg-muted/40",
-          expanded && expandableExpandedSummaryClass,
-          !expanded && "hover:bg-muted/50",
+          expandableArchivedSummaryRowClass({ archived, expanded, striped }),
         )}
         onClick={onToggle}
       >
@@ -217,14 +220,19 @@ function DealRowGroup({
             ) : (
               <ChevronRight className={expandableChevronClass} />
             )}
-            <span className="truncate font-medium">{deal.name}</span>
+            <span className={cn("truncate font-medium", archived && "font-normal")}>
+              {deal.name}
+            </span>
           </div>
         </TableCell>
         <TableCell className={cn(expandableSummaryCellClass, "text-center font-medium tabular-nums")}>
           {formatMoney(deal.total)}
         </TableCell>
         <TableCell className={cn(expandableSummaryCellClass, "text-center")}>
-          <Badge variant={deal.status === "OPEN" ? "secondary" : "outline"}>
+          <Badge
+            variant={deal.status === "OPEN" ? "secondary" : "outline"}
+            className={archived ? "opacity-80" : undefined}
+          >
             {deal.status === "OPEN" ? "Открыта" : "Архив"}
           </Badge>
         </TableCell>

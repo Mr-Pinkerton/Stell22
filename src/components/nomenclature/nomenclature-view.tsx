@@ -25,6 +25,10 @@ import {
 } from "@/server/nomenclature";
 import { formatLength, formatMoney } from "@/lib/format";
 import { exportXlsx } from "@/lib/export-xlsx";
+import {
+  dataTableArchivedRowClass,
+  partitionActiveArchived,
+} from "@/lib/table-archive";
 import { XLSX_FMT, type XlsxSheet } from "@/lib/xlsx-types";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
@@ -71,8 +75,12 @@ const TAB_TO_NOM_TYPE: Partial<Record<TabKey, NomenclatureType>> = {
 };
 
 function statusBadge(status: "ACTIVE" | "ARCHIVED") {
+  const archived = status === "ARCHIVED";
   return (
-    <Badge variant={status === "ACTIVE" ? "secondary" : "outline"}>
+    <Badge
+      variant={status === "ACTIVE" ? "secondary" : "outline"}
+      className={archived ? "opacity-80" : undefined}
+    >
       {status === "ACTIVE" ? "Активен" : "Архив"}
     </Badge>
   );
@@ -205,17 +213,27 @@ export function NomenclatureView({
   const matchesSearch = (text: string) => !q || text.toLowerCase().includes(q);
   const visible = (status: "ACTIVE" | "ARCHIVED") => showArchive || status !== "ARCHIVED";
 
-  const productRows = products.filter(
-    (p) => visible(p.status) && matchesSearch(`${p.name} ${p.sku}`),
+  const productRows = partitionActiveArchived(
+    products.filter((p) => visible(p.status) && matchesSearch(`${p.name} ${p.sku}`)),
+    (p) => p.status === "ARCHIVED",
   );
-  const detailRows = details.filter((d) => visible(d.status) && matchesSearch(d.name));
+  const detailRows = partitionActiveArchived(
+    details.filter((d) => visible(d.status) && matchesSearch(d.name)),
+    (d) => d.status === "ARCHIVED",
+  );
   const itemsByType = (type: NomenclatureType) =>
-    items.filter((n) => n.type === type && visible(n.status) && matchesSearch(n.name));
+    partitionActiveArchived(
+      items.filter((n) => n.type === type && visible(n.status) && matchesSearch(n.name)),
+      (n) => n.status === "ARCHIVED",
+    );
   const fastenerRows = itemsByType("FASTENER");
   const packagingRows = itemsByType("PACKAGING");
   const otherRows = itemsByType("OTHER");
 
   const statusText = (s: "ACTIVE" | "ARCHIVED") => (s === "ACTIVE" ? "Активен" : "Архив");
+
+  const archivedRowClass = <T extends { status: "ACTIVE" | "ARCHIVED" }>(row: T, index: number) =>
+    dataTableArchivedRowClass(row, index, (r) => r.status === "ARCHIVED");
 
   const buildExportSheet = (): XlsxSheet => {
     if (activeTab === "products") {
@@ -622,6 +640,7 @@ export function NomenclatureView({
                 empty={emptyByTab.products}
                 className="border-0"
                 padded
+                rowClassName={archivedRowClass}
               />
             )}
             {activeTab === "details" && (
@@ -631,6 +650,7 @@ export function NomenclatureView({
                 empty={emptyByTab.details}
                 className="border-0"
                 padded
+                rowClassName={archivedRowClass}
               />
             )}
             {(activeTab === "fasteners" ||
@@ -642,6 +662,7 @@ export function NomenclatureView({
                 empty={emptyByTab[activeTab]}
                 className="border-0"
                 padded
+                rowClassName={archivedRowClass}
               />
             )}
           </CardContent>

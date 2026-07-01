@@ -3,6 +3,10 @@
 import { useMemo, useState } from "react";
 import type { WasteBatchRow, WasteEmployeeRow } from "@/mocks/report-fixtures";
 import { formatLength } from "@/lib/format";
+import {
+  dataTableArchivedRowClass,
+  partitionActiveArchived,
+} from "@/lib/table-archive";
 import { SegmentTabs, wastePercentClass } from "@/components/reports/report-shared";
 import { DataTable, type Column } from "@/components/data-table";
 import { Badge } from "@/components/ui/badge";
@@ -19,10 +23,10 @@ interface ReportWasteTabProps {
 export function ReportWasteTab({ showArchive, batches, employees }: ReportWasteTabProps) {
   const [subTab, setSubTab] = useState<WasteSubTab>("batches");
 
-  const batchRows = useMemo(
-    () => batches.filter((r) => showArchive || r.status !== "ARCHIVED"),
-    [showArchive, batches],
-  );
+  const batchRows = useMemo(() => {
+    const filtered = batches.filter((r) => showArchive || r.status !== "ARCHIVED");
+    return partitionActiveArchived(filtered, (r) => r.status === "ARCHIVED");
+  }, [showArchive, batches]);
 
   const batchColumns: Column<WasteBatchRow>[] = [
     {
@@ -71,11 +75,17 @@ export function ReportWasteTab({ showArchive, batches, employees }: ReportWasteT
     {
       key: "status",
       header: "Статус",
-      render: (row) => (
-        <Badge variant={row.status === "IN_WORK" ? "secondary" : "outline"}>
-          {row.status === "IN_WORK" ? "В работе" : "Архив"}
-        </Badge>
-      ),
+      render: (row) => {
+        const archived = row.status === "ARCHIVED";
+        return (
+          <Badge
+            variant={row.status === "IN_WORK" ? "secondary" : "outline"}
+            className={archived ? "opacity-80" : undefined}
+          >
+            {row.status === "IN_WORK" ? "В работе" : "Архив"}
+          </Badge>
+        );
+      },
     },
   ];
 
@@ -134,6 +144,9 @@ export function ReportWasteTab({ showArchive, batches, employees }: ReportWasteT
               empty="Партии не найдены"
               className="border-0"
               padded
+              rowClassName={(row, index) =>
+                dataTableArchivedRowClass(row, index, (r) => r.status === "ARCHIVED")
+              }
             />
           ) : (
             <DataTable

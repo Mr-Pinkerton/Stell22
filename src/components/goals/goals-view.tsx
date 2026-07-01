@@ -15,6 +15,7 @@ import {
   weeklyPlan,
 } from "@/lib/goals";
 import { goalMonthLabel, splitGoalsForView } from "@/lib/goals-view";
+import { dataTableArchivedRowClass } from "@/lib/table-archive";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
@@ -67,6 +68,7 @@ export function GoalsView({
 
       <FiltersBar
         date
+        dateAllTime
         dateFilterValue={dateFilter}
         onDateFilterChange={setDateFilter}
       />
@@ -98,6 +100,9 @@ export function GoalsView({
                   empty="Нет целей"
                   padded
                   className="border-0"
+                  rowClassName={(row, index) =>
+                    dataTableArchivedRowClass(row, index, (r) => r.status === "ARCHIVED")
+                  }
                 />
               </CardContent>
             </Card>

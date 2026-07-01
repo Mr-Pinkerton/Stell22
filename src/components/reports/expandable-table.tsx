@@ -73,6 +73,22 @@ export const expandableColWidths6 = [
   "14%",
 ] as const;
 
+export const expandableColWidths5Detail = [
+  "26%",
+  "22%",
+  "14%",
+  "18%",
+  "20%",
+] as const;
+
+export const expandableColWidths5ChangeLog = [
+  "24%",
+  "20%",
+  "18%",
+  "19%",
+  "19%",
+] as const;
+
 export function ExpandableColGroup({ widths }: { widths: readonly string[] }) {
   return (
     <colgroup>
@@ -132,25 +148,36 @@ interface NestedTableProps {
   children: React.ReactNode;
   empty?: string;
   isEmpty?: boolean;
+  colWidths?: readonly string[];
+  /** С какого индекса столбца выравнивать заголовок по центру (по умолчанию — все кроме первого). */
+  centerFrom?: number;
 }
 
-export function NestedTable({ headers, children, empty, isEmpty }: NestedTableProps) {
+export function NestedTable({
+  headers,
+  children,
+  empty,
+  isEmpty,
+  colWidths,
+  centerFrom = 1,
+}: NestedTableProps) {
   if (isEmpty && empty) {
     return <p className="text-muted-foreground pl-2 text-sm">{empty}</p>;
   }
 
   return (
     <div className={expandableNestedTableShellClass}>
-      <Table>
+      <Table className={colWidths ? "table-fixed w-full" : undefined}>
+        {colWidths && <ExpandableColGroup widths={colWidths} />}
         <TableHeader className="[&_[data-slot=table-row]]:border-border/30">
           <TableRow>
             {headers.map((h, i) => (
               <TableHead
-                key={h}
+                key={`${h}-${i}`}
                 className={cn(
                   expandableNestedHeadClass,
                   expandableNestedCellPad,
-                  i > 0 && "text-center",
+                  i >= centerFrom && h && "text-center",
                 )}
               >
                 {h}

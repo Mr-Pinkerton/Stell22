@@ -89,6 +89,12 @@ enum CostStatus {
   FINAL       // заморожено
 }
 
+enum NotificationTone {
+  ERROR
+  SUCCESS
+  INFO
+}
+
 // ============================= ПОЛЬЗОВАТЕЛИ =================================
 
 model User {
@@ -614,6 +620,29 @@ model Sale {
   date        DateTime
 
   @@index([date])
+}
+
+// ============================= УВЕДОМЛЕНИЯ ==================================
+
+// Колокольчик в шапке. Два вида записей:
+//  - isSystem=true  — текущее состояние (напр. низкий остаток, высокий отход);
+//    пересчитывается при каждом открытии панели, лишние удаляются автоматически
+//    (см. syncSystemNotifications в src/server/notifications.ts);
+//  - isSystem=false — разовое событие (партия закрыта, ЗП выплачена и т.п.),
+//    создаётся один раз в момент действия и хранится как есть.
+model Notification {
+  id        String            @id @default(cuid())
+  key       String            @unique // стабильный ключ условия/события — дедупликация
+  title     String
+  message   String
+  tone      NotificationTone
+  href      String?
+  severity  Int               @default(0)
+  isRead    Boolean           @default(false)
+  isSystem  Boolean           @default(true)
+  createdAt DateTime          @default(now())
+
+  @@index([isRead])
 }
 
 // ============================= НАСТРОЙКИ / КАЛЕНДАРЬ ========================

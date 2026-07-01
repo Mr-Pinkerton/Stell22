@@ -9,6 +9,7 @@ import {
   type PurchaseReportRow,
 } from "@/mocks/report-fixtures";
 import { formatIsoDate, formatLength, formatMoney, formatVolume } from "@/lib/format";
+import { partitionActiveArchived, expandableArchivedSummaryRowClass } from "@/lib/table-archive";
 import {
   ExpandableDetailRow,
   ExpandableMainHeader,
@@ -19,7 +20,6 @@ import {
   expandableColWidths8,
   expandableExpandedAccentClass,
   expandableExpandedChevronClass,
-  expandableExpandedSummaryClass,
   expandableNestedWrapExpandedClass,
   expandableSummaryCellClass,
 } from "@/components/reports/expandable-table";
@@ -78,10 +78,10 @@ function packageTitle(pkg: PurchasePackageLine) {
 export function ReportPurchasesTab({ showArchive, initialRows }: ReportPurchasesTabProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const rows = useMemo(
-    () => initialRows.filter((r) => showArchive || r.status !== "ARCHIVED"),
-    [showArchive, initialRows],
-  );
+  const rows = useMemo(() => {
+    const filtered = initialRows.filter((r) => showArchive || r.status !== "ARCHIVED");
+    return partitionActiveArchived(filtered, (r) => r.status === "ARCHIVED");
+  }, [showArchive, initialRows]);
 
   const kpis = useMemo(() => purchaseReportKpis(rows), [rows]);
 
@@ -185,13 +185,7 @@ function BatchSummaryRow({
     <TableRow
       className={cn(
         "group cursor-pointer align-top",
-        archived && "text-muted-foreground/70 opacity-60",
-        striped && !archived && !expanded && "bg-muted/40",
-        striped && archived && !expanded && "bg-muted/25",
-        expanded && !archived && expandableExpandedSummaryClass,
-        expanded && archived && "bg-muted/30",
-        !archived && !expanded && "hover:bg-muted/50",
-        archived && !expanded && "hover:bg-muted/30 hover:opacity-75",
+        expandableArchivedSummaryRowClass({ archived, expanded, striped }),
       )}
       onClick={onToggle}
     >

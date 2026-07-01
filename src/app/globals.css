@@ -333,4 +333,9 @@
   .icon-action-btn.icon-action-btn--compact:hover {
     transform: scale(1.05);
   }
+
+  /* Якорь popover — без scale, иначе панель «прыгает». */
+  .icon-action-btn.icon-action-btn--compact.icon-action-btn--anchor:hover {
+    transform: none;
+  }
 }

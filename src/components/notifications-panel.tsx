@@ -1,9 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { AlertCircle, Bell, CheckCircle2, Info } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { adminNotifications, type AdminNotification, type NotificationTone } from "@/mocks/notifications";
+import {
+  markAllNotificationsRead,
+  markNotificationRead,
+  type NotificationRow,
+  type NotificationTone,
+} from "@/server/notifications";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,17 +18,17 @@ const toneStyles: Record<
   NotificationTone,
   { row: string; icon: string; Icon: typeof Info }
 > = {
-  error: {
+  ERROR: {
     row: "border-destructive/25 bg-destructive/5 hover:bg-destructive/10",
     icon: "bg-destructive/15 text-destructive",
     Icon: AlertCircle,
   },
-  success: {
+  SUCCESS: {
     row: "border-[#abefc6] bg-[#ecfdf3] hover:bg-[#d1fadf]",
     icon: "bg-[#d1fadf] text-[#027a48]",
     Icon: CheckCircle2,
   },
-  info: {
+  INFO: {
     row: "border-tag-blue-bg bg-tag-blue-bg/40 hover:bg-tag-blue-bg/70",
     icon: "bg-tag-blue-bg text-tag-blue",
     Icon: Info,
@@ -44,14 +50,13 @@ function formatRelativeTime(iso: string): string {
 
 function NotificationItem({
   item,
-  unread,
   onClick,
 }: {
-  item: AdminNotification;
-  unread: boolean;
+  item: NotificationRow;
   onClick: () => void;
 }) {
   const { row, icon, Icon } = toneStyles[item.tone];
+  const unread = !item.isRead;
 
   return (
     <button
@@ -75,34 +80,50 @@ function NotificationItem({
         </span>
         <span className="text-muted-foreground mt-0.5 block text-sm leading-snug">{item.message}</span>
         <span className="text-muted-foreground/80 mt-1.5 block text-xs">
-          {formatRelativeTime(item.occurredAt)}
+          {formatRelativeTime(item.createdAt)}
         </span>
       </span>
     </button>
   );
 }
 
-export function NotificationsPanel() {
+export function NotificationsPanel({
+  initialNotifications,
+}: {
+  initialNotifications: NotificationRow[];
+}) {
   const [open, setOpen] = useState(false);
-  const [readIds, setReadIds] = useState<Set<string>>(() => new Set());
+  const [rows, setRows] = useState(initialNotifications);
+  const [, startTransition] = useTransition();
 
-  const unreadCount = useMemo(
-    () => adminNotifications.filter((n) => !readIds.has(n.id)).length,
-    [readIds],
-  );
+  const unreadCount = useMemo(() => rows.filter((n) => !n.isRead).length, [rows]);
 
   const markRead = (id: string) => {
-    setReadIds((prev) => new Set(prev).add(id));
+    setRows((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
+    startTransition(async () => {
+      try {
+        await markNotificationRead(id);
+      } catch {
+        toast.error("Не удалось отметить уведомление прочитанным");
+      }
+    });
   };
 
   const markAllRead = () => {
-    setReadIds(new Set(adminNotifications.map((n) => n.id)));
+    setRows((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    startTransition(async () => {
+      try {
+        await markAllNotificationsRead();
+      } catch {
+        toast.error("Не удалось отметить уведомления прочитанными");
+      }
+    });
   };
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
-        className="icon-action-btn icon-action-btn--compact relative inline-flex size-10 cursor-pointer items-center justify-center rounded-full p-0 [&_svg]:size-4 [&_svg]:stroke-[1.75]"
+        className="icon-action-btn icon-action-btn--compact icon-action-btn--anchor relative inline-flex size-10 cursor-pointer items-center justify-center rounded-full p-0 [&_svg]:size-4 [&_svg]:stroke-[1.75]"
         aria-label="Уведомления"
       >
         <Bell />
@@ -138,19 +159,14 @@ export function NotificationsPanel() {
         </div>
 
         <div className="scrollbar-thin-y max-h-[min(24rem,60vh)] overflow-y-auto p-3">
-          {adminNotifications.length === 0 ? (
+          {rows.length === 0 ? (
             <div className="text-muted-foreground flex h-32 items-center justify-center text-sm">
               Уведомлений нет
             </div>
           ) : (
             <div className="flex flex-col gap-2">
-              {adminNotifications.map((item) => (
-                <NotificationItem
-                  key={item.id}
-                  item={item}
-                  unread={!readIds.has(item.id)}
-                  onClick={() => markRead(item.id)}
-                />
+              {rows.map((item) => (
+                <NotificationItem key={item.id} item={item} onClick={() => markRead(item.id)} />
               ))}
             </div>
           )}

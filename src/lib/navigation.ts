@@ -68,7 +68,7 @@ export const navItems: NavItem[] = [
     icon: Package,
     canExport: true,
     addLabel: "Добавить",
-    filters: { search: true },
+    filters: { search: true, archive: true },
   },
   {
     slug: "reports",
@@ -76,7 +76,7 @@ export const navItems: NavItem[] = [
     href: "/reports",
     icon: FileBarChart,
     canExport: true,
-    filters: { date: true, archive: true },
+    filters: { date: true, dateAllTime: true, archive: true },
   },
   {
     slug: "finance",
@@ -94,7 +94,7 @@ export const navItems: NavItem[] = [
     icon: Factory,
     canExport: true,
     addLabel: "Добавить",
-    filters: { date: true },
+    filters: { date: true, dateAllTime: true },
   },
   {
     slug: "sales",
@@ -102,7 +102,7 @@ export const navItems: NavItem[] = [
     href: "/sales",
     icon: TrendingUp,
     canExport: false,
-    filters: { date: true },
+    filters: { date: true, dateAllTime: true },
   },
   {
     slug: "warehouse",
@@ -119,7 +119,7 @@ export const navItems: NavItem[] = [
     icon: Target,
     canExport: false,
     addLabel: "Создать цель",
-    filters: { date: true },
+    filters: { date: true, dateAllTime: true },
   },
   {
     slug: "settings",

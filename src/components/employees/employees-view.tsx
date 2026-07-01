@@ -14,6 +14,10 @@ import {
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
 import { exportXlsx } from "@/lib/export-xlsx";
+import {
+  dataTableArchivedRowClass,
+  partitionActiveArchived,
+} from "@/lib/table-archive";
 import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -40,11 +44,12 @@ export function EmployeesView({ initialEmployees }: { initialEmployees: Employee
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return employees.filter((e) => {
+    const filtered = employees.filter((e) => {
       if (!showArchive && e.status === "ARCHIVED") return false;
       if (!q) return true;
       return e.fullName.toLowerCase().includes(q);
     });
+    return partitionActiveArchived(filtered, (e) => e.status === "ARCHIVED");
   }, [employees, search, showArchive]);
 
   const handleExport = () =>
@@ -135,11 +140,17 @@ export function EmployeesView({ initialEmployees }: { initialEmployees: Employee
     {
       key: "status",
       header: "Статус",
-      render: (row) => (
-        <Badge variant={row.status === "ACTIVE" ? "secondary" : "outline"}>
-          {row.status === "ACTIVE" ? "Активен" : "Архив"}
-        </Badge>
-      ),
+      render: (row) => {
+        const archived = row.status === "ARCHIVED";
+        return (
+          <Badge
+            variant={row.status === "ACTIVE" ? "secondary" : "outline"}
+            className={archived ? "opacity-80" : undefined}
+          >
+            {row.status === "ACTIVE" ? "Активен" : "Архив"}
+          </Badge>
+        );
+      },
     },
     {
       key: "actions",
@@ -257,6 +268,9 @@ export function EmployeesView({ initialEmployees }: { initialEmployees: Employee
             empty="Сотрудники не найдены"
             className="border-0"
             padded
+            rowClassName={(row, index) =>
+              dataTableArchivedRowClass(row, index, (r) => r.status === "ARCHIVED")
+            }
           />
         </CardContent>
       </Card>

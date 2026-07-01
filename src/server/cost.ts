@@ -11,6 +11,7 @@ import type {
 } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { notifyEvent } from "@/server/notifications";
 import { D, distributeBatchCost, sectionAreaM2 } from "@/lib/cost";
 import {
   buildCostDetailRows,
@@ -313,6 +314,16 @@ async function freezeBatch(tx: Prisma.TransactionClient, batch: PrismaBatch): Pr
     },
     tx,
   );
+  await notifyEvent(
+    {
+      key: `event:batch-frozen:${batch.id}`,
+      title: `Партия «${batch.name}»`,
+      message: "Себестоимость заморожена — все операции выплачены",
+      tone: "SUCCESS",
+      href: "/reports",
+    },
+    tx,
+  );
 }
 
 /**
@@ -372,6 +383,16 @@ export async function archiveBatchIfDepleted(
       entityId: batchId,
       oldValues: { status: batch.status, closedAt: null },
       newValues: { status: "ARCHIVED", closedAt: new Date().toISOString(), depleted: true },
+    },
+    tx,
+  );
+  await notifyEvent(
+    {
+      key: `event:batch-closed:${batchId}`,
+      title: `Партия «${batch.name}»`,
+      message: "Выработана — остаток списан, партия в архиве",
+      tone: "SUCCESS",
+      href: "/purchases",
     },
     tx,
   );
