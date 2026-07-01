@@ -55,7 +55,9 @@ export function SalesView({ data }: { data: SalesData }) {
     startTransition(async () => {
       const res = await syncMarketplaces();
       if (res.ok) {
-        toast.success(`Синхронизация: +${res.salesAdded} продаж, остатки обновлены`);
+        toast.success(
+          `Синхронизация: +${res.salesAdded} продаж, +${res.suppliesAdded} поставок, остатки обновлены`,
+        );
         router.refresh();
       } else {
         toast.error(res.error ?? "Ошибка синхронизации");

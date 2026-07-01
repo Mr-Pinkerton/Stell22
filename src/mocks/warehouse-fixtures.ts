@@ -92,36 +92,6 @@ export const mpStockRows: MpStockRow[] = [
   },
 ];
 
-export const shipmentRows: ShipmentRow[] = [
-  {
-    id: "shp-1",
-    date: "2026-06-20",
-    marketplace: "OZON",
-    sku: "ART-001",
-    productName: "Полка настенная",
-    quantity: 30,
-    status: "ACCEPTED",
-  },
-  {
-    id: "shp-2",
-    date: "2026-06-22",
-    marketplace: "WB",
-    sku: "ART-002",
-    productName: "Полка угловая",
-    quantity: 20,
-    status: "SHIPPED",
-  },
-  {
-    id: "shp-3",
-    date: "2026-06-25",
-    marketplace: "OZON",
-    sku: "ART-001",
-    productName: "Полка настенная",
-    quantity: 15,
-    status: "PENDING",
-  },
-];
-
 function line(
   id: string,
   refType: InventoryRefType,

@@ -400,6 +400,8 @@ model MpStock {
   marketplace String // OZON / WB
   sku       String
   quantity  Int
+  reserved  Int      @default(0) // зарезервировано/в возврате (Ozon reserved, WB inWayFromClient)
+  inWay     Int      @default(0) // в пути к покупателю (WB inWayToClient)
   syncedAt  DateTime @default(now())
 }
 
@@ -613,13 +615,36 @@ model ProductCost {
 model Sale {
   id          String   @id @default(cuid())
   marketplace String   // OZON / WB
+  externalId  String?  // saleID (WB) / posting_number:offer_id (Ozon) — идемпотентность
   sku         String
   productId   String?
-  quantity    Int
+  quantity    Int      // < 0 для возвратов (чтобы агрегаты сходились)
   revenue     Decimal  @db.Decimal(14, 2)
+  isReturn    Boolean  @default(false)
   date        DateTime
 
+  @@unique([marketplace, externalId])
   @@index([date])
+}
+
+// Поставки на склады маркетплейсов (WB incomes / Ozon supply-order).
+// Одна строка = один SKU в поставке (у одной заявки может быть несколько SKU).
+model Supply {
+  id            String    @id @default(cuid())
+  marketplace   String    // OZON / WB
+  externalId    String    // incomeId (WB) / supply_order_id (Ozon)
+  number        String? // человекочитаемый номер поставки
+  sku           String
+  productId     String?
+  quantity      Int
+  status        String    // PENDING / SHIPPED / ACCEPTED (нормализованный)
+  warehouseName String?
+  createdAt     DateTime  // дата создания заявки/поставки
+  acceptedAt    DateTime? // дата приёмки (WB dateClose)
+  syncedAt      DateTime  @default(now())
+
+  @@unique([marketplace, externalId, sku])
+  @@index([createdAt])
 }
 
 // ============================= УВЕДОМЛЕНИЯ ==================================

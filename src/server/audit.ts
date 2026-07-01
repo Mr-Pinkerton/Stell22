@@ -43,7 +43,7 @@ function describe(entity: string, entityId: string, newValues: unknown, oldValue
     return `${label}: авторазнесение операций (${String(nv.reappliedCount ?? 0)})`;
   }
   if (entity === "MpStock" && entityId === "sync") {
-    return `${label}: синхронизация (продажи ${String(nv.salesAdded ?? 0)}, остатки ${String(nv.stockUpdated ?? 0)})`;
+    return `${label}: синхронизация (продажи ${String(nv.salesAdded ?? 0)}, поставки ${String(nv.suppliesAdded ?? 0)}, остатки ${String(nv.stockUpdated ?? 0)})`;
   }
   if (typeof nv.status === "string") {
     const from = typeof ov.status === "string" ? `${ov.status} → ` : "";

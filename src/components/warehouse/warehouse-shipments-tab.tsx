@@ -4,7 +4,6 @@ import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
-  shipmentRows,
   MARKETPLACE_LABEL,
   SHIPMENT_STATUS_LABEL,
   type ShipmentRow,
@@ -58,14 +57,20 @@ const columns: Column<ShipmentRow>[] = [
 ];
 
 interface WarehouseShipmentsTabProps {
-  rows?: ShipmentRow[];
+  rows: ShipmentRow[];
 }
 
-export function WarehouseShipmentsTab({ rows = shipmentRows }: WarehouseShipmentsTabProps) {
+export function WarehouseShipmentsTab({ rows }: WarehouseShipmentsTabProps) {
   return (
     <Card className="surface-card ring-0">
       <CardContent className="p-0">
-        <DataTable columns={columns} rows={rows} empty="Поставок нет" padded className="border-0" />
+        <DataTable
+          columns={columns}
+          rows={rows}
+          empty="Поставок нет — нажмите «Синхронизировать с МП» в разделе Продажи"
+          padded
+          className="border-0"
+        />
       </CardContent>
     </Card>
   );

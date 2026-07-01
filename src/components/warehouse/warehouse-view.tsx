@@ -5,9 +5,9 @@ import { toast } from "sonner";
 import {
   MARKETPLACE_LABEL,
   SHIPMENT_STATUS_LABEL,
-  shipmentRows,
   type InventoryDocRow,
   type MpStockRow,
+  type ShipmentRow,
 } from "@/mocks/warehouse-fixtures";
 import { createInventoryDraft, type WarehouseStock } from "@/server/warehouse";
 import { exportXlsx } from "@/lib/export-xlsx";
@@ -39,9 +39,10 @@ interface WarehouseViewProps {
   stock: WarehouseStock;
   initialDocs: InventoryDocRow[];
   mpStock: MpStockRow[];
+  supplies: ShipmentRow[];
 }
 
-export function WarehouseView({ stock, initialDocs, mpStock }: WarehouseViewProps) {
+export function WarehouseView({ stock, initialDocs, mpStock, supplies }: WarehouseViewProps) {
   const [activeTab, setActiveTab] = useState<WarehouseTab>("mp");
   const [inventoryDocs, setInventoryDocs] = useState<InventoryDocRow[]>(initialDocs);
   const [pending, startTransition] = useTransition();
@@ -108,7 +109,7 @@ export function WarehouseView({ stock, initialDocs, mpStock }: WarehouseViewProp
               { header: "Кол-во", key: "quantity", numFmt: XLSX_FMT.int },
               { header: "Статус", key: "status", width: 14 },
             ],
-            rows: shipmentRows.map((r) => ({
+            rows: supplies.map((r) => ({
               date: formatIsoDate(r.date),
               mp: MARKETPLACE_LABEL[r.marketplace],
               sku: r.sku,
@@ -210,7 +211,7 @@ export function WarehouseView({ stock, initialDocs, mpStock }: WarehouseViewProp
 
         {activeTab === "mp" && <WarehouseMpTab rows={mpStock} />}
         {activeTab === "production" && <WarehouseProductionTab stock={stock} />}
-        {activeTab === "shipments" && <WarehouseShipmentsTab />}
+        {activeTab === "shipments" && <WarehouseShipmentsTab rows={supplies} />}
         {activeTab === "inventory" && (
           <WarehouseInventoryTab docs={inventoryDocs} onDocsChange={setInventoryDocs} />
         )}
