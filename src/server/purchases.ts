@@ -6,6 +6,8 @@ import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { sectionAreaM2, type PurchaseBatchRow } from "@/lib/batch-stats";
+import { allocatePackageCode } from "@/lib/package-code";
+import { archiveBatchIfDepleted } from "@/server/cost";
 import type { NomenclatureItem, RailType, Sort } from "@/types/domain";
 
 const PATH = "/purchases";
@@ -134,10 +136,6 @@ function parseDate(iso: string | null): Date {
   return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
-function packageCode(): string {
-  return `PKG-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
-}
-
 const RAIL_TYPE_LABEL: Record<RailType, string> = { POLKA: "Полка", KANAVKA: "Канавка" };
 const SORT_LABEL: Record<Sort, string> = { SORT1: "Сорт 1", SORT2: "Сорт 2" };
 
@@ -163,14 +161,40 @@ export async function getBatchLabels(batchId: string): Promise<PackageLabelData[
     }));
 }
 
-function validateBatch(v: BatchFormValues) {
+function validateBatch(v: BatchFormValues, options?: { requirePackages?: boolean }) {
   if (!v.name.trim()) throw new Error("Название партии обязательно");
   if (!v.sectionWidthMm || !v.sectionHeightMm) throw new Error("Укажите сечение рейки");
   if (!v.purchaseCost || v.purchaseCost <= 0) throw new Error("Укажите стоимость партии");
+  if (options?.requirePackages && !v.rails.some((r) => r.mode === "package")) {
+    throw new Error("Добавьте хотя бы один пакет");
+  }
+}
+
+async function assertUniqueBatchName(name: string, excludeId?: string): Promise<void> {
+  const trimmed = name.trim();
+  const existing = await prisma.batch.findFirst({
+    where: {
+      name: { equals: trimmed, mode: "insensitive" },
+      ...(excludeId ? { id: { not: excludeId } } : {}),
+    },
+  });
+  if (existing) throw new Error(`Партия «${trimmed}» уже существует`);
+}
+
+async function loadUsedPackageCodes(): Promise<Set<string>> {
+  const rows = await prisma.railLot.findMany({
+    where: { code: { not: null } },
+    select: { code: true },
+  });
+  return new Set(rows.map((r) => r.code as string));
 }
 
 export async function createBatch(values: BatchFormValues): Promise<PurchaseBatchRow> {
-  validateBatch(values);
+  validateBatch(values, { requirePackages: true });
+  await assertUniqueBatchName(values.name);
+
+  const purchaseDate = parseDate(values.purchaseDate);
+  const usedCodes = await loadUsedPackageCodes();
 
   const created = await prisma.batch.create({
     data: {
@@ -182,7 +206,7 @@ export async function createBatch(values: BatchFormValues): Promise<PurchaseBatc
       priceSort1: values.priceSort1 ?? 0,
       priceSort2: values.priceSort2 ?? 0,
       status: "IN_WORK",
-      purchaseDate: parseDate(values.purchaseDate),
+      purchaseDate,
       note: values.note.trim() || null,
       railLots: {
         create: values.rails.map((r) => ({
@@ -190,7 +214,10 @@ export async function createBatch(values: BatchFormValues): Promise<PurchaseBatc
           railType: r.railType,
           sort: r.sort,
           isPackage: r.mode === "package",
-          code: r.mode === "package" ? packageCode() : null,
+          code:
+            r.mode === "package"
+              ? allocatePackageCode(r.lengthM, purchaseDate, usedCodes)
+              : null,
           rows: r.rows ?? null,
           layers: r.layers ?? null,
           quantity: r.quantity,
@@ -216,6 +243,7 @@ export async function createBatch(values: BatchFormValues): Promise<PurchaseBatc
  */
 export async function updateBatch(id: string, values: BatchFormValues): Promise<PurchaseBatchRow> {
   validateBatch(values);
+  await assertUniqueBatchName(values.name, id);
 
   const before = await prisma.batch.findUnique({ where: { id } });
   if (!before) throw new Error("Партия не найдена");
@@ -274,8 +302,13 @@ export async function writeOffBatchRemainder(id: string): Promise<PurchaseBatchR
       },
       tx,
     );
+
+    // Остаток списан в отход → партия выработана: архивируем (заморозка — после
+    // выплаты всех операций).
+    await archiveBatchIfDepleted(tx, id);
   });
   revalidatePath(PATH);
+  revalidatePath("/reports");
   return loadRow(id);
 }
 

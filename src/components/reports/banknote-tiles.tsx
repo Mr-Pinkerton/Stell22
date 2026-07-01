@@ -1,4 +1,4 @@
-import { calcBanknotes, type BillDenomination } from "@/lib/cash-bills";
+import { calcBanknotes, type BanknoteBreakdown, type BillDenomination } from "@/lib/cash-bills";
 import { cn } from "@/lib/utils";
 
 const BILL_STYLES: Record<
@@ -27,8 +27,14 @@ const BILL_STYLES: Record<
   },
 };
 
-export function BanknoteTiles({ amount }: { amount: number }) {
-  const { bills } = calcBanknotes(amount);
+export function BanknoteTiles({
+  amount,
+  bills: billsOverride,
+}: {
+  amount?: number;
+  bills?: BanknoteBreakdown;
+}) {
+  const bills = billsOverride ?? calcBanknotes(amount ?? 0).bills;
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

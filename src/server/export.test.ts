@@ -5,7 +5,8 @@ import { XLSX_FMT, type XlsxSheet } from "@/lib/xlsx-types";
 
 async function readWorkbook(base64: string): Promise<ExcelJS.Workbook> {
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(Buffer.from(base64, "base64"));
+  const bytes = Buffer.from(base64, "base64");
+  await wb.xlsx.load(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
   return wb;
 }
 

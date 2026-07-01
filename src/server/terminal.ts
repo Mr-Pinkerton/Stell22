@@ -12,6 +12,7 @@ import type {
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
+import { archiveBatchIfDepleted } from "@/server/cost";
 import { allocate, buildStockSnapshot, isReady, type DetailStockRow } from "@/lib/detail-stock";
 import type {
   Batch,
@@ -230,9 +231,14 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
       },
       tx,
     );
+
+    // Остаток дошёл до нуля → партия выработана: архивируем (заморозка — после
+    // выплаты всех операций).
+    await archiveBatchIfDepleted(tx, batchId);
   });
 
-  // Произведённые детали меняют распределение стоимости партии по сортам.
+  // Произведённые детали меняют распределение стоимости партии по сортам
+  // (архивная-незамороженная партия ещё пересчитывается).
   await enqueueRecalcBatchCosts(batchId);
 
   revalidatePath("/production");

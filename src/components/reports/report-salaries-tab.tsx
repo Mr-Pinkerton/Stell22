@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { salaryReportKpis, type SalaryReportRow } from "@/mocks/report-fixtures";
 import { markEmployeePaid } from "@/server/payroll";
 import { formatIsoDate, formatMoney } from "@/lib/format";
+import { aggregateBanknotes } from "@/lib/cash-bills";
 import { BanknoteTiles } from "@/components/reports/banknote-tiles";
 import {
   ExpandableDetailRow,
@@ -46,18 +47,44 @@ const SALARY_HEADERS = [
 
 const SALARY_DAY_HEADERS = ["Дата", "Часы", "Торцовка", "Присадка", "Упаковка", "Итого"];
 
+/** Сводная строка в селекте купюр — сумма по невыплаченным. */
+const ALL_UNPAID_BILLS = "all-unpaid";
+
+const billSelectTriggerClass = cn(
+  filterSelectTriggerClass,
+  "h-10 w-full min-w-[17.6rem] sm:min-w-[20.8rem]",
+);
+
 export function ReportSalariesTab({ initialRows }: { initialRows: SalaryReportRow[] }) {
   const [rows, setRows] = useState(initialRows);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [billEmployeeId, setBillEmployeeId] = useState(
-    () => initialRows.find((r) => !r.paid)?.id ?? initialRows[0]?.id ?? "",
+  const [billEmployeeId, setBillEmployeeId] = useState(() =>
+    initialRows.some((r) => !r.paid)
+      ? ALL_UNPAID_BILLS
+      : (initialRows[0]?.id ?? ALL_UNPAID_BILLS),
   );
   const [isPending, startTransition] = useTransition();
 
   const kpis = useMemo(() => salaryReportKpis(rows), [rows]);
   const unpaid = rows.filter((r) => !r.paid);
   const paid = rows.filter((r) => r.paid);
-  const billRow = rows.find((r) => r.id === billEmployeeId) ?? unpaid[0];
+
+  const billView = useMemo(() => {
+    if (billEmployeeId === ALL_UNPAID_BILLS && unpaid.length > 0) {
+      const total = unpaid.reduce((sum, r) => sum + r.total, 0);
+      return {
+        label: `Все сотрудники — ${formatMoney(total)}`,
+        bills: aggregateBanknotes(unpaid.map((r) => r.total)).bills,
+      };
+    }
+    const row =
+      rows.find((r) => r.id === billEmployeeId) ?? unpaid[0] ?? rows[0];
+    if (!row) return null;
+    return {
+      label: `${row.employeeName} — ${formatMoney(row.total)}`,
+      amount: row.total,
+    };
+  }, [billEmployeeId, rows, unpaid]);
 
   const markPaid = (row: SalaryReportRow) => {
     const employeeId = row.id.replace(/^unpaid:/, "");
@@ -65,7 +92,9 @@ export function ReportSalariesTab({ initialRows }: { initialRows: SalaryReportRo
       try {
         const fresh = await markEmployeePaid(employeeId);
         setRows(fresh);
-        setBillEmployeeId(fresh.find((r) => !r.paid)?.id ?? fresh[0]?.id ?? "");
+        setBillEmployeeId(
+          fresh.some((r) => !r.paid) ? ALL_UNPAID_BILLS : fresh[0]?.id ?? ALL_UNPAID_BILLS,
+        );
         toast.success("Выплата проведена");
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Не удалось провести выплату");
@@ -121,24 +150,33 @@ export function ReportSalariesTab({ initialRows }: { initialRows: SalaryReportRo
         </ExpandableReportTable>
       </Card>
 
-      {billRow && (
+      {billView && (
         <section className="space-y-4">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <h3 className="text-sm font-semibold">Расчёт купюр</h3>
-            <div className="grid min-w-[14rem] gap-1.5">
+            <div className="grid w-full max-w-[28.8rem] gap-1.5 sm:w-auto">
               <label htmlFor="bill-emp" className="text-muted-foreground text-xs font-medium">
                 Сотрудник
               </label>
               <Select value={billEmployeeId} onValueChange={(v) => setBillEmployeeId(v ?? "")}>
-                <SelectTrigger
-                  id="bill-emp"
-                  className={cn(filterSelectTriggerClass, "w-full min-w-[17.5rem]")}
-                >
-                  <SelectValue>{billRow.employeeName}</SelectValue>
+                <SelectTrigger id="bill-emp" className={billSelectTriggerClass}>
+                  <SelectValue>{billView.label}</SelectValue>
                 </SelectTrigger>
-                <SelectContent className="rounded-xl shadow-balanced ring-0 p-1.5">
+                <SelectContent className="min-w-[var(--anchor-width)] rounded-xl p-1.5 shadow-balanced ring-0">
+                  {unpaid.length > 0 && (
+                    <SelectItem
+                      value={ALL_UNPAID_BILLS}
+                      className="cursor-pointer rounded-lg pr-10"
+                    >
+                      Все сотрудники — {formatMoney(unpaid.reduce((s, r) => s + r.total, 0))}
+                    </SelectItem>
+                  )}
                   {rows.map((r) => (
-                    <SelectItem key={r.id} value={r.id} className="cursor-pointer rounded-lg">
+                    <SelectItem
+                      key={r.id}
+                      value={r.id}
+                      className="cursor-pointer rounded-lg pr-10"
+                    >
                       {r.employeeName} — {formatMoney(r.total)}
                     </SelectItem>
                   ))}
@@ -146,7 +184,11 @@ export function ReportSalariesTab({ initialRows }: { initialRows: SalaryReportRo
               </Select>
             </div>
           </div>
-          <BanknoteTiles amount={billRow.total} />
+          {"bills" in billView ? (
+            <BanknoteTiles bills={billView.bills} />
+          ) : (
+            <BanknoteTiles amount={billView.amount} />
+          )}
         </section>
       )}
     </div>

@@ -1,5 +1,21 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Разработка
+
+```bash
+npm test          # Vitest (через scripts/vitest-run.mjs)
+npm run db:migrate
+npm run dev
+```
+
+### Windows: Vitest падает на всех тестах с `reading 'config'`
+
+Если **все** suite падают на `describe(...)` с
+`Cannot read properties of undefined (reading 'config')` — причина обычно в
+**разном регистре буквы диска** (`d:\dev\St` vs `D:\dev\St`): Vitest загружает
+две копии `@vitest/runner`. Используйте `npm test`, не прямой вызов `vitest`.
+Подробнее: `.cursor/rules/testing.mdc`.
+
 ## Getting Started
 
 First, run the development server:

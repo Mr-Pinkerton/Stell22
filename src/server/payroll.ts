@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { maybeFreezeBatch } from "@/server/cost";
 import { operationEarning } from "@/lib/payroll";
 import { dayKey } from "@/lib/entries";
 import type { SalaryDayLine, SalaryReportRow } from "@/mocks/report-fixtures";
@@ -181,6 +182,14 @@ export async function markEmployeePaid(employeeId: string): Promise<SalaryReport
   const amount = round2(ops.reduce((s, op) => s + computeOp(op, maps).amount, 0));
   const paidAt = new Date();
   const opIds = ops.map((o) => o.id);
+  // Партии выплачиваемых операций торцовки — кандидаты на заморозку.
+  const torcovkaBatchIds = [
+    ...new Set(
+      ops
+        .filter((o) => o.type === "TORCOVKA" && o.batchId)
+        .map((o) => o.batchId as string),
+    ),
+  ];
 
   await prisma.$transaction(async (tx) => {
     const payment = await tx.payment.create({
@@ -201,6 +210,12 @@ export async function markEmployeePaid(employeeId: string): Promise<SalaryReport
       },
       tx,
     );
+
+    // Выработанная партия, у которой все операции торцовки выплачены, —
+    // замораживаем себестоимость (FINAL).
+    for (const batchId of torcovkaBatchIds) {
+      await maybeFreezeBatch(tx, batchId);
+    }
   });
 
   revalidatePath(PATH);

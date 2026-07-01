@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { AlertTriangle, Lock, PackageMinus, Pencil, Printer, Trash2 } from "lucide-react";
+import { AlertTriangle, PackageMinus, Pencil, Printer, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   createBatch,
@@ -14,7 +14,6 @@ import {
   type SimplePurchaseFormValues,
 } from "@/server/purchases";
 import { printPackageLabels } from "@/lib/print-labels";
-import { closeBatch } from "@/server/cost";
 import { type PurchaseBatchRow } from "@/lib/batch-stats";
 import type { NomenclatureItem } from "@/types/domain";
 import { formatIsoDate, formatLength, formatMoney, formatVolume } from "@/lib/format";
@@ -275,40 +274,17 @@ export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
                     aria-label="Списать остаток"
                     disabled={pending}
                     onClick={() =>
-                      runRow(() => writeOffBatchRemainder(row.id).then(upsert), "Остаток списан в отход")
+                      runRow(
+                        () => writeOffBatchRemainder(row.id).then(upsert),
+                        "Остаток списан в отход, партия выработана",
+                      )
                     }
                   />
                 }
               >
                 <PackageMinus />
               </TooltipTrigger>
-              <TooltipContent>Списать остаток</TooltipContent>
-            </Tooltip>
-          )}
-
-          {row.status === "IN_WORK" && (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className={tableActionClass}
-                    aria-label="Закрыть партию"
-                    disabled={pending}
-                    onClick={() =>
-                      runRow(
-                        () => closeBatch(row.id).then(() => upsert({ ...row, status: "ARCHIVED" })),
-                        "Партия закрыта, себестоимость заморожена",
-                      )
-                    }
-                  />
-                }
-              >
-                <Lock />
-              </TooltipTrigger>
-              <TooltipContent>Закрыть партию (заморозить себестоимость)</TooltipContent>
+              <TooltipContent>Списать остаток (партия в архив)</TooltipContent>
             </Tooltip>
           )}
 

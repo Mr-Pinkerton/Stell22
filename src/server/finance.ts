@@ -566,11 +566,11 @@ export async function deleteCashFlow(id: string): Promise<void> {
  * «Стоимость общая» партии = закупочная + доставка/доп. расходы из её сделок.
  * Доставка сделки = расходные операции ДДС сверх суммы закупочных стоимостей
  * привязанных партий, распределённая по партиям пропорционально закупке.
- * Закрытые (замороженные) партии не трогаем (cost-integrity).
+ * Замороженные партии не трогаем (cost-integrity).
  */
 async function syncBatchTotalCost(batchId: string): Promise<void> {
   const batch = await prisma.batch.findUnique({ where: { id: batchId } });
-  if (!batch || batch.closedAt) return;
+  if (!batch || batch.frozenAt) return;
 
   const items = await prisma.dealItem.findMany({
     where: { batchId },

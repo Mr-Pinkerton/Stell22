@@ -22,3 +22,20 @@ export function calcBanknotes(rawAmount: number): {
 
   return { rounded, bills };
 }
+
+/** Сумма купюр по каждому работнику (округление и разбивка — отдельно на каждого). */
+export function aggregateBanknotes(amounts: number[]): {
+  rounded: number;
+  bills: BanknoteBreakdown;
+} {
+  const bills: BanknoteBreakdown = { 5000: 0, 1000: 0, 500: 0, 100: 0 };
+  let rounded = 0;
+  for (const amount of amounts) {
+    const one = calcBanknotes(amount);
+    rounded += one.rounded;
+    for (const denomination of BILL_DENOMINATIONS) {
+      bills[denomination] += one.bills[denomination];
+    }
+  }
+  return { rounded, bills };
+}

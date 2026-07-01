@@ -130,7 +130,7 @@ model Employee {
 // Партия рейки.
 model Batch {
   id           String      @id @default(cuid())
-  name         String
+  name         String      @unique
   sectionWidthMm  Decimal  @db.Decimal(8, 2) // сечение — одно на партию
   sectionHeightMm Decimal  @db.Decimal(8, 2)
 
@@ -145,7 +145,8 @@ model Batch {
   note         String?
   customFields Json? // произвольные поля "Добавить поле" (тип/название/значение)
 
-  closedAt     DateTime? // момент заморозки себестоимости партии
+  closedAt     DateTime? // момент выработки/архивации партии (остаток = 0)
+  frozenAt     DateTime? // момент заморозки себестоимости (все операции выплачены)
 
   createdAt    DateTime @default(now())
 

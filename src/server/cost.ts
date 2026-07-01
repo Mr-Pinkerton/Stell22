@@ -245,15 +245,16 @@ function computeBatchSnapshot(
 }
 
 /**
- * Пересчёт ПРЕДВАРИТЕЛЬНЫХ снапшотов открытых партий (closedAt == null).
- * Закрытые партии заморожены (cost-integrity) и не пересчитываются.
+ * Пересчёт ПРЕДВАРИТЕЛЬНЫХ снапшотов незамороженных партий (frozenAt == null).
+ * Выработанная (архивная), но ещё не выплаченная партия пересчитывается —
+ * заморожена только после выплаты всех операций (cost-integrity).
  * Вызывается синхронно из операций производства/закупок.
  */
 export async function recalcBatchCosts(opts: { batchId?: string; db?: Db } = {}): Promise<void> {
   const db = opts.db ?? prisma;
 
   const batches = await db.batch.findMany({
-    where: { closedAt: null, ...(opts.batchId ? { id: opts.batchId } : {}) },
+    where: { frozenAt: null, ...(opts.batchId ? { id: opts.batchId } : {}) },
   });
   if (batches.length === 0) return;
 
@@ -281,47 +282,101 @@ export async function recalcBatchCosts(opts: { batchId?: string; db?: Db } = {})
 }
 
 /**
- * Закрытие партии: перевод в архив, заморозка себестоимости (снапшот FINAL).
- * После заморозки снапшот не пересчитывается (recalcBatchCosts пропускает
- * закрытые партии). Идемпотентно для уже закрытой партии — ошибка.
+ * Заморозка себестоимости партии: снапшот FINAL + frozenAt.
+ * Вызывается ТОЛЬКО когда партия выработана (closedAt) и все её операции
+ * торцовки выплачены — править распределение больше нельзя. После заморозки
+ * recalcBatchCosts партию пропускает (frozenAt != null).
  */
-export async function closeBatch(id: string): Promise<void> {
-  const before = await prisma.batch.findUnique({ where: { id } });
-  if (!before) throw new Error("Партия не найдена");
-  if (before.closedAt) throw new Error("Партия уже закрыта");
-
-  await prisma.$transaction(async (tx) => {
-    const details = await tx.detail.findMany();
-    const ops = await tx.productionOperation.findMany({
-      where: { type: "TORCOVKA", batchId: id },
-      include: { lines: true },
-    });
-    const lines = producedLinesFromOperations(ops.map(toOperationForCost));
-    const detailsById = new Map(details.map((d) => [d.id, d]));
-    const snapshot = computeBatchSnapshot(before, lines, detailsById);
-
-    await tx.batch.update({
-      where: { id },
-      data: { status: "ARCHIVED", closedAt: new Date() },
-    });
-
-    // Замораживаем: убираем предварительный снапшот, фиксируем FINAL.
-    await tx.batchCost.deleteMany({ where: { batchId: id } });
-    if (snapshot) {
-      await tx.batchCost.create({ data: { batchId: id, status: "FINAL", ...snapshot } });
-    }
-
-    await writeChangeLog(
-      {
-        entity: "Batch",
-        entityId: id,
-        oldValues: { status: before.status, closedAt: null },
-        newValues: { status: "ARCHIVED", closedAt: new Date().toISOString(), costFrozen: true },
-      },
-      tx,
-    );
+async function freezeBatch(tx: Prisma.TransactionClient, batch: PrismaBatch): Promise<void> {
+  const details = await tx.detail.findMany();
+  const ops = await tx.productionOperation.findMany({
+    where: { type: "TORCOVKA", batchId: batch.id },
+    include: { lines: true },
   });
+  const lines = producedLinesFromOperations(ops.map(toOperationForCost));
+  const detailsById = new Map(details.map((d) => [d.id, d]));
+  const snapshot = computeBatchSnapshot(batch, lines, detailsById);
 
-  revalidatePath("/purchases");
-  revalidatePath("/reports");
+  await tx.batch.update({ where: { id: batch.id }, data: { frozenAt: new Date() } });
+
+  // Замораживаем: убираем предварительный снапшот, фиксируем FINAL.
+  await tx.batchCost.deleteMany({ where: { batchId: batch.id } });
+  if (snapshot) {
+    await tx.batchCost.create({ data: { batchId: batch.id, status: "FINAL", ...snapshot } });
+  }
+
+  await writeChangeLog(
+    {
+      entity: "Batch",
+      entityId: batch.id,
+      newValues: { frozenAt: new Date().toISOString(), costFrozen: true },
+    },
+    tx,
+  );
+}
+
+/**
+ * Заморозить партию, если она уже выработана (closedAt) и ВСЕ её операции
+ * торцовки выплачены. До выплаты снапшот остаётся PRELIMINARY и пересчитывается
+ * при правках операций (cost-integrity: «правка до выплаты → пересчёт
+ * предварительных»). Вызывается из выплаты ЗП и из архивации при выработке.
+ */
+export async function maybeFreezeBatch(
+  tx: Prisma.TransactionClient,
+  batchId: string,
+): Promise<boolean> {
+  const batch = await tx.batch.findUnique({ where: { id: batchId } });
+  if (!batch || batch.frozenAt) return false;
+  // Замораживаем только выработанную (архивную) партию.
+  if (!batch.closedAt) return false;
+
+  const unpaid = await tx.productionOperation.count({
+    where: { batchId, type: "TORCOVKA", isPaid: false },
+  });
+  if (unpaid > 0) return false;
+
+  await freezeBatch(tx, batch);
+  return true;
+}
+
+/**
+ * Архивация партии при выработке: весь остаток реек списан/выработан
+ * (Σ остатка = 0) → статус ARCHIVED + closedAt. Себестоимость НЕ замораживается
+ * (снапшот остаётся PRELIMINARY, правки операций продолжают пересчёт). Если все
+ * операции уже выплачены — сразу же замораживает (maybeFreezeBatch).
+ * Вызывается внутри транзакции операции (торцовка/списание остатка).
+ */
+export async function archiveBatchIfDepleted(
+  tx: Prisma.TransactionClient,
+  batchId: string,
+): Promise<boolean> {
+  const batch = await tx.batch.findUnique({ where: { id: batchId } });
+  if (!batch || batch.closedAt) return false;
+
+  const lots = await tx.railLot.findMany({
+    where: { batchId },
+    select: { remainingQuantity: true },
+  });
+  // Партия без реек ещё не выработана — не закрываем по «пустому» остатку.
+  if (lots.length === 0) return false;
+  const remaining = lots.reduce((s, l) => s + l.remainingQuantity, 0);
+  if (remaining > 0) return false;
+
+  await tx.batch.update({
+    where: { id: batchId },
+    data: { status: "ARCHIVED", closedAt: new Date() },
+  });
+  await writeChangeLog(
+    {
+      entity: "Batch",
+      entityId: batchId,
+      oldValues: { status: batch.status, closedAt: null },
+      newValues: { status: "ARCHIVED", closedAt: new Date().toISOString(), depleted: true },
+    },
+    tx,
+  );
+
+  // Если по партии уже всё выплачено — можно замораживать сразу.
+  await maybeFreezeBatch(tx, batchId);
+  return true;
 }

@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Plus, Trash2, XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { sectionAreaM2, resolveRailQuantity } from "@/lib/batch-stats";
+import { allocatePackageCode } from "@/lib/package-code";
 import type { PurchaseBatchRow } from "@/lib/batch-stats";
 import { formatLength, formatMoney, formatVolume } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -82,6 +83,12 @@ function displayDateToIso(display: string): string | null {
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+function purchaseDateFromDisplay(display: string): Date {
+  const iso = displayDateToIso(display);
+  if (iso) return new Date(`${iso}T12:00:00`);
+  return new Date();
 }
 
 interface DraftRailEntry {
@@ -278,20 +285,28 @@ function BatchFormBody({
     const rowsNum = draftRowsNum > 0 ? draftRowsNum : undefined;
     const layersNum = draftLayersNum > 0 ? draftLayersNum : undefined;
 
-    setEntries((prev) => [
-      ...prev,
-      {
-        id: `draft-${Date.now()}`,
-        mode: addMode,
-        lengthM: len,
-        railType: draftType,
-        sort: draftSort,
-        quantity: qty,
-        rows: addMode === "package" && rowsNum && layersNum ? rowsNum : undefined,
-        layers: addMode === "package" && rowsNum && layersNum ? layersNum : undefined,
-        code: addMode === "package" ? `PKG-${String(prev.length + 1).padStart(4, "0")}` : undefined,
-      },
-    ]);
+    setEntries((prev) => {
+      const usedCodes = new Set(
+        prev.map((e) => e.code).filter((c): c is string => Boolean(c)),
+      );
+      return [
+        ...prev,
+        {
+          id: `draft-${Date.now()}`,
+          mode: addMode,
+          lengthM: len,
+          railType: draftType,
+          sort: draftSort,
+          quantity: qty,
+          rows: addMode === "package" && rowsNum && layersNum ? rowsNum : undefined,
+          layers: addMode === "package" && rowsNum && layersNum ? layersNum : undefined,
+          code:
+            addMode === "package"
+              ? allocatePackageCode(len, purchaseDateFromDisplay(purchaseDate), usedCodes)
+              : undefined,
+        },
+      ];
+    });
 
     setDraftLength("");
     setDraftQty("");
@@ -304,7 +319,12 @@ function BatchFormBody({
   };
 
   const canSubmitBatch =
-    name.trim().length > 0 && wMm > 0 && hMm > 0 && (purchaseCost ?? 0) > 0 && !pending;
+    name.trim().length > 0 &&
+    wMm > 0 &&
+    hMm > 0 &&
+    (purchaseCost ?? 0) > 0 &&
+    entries.some((e) => e.mode === "package") &&
+    !pending;
   const simpleQtyNum = Number(simpleQty) || 0;
   const canSubmitSimple =
     simpleItemId !== "" && simpleQtyNum > 0 && simplePrice != null && simplePrice >= 0 && !pending;
