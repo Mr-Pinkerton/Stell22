@@ -4,14 +4,6 @@ export interface AppSettings {
   labelHeightMm: number;
 }
 
-export interface ApiKeyRow {
-  id: string;
-  service: string;
-  description: string;
-  keyValue: string;
-  updatedAt: string;
-}
-
 export type LogLevel = "INFO" | "WARN" | "ERROR";
 
 export interface SystemLogRow {
@@ -20,6 +12,9 @@ export interface SystemLogRow {
   level: LogLevel;
   source: string;
   message: string;
+  /** Структурированные детали (только операционный журнал). */
+  details?: Record<string, unknown> | null;
+  kind: "system" | "audit";
 }
 
 export type MinStockKind = "PRODUCT" | "DETAIL" | "NOMENCLATURE";
@@ -37,33 +32,6 @@ export const defaultAppSettings: AppSettings = {
   labelHeightMm: 40,
 };
 
-/** Пароль для просмотра API-ключей в прототипе. */
-export const SETTINGS_API_PASSWORD = "stell22";
-
-export const apiKeyRows: ApiKeyRow[] = [
-  {
-    id: "api-ozon",
-    service: "Ozon Seller API",
-    description: "Остатки, поставки, отчёты",
-    keyValue: "ozon_live_8f3a2c91d4e7b605",
-    updatedAt: "2026-06-15T10:00:00.000Z",
-  },
-  {
-    id: "api-wb",
-    service: "Wildberries API",
-    description: "Остатки и поставки",
-    keyValue: "wb_stat_44ac90ef12bb8801",
-    updatedAt: "2026-06-10T14:30:00.000Z",
-  },
-  {
-    id: "api-bank",
-    service: "Банк (выписки)",
-    description: "Загрузка выписок в ДДС",
-    keyValue: "bank_token_91fe22aa77cd",
-    updatedAt: "2026-06-01T09:00:00.000Z",
-  },
-];
-
 export const systemLogRows: SystemLogRow[] = [
   {
     id: "log-1",
@@ -71,6 +39,7 @@ export const systemLogRows: SystemLogRow[] = [
     level: "INFO",
     source: "Ozon API",
     message: "Синхронизация остатков: 4 позиции",
+    kind: "system",
   },
   {
     id: "log-2",
@@ -78,6 +47,7 @@ export const systemLogRows: SystemLogRow[] = [
     level: "INFO",
     source: "Банк",
     message: "Выписка Тинькофф: 18 операций",
+    kind: "system",
   },
   {
     id: "log-3",
@@ -85,6 +55,7 @@ export const systemLogRows: SystemLogRow[] = [
     level: "WARN",
     source: "WB API",
     message: "Повтор запроса поставок (таймаут)",
+    kind: "system",
   },
   {
     id: "log-4",
@@ -92,6 +63,7 @@ export const systemLogRows: SystemLogRow[] = [
     level: "ERROR",
     source: "Принтер",
     message: "Этикетки: нет связи с устройством",
+    kind: "system",
   },
   {
     id: "log-5",
@@ -99,6 +71,7 @@ export const systemLogRows: SystemLogRow[] = [
     level: "INFO",
     source: "Система",
     message: "Инвентаризация inv-1 проведена",
+    kind: "audit",
   },
 ];
 

@@ -1,55 +1,73 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { Eye, EyeOff, Lock } from "lucide-react";
 import { toast } from "sonner";
 import {
-  apiKeyRows,
-  SETTINGS_API_PASSWORD,
-  type ApiKeyRow,
-} from "@/mocks/settings-fixtures";
-import { maskApiKey, verifySettingsApiPassword } from "@/lib/settings";
-import { formatIsoDate } from "@/lib/format";
+  API_CREDENTIAL_GROUPS,
+  type ApiCredentialValues,
+} from "@/lib/api-credentials";
+import { saveApiCredentials, verifyApiCredentialsPassword } from "@/server/settings";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { DataTable, type Column } from "@/components/data-table";
 
 const fieldClass =
   "border-border bg-card hover:border-[#98a2b3] focus-visible:border-ring focus-visible:bg-card h-10 rounded-xl border px-4";
 
 interface SettingsApiTabProps {
-  rows?: ApiKeyRow[];
+  initialValues: ApiCredentialValues;
 }
 
-export function SettingsApiTab({ rows = apiKeyRows }: SettingsApiTabProps) {
+export function SettingsApiTab({ initialValues }: SettingsApiTabProps) {
   const [unlocked, setUnlocked] = useState(false);
   const [password, setPassword] = useState("");
-  const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
+  const [values, setValues] = useState<ApiCredentialValues>(initialValues);
+  const [visible, setVisible] = useState<Set<string>>(new Set());
+  const [saving, startSave] = useTransition();
+  const [unlocking, startUnlock] = useTransition();
 
   const tryUnlock = () => {
-    if (verifySettingsApiPassword(password, SETTINGS_API_PASSWORD)) {
+    startUnlock(async () => {
+      const result = await verifyApiCredentialsPassword(password);
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
       setUnlocked(true);
       setPassword("");
       toast.success("Доступ к ключам открыт");
-      return;
-    }
-    toast.error("Неверный пароль");
+    });
   };
 
   const lock = () => {
     setUnlocked(false);
-    setVisibleIds(new Set());
-    toast.message("Ключи скрыты");
+    setVisible(new Set());
+    setValues(initialValues);
   };
 
-  const toggleVisible = (id: string) => {
-    setVisibleIds((prev) => {
+  const toggleVisible = (key: string) => {
+    setVisible((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
+    });
+  };
+
+  const setValue = (key: string, value: string) => {
+    setValues((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleSave = () => {
+    startSave(async () => {
+      try {
+        await saveApiCredentials(values);
+        toast.success("Ключи сохранены");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Не удалось сохранить");
+      }
     });
   };
 
@@ -78,69 +96,80 @@ export function SettingsApiTab({ rows = apiKeyRows }: SettingsApiTabProps) {
               placeholder="••••••••"
             />
           </div>
-          <Button type="button" className="h-10 w-full rounded-xl" onClick={tryUnlock}>
-            Разблокировать
+          <Button
+            type="button"
+            className="h-10 w-full rounded-xl"
+            disabled={unlocking}
+            onClick={tryUnlock}
+          >
+            {unlocking ? "Проверка…" : "Разблокировать"}
           </Button>
         </CardContent>
       </Card>
     );
   }
 
-  const columns: Column<ApiKeyRow>[] = [
-    {
-      key: "service",
-      header: "Сервис",
-      render: (row) => (
-        <div>
-          <p className="font-medium">{row.service}</p>
-          <p className="text-muted-foreground text-xs">{row.description}</p>
-        </div>
-      ),
-    },
-    {
-      key: "key",
-      header: "Ключ",
-      render: (row) => (
-        <div className="flex items-center justify-center gap-2">
-          <code className="text-sm">
-            {visibleIds.has(row.id) ? row.keyValue : maskApiKey(row.keyValue)}
-          </code>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="size-8 shrink-0"
-            onClick={() => toggleVisible(row.id)}
-          >
-            {visibleIds.has(row.id) ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-          </Button>
-        </div>
-      ),
-    },
-    {
-      key: "updated",
-      header: "Обновлён",
-      className: "w-32",
-      render: (row) => (
-        <span className="text-muted-foreground tabular-nums">
-          {formatIsoDate(row.updatedAt.slice(0, 10))}
-        </span>
-      ),
-    },
-  ];
-
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
         <Button type="button" variant="outline" className="h-10 rounded-xl px-4" onClick={lock}>
           Заблокировать
         </Button>
+        <Button
+          type="button"
+          variant="brand"
+          className="h-10 rounded-xl px-5"
+          disabled={saving}
+          onClick={handleSave}
+        >
+          {saving ? "Сохранение…" : "Сохранить"}
+        </Button>
       </div>
-      <Card className="surface-card ring-0">
-        <CardContent className="p-0">
-          <DataTable columns={columns} rows={rows} padded className="border-0" />
-        </CardContent>
-      </Card>
+
+      {API_CREDENTIAL_GROUPS.map((group) => (
+        <Card key={group.service} className="surface-card ring-0">
+          <CardContent className="space-y-4 p-6">
+            <div>
+              <h3 className="font-semibold">{group.service}</h3>
+              <p className="text-muted-foreground text-sm">{group.description}</p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              {group.fields.map((field) => {
+                const shown = visible.has(field.key);
+                return (
+                  <div key={field.key} className="space-y-1.5">
+                    <Label htmlFor={`cred-${field.key}`}>{field.label}</Label>
+                    <div className="relative">
+                      <Input
+                        id={`cred-${field.key}`}
+                        type={field.secret && !shown ? "password" : "text"}
+                        autoComplete="off"
+                        spellCheck={false}
+                        value={values[field.key] ?? ""}
+                        onChange={(e) => setValue(field.key, e.target.value)}
+                        className={`${fieldClass} ${field.secret ? "pr-11" : ""} font-mono`}
+                        placeholder={field.placeholder}
+                      />
+                      {field.secret && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="absolute top-1/2 right-1 size-8 -translate-y-1/2"
+                          onClick={() => toggleVisible(field.key)}
+                          aria-label={shown ? "Скрыть" : "Показать"}
+                        >
+                          {shown ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

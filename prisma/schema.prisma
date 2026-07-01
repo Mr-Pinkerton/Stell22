@@ -105,7 +105,8 @@ model User {
   role         UserRole @default(ADMIN)
   createdAt    DateTime @default(now())
 
-  changeLogs ChangeLog[]
+  changeLogs  ChangeLog[]
+  systemLogs  SystemLog[]
 }
 
 // Работник — не аккаунт; вход в терминал = выбор ФИО + подтверждение PIN.
@@ -362,6 +363,28 @@ model ChangeLog {
   changedAt  DateTime @default(now())
 
   @@index([entity, entityId])
+}
+
+// Операционный журнал: синхронизации, ошибки API, интеграции. Отдельно от ChangeLog
+// (аудит бизнес-изменений). Смотреть: Настройки → Логи.
+enum SystemLogLevel {
+  INFO
+  WARN
+  ERROR
+}
+
+model SystemLog {
+  id        String         @id @default(cuid())
+  level     SystemLogLevel @default(INFO)
+  source    String
+  message   String
+  details   Json?
+  userId    String?
+  user      User?          @relation(fields: [userId], references: [id])
+  createdAt DateTime       @default(now())
+
+  @@index([createdAt(sort: Desc)])
+  @@index([level])
 }
 
 // ============================= СКЛАД ========================================

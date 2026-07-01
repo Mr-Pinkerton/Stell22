@@ -4,6 +4,28 @@ import { revalidatePath } from "next/cache";
 import { Decimal } from "decimal.js";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { requireAdmin } from "@/server/session";
+import { loadStoredApiCredentials } from "@/server/settings";
+import { writeSystemLog } from "@/server/system-log";
+import {
+  formatMpSyncMessage,
+  mpSyncLogLevel,
+  type MpSyncReport,
+  type MpSyncSideReport,
+} from "@/lib/system-log";
+import {
+  fetchOzonPostings,
+  fetchOzonStocks,
+  fetchOzonSupplyOrders,
+  isOzonConfigured,
+  ozonCredentialsFrom,
+} from "@/lib/ozon-api";
+import {
+  fetchWbIncomes,
+  fetchWbSalesWithMeta,
+  fetchWbStocks,
+  isWbConfigured,
+} from "@/lib/wb-api";
 import type { SalesReportRow } from "@/mocks/report-fixtures";
 import type { Marketplace, MpStockRow, ShipmentRow, ShipmentStatus } from "@/mocks/warehouse-fixtures";
 import {
@@ -225,18 +247,207 @@ export interface SyncResult {
   suppliesAdded: number;
   stockUpdated: number;
   error?: string;
+  warnings?: string[];
+  sources?: { wb: "api" | "stub"; ozon: "api" | "stub" };
+}
+
+const SYNC_LOOKBACK_DAYS = 90;
+
+async function getSyncSince(): Promise<Date> {
+  const [lastSale, lastSupply] = await Promise.all([
+    prisma.sale.findFirst({ orderBy: { date: "desc" }, select: { date: true } }),
+    prisma.supply.findFirst({ orderBy: { createdAt: "desc" }, select: { createdAt: true } }),
+  ]);
+  const candidates = [lastSale?.date, lastSupply?.createdAt].filter(Boolean) as Date[];
+  if (candidates.length > 0) {
+    const latest = candidates.reduce((a, b) => (a > b ? a : b));
+    return new Date(latest.getTime() - 24 * 60 * 60 * 1000);
+  }
+  return new Date(Date.now() - SYNC_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+}
+
+function emptySideReport(mode: "api" | "stub"): MpSyncSideReport {
+  return { mode, sales: 0, supplies: 0, stocks: 0, durationMs: 0 };
+}
+
+interface FetchedMarketplaceData {
+  sales: NormalizedSale[];
+  supplies: NormalizedSupply[];
+  stocks: NormalizedStock[];
+  warnings: string[];
+  sources: { wb: "api" | "stub"; ozon: "api" | "stub" };
+  wb: MpSyncSideReport;
+  ozon: MpSyncSideReport;
+}
+
+function apiErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : "ошибка API";
+}
+
+function noteSideError(side: MpSyncSideReport, label: string, err: unknown, warnings: string[]): void {
+  const msg = apiErrorMessage(err);
+  warnings.push(`${label}: ${msg}`);
+  side.error = side.error ? `${side.error}; ${msg}` : msg;
+}
+
+async function fetchMarketplaceData(
+  products: ActiveProduct[],
+  since: Date,
+  to: Date,
+): Promise<FetchedMarketplaceData> {
+  const creds = await loadStoredApiCredentials();
+  const warnings: string[] = [];
+  const sources: { wb: "api" | "stub"; ozon: "api" | "stub" } = { wb: "stub", ozon: "stub" };
+  const wb = emptySideReport("stub");
+  const ozon = emptySideReport("stub");
+
+  const wbSales: NormalizedSale[] = [];
+  const wbSupplies: NormalizedSupply[] = [];
+  const wbStocks: NormalizedStock[] = [];
+  const ozonSales: NormalizedSale[] = [];
+  const ozonSupplies: NormalizedSupply[] = [];
+  const ozonStocks: NormalizedStock[] = [];
+
+  const rand = makeRand(to.getTime());
+  const offerIds = products.map((p) => p.sku);
+
+  if (isWbConfigured(creds["wb.token"])) {
+    sources.wb = "api";
+    wb.mode = "api";
+    const t0 = performance.now();
+    let nmIdToSku = new Map<number, string>();
+
+    try {
+      const { sales: wbSalesRaw, nmIdToSku: map } = await fetchWbSalesWithMeta(
+        creds["wb.token"],
+        since,
+      );
+      nmIdToSku = map;
+      wbSales.push(...wbSalesRaw.map(mapWbSale));
+      wb.sales = wbSales.length;
+    } catch (err) {
+      noteSideError(wb, "WB/продажи", err, warnings);
+    }
+
+    try {
+      const wbIncomes = await fetchWbIncomes(creds["wb.token"], since);
+      wbSupplies.push(...wbIncomes.map(mapWbIncome));
+      wb.supplies = wbSupplies.length;
+    } catch (err) {
+      noteSideError(wb, "WB/поставки", err, warnings);
+    }
+
+    try {
+      const wbStocksRaw = await fetchWbStocks(creds["wb.token"], nmIdToSku);
+      wbStocks.push(...wbStocksRaw.map(mapWbStock));
+      wb.stocks = wbStocks.length;
+    } catch (err) {
+      noteSideError(wb, "WB/остатки", err, warnings);
+    }
+
+    wb.durationMs = Math.round(performance.now() - t0);
+  } else {
+    wbSales.push(...fetchWbSalesRaw(products, to, rand).map(mapWbSale));
+    wbSupplies.push(...fetchWbIncomesRaw(products, to).map(mapWbIncome));
+    wbStocks.push(...fetchWbStockRaw(products, rand).map(mapWbStock));
+    wb.sales = wbSales.length;
+    wb.supplies = wbSupplies.length;
+    wb.stocks = wbStocks.length;
+  }
+
+  const ozonCreds = ozonCredentialsFrom(creds);
+  if (isOzonConfigured(ozonCreds ?? {})) {
+    sources.ozon = "api";
+    ozon.mode = "api";
+    const t0 = performance.now();
+    const ozonCredsNonNull = ozonCreds!;
+
+    try {
+      const ozonPostings = await fetchOzonPostings(ozonCredsNonNull, since, to);
+      ozonSales.push(...ozonPostings.flatMap(mapOzonPosting));
+      ozon.sales = ozonSales.length;
+    } catch (err) {
+      noteSideError(ozon, "Ozon/продажи", err, warnings);
+    }
+
+    try {
+      const ozonSuppliesRaw = await fetchOzonSupplyOrders(ozonCredsNonNull, since, to);
+      ozonSupplies.push(...ozonSuppliesRaw.flatMap(mapOzonSupplyOrder));
+      ozon.supplies = ozonSupplies.length;
+    } catch (err) {
+      noteSideError(ozon, "Ozon/поставки", err, warnings);
+    }
+
+    try {
+      const ozonStocksRaw = await fetchOzonStocks(ozonCredsNonNull, offerIds);
+      ozonStocks.push(...ozonStocksRaw.map(mapOzonStock));
+      ozon.stocks = ozonStocks.length;
+    } catch (err) {
+      noteSideError(ozon, "Ozon/остатки", err, warnings);
+    }
+
+    ozon.durationMs = Math.round(performance.now() - t0);
+  } else {
+    ozonSales.push(...fetchOzonPostingsRaw(products, to, rand).flatMap(mapOzonPosting));
+    ozonSupplies.push(...fetchOzonSupplyOrdersRaw(products, to).flatMap(mapOzonSupplyOrder));
+    ozonStocks.push(...fetchOzonStockRaw(products, rand).map(mapOzonStock));
+    ozon.sales = ozonSales.length;
+    ozon.supplies = ozonSupplies.length;
+    ozon.stocks = ozonStocks.length;
+  }
+
+  return {
+    sales: [...wbSales, ...ozonSales],
+    supplies: [...wbSupplies, ...ozonSupplies],
+    stocks: [...wbStocks, ...ozonStocks],
+    warnings,
+    sources,
+    wb,
+    ozon,
+  };
+}
+
+async function persistMpSyncLog(report: MpSyncReport, userId: string): Promise<void> {
+  await writeSystemLog({
+    level: mpSyncLogLevel(report),
+    source: "Маркетплейсы",
+    message: formatMpSyncMessage(report),
+    details: report as unknown as Record<string, unknown>,
+    userId,
+  });
 }
 
 /**
- * Синхронизация с маркетплейсами. Сейчас источник — заглушка (нет ключей),
- * но данные проходят через реальные мапперы `src/lib/marketplace-map.ts` и
- * пишутся идемпотентно (upsert по внешнему id). При появлении ключей достаточно
- * заменить fetch*Raw на настоящие HTTP-вызовы — контракт не изменится.
+ * Синхронизация с маркетплейсами. При сохранённых ключах — реальные HTTP-вызовы
+ * (см. src/lib/wb-api.ts, src/lib/ozon-api.ts); иначе — демо-заглушки.
  */
 export async function syncMarketplaces(): Promise<SyncResult> {
+  const admin = await requireAdmin();
+  return syncMarketplacesAsUser(admin.id);
+}
+
+/** Синхронизация от имени пользователя (для CLI без cookie-сессии). */
+export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult> {
+  const syncStarted = performance.now();
+  const now = new Date();
+  const since = await getSyncSince();
+
   const dbProducts = await prisma.product.findMany({ where: { status: "ACTIVE" } });
   if (dbProducts.length === 0) {
-    return { ok: false, salesAdded: 0, suppliesAdded: 0, stockUpdated: 0, error: "Нет активных изделий" };
+    const report: MpSyncReport = {
+      since: since.toISOString(),
+      to: now.toISOString(),
+      ok: false,
+      durationMs: Math.round(performance.now() - syncStarted),
+      sources: { wb: "stub", ozon: "stub" },
+      wb: emptySideReport("stub"),
+      ozon: emptySideReport("stub"),
+      warnings: [],
+      totals: { sales: 0, supplies: 0, stocks: 0 },
+      error: "Нет активных изделий",
+    };
+    await persistMpSyncLog(report, userId);
+    return { ok: false, salesAdded: 0, suppliesAdded: 0, stockUpdated: 0, error: report.error };
   }
 
   const products: ActiveProduct[] = dbProducts.map((p) => ({
@@ -246,24 +457,38 @@ export async function syncMarketplaces(): Promise<SyncResult> {
   }));
   const idBySku = new Map(products.map((p) => [p.sku, p.id]));
 
-  const now = new Date();
-  const rand = makeRand(now.getTime());
+  const fetched = await fetchMarketplaceData(products, since, now);
+  const { sales, supplies, stocks, warnings, sources, wb, ozon } = fetched;
 
-  // 1) Сырые ответы API → нормализованные записи через мапперы.
-  const sales: NormalizedSale[] = [
-    ...fetchWbSalesRaw(products, now, rand).map(mapWbSale),
-    ...fetchOzonPostingsRaw(products, now, rand).flatMap(mapOzonPosting),
-  ];
-  const supplies: NormalizedSupply[] = [
-    ...fetchWbIncomesRaw(products, now).map(mapWbIncome),
-    ...fetchOzonSupplyOrdersRaw(products, now).flatMap(mapOzonSupplyOrder),
-  ];
-  const stocks: NormalizedStock[] = [
-    ...fetchWbStockRaw(products, rand).map(mapWbStock),
-    ...fetchOzonStockRaw(products, rand).map(mapOzonStock),
-  ];
+  const apiConfigured = sources.wb === "api" || sources.ozon === "api";
+  const noData = sales.length === 0 && supplies.length === 0 && stocks.length === 0;
 
-  // 2) Идемпотентная запись.
+  if (apiConfigured && warnings.length > 0 && noData) {
+    const report: MpSyncReport = {
+      since: since.toISOString(),
+      to: now.toISOString(),
+      ok: false,
+      durationMs: Math.round(performance.now() - syncStarted),
+      sources,
+      wb,
+      ozon,
+      warnings,
+      totals: { sales: 0, supplies: 0, stocks: 0 },
+      error: warnings.join("; "),
+    };
+    await persistMpSyncLog(report, userId);
+    return {
+      ok: false,
+      salesAdded: 0,
+      suppliesAdded: 0,
+      stockUpdated: 0,
+      error: report.error,
+      warnings,
+      sources,
+    };
+  }
+  let deductedTotal = 0;
+  let shortfallTotal = 0;
   await prisma.$transaction(async (tx) => {
     for (const s of sales) {
       await tx.sale.upsert({
@@ -287,8 +512,6 @@ export async function syncMarketplaces(): Promise<SyncResult> {
       });
     }
 
-    let deductedTotal = 0;
-    let shortfallTotal = 0;
     for (const s of supplies) {
       const productId = idBySku.get(s.sku) ?? null;
       const key = {
@@ -379,14 +602,46 @@ export async function syncMarketplaces(): Promise<SyncResult> {
           deductedFromProduction: deductedTotal,
           gpShortfall: shortfallTotal,
           at: now.toISOString(),
+          sources,
         },
       },
       tx,
     );
   });
 
-  revalidatePath("/sales");
-  revalidatePath("/warehouse");
-  revalidatePath("/reports");
-  return { ok: true, salesAdded: sales.length, suppliesAdded: supplies.length, stockUpdated: stocks.length };
+  const report: MpSyncReport = {
+    since: since.toISOString(),
+    to: now.toISOString(),
+    ok: true,
+    durationMs: Math.round(performance.now() - syncStarted),
+    sources,
+    wb,
+    ozon,
+    warnings,
+    totals: {
+      sales: sales.length,
+      supplies: supplies.length,
+      stocks: stocks.length,
+      deductedFromProduction: deductedTotal,
+      gpShortfall: shortfallTotal,
+    },
+  };
+  await persistMpSyncLog(report, userId);
+
+  try {
+    revalidatePath("/sales");
+    revalidatePath("/warehouse");
+    revalidatePath("/reports");
+    revalidatePath("/settings");
+  } catch {
+    // вне Next.js runtime (CLI-скрипты)
+  }
+  return {
+    ok: true,
+    salesAdded: sales.length,
+    suppliesAdded: supplies.length,
+    stockUpdated: stocks.length,
+    warnings: warnings.length > 0 ? warnings : undefined,
+    sources,
+  };
 }

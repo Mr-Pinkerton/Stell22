@@ -10,6 +10,7 @@ import {
   type SystemLogRow,
 } from "@/mocks/settings-fixtures";
 import { financeAccounts, type FinanceAccount } from "@/mocks/finance-fixtures";
+import type { ApiCredentialValues } from "@/lib/api-credentials";
 import { PageHeader } from "@/components/page-header";
 import { SegmentTabs } from "@/components/reports/report-shared";
 import { SettingsApiTab } from "@/components/settings/settings-api-tab";
@@ -26,7 +27,13 @@ const TABS: { key: SettingsTab; label: string }[] = [
   { key: "accounts", label: "Счета" },
 ];
 
-export function SettingsView({ logs }: { logs: SystemLogRow[] }) {
+export function SettingsView({
+  logs,
+  apiCredentials,
+}: {
+  logs: SystemLogRow[];
+  apiCredentials: ApiCredentialValues;
+}) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("params");
   const [settings, setSettings] = useState<AppSettings>(defaultAppSettings);
   const [minStock, setMinStock] = useState<MinStockRow[]>(mockMinStockRows);
@@ -62,7 +69,7 @@ export function SettingsView({ logs }: { logs: SystemLogRow[] }) {
           onChange={setActiveTab}
         />
 
-        {activeTab === "api" && <SettingsApiTab />}
+        {activeTab === "api" && <SettingsApiTab initialValues={apiCredentials} />}
         {activeTab === "logs" && <SettingsLogsTab rows={logs} />}
         {activeTab === "params" && (
           <SettingsParamsTab

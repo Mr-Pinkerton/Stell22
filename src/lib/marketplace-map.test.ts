@@ -124,7 +124,9 @@ describe("поставки", () => {
 
   it("mapOzonSupplyStatus нормализует статусы", () => {
     expect(mapOzonSupplyStatus("delivered")).toBe("ACCEPTED");
+    expect(mapOzonSupplyStatus("COMPLETED")).toBe("ACCEPTED");
     expect(mapOzonSupplyStatus("shipped")).toBe("SHIPPED");
+    expect(mapOzonSupplyStatus("IN_TRANSIT")).toBe("SHIPPED");
     expect(mapOzonSupplyStatus("confirmed")).toBe("SHIPPED");
     expect(mapOzonSupplyStatus("created")).toBe("PENDING");
     expect(mapOzonSupplyStatus("cancelled")).toBe("PENDING");

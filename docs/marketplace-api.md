@@ -2,9 +2,9 @@
 
 Справка по реальным API для разделов **«Продажи»** и **«Поставки»**. Источник —
 официальная документация `dev.wildberries.ru` и анонсы Ozon Seller API
-(конец 2025 — начало 2026). Реальные HTTP-вызовы подключаются при появлении
-ключей; до тех пор `syncMarketplaces()` генерирует данные в том же формате, что
-и API, и прогоняет их через те же мапперы (`src/lib/marketplace-map.ts`).
+(конец 2025 — начало 2026). HTTP-клиенты: `src/lib/wb-api.ts`, `src/lib/ozon-api.ts`;
+ключи читаются из `Setting` (`apiCred:*`) через `loadStoredApiCredentials()`.
+Без ключей `syncMarketplaces()` использует демо-заглушки в том же формате.
 
 ## Аутентификация
 - **Ozon:** заголовки `Client-Id`, `Api-Key`; все методы — `POST` на
@@ -46,14 +46,11 @@ nmId, supplierArticle, barcode, warehouseName,
 quantity, inWayToClient, inWayFromClient, quantityFull
 ```
 
-### Поставки на склад WB (FBW) — `GET /api/v1/supplier/incomes`
-```
-incomeId, number, date, dateClose, lastChangeDate,
-supplierArticle, nmId, barcode, techSize, quantity,
-totalPrice, warehouseName, status
-```
-Статусы приёмки нормализуем в наш `ShipmentStatus`
-(`PENDING`/`SHIPPED`/`ACCEPTED`): есть `dateClose` → `ACCEPTED`.
+### Поставки на склад WB (FBW)
+Старый `GET /api/v1/supplier/incomes` (Statistics) **снят** (404).
+Актуально: `POST https://supplies-api.wildberries.ru/api/v1/supplies`
++ `GET /api/v1/supplies/{ID}/goods`. Нужен токен категории **Supplies**.
+`statusID`: 3–6 → отгрузка/приёмка; 5 → `ACCEPTED`.
 
 ---
 
@@ -73,16 +70,13 @@ totalPrice, warehouseName, status
 - Финансовый реестр (комиссии, выплаты) — `POST /v3/finance/transaction/list`.
 
 ### Остатки
+- Товарные: `POST /v4/product/info/stocks` (ранее v1 — снят).
 - Аналитика: `POST /v1/analytics/stocks`
-  (`sku, name, available_stock_count, warehouse_name, cluster_name`).
-- Товарные: `POST /v1/product/info/stocks`
-  (`offer_id, product_id, sku, stocks[{ warehouse_id, present, reserved }]`).
 
 ### Поставки на склад Ozon (FBO)
-- `POST /v3/supply-order/list` → `POST /v3/supply-order/get` → состав (bundle).
-  (v2 удалён в декабре 2025.)
-- Поля заявки: `supply_order_id, status (created/confirmed/…),
-  warehouse_id, planned_delivery_date, created_at`, состав — товары со `sku/quantity`.
+- `POST /v3/supply-order/list` — `sort_by: 1`, `filter.states[]`, пагинация `last_id`.
+- `POST /v3/supply-order/get` — поле `order_ids` (до 50).
+- `POST /v1/supply-order/bundle` — состав по `bundle_ids` из get.
 
 ---
 
@@ -119,8 +113,7 @@ totalPrice, warehouseName, status
 Upsert по `(marketplace, externalId, sku)`.
 
 ### `MpStock` (остатки)
-`quantity` — сколько лежит на складах маркетплейса. Снимок заменяется целиком
-при каждой синхронизации.
+`quantity` — сколько лежит на складах маркетплейса. Ozon: `POST /v4/product/info/stocks`.
 
 ### Списание со склада производства
 Поставка = изделия физически ушли с нашего склада производства на МП. При

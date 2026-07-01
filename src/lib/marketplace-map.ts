@@ -69,20 +69,22 @@ export interface WbIncomeRaw {
   supplierArticle: string;
   quantity: number;
   warehouseName?: string;
+  status?: "PENDING" | "SHIPPED" | "ACCEPTED";
 }
 
 export function mapWbIncome(r: WbIncomeRaw): NormalizedSupply {
-  const accepted = r.dateClose ? new Date(r.dateClose) : null;
+  const acceptedAt = r.dateClose ? new Date(r.dateClose) : null;
+  const status = r.status ?? (acceptedAt ? "ACCEPTED" : "SHIPPED");
   return {
     marketplace: "WB",
     externalId: String(r.incomeId),
     number: r.number || null,
     sku: r.supplierArticle,
     quantity: r.quantity,
-    status: accepted ? "ACCEPTED" : "SHIPPED",
+    status,
     warehouseName: r.warehouseName ?? null,
     createdAt: new Date(r.date),
-    acceptedAt: accepted,
+    acceptedAt: status === "ACCEPTED" ? acceptedAt ?? new Date(r.date) : null,
   };
 }
 
@@ -150,14 +152,21 @@ export interface OzonSupplyOrderRaw {
 }
 
 export function mapOzonSupplyStatus(status: string): SupplyStatus {
-  switch (status) {
+  const s = status.toLowerCase();
+  switch (s) {
     case "delivered":
+    case "completed":
+    case "acceptance_at_storage_warehouse":
       return "ACCEPTED";
     case "shipped":
     case "confirmed":
+    case "in_transit":
+    case "ready_to_supply":
+    case "accepted_at_supply_warehouse":
+    case "reports_confirmation_awaiting":
       return "SHIPPED";
     default:
-      return "PENDING"; // created / cancelled / неизвестный
+      return "PENDING";
   }
 }
 

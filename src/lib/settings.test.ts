@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { maskApiKey, verifySettingsApiPassword } from "@/lib/settings";
+import { maskApiKey } from "@/lib/settings";
 
 describe("maskApiKey", () => {
   it("маскирует середину ключа", () => {
@@ -11,12 +11,5 @@ describe("maskApiKey", () => {
 
   it("короткий ключ полностью скрыт", () => {
     expect(maskApiKey("short")).toBe("••••••••");
-  });
-});
-
-describe("verifySettingsApiPassword", () => {
-  it("сверяет пароль", () => {
-    expect(verifySettingsApiPassword("stell22", "stell22")).toBe(true);
-    expect(verifySettingsApiPassword("wrong", "stell22")).toBe(false);
   });
 });

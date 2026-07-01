@@ -55,9 +55,14 @@ export function SalesView({ data }: { data: SalesData }) {
     startTransition(async () => {
       const res = await syncMarketplaces();
       if (res.ok) {
+        const src = res.sources;
+        const mode = src
+          ? ` [${src.wb === "api" ? "WB: API" : "WB: демо"}, ${src.ozon === "api" ? "Ozon: API" : "Ozon: демо"}]`
+          : "";
         toast.success(
-          `Синхронизация: +${res.salesAdded} продаж, +${res.suppliesAdded} поставок, остатки обновлены`,
+          `Синхронизация: +${res.salesAdded} продаж, +${res.suppliesAdded} поставок, остатки обновлены${mode}`,
         );
+        if (res.warnings?.length) toast.warning(res.warnings.join("; "));
         router.refresh();
       } else {
         toast.error(res.error ?? "Ошибка синхронизации");

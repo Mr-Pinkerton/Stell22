@@ -1,9 +1,10 @@
 import { SettingsView } from "@/components/settings/settings-view";
-import { getChangeLogs } from "@/server/audit";
+import { getSettingsLogs } from "@/server/audit";
+import { getApiCredentials } from "@/server/settings";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
-  const logs = await getChangeLogs();
-  return <SettingsView logs={logs} />;
+  const [logs, apiCredentials] = await Promise.all([getSettingsLogs(), getApiCredentials()]);
+  return <SettingsView logs={logs} apiCredentials={apiCredentials} />;
 }
