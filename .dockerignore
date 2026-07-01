@@ -9,5 +9,6 @@ npm-debug.log*
 terminals
 agent-transcripts
 .cursor
+backups
 scripts/probe-*.ts
 scripts/debug-*.ts

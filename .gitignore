@@ -35,6 +35,9 @@ yarn-error.log*
 !.env.example
 !.env.deploy.example
 
+# database backups (created on server)
+/backups/
+
 # vercel
 .vercel
 
