@@ -1,0 +1,13 @@
+node_modules
+.next
+.git
+.env
+.env.*
+!.env.example
+npm-debug.log*
+*.log
+terminals
+agent-transcripts
+.cursor
+scripts/probe-*.ts
+scripts/debug-*.ts

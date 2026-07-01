@@ -1,0 +1,6 @@
+# Caddy автоматически получает и продлевает HTTPS-сертификат (Let's Encrypt)
+# для домена из переменной DOMAIN и проксирует запросы в приложение.
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy app:3000
+}
