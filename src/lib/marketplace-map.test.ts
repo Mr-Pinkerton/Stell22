@@ -155,19 +155,19 @@ describe("поставки", () => {
 });
 
 describe("остатки", () => {
-  it("mapWbStock: inWayToClient → inWay, inWayFromClient → reserved", () => {
-    expect(
-      mapWbStock({ supplierArticle: "ART-001", quantity: 33, inWayToClient: 1, inWayFromClient: 2 }),
-    ).toEqual({ marketplace: "WB", sku: "ART-001", quantity: 33, reserved: 2, inWay: 1 });
+  it("mapWbStock: supplierArticle → sku, quantity", () => {
+    expect(mapWbStock({ supplierArticle: "ART-001", quantity: 33 })).toEqual({
+      marketplace: "WB",
+      sku: "ART-001",
+      quantity: 33,
+    });
   });
 
-  it("mapOzonStock: present → quantity, reserved", () => {
-    expect(mapOzonStock({ offer_id: "ART-002", present: 12, reserved: 3 })).toEqual({
+  it("mapOzonStock: present → quantity", () => {
+    expect(mapOzonStock({ offer_id: "ART-002", present: 12 })).toEqual({
       marketplace: "OZON",
       sku: "ART-002",
       quantity: 12,
-      reserved: 3,
-      inWay: 0,
     });
   });
 });

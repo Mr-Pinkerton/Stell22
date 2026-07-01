@@ -171,36 +171,31 @@ function fetchOzonPostingsRaw(products: ActiveProduct[], now: Date, rand: () => 
   }));
 }
 
-function fetchWbIncomesRaw(products: ActiveProduct[], now: Date, rand: () => number): WbIncomeRaw[] {
-  const stamp = now.getTime();
-  const out: WbIncomeRaw[] = [];
-  products.forEach((p, idx) => {
-    if (rand() < 0.5) return; // не по каждому изделию
-    const accepted = rand() < 0.6;
-    out.push({
-      incomeId: Number(`${stamp % 1000000}${idx}`),
-      number: `WB-INC-${stamp % 100000}-${idx}`,
+// Поставки — детерминированные (стабильный externalId), чтобы повторная
+// синхронизация была идемпотентна и не списывала склад производства повторно
+// (см. deductedQty). Реальные поставки придут из API с собственными id.
+function fetchWbIncomesRaw(products: ActiveProduct[], now: Date): WbIncomeRaw[] {
+  return products.map((p, idx) => {
+    const accepted = idx % 2 === 0; // часть принята, часть в пути (обе отгружены)
+    return {
+      incomeId: 900000 + idx,
+      number: `WB-INC-${900000 + idx}`,
       date: now.toISOString(),
       dateClose: accepted ? now.toISOString() : null,
       supplierArticle: p.sku,
-      quantity: 10 + Math.floor(rand() * 30),
+      quantity: 5 + (idx % 4),
       warehouseName: "Коледино",
-    });
+    };
   });
-  return out;
 }
 
-function fetchOzonSupplyOrdersRaw(products: ActiveProduct[], now: Date, rand: () => number): OzonSupplyOrderRaw[] {
-  const stamp = now.getTime();
-  const items = products
-    .filter(() => rand() < 0.6)
-    .map((p) => ({ offer_id: p.sku, quantity: 10 + Math.floor(rand() * 30) }));
+function fetchOzonSupplyOrdersRaw(products: ActiveProduct[], now: Date): OzonSupplyOrderRaw[] {
+  const items = products.map((p, idx) => ({ offer_id: p.sku, quantity: 3 + (idx % 3) }));
   if (items.length === 0) return [];
-  const statuses = ["confirmed", "shipped", "delivered"];
   return [
     {
-      supply_order_id: Number(`${stamp % 1000000}`),
-      status: statuses[Math.floor(rand() * statuses.length)],
+      supply_order_id: 800001,
+      status: "shipped",
       created_at: now.toISOString(),
       warehouse_name: "Хоругвино",
       items,
@@ -212,8 +207,6 @@ function fetchWbStockRaw(products: ActiveProduct[], rand: () => number): WbStock
   return products.map((p) => ({
     supplierArticle: p.sku,
     quantity: 10 + Math.floor(rand() * 25),
-    inWayToClient: Math.floor(rand() * 5),
-    inWayFromClient: Math.floor(rand() * 3),
   }));
 }
 
@@ -221,7 +214,6 @@ function fetchOzonStockRaw(products: ActiveProduct[], rand: () => number): OzonS
   return products.map((p) => ({
     offer_id: p.sku,
     present: 10 + Math.floor(rand() * 25),
-    reserved: Math.floor(rand() * 5),
   }));
 }
 
@@ -263,8 +255,8 @@ export async function syncMarketplaces(): Promise<SyncResult> {
     ...fetchOzonPostingsRaw(products, now, rand).flatMap(mapOzonPosting),
   ];
   const supplies: NormalizedSupply[] = [
-    ...fetchWbIncomesRaw(products, now, rand).map(mapWbIncome),
-    ...fetchOzonSupplyOrdersRaw(products, now, rand).flatMap(mapOzonSupplyOrder),
+    ...fetchWbIncomesRaw(products, now).map(mapWbIncome),
+    ...fetchOzonSupplyOrdersRaw(products, now).flatMap(mapOzonSupplyOrder),
   ];
   const stocks: NormalizedStock[] = [
     ...fetchWbStockRaw(products, rand).map(mapWbStock),
@@ -295,21 +287,28 @@ export async function syncMarketplaces(): Promise<SyncResult> {
       });
     }
 
+    let deductedTotal = 0;
+    let shortfallTotal = 0;
     for (const s of supplies) {
-      await tx.supply.upsert({
-        where: {
-          marketplace_externalId_sku: {
-            marketplace: s.marketplace,
-            externalId: s.externalId,
-            sku: s.sku,
-          },
+      const productId = idBySku.get(s.sku) ?? null;
+      const key = {
+        marketplace_externalId_sku: {
+          marketplace: s.marketplace,
+          externalId: s.externalId,
+          sku: s.sku,
         },
+      };
+      const existing = await tx.supply.findUnique({ where: key });
+      const alreadyDeducted = existing?.deductedQty ?? 0;
+
+      await tx.supply.upsert({
+        where: key,
         create: {
           marketplace: s.marketplace,
           externalId: s.externalId,
           number: s.number,
           sku: s.sku,
-          productId: idBySku.get(s.sku) ?? null,
+          productId,
           quantity: s.quantity,
           status: s.status,
           warehouseName: s.warehouseName,
@@ -323,6 +322,39 @@ export async function syncMarketplaces(): Promise<SyncResult> {
           warehouseName: s.warehouseName,
         },
       });
+
+      // Списание со склада производства: отгрузка (SHIPPED/ACCEPTED) означает,
+      // что изделия физически ушли к нам со склада. Списываем один раз —
+      // только «новую» часть (quantity − уже списанное). Нельзя в минус:
+      // недостачу фиксируем как «потеря ГП».
+      const shipped = s.status === "SHIPPED" || s.status === "ACCEPTED";
+      const target = shipped ? s.quantity : 0;
+      const delta = target - alreadyDeducted;
+      if (delta > 0 && productId) {
+        const ps = await tx.productStock.findUnique({ where: { productId } });
+        const available = ps?.quantity ?? 0;
+        const toRemove = Math.min(delta, available);
+        if (toRemove > 0) {
+          await tx.productStock.update({
+            where: { productId },
+            data: { quantity: { decrement: toRemove } },
+          });
+          deductedTotal += toRemove;
+        }
+        const shortfall = delta - toRemove;
+        if (shortfall > 0) {
+          shortfallTotal += shortfall;
+          await writeChangeLog(
+            {
+              entity: "Supply",
+              entityId: `${s.marketplace}:${s.externalId}:${s.sku}`,
+              newValues: { event: "gp_shortfall", sku: s.sku, shortfall },
+            },
+            tx,
+          );
+        }
+        await tx.supply.update({ where: key, data: { deductedQty: target } });
+      }
     }
 
     // Остатки — полный снимок: заменяем целиком.
@@ -332,8 +364,6 @@ export async function syncMarketplaces(): Promise<SyncResult> {
         marketplace: s.marketplace,
         sku: s.sku,
         quantity: s.quantity,
-        reserved: s.reserved,
-        inWay: s.inWay,
         syncedAt: now,
       })),
     });
@@ -346,6 +376,8 @@ export async function syncMarketplaces(): Promise<SyncResult> {
           salesAdded: sales.length,
           suppliesAdded: supplies.length,
           stockUpdated: stocks.length,
+          deductedFromProduction: deductedTotal,
+          gpShortfall: shortfallTotal,
           at: now.toISOString(),
         },
       },

@@ -33,8 +33,6 @@ export interface NormalizedStock {
   marketplace: Marketplace;
   sku: string;
   quantity: number;
-  reserved: number;
-  inWay: number;
 }
 
 // ============================ WILDBERRIES ==================================
@@ -92,8 +90,6 @@ export function mapWbIncome(r: WbIncomeRaw): NormalizedSupply {
 export interface WbStockRaw {
   supplierArticle: string;
   quantity: number;
-  inWayToClient?: number;
-  inWayFromClient?: number;
 }
 
 export function mapWbStock(r: WbStockRaw): NormalizedStock {
@@ -101,8 +97,6 @@ export function mapWbStock(r: WbStockRaw): NormalizedStock {
     marketplace: "WB",
     sku: r.supplierArticle,
     quantity: r.quantity,
-    reserved: r.inWayFromClient ?? 0,
-    inWay: r.inWayToClient ?? 0,
   };
 }
 
@@ -187,7 +181,6 @@ export function mapOzonSupplyOrder(r: OzonSupplyOrderRaw): NormalizedSupply[] {
 export interface OzonStockRaw {
   offer_id: string;
   present: number;
-  reserved?: number;
 }
 
 export function mapOzonStock(r: OzonStockRaw): NormalizedStock {
@@ -195,7 +188,5 @@ export function mapOzonStock(r: OzonStockRaw): NormalizedStock {
     marketplace: "OZON",
     sku: r.offer_id,
     quantity: r.present,
-    reserved: r.reserved ?? 0,
-    inWay: 0,
   };
 }

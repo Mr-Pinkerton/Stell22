@@ -400,8 +400,6 @@ model MpStock {
   marketplace String // OZON / WB
   sku       String
   quantity  Int
-  reserved  Int      @default(0) // зарезервировано/в возврате (Ozon reserved, WB inWayFromClient)
-  inWay     Int      @default(0) // в пути к покупателю (WB inWayToClient)
   syncedAt  DateTime @default(now())
 }
 
@@ -637,6 +635,10 @@ model Supply {
   sku           String
   productId     String?
   quantity      Int
+  // Сколько единиц этой поставки уже списано со склада производства
+  // (ProductStock). Списываем при отгрузке (SHIPPED/ACCEPTED) один раз —
+  // сравнение quantity с deductedQty делает повторную синхронизацию идемпотентной.
+  deductedQty   Int       @default(0)
   status        String    // PENDING / SHIPPED / ACCEPTED (нормализованный)
   warehouseName String?
   createdAt     DateTime  // дата создания заявки/поставки

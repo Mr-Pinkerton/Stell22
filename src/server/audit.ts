@@ -23,6 +23,7 @@ const ENTITY_LABEL: Record<string, string> = {
   Inventory: "Инвентаризация",
   InventoryLine: "Инвентаризация",
   MpStock: "Маркетплейсы",
+  Supply: "Маркетплейсы",
   Goal: "Цели",
   Payment: "Зарплата",
 };
@@ -43,7 +44,10 @@ function describe(entity: string, entityId: string, newValues: unknown, oldValue
     return `${label}: авторазнесение операций (${String(nv.reappliedCount ?? 0)})`;
   }
   if (entity === "MpStock" && entityId === "sync") {
-    return `${label}: синхронизация (продажи ${String(nv.salesAdded ?? 0)}, поставки ${String(nv.suppliesAdded ?? 0)}, остатки ${String(nv.stockUpdated ?? 0)})`;
+    return `${label}: синхронизация (продажи ${String(nv.salesAdded ?? 0)}, поставки ${String(nv.suppliesAdded ?? 0)}, остатки ${String(nv.stockUpdated ?? 0)}, списано с производства ${String(nv.deductedFromProduction ?? 0)})`;
+  }
+  if (entity === "Supply" && nv.event === "gp_shortfall") {
+    return `${label}: потеря ГП по поставке (${String(nv.sku ?? "")}, ${String(nv.shortfall ?? 0)} шт — нехватка на складе)`;
   }
   if (typeof nv.status === "string") {
     const from = typeof ov.status === "string" ? `${ov.status} → ` : "";

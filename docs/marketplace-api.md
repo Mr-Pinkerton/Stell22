@@ -119,8 +119,15 @@ totalPrice, warehouseName, status
 Upsert по `(marketplace, externalId, sku)`.
 
 ### `MpStock` (остатки)
-`quantity` + `reserved` (WB `inWayFromClient`/Ozon `reserved`) +
-`inWay` (WB `inWayToClient`). Снимок заменяется целиком при каждой синхронизации.
+`quantity` — сколько лежит на складах маркетплейса. Снимок заменяется целиком
+при каждой синхронизации.
+
+### Списание со склада производства
+Поставка = изделия физически ушли с нашего склада производства на МП. При
+статусе **SHIPPED/ACCEPTED** синхронизация списывает `quantity` изделий из
+`ProductStock` (по `sku → productId`). Списание идемпотентно (`Supply.deductedQty`
+хранит уже списанное), нельзя в минус — при нехватке списываем до нуля и пишем
+в аудит «потеря ГП».
 
 ---
 
