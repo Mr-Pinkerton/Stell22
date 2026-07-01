@@ -7,6 +7,7 @@ import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
 import { loadStoredApiCredentials } from "@/server/settings";
 import { writeSystemLog } from "@/server/system-log";
+import { computeSupplyDeduction } from "@/lib/supply-stock";
 import {
   formatMpSyncMessage,
   mpSyncLogLevel,
@@ -14,6 +15,7 @@ import {
   type MpSyncSideReport,
 } from "@/lib/system-log";
 import {
+  fetchOzonCancelledSupplyOrderIds,
   fetchOzonPostings,
   fetchOzonStocks,
   fetchOzonSupplyOrders,
@@ -252,6 +254,8 @@ export interface SyncResult {
 }
 
 const SYNC_LOOKBACK_DAYS = 90;
+/** Окно поиска отменённых заявок Ozon для реверса списания (шире обычного). */
+const CANCELLED_LOOKBACK_DAYS = 90;
 
 async function getSyncSince(): Promise<Date> {
   const [lastSale, lastSupply] = await Promise.all([
@@ -278,6 +282,8 @@ interface FetchedMarketplaceData {
   sources: { wb: "api" | "stub"; ozon: "api" | "stub" };
   /** Успешно ли получены остатки по каждому МП (для частичной замены снимка). */
   stockReplace: { wb: boolean; ozon: boolean };
+  /** externalId отменённых/отклонённых заявок Ozon (для реверса списания ГП). */
+  ozonCancelledExternalIds: string[];
   wb: MpSyncSideReport;
   ozon: MpSyncSideReport;
 }
@@ -313,6 +319,7 @@ async function fetchMarketplaceData(
   const rand = makeRand(to.getTime());
   const offerIds = products.map((p) => p.sku);
   const stockReplace = { wb: false, ozon: false };
+  const ozonCancelledExternalIds: string[] = [];
 
   if (isWbConfigured(creds["wb.token"])) {
     sources.wb = "api";
@@ -392,6 +399,20 @@ async function fetchMarketplaceData(
       noteSideError(ozon, "Ozon/остатки", err, warnings);
     }
 
+    // Отменённые заявки за широкое окно — для реверса ранее списанного ГП.
+    // Не блокирует остальной sync: сбой лишь пишет предупреждение.
+    try {
+      const cancelledSince = new Date(to.getTime() - CANCELLED_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+      const cancelledIds = await fetchOzonCancelledSupplyOrderIds(
+        ozonCredsNonNull,
+        cancelledSince,
+        to,
+      );
+      ozonCancelledExternalIds.push(...cancelledIds.map((id) => String(id)));
+    } catch (err) {
+      noteSideError(ozon, "Ozon/отмены", err, warnings);
+    }
+
     ozon.durationMs = Math.round(performance.now() - t0);
   } else {
     ozonSales.push(...fetchOzonPostingsRaw(products, to, rand).flatMap(mapOzonPosting));
@@ -410,6 +431,7 @@ async function fetchMarketplaceData(
     warnings,
     sources,
     stockReplace,
+    ozonCancelledExternalIds,
     wb,
     ozon,
   };
@@ -466,7 +488,17 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
   const idBySku = new Map(products.map((p) => [p.sku, p.id]));
 
   const fetched = await fetchMarketplaceData(products, since, now);
-  const { sales, supplies, stocks, warnings, sources, stockReplace, wb, ozon } = fetched;
+  const {
+    sales,
+    supplies,
+    stocks,
+    warnings,
+    sources,
+    stockReplace,
+    ozonCancelledExternalIds,
+    wb,
+    ozon,
+  } = fetched;
 
   const apiConfigured = sources.wb === "api" || sources.ozon === "api";
   const noData = sales.length === 0 && supplies.length === 0 && stocks.length === 0;
@@ -497,6 +529,7 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
   }
   let deductedTotal = 0;
   let shortfallTotal = 0;
+  let restoredTotal = 0;
   await prisma.$transaction(async (tx) => {
     for (const s of sales) {
       await tx.sale.upsert({
@@ -531,6 +564,7 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
       };
       const existing = await tx.supply.findUnique({ where: key });
       const alreadyDeducted = existing?.deductedQty ?? 0;
+      const alreadyShort = existing?.shortfallQty ?? 0;
 
       await tx.supply.upsert({
         where: key,
@@ -555,16 +589,21 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
       });
 
       // Списание со склада производства: отгрузка (SHIPPED/ACCEPTED) означает,
-      // что изделия физически ушли к нам со склада. Списываем один раз —
-      // только «новую» часть (quantity − уже списанное). Нельзя в минус:
-      // недостачу фиксируем как «потеря ГП».
+      // что изделия физически ушли со склада. Учитываем «новую» часть
+      // (quantity − уже учтённое), где учтённое = фактически списано + недостача.
+      // deductedQty хранит именно ФАКТ (для корректного восстановления при
+      // отмене), shortfallQty — учтённую недостачу (чтобы не пытаться списать
+      // её повторно каждую синхронизацию). Нельзя в минус — недостача = «потеря ГП».
       const shipped = s.status === "SHIPPED" || s.status === "ACCEPTED";
       const target = shipped ? s.quantity : 0;
-      const delta = target - alreadyDeducted;
-      if (delta > 0 && productId) {
+      if (target > alreadyDeducted + alreadyShort && productId) {
         const ps = await tx.productStock.findUnique({ where: { productId } });
-        const available = ps?.quantity ?? 0;
-        const toRemove = Math.min(delta, available);
+        const { toRemove, shortfall, newDeducted, newShort } = computeSupplyDeduction({
+          targetQty: target,
+          alreadyDeducted,
+          alreadyShort,
+          available: ps?.quantity ?? 0,
+        });
         if (toRemove > 0) {
           await tx.productStock.update({
             where: { productId },
@@ -572,7 +611,6 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
           });
           deductedTotal += toRemove;
         }
-        const shortfall = delta - toRemove;
         if (shortfall > 0) {
           shortfallTotal += shortfall;
           await writeChangeLog(
@@ -584,7 +622,46 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
             tx,
           );
         }
-        await tx.supply.update({ where: key, data: { deductedQty: target } });
+        await tx.supply.update({
+          where: key,
+          data: { deductedQty: newDeducted, shortfallQty: newShort },
+        });
+      }
+    }
+
+    // Восстановление склада производства по отменённым заявкам Ozon: если ранее
+    // списали ГП, а заявку отменили/отклонили — возвращаем ровно фактически
+    // списанное (deductedQty) и обнуляем счётчики. shortfallQty не возвращаем —
+    // эти единицы физически не списывались.
+    for (const externalId of ozonCancelledExternalIds) {
+      const rows = await tx.supply.findMany({
+        where: { marketplace: "OZON", externalId, deductedQty: { gt: 0 } },
+      });
+      for (const row of rows) {
+        if (row.productId && row.deductedQty > 0) {
+          await tx.productStock.upsert({
+            where: { productId: row.productId },
+            create: { productId: row.productId, quantity: row.deductedQty },
+            update: { quantity: { increment: row.deductedQty } },
+          });
+          restoredTotal += row.deductedQty;
+          await writeChangeLog(
+            {
+              entity: "Supply",
+              entityId: `OZON:${externalId}:${row.sku}`,
+              newValues: {
+                event: "gp_restore_cancelled",
+                sku: row.sku,
+                restored: row.deductedQty,
+              },
+            },
+            tx,
+          );
+        }
+        await tx.supply.update({
+          where: { id: row.id },
+          data: { deductedQty: 0, shortfallQty: 0, status: "PENDING" },
+        });
       }
     }
 
@@ -619,6 +696,7 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
           stockUpdated: stocks.length,
           deductedFromProduction: deductedTotal,
           gpShortfall: shortfallTotal,
+          restoredFromCancelled: restoredTotal,
           at: now.toISOString(),
           sources,
         },
@@ -642,6 +720,7 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
       stocks: stocks.length,
       deductedFromProduction: deductedTotal,
       gpShortfall: shortfallTotal,
+      restoredFromCancelled: restoredTotal,
     },
   };
   await persistMpSyncLog(report, userId);

@@ -127,6 +127,12 @@ const OZON_SUPPLY_MAX_ORDERS = 120;
 
 const OZON_SUPPLY_SKIP_STATES = new Set(["CANCELLED", "REJECTED_AT_SUPPLY_WAREHOUSE"]);
 
+/** Статусы отменённых/отклонённых заявок (для реверса списания ГП). */
+const OZON_SUPPLY_CANCELLED_STATES = ["CANCELLED", "REJECTED_AT_SUPPLY_WAREHOUSE"] as const;
+
+/** Максимум отменённых заявок за проход реверса. */
+const OZON_CANCELLED_MAX_ORDERS = 500;
+
 interface OzonSupplyGetProduct {
   offer_id?: string;
   quantity?: number;
@@ -203,10 +209,12 @@ export function mapOzonSupplyGetToRaw(
   };
 }
 
-async function fetchOzonSupplyOrderIds(
+async function fetchOzonSupplyOrderIdsByStates(
   creds: OzonCredentials,
   since: Date,
   to: Date,
+  states: readonly string[],
+  maxOrders: number,
 ): Promise<number[]> {
   const ids: number[] = [];
   let lastId: string | undefined;
@@ -217,7 +225,7 @@ async function fetchOzonSupplyOrderIds(
       to: toIso(to),
       limit: 100,
       sort_by: OZON_SUPPLY_SORT_BY_CREATED,
-      filter: { states: [...OZON_SUPPLY_LIST_STATES] },
+      filter: { states: [...states] },
     };
     if (lastId) body.last_id = lastId;
 
@@ -230,13 +238,46 @@ async function fetchOzonSupplyOrderIds(
     const batch = res.order_ids ?? [];
     ids.push(...batch);
 
+    if (ids.length >= maxOrders) break;
     const next = res.last_id?.trim();
     if (!next || batch.length === 0) break;
     lastId = next;
     await sleep(300);
   }
 
-  return [...new Set(ids)].slice(0, OZON_SUPPLY_MAX_ORDERS);
+  return [...new Set(ids)].slice(0, maxOrders);
+}
+
+async function fetchOzonSupplyOrderIds(
+  creds: OzonCredentials,
+  since: Date,
+  to: Date,
+): Promise<number[]> {
+  return fetchOzonSupplyOrderIdsByStates(
+    creds,
+    since,
+    to,
+    OZON_SUPPLY_LIST_STATES,
+    OZON_SUPPLY_MAX_ORDERS,
+  );
+}
+
+/**
+ * ID отменённых/отклонённых заявок Ozon за период (только list — дёшево, без
+ * get/bundle). Используется для восстановления списанного ГП при отмене.
+ */
+export async function fetchOzonCancelledSupplyOrderIds(
+  creds: OzonCredentials,
+  since: Date,
+  to: Date,
+): Promise<number[]> {
+  return fetchOzonSupplyOrderIdsByStates(
+    creds,
+    since,
+    to,
+    OZON_SUPPLY_CANCELLED_STATES,
+    OZON_CANCELLED_MAX_ORDERS,
+  );
 }
 
 interface OzonBundleItem {

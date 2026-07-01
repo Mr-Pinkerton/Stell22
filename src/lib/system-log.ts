@@ -37,6 +37,7 @@ export interface MpSyncReport {
     stocks: number;
     deductedFromProduction?: number;
     gpShortfall?: number;
+    restoredFromCancelled?: number;
   };
   error?: string;
 }
@@ -59,6 +60,9 @@ export function formatMpSyncMessage(report: MpSyncReport): string {
   ];
   if (totals.deductedFromProduction != null && totals.deductedFromProduction > 0) {
     parts.push(`списано ГП ${totals.deductedFromProduction}`);
+  }
+  if (totals.restoredFromCancelled != null && totals.restoredFromCancelled > 0) {
+    parts.push(`возврат ГП ${totals.restoredFromCancelled}`);
   }
   if (report.warnings.length > 0) {
     return `Синхронизация с предупреждениями (${parts.join(", ")})`;
