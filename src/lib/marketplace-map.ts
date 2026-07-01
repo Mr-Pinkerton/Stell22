@@ -158,13 +158,16 @@ export function mapOzonSupplyStatus(status: string): SupplyStatus {
     case "completed":
     case "acceptance_at_storage_warehouse":
       return "ACCEPTED";
+    // SHIPPED = изделия физически ушли с нашего склада (списываем ГП).
+    // Только статусы после фактической передачи/отгрузки.
     case "shipped":
     case "confirmed":
     case "in_transit":
-    case "ready_to_supply":
     case "accepted_at_supply_warehouse":
     case "reports_confirmation_awaiting":
       return "SHIPPED";
+    // ready_to_supply / data_filling / created — заявка лишь подготовлена,
+    // товар ещё не отгружен: PENDING, ГП не списываем (иначе преждевременно).
     default:
       return "PENDING";
   }

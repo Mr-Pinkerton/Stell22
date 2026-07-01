@@ -276,6 +276,8 @@ interface FetchedMarketplaceData {
   stocks: NormalizedStock[];
   warnings: string[];
   sources: { wb: "api" | "stub"; ozon: "api" | "stub" };
+  /** Успешно ли получены остатки по каждому МП (для частичной замены снимка). */
+  stockReplace: { wb: boolean; ozon: boolean };
   wb: MpSyncSideReport;
   ozon: MpSyncSideReport;
 }
@@ -310,6 +312,7 @@ async function fetchMarketplaceData(
 
   const rand = makeRand(to.getTime());
   const offerIds = products.map((p) => p.sku);
+  const stockReplace = { wb: false, ozon: false };
 
   if (isWbConfigured(creds["wb.token"])) {
     sources.wb = "api";
@@ -341,6 +344,7 @@ async function fetchMarketplaceData(
       const wbStocksRaw = await fetchWbStocks(creds["wb.token"], nmIdToSku);
       wbStocks.push(...wbStocksRaw.map(mapWbStock));
       wb.stocks = wbStocks.length;
+      stockReplace.wb = true;
     } catch (err) {
       noteSideError(wb, "WB/остатки", err, warnings);
     }
@@ -353,6 +357,7 @@ async function fetchMarketplaceData(
     wb.sales = wbSales.length;
     wb.supplies = wbSupplies.length;
     wb.stocks = wbStocks.length;
+    stockReplace.wb = true;
   }
 
   const ozonCreds = ozonCredentialsFrom(creds);
@@ -382,6 +387,7 @@ async function fetchMarketplaceData(
       const ozonStocksRaw = await fetchOzonStocks(ozonCredsNonNull, offerIds);
       ozonStocks.push(...ozonStocksRaw.map(mapOzonStock));
       ozon.stocks = ozonStocks.length;
+      stockReplace.ozon = true;
     } catch (err) {
       noteSideError(ozon, "Ozon/остатки", err, warnings);
     }
@@ -394,6 +400,7 @@ async function fetchMarketplaceData(
     ozon.sales = ozonSales.length;
     ozon.supplies = ozonSupplies.length;
     ozon.stocks = ozonStocks.length;
+    stockReplace.ozon = true;
   }
 
   return {
@@ -402,6 +409,7 @@ async function fetchMarketplaceData(
     stocks: [...wbStocks, ...ozonStocks],
     warnings,
     sources,
+    stockReplace,
     wb,
     ozon,
   };
@@ -458,7 +466,7 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
   const idBySku = new Map(products.map((p) => [p.sku, p.id]));
 
   const fetched = await fetchMarketplaceData(products, since, now);
-  const { sales, supplies, stocks, warnings, sources, wb, ozon } = fetched;
+  const { sales, supplies, stocks, warnings, sources, stockReplace, wb, ozon } = fetched;
 
   const apiConfigured = sources.wb === "api" || sources.ozon === "api";
   const noData = sales.length === 0 && supplies.length === 0 && stocks.length === 0;
@@ -580,16 +588,26 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
       }
     }
 
-    // Остатки — полный снимок: заменяем целиком.
-    await tx.mpStock.deleteMany();
-    await tx.mpStock.createMany({
-      data: stocks.map((s) => ({
-        marketplace: s.marketplace,
-        sku: s.sku,
-        quantity: s.quantity,
-        syncedAt: now,
-      })),
-    });
+    // Остатки — полный снимок, но по каждому МП отдельно: заменяем только те
+    // маркетплейсы, чьи остатки успешно получены. Иначе частичный сбой (напр.
+    // Ozon упал, WB прошёл) стёр бы остатки другого маркетплейса.
+    const replaceMarketplaces: Marketplace[] = [];
+    if (stockReplace.wb) replaceMarketplaces.push("WB");
+    if (stockReplace.ozon) replaceMarketplaces.push("OZON");
+    if (replaceMarketplaces.length > 0) {
+      await tx.mpStock.deleteMany({ where: { marketplace: { in: replaceMarketplaces } } });
+      const rows = stocks.filter((s) => replaceMarketplaces.includes(s.marketplace));
+      if (rows.length > 0) {
+        await tx.mpStock.createMany({
+          data: rows.map((s) => ({
+            marketplace: s.marketplace,
+            sku: s.sku,
+            quantity: s.quantity,
+            syncedAt: now,
+          })),
+        });
+      }
+    }
 
     await writeChangeLog(
       {

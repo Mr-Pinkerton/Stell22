@@ -130,6 +130,8 @@ describe("поставки", () => {
     expect(mapOzonSupplyStatus("confirmed")).toBe("SHIPPED");
     expect(mapOzonSupplyStatus("created")).toBe("PENDING");
     expect(mapOzonSupplyStatus("cancelled")).toBe("PENDING");
+    expect(mapOzonSupplyStatus("READY_TO_SUPPLY")).toBe("PENDING");
+    expect(mapOzonSupplyStatus("DATA_FILLING")).toBe("PENDING");
   });
 
   it("mapOzonSupplyOrder раскладывает заявку по SKU", () => {
