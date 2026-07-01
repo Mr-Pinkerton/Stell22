@@ -253,6 +253,115 @@ export interface PrisadkaInput {
   picks: { detailId: string; kind: "torcev" | "plosk"; quantity: number }[];
 }
 
+/**
+ * Списывает `quantity` детали `detailId` для присадки типа `kind` с сырого/
+ * частично присаженного остатка и приходует на результирующую комбинацию.
+ * Один пик может распределиться по НЕСКОЛЬКИМ строкам-источникам с разной
+ * комбинацией другого флага — на каждую создаётся своя строка
+ * `OperationDetailLine` с провенансом (`sourceTorcevayaDone/PloskostDone`),
+ * это нужно для точного возврата при правке/удалении операции.
+ * Бросает при нехватке остатка (нельзя в минус — cost-integrity).
+ */
+async function applyPrisadkaPick(
+  tx: Prisma.TransactionClient,
+  operationId: string,
+  detailId: string,
+  kind: "torcev" | "plosk",
+  quantity: number,
+): Promise<void> {
+  const sources = await tx.detailStock.findMany({
+    where: {
+      detailId,
+      quantity: { gt: 0 },
+      ...(kind === "torcev" ? { torcevayaDone: false } : { ploskostDone: false }),
+    },
+    orderBy: { id: "asc" },
+  });
+  const takes = allocate(
+    sources.map((s) => s.quantity),
+    quantity,
+  ); // бросит при нехватке
+
+  for (let i = 0; i < sources.length; i++) {
+    const take = takes[i];
+    if (take <= 0) continue;
+    const src = sources[i];
+    // Атомарное списание с защитой от гонки: если параллельная транзакция
+    // уже увела остаток ниже take — count === 0 и весь $transaction откатится
+    // (нельзя в минус — cost-integrity).
+    const dec = await tx.detailStock.updateMany({
+      where: { id: src.id, quantity: { gte: take } },
+      data: { quantity: { decrement: take } },
+    });
+    if (dec.count === 0) throw new Error("Недостаточно остатка деталей для присадки");
+    const torcevayaDone = kind === "torcev" ? true : src.torcevayaDone;
+    const ploskostDone = kind === "plosk" ? true : src.ploskostDone;
+    await tx.detailStock.upsert({
+      where: {
+        detailId_torcevayaDone_ploskostDone: { detailId, torcevayaDone, ploskostDone },
+      },
+      create: { detailId, torcevayaDone, ploskostDone, quantity: take },
+      update: { quantity: { increment: take } },
+    });
+    await tx.operationDetailLine.create({
+      data: {
+        operationId,
+        detailId,
+        quantity: take,
+        prisadkaTorcevaya: kind === "torcev",
+        prisadkaPloskost: kind === "plosk",
+        sourceTorcevayaDone: src.torcevayaDone,
+        sourcePloskostDone: src.ploskostDone,
+      },
+    });
+  }
+}
+
+/**
+ * Обратная разноска одной строки ПРИСАДКИ: снимает результат (комбинация
+ * после выполнения этого типа) и возвращает деталь в исходную комбинацию
+ * (`sourceTorcevayaDone/PloskostDone`). Бросает, если деталь уже ушла дальше
+ * (в другую присадку/упаковку) — правка/удаление в этом случае невозможны.
+ */
+export async function reversePrisadkaLine(
+  tx: Prisma.TransactionClient,
+  line: { detailId: string; quantity: number; prisadkaTorcevaya: boolean; sourceTorcevayaDone: boolean; sourcePloskostDone: boolean },
+): Promise<void> {
+  const kind: "torcev" | "plosk" = line.prisadkaTorcevaya ? "torcev" : "plosk";
+  const destTorcev = kind === "torcev" ? true : line.sourceTorcevayaDone;
+  const destPlosk = kind === "plosk" ? true : line.sourcePloskostDone;
+
+  const dec = await tx.detailStock.updateMany({
+    where: {
+      detailId: line.detailId,
+      torcevayaDone: destTorcev,
+      ploskostDone: destPlosk,
+      quantity: { gte: line.quantity },
+    },
+    data: { quantity: { decrement: line.quantity } },
+  });
+  if (dec.count === 0) {
+    throw new Error("Нельзя изменить/удалить: деталь уже использована в упаковке или дальнейшей присадке");
+  }
+
+  await tx.detailStock.upsert({
+    where: {
+      detailId_torcevayaDone_ploskostDone: {
+        detailId: line.detailId,
+        torcevayaDone: line.sourceTorcevayaDone,
+        ploskostDone: line.sourcePloskostDone,
+      },
+    },
+    create: {
+      detailId: line.detailId,
+      torcevayaDone: line.sourceTorcevayaDone,
+      ploskostDone: line.sourcePloskostDone,
+      quantity: line.quantity,
+    },
+    update: { quantity: { increment: line.quantity } },
+  });
+}
+
 export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
   const { employeeId } = input;
   const picks = input.picks.filter((p) => p.quantity > 0);
@@ -261,62 +370,11 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
 
   await prisma.$transaction(async (tx) => {
     const op = await tx.productionOperation.create({
-      data: {
-        type: "PRISADKA",
-        employeeId,
-        workDate: new Date(),
-        lines: {
-          create: picks.map((p) => ({
-            detailId: p.detailId,
-            quantity: p.quantity,
-            prisadkaTorcevaya: p.kind === "torcev",
-            prisadkaPloskost: p.kind === "plosk",
-          })),
-        },
-      },
+      data: { type: "PRISADKA", employeeId, workDate: new Date() },
     });
 
     for (const pick of picks) {
-      // Источник — строки, где этот тип присадки ещё НЕ выполнен.
-      const sources = await tx.detailStock.findMany({
-        where: {
-          detailId: pick.detailId,
-          quantity: { gt: 0 },
-          ...(pick.kind === "torcev" ? { torcevayaDone: false } : { ploskostDone: false }),
-        },
-        orderBy: { id: "asc" },
-      });
-      const takes = allocate(
-        sources.map((s) => s.quantity),
-        pick.quantity,
-      ); // бросит при нехватке
-
-      for (let i = 0; i < sources.length; i++) {
-        const take = takes[i];
-        if (take <= 0) continue;
-        const src = sources[i];
-        // Атомарное списание с защитой от гонки: если параллельная транзакция
-        // уже увела остаток ниже take — count === 0 и весь $transaction откатится
-        // (нельзя в минус — cost-integrity).
-        const dec = await tx.detailStock.updateMany({
-          where: { id: src.id, quantity: { gte: take } },
-          data: { quantity: { decrement: take } },
-        });
-        if (dec.count === 0) throw new Error("Недостаточно остатка деталей для присадки");
-        const torcevayaDone = pick.kind === "torcev" ? true : src.torcevayaDone;
-        const ploskostDone = pick.kind === "plosk" ? true : src.ploskostDone;
-        await tx.detailStock.upsert({
-          where: {
-            detailId_torcevayaDone_ploskostDone: {
-              detailId: pick.detailId,
-              torcevayaDone,
-              ploskostDone,
-            },
-          },
-          create: { detailId: pick.detailId, torcevayaDone, ploskostDone, quantity: take },
-          update: { quantity: { increment: take } },
-        });
-      }
+      await applyPrisadkaPick(tx, op.id, pick.detailId, pick.kind, pick.quantity);
     }
 
     await writeChangeLog(
@@ -336,6 +394,144 @@ export interface UpakovkaInput {
   picks: { productId: string; quantity: number }[];
 }
 
+/**
+ * Списывает готовые детали/крепёж/упаковку под `quantity` изделий `productId`
+ * и приходует изделие. Фиксирует провенанс (какие именно комбинации
+ * DetailStock и какие количества номенклатуры списаны) — состав изделия
+ * может измениться позже, поэтому для обратной разноски нужен именно
+ * фактически списанный набор, а не текущий состав.
+ */
+async function applyUpakovkaPick(
+  tx: Prisma.TransactionClient,
+  operationId: string,
+  productId: string,
+  quantity: number,
+): Promise<void> {
+  const product = await tx.product.findUnique({
+    where: { id: productId },
+    include: { details: true, fasteners: true },
+  });
+  if (!product) throw new Error("Изделие не найдено");
+
+  // Списываем готовые детали (все требуемые присадки выполнены).
+  for (const pd of product.details) {
+    const needed = pd.quantity * quantity;
+    if (needed <= 0) continue;
+    const detail = await tx.detail.findUniqueOrThrow({ where: { id: pd.detailId } });
+    const rows = (
+      await tx.detailStock.findMany({
+        where: { detailId: pd.detailId, quantity: { gt: 0 } },
+        orderBy: { id: "asc" },
+      })
+    ).filter((r) => isReady(detail, r.torcevayaDone, r.ploskostDone));
+
+    const takes = allocate(
+      rows.map((r) => r.quantity),
+      needed,
+    ); // бросит при нехватке готовых деталей
+    for (let i = 0; i < rows.length; i++) {
+      const take = takes[i];
+      if (take <= 0) continue;
+      // Условное списание: при гонке (остаток ушёл ниже) откат транзакции.
+      const dec = await tx.detailStock.updateMany({
+        where: { id: rows[i].id, quantity: { gte: take } },
+        data: { quantity: { decrement: take } },
+      });
+      if (dec.count === 0) throw new Error("Недостаточно готовых деталей для упаковки");
+      await tx.operationDetailLine.create({
+        data: {
+          operationId,
+          detailId: pd.detailId,
+          quantity: take,
+          sourceTorcevayaDone: rows[i].torcevayaDone,
+          sourcePloskostDone: rows[i].ploskostDone,
+        },
+      });
+    }
+  }
+
+  // Списываем крепёж.
+  for (const f of product.fasteners) {
+    const needed = f.quantity * quantity;
+    if (needed <= 0) continue;
+    const dec = await tx.nomenclatureStock.updateMany({
+      where: { nomenclatureId: f.nomenclatureId, quantity: { gte: needed } },
+      data: { quantity: { decrement: needed } },
+    });
+    if (dec.count === 0) throw new Error("Недостаточно крепежа на складе");
+    await tx.operationNomenclatureLine.create({
+      data: { operationId, nomenclatureId: f.nomenclatureId, quantity: needed },
+    });
+  }
+
+  // Списываем упаковку.
+  if (product.packagingId) {
+    const dec = await tx.nomenclatureStock.updateMany({
+      where: { nomenclatureId: product.packagingId, quantity: { gte: quantity } },
+      data: { quantity: { decrement: quantity } },
+    });
+    if (dec.count === 0) throw new Error("Недостаточно упаковки на складе");
+    await tx.operationNomenclatureLine.create({
+      data: { operationId, nomenclatureId: product.packagingId, quantity },
+    });
+  }
+
+  // Приход готовой продукции.
+  await tx.productStock.upsert({
+    where: { productId },
+    create: { productId, quantity },
+    update: { quantity: { increment: quantity } },
+  });
+}
+
+/**
+ * Обратная разноска операции УПАКОВКИ: возвращает детали в исходные комбинации
+ * DetailStock, крепёж/упаковку — в NomenclatureStock, снимает изделие с
+ * ProductStock. Бросает, если изделие уже отгружено/продано (остаток < qty).
+ */
+export async function reverseUpakovkaOperation(
+  tx: Prisma.TransactionClient,
+  productId: string,
+  productQty: number,
+  detailLines: { detailId: string; quantity: number; sourceTorcevayaDone: boolean; sourcePloskostDone: boolean }[],
+  nomenclatureLines: { nomenclatureId: string; quantity: number }[],
+): Promise<void> {
+  const dec = await tx.productStock.updateMany({
+    where: { productId, quantity: { gte: productQty } },
+    data: { quantity: { decrement: productQty } },
+  });
+  if (dec.count === 0) {
+    throw new Error("Нельзя изменить/удалить: изделие уже отгружено/продано");
+  }
+
+  for (const l of detailLines) {
+    await tx.detailStock.upsert({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId: l.detailId,
+          torcevayaDone: l.sourceTorcevayaDone,
+          ploskostDone: l.sourcePloskostDone,
+        },
+      },
+      create: {
+        detailId: l.detailId,
+        torcevayaDone: l.sourceTorcevayaDone,
+        ploskostDone: l.sourcePloskostDone,
+        quantity: l.quantity,
+      },
+      update: { quantity: { increment: l.quantity } },
+    });
+  }
+
+  for (const nl of nomenclatureLines) {
+    await tx.nomenclatureStock.upsert({
+      where: { nomenclatureId: nl.nomenclatureId },
+      create: { nomenclatureId: nl.nomenclatureId, quantity: nl.quantity },
+      update: { quantity: { increment: nl.quantity } },
+    });
+  }
+}
+
 export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
   const { employeeId } = input;
   const picks = input.picks.filter((p) => p.quantity > 0);
@@ -344,65 +540,6 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
 
   await prisma.$transaction(async (tx) => {
     for (const pick of picks) {
-      const product = await tx.product.findUnique({
-        where: { id: pick.productId },
-        include: { details: true, fasteners: true },
-      });
-      if (!product) throw new Error("Изделие не найдено");
-
-      // Списываем готовые детали (все требуемые присадки выполнены).
-      for (const pd of product.details) {
-        const needed = pd.quantity * pick.quantity;
-        const detail = await tx.detail.findUniqueOrThrow({ where: { id: pd.detailId } });
-        const rows = (
-          await tx.detailStock.findMany({
-            where: { detailId: pd.detailId, quantity: { gt: 0 } },
-            orderBy: { id: "asc" },
-          })
-        ).filter((r) => isReady(detail, r.torcevayaDone, r.ploskostDone));
-
-        const takes = allocate(
-          rows.map((r) => r.quantity),
-          needed,
-        ); // бросит при нехватке готовых деталей
-        for (let i = 0; i < rows.length; i++) {
-          if (takes[i] > 0) {
-            // Условное списание: при гонке (остаток ушёл ниже) откат транзакции.
-            const dec = await tx.detailStock.updateMany({
-              where: { id: rows[i].id, quantity: { gte: takes[i] } },
-              data: { quantity: { decrement: takes[i] } },
-            });
-            if (dec.count === 0) throw new Error("Недостаточно готовых деталей для упаковки");
-          }
-        }
-      }
-
-      // Списываем крепёж.
-      for (const f of product.fasteners) {
-        const needed = f.quantity * pick.quantity;
-        const dec = await tx.nomenclatureStock.updateMany({
-          where: { nomenclatureId: f.nomenclatureId, quantity: { gte: needed } },
-          data: { quantity: { decrement: needed } },
-        });
-        if (dec.count === 0) throw new Error("Недостаточно крепежа на складе");
-      }
-
-      // Списываем упаковку.
-      if (product.packagingId) {
-        const dec = await tx.nomenclatureStock.updateMany({
-          where: { nomenclatureId: product.packagingId, quantity: { gte: pick.quantity } },
-          data: { quantity: { decrement: pick.quantity } },
-        });
-        if (dec.count === 0) throw new Error("Недостаточно упаковки на складе");
-      }
-
-      // Приход готовой продукции.
-      await tx.productStock.upsert({
-        where: { productId: pick.productId },
-        create: { productId: pick.productId, quantity: pick.quantity },
-        update: { quantity: { increment: pick.quantity } },
-      });
-
       const op = await tx.productionOperation.create({
         data: {
           type: "UPAKOVKA",
@@ -412,6 +549,7 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
           productQty: pick.quantity,
         },
       });
+      await applyUpakovkaPick(tx, op.id, pick.productId, pick.quantity);
       await writeChangeLog(
         {
           entity: "ProductionOperation",
@@ -426,6 +564,8 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
   revalidatePath("/production");
   revalidatePath("/terminal");
 }
+
+export { applyPrisadkaPick, applyUpakovkaPick };
 
 // ============================ РАБОЧИЕ ЧАСЫ =================================
 

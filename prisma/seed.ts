@@ -37,6 +37,7 @@ async function main() {
     prisma.productCost.deleteMany(),
     // производство
     prisma.operationDetailLine.deleteMany(),
+    prisma.operationNomenclatureLine.deleteMany(),
     prisma.productionOperation.deleteMany(),
     // финансы (cashflow ссылается на счёт/статью/сделку/контрагента/выписку)
     prisma.cashFlow.deleteMany(),
@@ -294,6 +295,10 @@ async function main() {
               quantity: o.quantity,
               prisadkaTorcevaya: o.kind === "torcev",
               prisadkaPloskost: o.kind === "plosk",
+              // Провенанс (откуда списано) — нужен для обратной разноски при
+              // правке/удалении, см. src/server/terminal.ts.
+              sourceTorcevayaDone: o.from.t,
+              sourcePloskostDone: o.from.p,
             },
           ],
         },
@@ -350,6 +355,22 @@ async function main() {
         productId: o.productId,
         productQty: o.quantity,
         workDate: new Date(o.date),
+        // Провенанс списания — нужен для обратной разноски при правке/
+        // удалении (см. src/server/terminal.ts, reverseUpakovkaOperation).
+        lines: {
+          create: o.details.map((d) => ({
+            detailId: d.detailId,
+            quantity: d.per * o.quantity,
+            sourceTorcevayaDone: d.ready.t,
+            sourcePloskostDone: d.ready.p,
+          })),
+        },
+        nomenclatureLines: {
+          create: [
+            ...o.fasteners.map((f) => ({ nomenclatureId: f.nomenclatureId, quantity: f.per * o.quantity })),
+            { nomenclatureId: o.packagingId, quantity: o.quantity },
+          ],
+        },
       },
     });
   };

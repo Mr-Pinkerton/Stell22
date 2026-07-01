@@ -299,16 +299,20 @@ model ProductionOperation {
   isPaid Boolean   @default(false)
   paidAt DateTime?
 
-  lines   OperationDetailLine[]
-  payment PaymentBatchItem[]
+  lines             OperationDetailLine[]
+  nomenclatureLines OperationNomenclatureLine[]
+  payment           PaymentBatchItem[]
 
   @@index([workDate])
   @@index([employeeId, workDate])
 }
 
 // Строки деталей в операции:
-//  - TORCOVKA: произведённые детали (qty)
-//  - PRISADKA: обработанные детали + какой тип присадки сделан
+//  - TORCOVKA: произведённые детали (qty) — выход, не списание со склада
+//  - PRISADKA: обработанные детали + какой тип присадки сделан (списание
+//    сырой/частично присаженной детали → приход присаженной)
+//  - UPAKOVKA: готовые детали, списанные на изделие (провенанс, для UI не
+//    показываются — см. src/server/production.ts serializeRow)
 model OperationDetailLine {
   id          String              @id @default(cuid())
   operationId String
@@ -319,6 +323,25 @@ model OperationDetailLine {
   // для PRISADKA: какой тип выполнен
   prisadkaTorcevaya Boolean @default(false)
   prisadkaPloskost  Boolean @default(false)
+
+  // Провенанс списания: комбинация DetailStock, ОТКУДА взято это кол-во
+  // (для PRISADKA — до выполнения этого типа присадки; для UPAKOVKA — до
+  // потребления в изделие). Нужен для точного возврата на склад при правке/
+  // удалении операции — cost-integrity: нельзя редактировать/удалять без
+  // обратной разноски.
+  sourceTorcevayaDone Boolean @default(false)
+  sourcePloskostDone  Boolean @default(false)
+}
+
+// Провенанс списания крепежа/упаковки конкретной операцией УПАКОВКИ — состав
+// изделия может измениться позже, поэтому фиксируем именно то, что было
+// списано этой операцией (для точного возврата при правке/удалении).
+model OperationNomenclatureLine {
+  id             String              @id @default(cuid())
+  operationId    String
+  operation      ProductionOperation @relation(fields: [operationId], references: [id])
+  nomenclatureId String
+  quantity       Int
 }
 
 // Журнал изменений (аудит) — производство и финансы.

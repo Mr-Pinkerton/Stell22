@@ -5,6 +5,12 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
+import {
+  applyPrisadkaPick,
+  applyUpakovkaPick,
+  reversePrisadkaLine,
+  reverseUpakovkaOperation,
+} from "@/server/terminal";
 import { operationEarning } from "@/lib/payroll";
 import { dayKey } from "@/lib/entries";
 import type {
@@ -73,12 +79,18 @@ function computeAmount(op: OpFull, maps: RefMaps): { quantity: number; amount: n
 
 function serializeRow(op: OpFull, maps: RefMaps): ProductionEntryRow {
   const { quantity, amount } = computeAmount(op, maps);
-  const detailLines: ProductionDetailLine[] = op.lines.map((l) => ({
-    detailName: maps.detail.get(l.detailId)?.name ?? "—",
-    quantity: l.quantity,
-    prisadkaTorcevaya: l.prisadkaTorcevaya,
-    prisadkaPloskost: l.prisadkaPloskost,
-  }));
+  // Строки УПАКОВКИ в op.lines — внутренний провенанс списания (для обратной
+  // разноски), в UI не показываются: там редактируется количество изделий
+  // одной строкой (как у ЧАСОВ), а не список деталей.
+  const detailLines: ProductionDetailLine[] =
+    op.type === "TORCOVKA" || op.type === "PRISADKA"
+      ? op.lines.map((l) => ({
+          detailName: maps.detail.get(l.detailId)?.name ?? "—",
+          quantity: l.quantity,
+          prisadkaTorcevaya: l.prisadkaTorcevaya,
+          prisadkaPloskost: l.prisadkaPloskost,
+        }))
+      : [];
 
   return {
     id: op.id,
@@ -171,9 +183,14 @@ async function reloadRow(id: string): Promise<ProductionEntryRow> {
 }
 
 /**
- * Правка количества строки операции до выплаты. Поддержано для торцовки
- * (корректируется сырой остаток деталей) и часов. Присадка/упаковка —
- * редактирование пока недоступно (нужна обратная разноска по стадиям/складу).
+ * Правка количества строки операции до выплаты.
+ *  - TORCOVKA: корректируется сырой остаток произведённой детали.
+ *  - HOURS / UPAKOVKA: одна синтетическая строка (часы / изделия), правка —
+ *    как в HOURS для часов; для УПАКОВКИ — полная обратная разноска старого
+ *    количества и повторное списание материалов под новое (см. ниже).
+ *  - PRISADKA: обратная разноска конкретной строки (в исходную комбинацию
+ *    присадки) и повторное списание под новое количество — источники могут
+ *    оказаться другими (актуальный остаток на момент правки).
  */
 export async function updateProductionLineQuantity(
   id: string,
@@ -198,6 +215,66 @@ export async function updateProductionLineQuantity(
       newValues: { field: "Количество", oldValue: old, newValue: newQty },
     });
     revalidatePath(PATH);
+    return reloadRow(id);
+  }
+
+  if (op.type === "UPAKOVKA") {
+    const newQtyInt = Math.round(newQty);
+    const oldQty = op.productQty ?? 0;
+    if (!op.productId) throw new Error("У операции не указано изделие");
+    if (newQtyInt === oldQty) return reloadRow(id);
+
+    await prisma.$transaction(async (tx) => {
+      const [detailLines, nomenclatureLines] = await Promise.all([
+        tx.operationDetailLine.findMany({ where: { operationId: id } }),
+        tx.operationNomenclatureLine.findMany({ where: { operationId: id } }),
+      ]);
+      // Полная обратная разноска старого количества, затем чистое повторное
+      // списание под новое — проще и надёжнее частичного дельта-пересчёта,
+      // и симметрично удалению.
+      await reverseUpakovkaOperation(tx, op.productId!, oldQty, detailLines, nomenclatureLines);
+      await tx.operationDetailLine.deleteMany({ where: { operationId: id } });
+      await tx.operationNomenclatureLine.deleteMany({ where: { operationId: id } });
+      await applyUpakovkaPick(tx, id, op.productId!, newQtyInt);
+      await tx.productionOperation.update({ where: { id }, data: { productQty: newQtyInt } });
+      await writeChangeLog(
+        {
+          entity: "ProductionOperation",
+          entityId: id,
+          newValues: { field: "Количество", oldValue: oldQty, newValue: newQtyInt },
+        },
+        tx,
+      );
+    });
+
+    revalidatePath(PATH);
+    revalidatePath("/reports");
+    return reloadRow(id);
+  }
+
+  if (op.type === "PRISADKA") {
+    const line = op.lines[lineIndex];
+    if (!line) throw new Error("Строка не найдена");
+    const newQtyInt = Math.round(newQty);
+    if (newQtyInt === line.quantity) return reloadRow(id);
+    const kind: "torcev" | "plosk" = line.prisadkaTorcevaya ? "torcev" : "plosk";
+
+    await prisma.$transaction(async (tx) => {
+      await reversePrisadkaLine(tx, line);
+      await tx.operationDetailLine.delete({ where: { id: line.id } });
+      await applyPrisadkaPick(tx, id, line.detailId, kind, newQtyInt);
+      await writeChangeLog(
+        {
+          entity: "ProductionOperation",
+          entityId: id,
+          newValues: { field: "Количество", oldValue: line.quantity, newValue: newQtyInt },
+        },
+        tx,
+      );
+    });
+
+    revalidatePath(PATH);
+    revalidatePath("/reports");
     return reloadRow(id);
   }
 
@@ -261,20 +338,28 @@ export async function updateProductionLineQuantity(
 }
 
 /**
- * Удаление операции до выплаты с обратной разноской остатков.
- * Поддержано для торцовки (возврат реек, снятие сырых деталей) и часов.
- * Присадка/упаковка — пока недоступны (обратная разноска по стадиям/складу).
+ * Удаление операции до выплаты с полной обратной разноской остатков:
+ *  - TORCOVKA: снимаем произведённые детали с сырого остатка. Рейки НЕ
+ *    возвращаются в пакет — они уже физически распилены (торцовка
+ *    необратима), удаление лишь исправляет запись о том, что из них
+ *    произвели. Взятые рейки при этом перестают учитываться как «взято»
+ *    (операции больше нет), а `remainingQuantity` пакета не меняется — эта
+ *    разница автоматически попадает в отчёт «Процент отхода» как списание
+ *    сверх произведённого (`writtenOffM`, см. src/server/reports.ts и
+ *    src/lib/waste.ts), а не гасится искусственным возвратом целых реек;
+ *  - PRISADKA: возврат каждой строки в исходную комбинацию присадки;
+ *  - UPAKOVKA: возврат деталей/крепежа/упаковки, снятие изделия со склада;
+ *  - HOURS: просто удаление записи (не затрагивает склад).
+ * Бросает, если материал уже ушёл дальше по цепочке (упаковка/продажа) —
+ * в этом случае удаление невозможно без нарушения cost-integrity.
  */
 export async function deleteProductionOperation(id: string): Promise<void> {
   const op = await prisma.productionOperation.findUnique({
     where: { id },
-    include: { lines: true },
+    include: { lines: true, nomenclatureLines: true },
   });
   if (!op) throw new Error("Операция не найдена");
   if (op.isPaid) throw new Error("Нельзя удалить — операция уже выплачена");
-  if (op.type === "PRISADKA" || op.type === "UPAKOVKA") {
-    throw new Error("Удаление этого типа операции пока недоступно");
-  }
 
   await prisma.$transaction(async (tx) => {
     if (op.type === "TORCOVKA") {
@@ -293,16 +378,19 @@ export async function deleteProductionOperation(id: string): Promise<void> {
           throw new Error("Нельзя удалить: детали уже прошли присадку/упаковку");
         }
       }
-      // Возвращаем рейки в остаток партии.
-      if (op.railLotId && op.railsTaken) {
-        await tx.railLot.update({
-          where: { id: op.railLotId },
-          data: { remainingQuantity: { increment: op.railsTaken } },
-        });
+      // Рейки НЕ возвращаем — они уже распилены. Взятое сверх произведённого
+      // станет отходом партии (см. JSDoc функции).
+    } else if (op.type === "PRISADKA") {
+      for (const l of op.lines) {
+        await reversePrisadkaLine(tx, l);
       }
+    } else if (op.type === "UPAKOVKA") {
+      if (!op.productId) throw new Error("У операции не указано изделие");
+      await reverseUpakovkaOperation(tx, op.productId, op.productQty ?? 0, op.lines, op.nomenclatureLines);
     }
 
     await tx.operationDetailLine.deleteMany({ where: { operationId: id } });
+    await tx.operationNomenclatureLine.deleteMany({ where: { operationId: id } });
     await tx.productionOperation.delete({ where: { id } });
     await writeChangeLog(
       { entity: "ProductionOperation", entityId: id, oldValues: { type: op.type, deleted: true } },
