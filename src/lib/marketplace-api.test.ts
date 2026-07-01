@@ -77,9 +77,9 @@ describe("mapWbSupplyStatusFromId", () => {
 describe("buildWbNmIdMap", () => {
   it("строит карту nmId → артикул", () => {
     const map = buildWbNmIdMap([
-      { nmId: 111, supplierArticle: "ART-1", date: "", saleID: "S1", finishedPrice: 100 },
-      { nmId: 222, supplierArticle: "ART-2", date: "", saleID: "S2", finishedPrice: 200 },
-      { date: "", supplierArticle: "ART-3", saleID: "S3", finishedPrice: 0 },
+      { nmId: 111, supplierArticle: "ART-1" },
+      { nmId: 222, supplierArticle: "ART-2" },
+      { supplierArticle: "ART-3" },
     ]);
     expect(map.get(111)).toBe("ART-1");
     expect(map.get(222)).toBe("ART-2");
