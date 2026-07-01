@@ -20,6 +20,7 @@ import {
   financeDeals,
 } from "../src/mocks/finance-fixtures";
 import { batchExtraShare, batchTotalCost, dealDeliveryExtra } from "../src/lib/deal-cost";
+import { hashPassword } from "../src/lib/password";
 
 const prisma = new PrismaClient();
 
@@ -73,13 +74,14 @@ async function main() {
     prisma.user.deleteMany(),
   ]);
 
-  // Администратор (единственный аккаунт-роль).
+  // Администратор (единственный аккаунт-роль). Пароль для локальной разработки
+  // берётся из SEED_ADMIN_PASSWORD (по умолчанию — admin123).
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? "admin123";
   await prisma.user.create({
     data: {
       id: "user-admin",
       email: "admin@stell22.local",
-      // Заглушка хэша до настоящей аутентификации (Этап 5, конец).
-      passwordHash: "dev-placeholder",
+      passwordHash: await hashPassword(adminPassword),
       name: "Администратор",
       role: "ADMIN",
     },
