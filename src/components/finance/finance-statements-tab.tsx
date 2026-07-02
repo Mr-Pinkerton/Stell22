@@ -76,9 +76,25 @@ export function FinanceStatementsTab({
       key: "status",
       header: "Статус",
       render: (row) => (
-        <Badge variant={row.uploaded ? "secondary" : "outline"}>
-          {row.uploaded ? "Загружена" : "Нет выписки"}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant={row.uploaded ? "secondary" : "outline"}>
+            {row.uploaded ? "Загружена" : "Нет выписки"}
+          </Badge>
+          {row.mismatch && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Badge variant="outline" className="border-red-300 text-red-600">
+                    ≠
+                  </Badge>
+                }
+              />
+              <TooltipContent>
+                «Конечный остаток» выписки не совпал с расчётным
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
       ),
     },
     {

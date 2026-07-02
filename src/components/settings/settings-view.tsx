@@ -9,7 +9,7 @@ import {
   type MinStockRow,
   type SystemLogRow,
 } from "@/mocks/settings-fixtures";
-import { financeAccounts, type FinanceAccount } from "@/mocks/finance-fixtures";
+import type { FinanceAccount } from "@/mocks/finance-fixtures";
 import type { ApiCredentialValues } from "@/lib/api-credentials";
 import { PageHeader } from "@/components/page-header";
 import { SegmentTabs } from "@/components/reports/report-shared";
@@ -30,14 +30,16 @@ const TABS: { key: SettingsTab; label: string }[] = [
 export function SettingsView({
   logs,
   apiCredentials,
+  accounts: initialAccounts,
 }: {
   logs: SystemLogRow[];
   apiCredentials: ApiCredentialValues;
+  accounts: FinanceAccount[];
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("params");
   const [settings, setSettings] = useState<AppSettings>(defaultAppSettings);
   const [minStock, setMinStock] = useState<MinStockRow[]>(mockMinStockRows);
-  const [accounts, setAccounts] = useState<FinanceAccount[]>(financeAccounts);
+  const [accounts, setAccounts] = useState<FinanceAccount[]>(initialAccounts);
 
   const accountCreateRef = useRef<(() => void) | null>(null);
 

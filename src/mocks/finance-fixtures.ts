@@ -5,9 +5,16 @@ import type { DealStatus, FlowType } from "@/types/domain";
 export interface FinanceAccount {
   id: string;
   name: string;
+  /** Текущий остаток = начальный остаток + операции ДДС с даты `openingDate`. */
   balance: number;
   accountNumber?: string | null;
   bik?: string | null;
+  /** Зафиксированная точка отсчёта остатка (вручную или из выписки). */
+  openingBalance?: number;
+  /** Дата точки отсчёта (yyyy-mm-dd); операции с неё двигают остаток. */
+  openingDate?: string | null;
+  /** Последняя выписка разошлась с расчётным остатком (бейдж «≠»). */
+  balanceMismatch?: boolean;
 }
 
 export interface FinanceArticle {
@@ -42,6 +49,7 @@ export interface FinanceCashFlowRow {
   date: string;
   amount: number;
   flowType: FlowType;
+  accountId?: string;
   accountName: string;
   counterpartyName: string | null;
   description: string;
@@ -49,6 +57,8 @@ export interface FinanceCashFlowRow {
   dealName: string | null;
   dealId: string | null;
   isAutoAssigned: boolean;
+  /** Перевод между своими счетами — не учитывается в доходах/расходах. */
+  isTransfer?: boolean;
 }
 
 export type AutoRuleLogic = "AND" | "OR";
@@ -71,6 +81,8 @@ export interface FinanceStatementRow {
   operationsCount: number;
   unassignedCount: number;
   uploaded: boolean;
+  /** «Конечный остаток» выписки разошёлся с расчётным (бейдж «≠»). */
+  mismatch?: boolean;
 }
 
 export interface ExpenseChartSlice {
@@ -431,15 +443,19 @@ export function financeAccountBalance(accounts: FinanceAccount[]) {
 }
 
 export function financePeriodIncome(rows: FinanceCashFlowRow[]) {
-  return rows.filter((r) => r.flowType === "INCOME").reduce((s, r) => s + r.amount, 0);
+  return rows
+    .filter((r) => r.flowType === "INCOME" && !r.isTransfer)
+    .reduce((s, r) => s + r.amount, 0);
 }
 
 export function financePeriodExpense(rows: FinanceCashFlowRow[]) {
-  return rows.filter((r) => r.flowType === "EXPENSE").reduce((s, r) => s + r.amount, 0);
+  return rows
+    .filter((r) => r.flowType === "EXPENSE" && !r.isTransfer)
+    .reduce((s, r) => s + r.amount, 0);
 }
 
 export function financeUnassignedCount(rows: FinanceCashFlowRow[]) {
-  return rows.filter((r) => !r.isAutoAssigned).length;
+  return rows.filter((r) => !r.isAutoAssigned && !r.isTransfer).length;
 }
 
 /** Группы операций ДДС по дате (сверху — новые). */
@@ -463,7 +479,7 @@ export function financeExpenseChart(rows: FinanceCashFlowRow[], articles: Financ
   const byCategory = new Map<string, number>();
 
   for (const row of rows) {
-    if (row.flowType !== "EXPENSE" || !row.articleName) continue;
+    if (row.flowType !== "EXPENSE" || row.isTransfer || !row.articleName) continue;
     const article = articles.find((a) => a.name === row.articleName);
     const root = article?.parentId
       ? articles.find((a) => a.id === article.parentId)
@@ -473,7 +489,7 @@ export function financeExpenseChart(rows: FinanceCashFlowRow[], articles: Financ
   }
 
   const unassigned = rows
-    .filter((r) => r.flowType === "EXPENSE" && !r.articleName)
+    .filter((r) => r.flowType === "EXPENSE" && !r.isTransfer && !r.articleName)
     .reduce((s, r) => s + r.amount, 0);
   if (unassigned > 0) byCategory.set("Не разнесено", unassigned);
 

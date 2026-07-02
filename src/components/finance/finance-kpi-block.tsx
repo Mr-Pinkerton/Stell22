@@ -2,11 +2,9 @@
 
 import { useMemo } from "react";
 import {
-  financeAccountBalance,
   financeExpenseChart,
   financePeriodExpense,
   financePeriodIncome,
-  type FinanceAccount,
   type FinanceArticle,
   type FinanceCashFlowRow,
 } from "@/mocks/finance-fixtures";
@@ -17,12 +15,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface FinanceKpiBlockProps {
   rows: FinanceCashFlowRow[];
-  accounts: FinanceAccount[];
+  /** Суммарный остаток по счетам (считается от «якорей» на всех операциях). */
+  balance: number;
   articles: FinanceArticle[];
 }
 
-export function FinanceKpiBlock({ rows, accounts, articles }: FinanceKpiBlockProps) {
-  const balance = useMemo(() => financeAccountBalance(accounts), [accounts]);
+export function FinanceKpiBlock({ rows, balance, articles }: FinanceKpiBlockProps) {
   const income = useMemo(() => financePeriodIncome(rows), [rows]);
   const expense = useMemo(() => financePeriodExpense(rows), [rows]);
   const chart = useMemo(() => financeExpenseChart(rows, articles), [rows, articles]);

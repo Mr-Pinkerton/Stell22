@@ -61,10 +61,16 @@ const tableActionClass =
 
 function rowHighlightClass(row: FinanceCashFlowRow) {
   return cn(
-    !row.isAutoAssigned && "!bg-amber-500/10 hover:!bg-amber-500/15",
-    row.dealId && row.isAutoAssigned && "!bg-violet-500/8 hover:!bg-violet-500/12",
+    row.isTransfer && "!bg-sky-500/8 hover:!bg-sky-500/12",
+    !row.isTransfer && !row.isAutoAssigned && "!bg-amber-500/10 hover:!bg-amber-500/15",
+    !row.isTransfer &&
+      row.dealId &&
+      row.isAutoAssigned &&
+      "!bg-violet-500/8 hover:!bg-violet-500/12",
   );
 }
+
+const transferMutedCellClass = "text-muted-foreground/70 text-center text-sm";
 
 interface FinanceCashflowTabProps {
   rows: FinanceCashFlowRow[];
@@ -149,7 +155,9 @@ export function FinanceCashflowTab({
                         </TableCell>
                       </TableRow>
                       {group.rows.map((row, index) => {
-                        const matchedRule = findMatchingAutoRule(autoRules, row);
+                        const matchedRule = row.isTransfer
+                          ? null
+                          : findMatchingAutoRule(autoRules, row);
                         return (
                         <TableRow
                           key={row.id}
@@ -174,40 +182,62 @@ export function FinanceCashflowTab({
                               </p>
                             </div>
                           </TableCell>
-                          <TableCell className={cn(cellPad, "align-middle text-center")}>
-                            <CashflowCounterpartySelect
-                              row={row}
-                              counterparties={counterparties}
-                              onAssign={(patch) => assignRow(row, patch)}
-                            />
-                          </TableCell>
+                          {row.isTransfer ? (
+                            <TableCell className={cn(cellPad, "align-middle text-center")}>
+                              <span className="bg-sky-500/12 text-sky-700 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium">
+                                Перевод
+                              </span>
+                            </TableCell>
+                          ) : (
+                            <TableCell className={cn(cellPad, "align-middle text-center")}>
+                              <CashflowCounterpartySelect
+                                row={row}
+                                counterparties={counterparties}
+                                onAssign={(patch) => assignRow(row, patch)}
+                              />
+                            </TableCell>
+                          )}
                           <TableCell className={cn(cellPad, "align-middle text-center")}>
                             <p className="mx-auto line-clamp-2 w-full whitespace-normal">
                               {row.description}
                             </p>
                           </TableCell>
-                          <TableCell className={cn(cellPad, "align-middle text-center")}>
-                            <CashflowArticleSelect
-                              row={row}
-                              articles={articles}
-                              onAssign={(patch) => assignRow(row, patch)}
-                            />
-                          </TableCell>
-                          <TableCell className={cn(cellPad, "align-middle text-center")}>
-                            <CashflowDealSelect
-                              row={row}
-                              deals={deals}
-                              onAssign={(patch) => assignRow(row, patch)}
-                            />
-                          </TableCell>
+                          {row.isTransfer ? (
+                            <TableCell className={cn(cellPad, "align-middle")}>
+                              <p className={transferMutedCellClass}>Между счетами</p>
+                            </TableCell>
+                          ) : (
+                            <TableCell className={cn(cellPad, "align-middle text-center")}>
+                              <CashflowArticleSelect
+                                row={row}
+                                articles={articles}
+                                onAssign={(patch) => assignRow(row, patch)}
+                              />
+                            </TableCell>
+                          )}
+                          {row.isTransfer ? (
+                            <TableCell className={cn(cellPad, "align-middle")}>
+                              <p className={transferMutedCellClass}>—</p>
+                            </TableCell>
+                          ) : (
+                            <TableCell className={cn(cellPad, "align-middle text-center")}>
+                              <CashflowDealSelect
+                                row={row}
+                                deals={deals}
+                                onAssign={(patch) => assignRow(row, patch)}
+                              />
+                            </TableCell>
+                          )}
                           <TableCell className={cn(cellPad, "align-middle text-center")}>
                             <div className="flex items-center justify-center gap-0.5">
-                              <AutoRuleQuickButton
-                                hasRule={Boolean(matchedRule)}
-                                onClick={() =>
-                                  matchedRule ? onGoToRule?.(matchedRule.id) : openRule(row)
-                                }
-                              />
+                              {!row.isTransfer && (
+                                <AutoRuleQuickButton
+                                  hasRule={Boolean(matchedRule)}
+                                  onClick={() =>
+                                    matchedRule ? onGoToRule?.(matchedRule.id) : openRule(row)
+                                  }
+                                />
+                              )}
                               <Tooltip>
                                 <TooltipTrigger
                                   render={

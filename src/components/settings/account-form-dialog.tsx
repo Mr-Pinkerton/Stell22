@@ -3,14 +3,21 @@
 import { useState } from "react";
 import { FormDialog } from "@/components/form-dialog-shared";
 import { useJustOpened } from "@/hooks/use-just-opened";
-import { Field, fieldClass } from "@/components/nomenclature/form-shared";
+import {
+  DateFieldInput,
+  Field,
+  fieldClass,
+  isoToDisplayDate,
+  narrowFieldClass,
+  parseDisplayDate,
+} from "@/components/finance/finance-form-shared";
 import { Input } from "@/components/ui/input";
 import { MoneyInput } from "@/components/ui/money-input";
+import type { AccountFormValues } from "@/server/finance";
 import type { FinanceAccount } from "@/mocks/finance-fixtures";
 
-export interface AccountFormValues {
-  name: string;
-  balance: number;
+function todayDisplay(): string {
+  return isoToDisplayDate(new Date().toISOString().slice(0, 10));
 }
 
 interface AccountFormDialogProps {
@@ -27,14 +34,17 @@ export function AccountFormDialog({
   onSubmit,
 }: AccountFormDialogProps) {
   const [name, setName] = useState("");
-  const [balance, setBalance] = useState(0);
+  const [openingBalance, setOpeningBalance] = useState(0);
+  const [openingDate, setOpeningDate] = useState("");
 
   if (useJustOpened(open)) {
     setName(account?.name ?? "");
-    setBalance(account?.balance ?? 0);
+    setOpeningBalance(account?.openingBalance ?? account?.balance ?? 0);
+    setOpeningDate(isoToDisplayDate(account?.openingDate) || todayDisplay());
   }
 
-  const canSubmit = name.trim().length > 0;
+  const isoDate = parseDisplayDate(openingDate);
+  const canSubmit = name.trim().length > 0 && Boolean(isoDate);
 
   return (
     <FormDialog
@@ -44,8 +54,8 @@ export function AccountFormDialog({
       submitLabel={account ? "Сохранить" : "Добавить"}
       submitDisabled={!canSubmit}
       onSubmit={() => {
-        if (!canSubmit) return;
-        onSubmit({ name: name.trim(), balance });
+        if (!canSubmit || !isoDate) return;
+        onSubmit({ name: name.trim(), openingBalance, openingDate: isoDate });
         onOpenChange(false);
       }}
     >
@@ -59,15 +69,26 @@ export function AccountFormDialog({
         />
       </Field>
 
-      <Field id="acc-balance" label="Текущий остаток, ₽">
-        <MoneyInput
-          id="acc-balance"
-          value={balance}
-          onValueChange={(v) => setBalance(v ?? 0)}
-          className={fieldClass}
-          placeholder="0"
-        />
-      </Field>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field id="acc-opening" label="Остаток на дату, ₽" required>
+          <MoneyInput
+            id="acc-opening"
+            value={openingBalance}
+            onValueChange={(v) => setOpeningBalance(v ?? 0)}
+            className={narrowFieldClass}
+            placeholder="0"
+          />
+        </Field>
+
+        <Field id="acc-date" label="На дату" required>
+          <DateFieldInput id="acc-date" value={openingDate} onChange={setOpeningDate} />
+        </Field>
+      </div>
+
+      <p className="text-muted-foreground text-xs">
+        Начальный остаток фиксируется на указанную дату. Дальше он изменяется
+        операциями ДДС; при импорте выписки остаток берётся из «конечного остатка».
+      </p>
     </FormDialog>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState, useTransition } from "react";
-import { Plus } from "lucide-react";
+import { ArrowLeftRight, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
 import type {
@@ -10,6 +10,7 @@ import type {
   FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { matchesDateFilter } from "@/lib/match-date-filter";
+import { totalAccountBalance } from "@/lib/account-balance";
 import {
   type FinanceData,
   assignCashFlow,
@@ -19,6 +20,7 @@ import {
   createCounterparty,
   createDeal,
   createStatement,
+  createTransfer,
   deleteAutoRule,
   deleteCashFlow,
   deleteCounterparty,
@@ -50,6 +52,7 @@ import { FinanceDealsTab } from "@/components/finance/finance-deals-tab";
 import { FinanceStatementsTab } from "@/components/finance/finance-statements-tab";
 import { FinanceCounterpartiesTab } from "@/components/finance/finance-counterparties-tab";
 import { CashflowFormDialog } from "@/components/finance/cashflow-form-dialog";
+import { TransferFormDialog } from "@/components/finance/transfer-form-dialog";
 import { ArticleFormDialog } from "@/components/finance/article-form-dialog";
 import {
   DealFormDialog,
@@ -94,6 +97,7 @@ export function FinanceView({ data }: { data: FinanceData }) {
   const [statements, setStatements] = useState(data.statements);
 
   const [cashflowDialogOpen, setCashflowDialogOpen] = useState(false);
+  const [transferDialogOpen, setTransferDialogOpen] = useState(false);
   const [articleDialogOpen, setArticleDialogOpen] = useState(false);
   const [dealDialogOpen, setDealDialogOpen] = useState(false);
   const [editingDeal, setEditingDeal] = useState<FinanceDeal | null>(null);
@@ -105,6 +109,26 @@ export function FinanceView({ data }: { data: FinanceData }) {
   const filteredCashFlows = useMemo(
     () => cashFlows.filter((row) => matchesDateFilter(row.date, dateFilter)),
     [cashFlows, dateFilter],
+  );
+
+  // Остаток на счетах считается от «якорей» по ВСЕМ операциям (без фильтра
+  // периода) — это остаток на текущую дату, а не за выбранный период.
+  const accountBalanceTotal = useMemo(
+    () =>
+      totalAccountBalance(
+        accounts.map((a) => ({
+          id: a.id,
+          openingBalance: a.openingBalance ?? 0,
+          balanceAsOf: a.openingDate ?? null,
+        })),
+        cashFlows.map((r) => ({
+          accountId: r.accountId ?? "",
+          date: r.date,
+          flowType: r.flowType,
+          amount: r.amount,
+        })),
+      ),
+    [accounts, cashFlows],
   );
 
   const buildFinanceSheet = (): XlsxSheet => {
@@ -205,7 +229,7 @@ export function FinanceView({ data }: { data: FinanceData }) {
           ],
           rows: filteredCashFlows.map((r) => ({
             date: formatIsoDate(r.date),
-            flowType: flowTypeLabel(r.flowType),
+            flowType: r.isTransfer ? "Перевод" : flowTypeLabel(r.flowType),
             amount: r.amount,
             account: r.accountName,
             counterparty: r.counterpartyName ?? "",
@@ -318,7 +342,7 @@ export function FinanceView({ data }: { data: FinanceData }) {
           onDateFilterChange={setDateFilter}
         />
 
-        <FinanceKpiBlock rows={filteredCashFlows} accounts={accounts} articles={articles} />
+        <FinanceKpiBlock rows={filteredCashFlows} balance={accountBalanceTotal} articles={articles} />
 
         <SegmentTabs
           ariaLabel="Финансы"
@@ -334,6 +358,16 @@ export function FinanceView({ data }: { data: FinanceData }) {
                   onClick={handleReapply}
                 >
                   Разнести по правилам
+                </Button>
+              )}
+              {activeTab === "cashflow" && (
+                <Button
+                  variant="outline"
+                  className={tabActionButtonClass}
+                  onClick={() => setTransferDialogOpen(true)}
+                >
+                  <ArrowLeftRight />
+                  Перевод
                 </Button>
               )}
               <Button className={tabActionButtonClass} onClick={handleAdd}>
@@ -358,9 +392,10 @@ export function FinanceView({ data }: { data: FinanceData }) {
             }
             onDelete={(id) =>
               run(async () => {
-                await deleteCashFlow(id);
-                setCashFlows((prev) => prev.filter((r) => r.id !== id));
-                toast.success("Операция удалена");
+                const removed = await deleteCashFlow(id);
+                const removedSet = new Set(removed);
+                setCashFlows((prev) => prev.filter((r) => !removedSet.has(r.id)));
+                toast.success(removed.length > 1 ? "Перевод удалён" : "Операция удалена");
               })
             }
             onAutoRuleCreated={(values) =>
@@ -486,6 +521,19 @@ export function FinanceView({ data }: { data: FinanceData }) {
             const row = await createCashFlow(values);
             setCashFlows((prev) => [row, ...prev]);
             toast.success("Операция добавлена");
+          })
+        }
+      />
+
+      <TransferFormDialog
+        open={transferDialogOpen}
+        accounts={accounts}
+        onOpenChange={setTransferDialogOpen}
+        onSubmit={(values) =>
+          run(async () => {
+            const legs = await createTransfer(values);
+            setCashFlows((prev) => [...legs, ...prev]);
+            toast.success("Перевод добавлен");
           })
         }
       />

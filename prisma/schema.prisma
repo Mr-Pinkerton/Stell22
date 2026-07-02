@@ -454,7 +454,14 @@ model Account {
   name          String
   accountNumber String? // РасчСчет из выписки (для авто-сопоставления)
   bik           String?
-  balance       Decimal @db.Decimal(14, 2) @default(0)
+  balance       Decimal @db.Decimal(14, 2) @default(0) // кэш текущего остатка (пересчитывается на чтении)
+
+  // Точка отсчёта остатка: фиксированный «якорь» + дата, с которой к нему
+  // прибавляются операции ДДС. Задаётся вручную или из «конечного остатка»
+  // выписки при импорте (банк — источник истины).
+  openingBalance  Decimal   @db.Decimal(14, 2) @default(0)
+  balanceAsOf     DateTime? // операции с этой даты (включительно) двигают остаток
+  balanceMismatch Boolean   @default(false) // последняя выписка разошлась с расчётом
 
   cashFlows  CashFlow[]
   statements Statement[]
@@ -515,6 +522,7 @@ model Statement {
   account    Account? @relation(fields: [accountId], references: [id])
   fileUrl    String?
   uploadedAt DateTime?
+  mismatch   Boolean  @default(false) // «конечный остаток» разошёлся с расчётом
   cashFlows  CashFlow[]
 }
 
@@ -537,9 +545,12 @@ model CashFlow {
   date           DateTime
   isAutoAssigned Boolean  @default(false) // false → подсветка для ручного разнесения
   importKey      String?  // ключ дедупликации импорта (док+дата+сумма+счёт)
+  isTransfer     Boolean  @default(false) // перевод между своими счетами (не доход/расход)
+  transferId     String?  // пара ног одного перевода (списание+зачисление)
 
   @@index([date])
   @@index([accountId, importKey])
+  @@index([transferId])
 }
 
 model AutoRule {

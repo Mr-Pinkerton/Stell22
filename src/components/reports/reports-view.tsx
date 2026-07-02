@@ -9,25 +9,23 @@ import { ReportPurchasesTab } from "@/components/reports/report-purchases-tab";
 import { ReportCostTab } from "@/components/reports/report-cost-tab";
 import { ReportSalariesTab } from "@/components/reports/report-salaries-tab";
 import { ReportWasteTab } from "@/components/reports/report-waste-tab";
-import { ReportSalesTab } from "@/components/reports/report-sales-tab";
 import { exportXlsx } from "@/lib/export-xlsx";
 import { XLSX_FMT } from "@/lib/xlsx-types";
 import { formatIsoDate } from "@/lib/format";
 import type { CostReport } from "@/server/cost";
 import type { WasteReport } from "@/server/reports";
-import type { PurchaseReportRow, SalaryReportRow, SalesReportRow } from "@/mocks/report-fixtures";
+import type { PurchaseReportRow, SalaryReportRow } from "@/mocks/report-fixtures";
 
 const statusLabel = (s: "IN_WORK" | "ARCHIVED") => (s === "IN_WORK" ? "В работе" : "Архив");
 const sortPctText = (p: { sort1: number; sort2: number }) => `${p.sort1}% / ${p.sort2}%`;
 
-type ReportTab = "purchases" | "cost" | "salaries" | "waste" | "sales";
+type ReportTab = "purchases" | "cost" | "salaries" | "waste";
 
 const TABS: { key: ReportTab; label: string }[] = [
   { key: "purchases", label: "Закупки" },
   { key: "cost", label: "Себестоимость" },
   { key: "salaries", label: "Зарплаты" },
   { key: "waste", label: "Процент отхода" },
-  { key: "sales", label: "Продажи" },
 ];
 
 const TAB_FILTERS: Record<
@@ -38,7 +36,6 @@ const TAB_FILTERS: Record<
   cost: { date: true },
   salaries: { date: true, weeks: true },
   waste: { date: true },
-  sales: { date: true },
 };
 
 export function ReportsView({
@@ -46,13 +43,11 @@ export function ReportsView({
   salary,
   purchases,
   waste,
-  sales,
 }: {
   cost: CostReport;
   salary: SalaryReportRow[];
   purchases: PurchaseReportRow[];
   waste: WasteReport;
-  sales: SalesReportRow[];
 }) {
   const [activeTab, setActiveTab] = useState<ReportTab>("purchases");
   const [exporting, startExport] = useTransition();
@@ -187,21 +182,6 @@ export function ReportsView({
               wastePct: r.wastePct,
             })),
           },
-          {
-            name: "Продажи",
-            columns: [
-              { header: "Изделие", key: "productName", width: 28 },
-              { header: "Артикул", key: "sku" },
-              { header: "Продано", key: "soldQty", numFmt: XLSX_FMT.int },
-              { header: "Выручка", key: "revenue", numFmt: XLSX_FMT.money },
-            ],
-            rows: sales.map((r) => ({
-              productName: r.productName,
-              sku: r.sku,
-              soldQty: r.soldQty,
-              revenue: r.revenue,
-            })),
-          },
         ]);
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Не удалось выгрузить отчёт");
@@ -233,7 +213,6 @@ export function ReportsView({
         {activeTab === "waste" && (
           <ReportWasteTab batches={waste.batches} employees={waste.employees} />
         )}
-        {activeTab === "sales" && <ReportSalesTab rows={sales} />}
       </div>
     </>
   );
