@@ -61,6 +61,16 @@ export async function notifyEvent(
   });
 }
 
+// Пересчёт системных алертов тянет дашборд (финансы/ЗП/отход/цели/закупки) —
+// это дорого, поэтому при частом опросе троттлим (не чаще раза в интервал).
+const SYSTEM_SYNC_INTERVAL_MS = 60_000;
+let lastSystemSyncAt = 0;
+
+async function runSystemSync(): Promise<void> {
+  lastSystemSyncAt = Date.now();
+  await syncSystemNotifications();
+}
+
 /**
  * Пересчёт «системных» уведомлений (текущее состояние) из тех же условий,
  * что и алерты на дашборде. Отсутствующие условия — удаляются, новые/текущие —
@@ -121,13 +131,30 @@ function serialize(row: {
   };
 }
 
-export async function getNotifications(limit = 30): Promise<NotificationRow[]> {
-  await syncSystemNotifications();
+async function readNotifications(limit: number): Promise<NotificationRow[]> {
   const rows = await prisma.notification.findMany({
     orderBy: { createdAt: "desc" },
     take: limit,
   });
   return rows.map(serialize);
+}
+
+/** Полная загрузка (с пересчётом системных алертов) — для рендера страницы. */
+export async function getNotifications(limit = 30): Promise<NotificationRow[]> {
+  await runSystemSync();
+  return readNotifications(limit);
+}
+
+/**
+ * Лёгкий опрос для клиентской панели: событийные уведомления (партия закрыта,
+ * ЗП выплачена и т.п.) читаются мгновенно; тяжёлый пересчёт системных алертов —
+ * не чаще раза в SYSTEM_SYNC_INTERVAL_MS, чтобы частый опрос не грузил БД.
+ */
+export async function pollNotifications(limit = 30): Promise<NotificationRow[]> {
+  if (Date.now() - lastSystemSyncAt >= SYSTEM_SYNC_INTERVAL_MS) {
+    await runSystemSync();
+  }
+  return readNotifications(limit);
 }
 
 export async function markNotificationRead(id: string): Promise<void> {

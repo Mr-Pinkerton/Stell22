@@ -244,6 +244,8 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
   revalidatePath("/production");
   revalidatePath("/terminal");
   revalidatePath("/reports");
+  // Возможное «партия выработана» — сразу обновить колокольчик в шапке.
+  revalidatePath("/", "layout");
 }
 
 // ============================ ПРИСАДКА =====================================

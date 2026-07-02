@@ -1,15 +1,20 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { AlertCircle, Bell, CheckCircle2, Info } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   markAllNotificationsRead,
   markNotificationRead,
+  pollNotifications,
   type NotificationRow,
   type NotificationTone,
 } from "@/server/notifications";
+
+// Интервал фонового опроса, чтобы событийные уведомления приходили без
+// перезагрузки страницы (в т.ч. от терминала/другой сессии).
+const POLL_INTERVAL_MS = 10_000;
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -96,6 +101,39 @@ export function NotificationsPanel({
   const [rows, setRows] = useState(initialNotifications);
   const [, startTransition] = useTransition();
 
+  // Серверный рендер (после revalidatePath("/", "layout")) присылает свежий
+  // список — синхронизируем его в состояние, чтобы событие в этой же сессии
+  // отражалось мгновенно. Клиентские ре-рендеры не меняют идентичность пропа,
+  // поэтому опрошенные данные не затираются.
+  const prevInitialRef = useRef(initialNotifications);
+  if (prevInitialRef.current !== initialNotifications) {
+    prevInitialRef.current = initialNotifications;
+    setRows(initialNotifications);
+  }
+
+  const refresh = useCallback(async () => {
+    try {
+      const fresh = await pollNotifications();
+      setRows(fresh);
+    } catch {
+      // Сбой опроса не показываем — просто ждём следующий тик.
+    }
+  }, []);
+
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState === "visible") void refresh();
+    };
+    const id = setInterval(tick, POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", tick);
+    window.addEventListener("focus", tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", tick);
+      window.removeEventListener("focus", tick);
+    };
+  }, [refresh]);
+
   const unreadCount = useMemo(() => rows.filter((n) => !n.isRead).length, [rows]);
 
   const markRead = (id: string) => {
@@ -120,8 +158,13 @@ export function NotificationsPanel({
     });
   };
 
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (next) void refresh();
+  };
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger
         className="icon-action-btn icon-action-btn--compact icon-action-btn--anchor relative inline-flex size-10 cursor-pointer items-center justify-center rounded-full p-0 [&_svg]:size-4 [&_svg]:stroke-[1.75]"
         aria-label="Уведомления"

@@ -309,6 +309,8 @@ export async function writeOffBatchRemainder(id: string): Promise<PurchaseBatchR
   });
   revalidatePath(PATH);
   revalidatePath("/reports");
+  // Уведомление «партия выработана» — сразу обновить колокольчик в шапке.
+  revalidatePath("/", "layout");
   return loadRow(id);
 }
 

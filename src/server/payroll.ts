@@ -233,5 +233,7 @@ export async function markEmployeePaid(employeeId: string): Promise<SalaryReport
 
   revalidatePath(PATH);
   revalidatePath("/production");
+  // Уведомления «ЗП выплачена» / «себестоимость заморожена» — сразу в шапку.
+  revalidatePath("/", "layout");
   return getSalaryReport();
 }
