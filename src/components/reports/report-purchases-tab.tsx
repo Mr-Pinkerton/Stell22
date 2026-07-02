@@ -9,7 +9,7 @@ import {
   type PurchaseReportRow,
 } from "@/mocks/report-fixtures";
 import { formatIsoDate, formatLength, formatMoney, formatVolume } from "@/lib/format";
-import { partitionActiveArchived, expandableArchivedSummaryRowClass } from "@/lib/table-archive";
+import { partitionActiveArchived } from "@/lib/table-archive";
 import {
   ExpandableDetailRow,
   ExpandableMainHeader,
@@ -20,6 +20,7 @@ import {
   expandableColWidths8,
   expandableExpandedAccentClass,
   expandableExpandedChevronClass,
+  expandableExpandedSummaryClass,
   expandableNestedWrapExpandedClass,
   expandableSummaryCellClass,
 } from "@/components/reports/expandable-table";
@@ -30,7 +31,6 @@ import { TableCell, TableRow } from "@/components/ui/table";
 import type { RailType, Sort } from "@/types/domain";
 
 interface ReportPurchasesTabProps {
-  showArchive: boolean;
   initialRows: PurchaseReportRow[];
 }
 
@@ -75,13 +75,13 @@ function packageTitle(pkg: PurchasePackageLine) {
   return "Поштучно";
 }
 
-export function ReportPurchasesTab({ showArchive, initialRows }: ReportPurchasesTabProps) {
+export function ReportPurchasesTab({ initialRows }: ReportPurchasesTabProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const rows = useMemo(() => {
-    const filtered = initialRows.filter((r) => showArchive || r.status !== "ARCHIVED");
-    return partitionActiveArchived(filtered, (r) => r.status === "ARCHIVED");
-  }, [showArchive, initialRows]);
+  const rows = useMemo(
+    () => partitionActiveArchived(initialRows, (r) => r.status === "ARCHIVED"),
+    [initialRows],
+  );
 
   const kpis = useMemo(() => purchaseReportKpis(rows), [rows]);
 
@@ -107,13 +107,11 @@ export function ReportPurchasesTab({ showArchive, initialRows }: ReportPurchases
             }
           >
             {rows.map((row, index) => {
-              const archived = row.status === "ARCHIVED";
               const expanded = expandedId === row.id;
               return (
                 <Fragment key={row.id}>
                   <BatchSummaryRow
                     row={row}
-                    archived={archived}
                     expanded={expanded}
                     striped={index % 2 === 1}
                     onToggle={() => setExpandedId(expanded ? null : row.id)}
@@ -170,13 +168,11 @@ export function ReportPurchasesTab({ showArchive, initialRows }: ReportPurchases
 
 function BatchSummaryRow({
   row,
-  archived,
   expanded,
   striped,
   onToggle,
 }: {
   row: PurchaseReportRow;
-  archived: boolean;
   expanded: boolean;
   striped: boolean;
   onToggle: () => void;
@@ -185,7 +181,9 @@ function BatchSummaryRow({
     <TableRow
       className={cn(
         "group cursor-pointer align-top",
-        expandableArchivedSummaryRowClass({ archived, expanded, striped }),
+        striped && !expanded && "bg-muted/40",
+        expanded && expandableExpandedSummaryClass,
+        !expanded && "hover:bg-muted/50",
       )}
       onClick={onToggle}
     >
@@ -196,7 +194,7 @@ function BatchSummaryRow({
           ) : (
             <ChevronRight className={expandableChevronClass} />
           )}
-          <span className={cn("font-medium", archived && "font-normal")}>{row.name}</span>
+          <span className="font-medium">{row.name}</span>
         </div>
       </TableCell>
       <TableCell className={cn(expandableSummaryCellClass, "text-center tabular-nums")}>
@@ -218,10 +216,7 @@ function BatchSummaryRow({
         {formatMoney(row.avgCostPerM3)}
       </TableCell>
       <TableCell className={cn(expandableSummaryCellClass, "text-center")}>
-        <Badge
-          variant={row.status === "IN_WORK" ? "secondary" : "outline"}
-          className={archived ? "opacity-80" : undefined}
-        >
+        <Badge variant={row.status === "IN_WORK" ? "secondary" : "outline"}>
           {row.status === "IN_WORK" ? "В работе" : "Архив"}
         </Badge>
       </TableCell>

@@ -5,7 +5,6 @@ import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
 import {
-  type ProductionDetailLine,
   type ProductionEntryRow,
 } from "@/mocks/production-fixtures";
 import {
@@ -35,8 +34,6 @@ import {
   expandableExpandedDetailClass,
   expandableExpandedSummaryClass,
   expandableNestedWrapExpandedClass,
-  expandableColWidths5ChangeLog,
-  expandableColWidths5Detail,
   expandableSummaryCellClass,
   NestedTable,
   NestedTableCell,
@@ -398,8 +395,7 @@ function ProductionEntryDetail({
 
       <NestedTable
         headers={[...DETAIL_HEADERS]}
-        colWidths={expandableColWidths5Detail}
-        centerFrom={2}
+        lastColumnAlign="right"
         isEmpty={editRows.length === 0}
         empty="Нет строк"
       >
@@ -429,7 +425,7 @@ function ProductionEntryDetail({
                     min={1}
                     value={raw}
                     onChange={(e) => onEditQtyChange(line.index, e.target.value)}
-                    className="border-border mx-auto h-9 w-24 rounded-lg text-center tabular-nums"
+                    className="border-border mx-auto h-9 w-20 rounded-lg text-center tabular-nums"
                     onClick={(e) => e.stopPropagation()}
                   />
                 )}
@@ -438,19 +434,19 @@ function ProductionEntryDetail({
                 {!row.isPaid && (
                   <div className="flex justify-end">
                     <Button
-                    type="button"
-                    size="sm"
-                    variant={hasChange ? "brand" : "outline"}
-                    disabled={!hasChange}
-                    className={cn(
-                      "h-9 min-w-[6.5rem] rounded-xl px-4",
-                      !hasChange &&
-                        "text-muted-foreground border-border/50 bg-muted/25 hover:bg-muted/25",
-                    )}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSaveLine(line.index);
-                    }}
+                      type="button"
+                      size="sm"
+                      variant={hasChange ? "brand" : "outline"}
+                      disabled={!hasChange}
+                      className={cn(
+                        "h-9 min-w-[5.5rem] rounded-xl px-3",
+                        !hasChange &&
+                          "text-muted-foreground border-border/50 bg-muted/25 hover:bg-muted/25",
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSaveLine(line.index);
+                      }}
                     >
                       Сохранить
                     </Button>
@@ -467,8 +463,6 @@ function ProductionEntryDetail({
           <p className="text-sm font-semibold">Журнал изменений</p>
           <NestedTable
             headers={[...CHANGE_LOG_HEADERS]}
-            colWidths={expandableColWidths5ChangeLog}
-            centerFrom={2}
             isEmpty={row.changeLog.length === 0}
             empty="Изменений не было"
           >
@@ -509,7 +503,7 @@ function buildDetailEditRows(row: ProductionEntryRow): DetailEditRow[] {
     return row.detailLines.map((line, index) => ({
       index,
       detailName: line.detailName,
-      operationLabel: lineOperationLabel(row.type, line),
+      operationLabel: OPERATION_TYPE_LABEL[row.type],
       terminalQty: line.quantity,
     }));
   }
@@ -522,15 +516,4 @@ function buildDetailEditRows(row: ProductionEntryRow): DetailEditRow[] {
       terminalQty: row.quantity,
     },
   ];
-}
-
-function lineOperationLabel(type: ProductionEntryRow["type"], line: ProductionDetailLine): string {
-  if (type !== "PRISADKA") return OPERATION_TYPE_LABEL[type];
-
-  const parts = [
-    line.prisadkaTorcevaya && "Торцевая",
-    line.prisadkaPloskost && "Плоскостная",
-  ].filter(Boolean);
-
-  return parts.length > 0 ? parts.join(", ") : OPERATION_TYPE_LABEL.PRISADKA;
 }

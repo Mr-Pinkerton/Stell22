@@ -34,10 +34,10 @@ const TAB_FILTERS: Record<
   ReportTab,
   { date?: boolean; weeks?: boolean; archive?: boolean }
 > = {
-  purchases: { date: true, archive: true },
+  purchases: { date: true },
   cost: { date: true },
   salaries: { date: true, weeks: true },
-  waste: { date: true, archive: true },
+  waste: { date: true },
   sales: { date: true },
 };
 
@@ -55,7 +55,6 @@ export function ReportsView({
   sales: SalesReportRow[];
 }) {
   const [activeTab, setActiveTab] = useState<ReportTab>("purchases");
-  const [showArchive, setShowArchive] = useState(false);
   const [exporting, startExport] = useTransition();
 
   const filters = TAB_FILTERS[activeTab];
@@ -63,8 +62,8 @@ export function ReportsView({
   const handleExport = () =>
     startExport(async () => {
       try {
-        const purchaseRows = purchases.filter((r) => showArchive || r.status !== "ARCHIVED");
-        const wasteBatchRows = waste.batches.filter((r) => showArchive || r.status !== "ARCHIVED");
+        const purchaseRows = purchases;
+        const wasteBatchRows = waste.batches;
         await exportXlsx("отчёты", [
           {
             name: "Закупки",
@@ -218,10 +217,7 @@ export function ReportsView({
           date={filters.date}
           dateAllTime={filters.date}
           weeks={filters.weeks}
-          archive={filters.archive}
           actionLabel={activeTab === "purchases" ? "Применить" : "Показать"}
-          archiveChecked={showArchive}
-          onArchiveChange={setShowArchive}
         />
 
         <SegmentTabs
@@ -231,17 +227,11 @@ export function ReportsView({
           onChange={setActiveTab}
         />
 
-        {activeTab === "purchases" && (
-          <ReportPurchasesTab showArchive={showArchive} initialRows={purchases} />
-        )}
+        {activeTab === "purchases" && <ReportPurchasesTab initialRows={purchases} />}
         {activeTab === "cost" && <ReportCostTab details={cost.details} products={cost.products} />}
         {activeTab === "salaries" && <ReportSalariesTab initialRows={salary} />}
         {activeTab === "waste" && (
-          <ReportWasteTab
-            showArchive={showArchive}
-            batches={waste.batches}
-            employees={waste.employees}
-          />
+          <ReportWasteTab batches={waste.batches} employees={waste.employees} />
         )}
         {activeTab === "sales" && <ReportSalesTab rows={sales} />}
       </div>

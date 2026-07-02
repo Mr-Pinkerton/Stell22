@@ -41,6 +41,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { DetailFormDialog } from "@/components/nomenclature/detail-form-dialog";
 import { NomenclatureItemFormDialog } from "@/components/nomenclature/nomenclature-item-form-dialog";
 import { ProductFormDialog } from "@/components/nomenclature/product-form-dialog";
+import { ProductsTable } from "@/components/nomenclature/products-table";
 import {
   RAIL_TYPE_LABEL,
   SORT_SHORT,
@@ -409,60 +410,23 @@ export function NomenclatureView({
     }
   };
 
-  const productColumns: Column<Product>[] = [
-    {
-      key: "name",
-      header: "Название",
-      render: (row) => <span className="font-medium">{row.name}</span>,
-    },
-    {
-      key: "sku",
-      header: "Артикул",
-      className: "tabular-nums",
-      render: (row) => row.sku,
-    },
-    {
-      key: "sort",
-      header: "Сорт",
-      render: (row) => SORT_SHORT[row.sort],
-    },
-    {
-      key: "detailsCount",
-      header: "Детали",
-      className: "tabular-nums",
-      render: (row) => {
-        const total = row.details.reduce((sum, d) => sum + d.quantity, 0);
-        return `${total} шт`;
-      },
-    },
-    {
-      key: "status",
-      header: "Статус",
-      render: (row) => statusBadge(row.status),
-    },
-    {
-      key: "actions",
-      header: "",
-      className: "w-28",
-      render: (row) => (
-        <ActionsCell
-          onEdit={() => {
-            setEditingProduct(row);
-            setProductDialogOpen(true);
-          }}
-          status={row.status}
-          onArchive={() => runRow(() => archiveProduct(row.id).then(upsertProduct), "Перенесено в архив")}
-          onRestore={() => runRow(() => restoreProduct(row.id).then(upsertProduct), "Восстановлено")}
-          onDelete={() =>
-            runRow(
-              () => deleteProduct(row.id).then(() => setProducts((p) => p.filter((x) => x.id !== row.id))),
-              "Изделие удалено",
-            )
-          }
-        />
-      ),
-    },
-  ];
+  const renderProductActions = (row: Product) => (
+    <ActionsCell
+      onEdit={() => {
+        setEditingProduct(row);
+        setProductDialogOpen(true);
+      }}
+      status={row.status}
+      onArchive={() => runRow(() => archiveProduct(row.id).then(upsertProduct), "Перенесено в архив")}
+      onRestore={() => runRow(() => restoreProduct(row.id).then(upsertProduct), "Восстановлено")}
+      onDelete={() =>
+        runRow(
+          () => deleteProduct(row.id).then(() => setProducts((p) => p.filter((x) => x.id !== row.id))),
+          "Изделие удалено",
+        )
+      }
+    />
+  );
 
   const detailColumns: Column<Detail>[] = [
     {
@@ -631,16 +595,15 @@ export function NomenclatureView({
           })}
         </div>
 
-        <Card className="surface-card ring-0">
+        <Card className="surface-card ring-0 overflow-hidden">
           <CardContent className="p-0">
             {activeTab === "products" && (
-              <DataTable
-                columns={productColumns}
+              <ProductsTable
                 rows={productRows}
+                details={details}
+                items={items}
                 empty={emptyByTab.products}
-                className="border-0"
-                padded
-                rowClassName={archivedRowClass}
+                renderActions={renderProductActions}
               />
             )}
             {activeTab === "details" && (
