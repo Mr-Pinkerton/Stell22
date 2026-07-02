@@ -350,6 +350,7 @@ export function FinanceView({ data }: { data: FinanceData }) {
             articles={articles}
             counterparties={counterparties}
             deals={deals}
+            autoRules={autoRules}
             onAssign={(id, patch) =>
               run(async () => {
                 replaceCashFlow(await assignCashFlow(id, patch));
@@ -369,6 +370,10 @@ export function FinanceView({ data }: { data: FinanceData }) {
                 toast.success("Автоправило сохранено");
               })
             }
+            onGoToRule={(ruleId) => {
+              setActiveTab("rules");
+              setHighlightRuleId(ruleId);
+            }}
           />
         )}
         {activeTab === "articles" && <FinanceArticlesTab articles={articles} />}

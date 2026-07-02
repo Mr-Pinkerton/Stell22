@@ -1,23 +1,26 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   groupCashFlowsByDate,
   type FinanceArticle,
+  type FinanceAutoRule,
   type FinanceCashFlowRow,
   type FinanceCounterparty,
   type FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { scrollTableYClass } from "@/lib/scroll-classes";
 import { formatIsoDate, formatMoney } from "@/lib/format";
+import { findMatchingAutoRule } from "@/lib/auto-rule-match";
 import {
   CashflowArticleSelect,
   CashflowCounterpartySelect,
   CashflowDealSelect,
   type CashflowAssignPatch,
 } from "@/components/finance/cashflow-inline-assign";
+import { AutoRuleQuickButton } from "@/components/finance/auto-rule-quick-button";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -68,9 +71,11 @@ interface FinanceCashflowTabProps {
   articles: FinanceArticle[];
   counterparties: FinanceCounterparty[];
   deals: FinanceDeal[];
+  autoRules: FinanceAutoRule[];
   onAssign?: (id: string, patch: CashflowAssignPatch) => void;
   onDelete?: (id: string) => void;
   onAutoRuleCreated?: (values: AutoRuleFormValues) => void;
+  onGoToRule?: (ruleId: string) => void;
 }
 
 export function FinanceCashflowTab({
@@ -78,9 +83,11 @@ export function FinanceCashflowTab({
   articles,
   counterparties,
   deals,
+  autoRules,
   onAssign,
   onDelete,
   onAutoRuleCreated,
+  onGoToRule,
 }: FinanceCashflowTabProps) {
   const [ruleDialogOpen, setRuleDialogOpen] = useState(false);
   const [ruleSeed, setRuleSeed] = useState<FinanceCashFlowRow | null>(null);
@@ -141,7 +148,9 @@ export function FinanceCashflowTab({
                           {formatIsoDate(group.date)}
                         </TableCell>
                       </TableRow>
-                      {group.rows.map((row, index) => (
+                      {group.rows.map((row, index) => {
+                        const matchedRule = findMatchingAutoRule(autoRules, row);
+                        return (
                         <TableRow
                           key={row.id}
                           className={cn(
@@ -193,24 +202,12 @@ export function FinanceCashflowTab({
                           </TableCell>
                           <TableCell className={cn(cellPad, "align-middle text-center")}>
                             <div className="flex items-center justify-center gap-0.5">
-                              {!row.isAutoAssigned && (
-                                <Tooltip>
-                                  <TooltipTrigger
-                                    render={
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="icon"
-                                        className={tableActionClass}
-                                        onClick={() => openRule(row)}
-                                      >
-                                        <Plus />
-                                      </Button>
-                                    }
-                                  />
-                                  <TooltipContent>Добавить правило</TooltipContent>
-                                </Tooltip>
-                              )}
+                              <AutoRuleQuickButton
+                                hasRule={Boolean(matchedRule)}
+                                onClick={() =>
+                                  matchedRule ? onGoToRule?.(matchedRule.id) : openRule(row)
+                                }
+                              />
                               <Tooltip>
                                 <TooltipTrigger
                                   render={
@@ -231,7 +228,8 @@ export function FinanceCashflowTab({
                             </div>
                           </TableCell>
                         </TableRow>
-                      ))}
+                        );
+                      })}
                     </Fragment>
                   ))
                 )}
