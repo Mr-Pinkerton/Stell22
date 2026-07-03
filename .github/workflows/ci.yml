@@ -1,0 +1,42 @@
+name: CI
+
+# Проверяем каждый PR и пуш в main: линтер, тесты, сборка.
+# Если что-то падает — код не должен попадать в main (включите branch
+# protection в настройках репозитория с обязательной проверкой "verify").
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Клиент Prisma нужен для типов при сборке и тестах.
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      # Сборка идёт без подключения к БД (как в Dockerfile) — ловим ошибки
+      # типов и битые страницы до деплоя на прод.
+      - name: Build
+        run: npm run build

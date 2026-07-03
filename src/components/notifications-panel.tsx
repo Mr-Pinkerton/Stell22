@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import { AlertCircle, Bell, CheckCircle2, Info } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -99,15 +99,16 @@ export function NotificationsPanel({
 }) {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState(initialNotifications);
+  const [prevInitial, setPrevInitial] = useState(initialNotifications);
   const [, startTransition] = useTransition();
 
   // Серверный рендер (после revalidatePath("/", "layout")) присылает свежий
   // список — синхронизируем его в состояние, чтобы событие в этой же сессии
   // отражалось мгновенно. Клиентские ре-рендеры не меняют идентичность пропа,
-  // поэтому опрошенные данные не затираются.
-  const prevInitialRef = useRef(initialNotifications);
-  if (prevInitialRef.current !== initialNotifications) {
-    prevInitialRef.current = initialNotifications;
+  // поэтому опрошенные данные не затираются. Паттерн «корректировка состояния
+  // при смене пропа» из доков React (через сравнение с прошлым значением).
+  if (prevInitial !== initialNotifications) {
+    setPrevInitial(initialNotifications);
     setRows(initialNotifications);
   }
 
