@@ -11,16 +11,20 @@ import {
 import { formatMoney } from "@/lib/format";
 import { FinanceExpenseChart } from "@/components/finance/finance-expense-chart";
 import { KpiTile } from "@/components/kpi-tile";
+import {
+  AccountBalanceTile,
+  type AccountBalanceTileAccount,
+} from "@/components/account-balance-tile";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 interface FinanceKpiBlockProps {
   rows: FinanceCashFlowRow[];
-  /** Суммарный остаток по счетам (считается от «якорей» на всех операциях). */
-  balance: number;
+  /** Счета с текущим остатком — для плитки «Остаток на счетах». */
+  accounts: AccountBalanceTileAccount[];
   articles: FinanceArticle[];
 }
 
-export function FinanceKpiBlock({ rows, balance, articles }: FinanceKpiBlockProps) {
+export function FinanceKpiBlock({ rows, accounts, articles }: FinanceKpiBlockProps) {
   const income = useMemo(() => financePeriodIncome(rows), [rows]);
   const expense = useMemo(() => financePeriodExpense(rows), [rows]);
   const chart = useMemo(() => financeExpenseChart(rows, articles), [rows, articles]);
@@ -28,7 +32,7 @@ export function FinanceKpiBlock({ rows, balance, articles }: FinanceKpiBlockProp
   return (
     <div className="grid gap-4 xl:grid-cols-[1fr_minmax(11rem,13rem)]">
       <div className="grid gap-4 sm:grid-cols-3">
-        <KpiTile title="Остаток на счетах" value={formatMoney(balance)} hint="на текущую дату" />
+        <AccountBalanceTile accounts={accounts} />
         <KpiTile title="Поступления" value={formatMoney(income)} hint="за период" />
         <KpiTile title="Расходы" value={formatMoney(expense)} hint="за период" />
       </div>

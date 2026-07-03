@@ -24,6 +24,7 @@ import { formatMoney } from "@/lib/format";
 import { createLocalDate } from "@/lib/dates";
 import type { DashboardSource } from "@/server/dashboard";
 import { KpiTile } from "@/components/kpi-tile";
+import { AccountBalanceTile } from "@/components/account-balance-tile";
 import {
   DashboardPeriodFilter,
   getDefaultDashboardCustomRange,
@@ -106,7 +107,7 @@ export function DashboardView({ source }: { source: DashboardSource }) {
           deltaPositive={kpi.expenseDelta < 0 ? true : kpi.expenseDelta > 0 ? false : undefined}
           hint="за период"
         />
-        <KpiTile title="Остаток на счетах" value={formatMoney(kpi.accountBalance)} hint="на текущую дату" />
+        <AccountBalanceTile accounts={source.accounts} />
       </div>
 
       <DashboardAlertsBlock alerts={alerts} />

@@ -11,7 +11,7 @@ import type {
   FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { matchesDateFilter } from "@/lib/match-date-filter";
-import { isAccountConfirmed, totalAccountBalance } from "@/lib/account-balance";
+import { computeAccountBalances, isAccountConfirmed } from "@/lib/account-balance";
 import {
   type FinanceData,
   assignCashFlow,
@@ -120,27 +120,32 @@ export function FinanceView({ data }: { data: FinanceData }) {
 
   // Остаток на счетах считается от «якорей» по ВСЕМ операциям (без фильтра
   // периода) — это остаток на текущую дату, а не за выбранный период.
-  // Неподтверждённые счета (в карантине после импорта) в сумму не входят —
-  // как и их операции, которых нет в `cashFlows`.
-  const accountBalanceTotal = useMemo(
-    () =>
-      totalAccountBalance(
-        accounts
-          .filter((a) => isAccountConfirmed(a.confirmed))
-          .map((a) => ({
-            id: a.id,
-            openingBalance: a.openingBalance ?? 0,
-            balanceAsOf: a.openingDate ?? null,
-          })),
-        cashFlows.map((r) => ({
-          accountId: r.accountId ?? "",
-          date: r.date,
-          flowType: r.flowType,
-          amount: r.amount,
-        })),
-      ),
-    [accounts, cashFlows],
-  );
+  // Неподтверждённые счета (в карантине после импорта) не участвуют — как и их
+  // операции, которых нет в `cashFlows`. Отдаём остаток по каждому счёту, чтобы
+  // плитка показала основные крупно, остальные — мелко.
+  const balanceTileAccounts = useMemo(() => {
+    const confirmed = accounts.filter((a) => isAccountConfirmed(a.confirmed));
+    const balances = computeAccountBalances(
+      confirmed.map((a) => ({
+        id: a.id,
+        openingBalance: a.openingBalance ?? 0,
+        balanceAsOf: a.openingDate ?? null,
+      })),
+      cashFlows.map((r) => ({
+        accountId: r.accountId ?? "",
+        date: r.date,
+        flowType: r.flowType,
+        amount: r.amount,
+      })),
+    );
+    return confirmed.map((a) => ({
+      id: a.id,
+      name: a.name,
+      balance: balances.get(a.id) ?? a.openingBalance ?? 0,
+      isPrimary: a.isPrimary,
+      confirmed: a.confirmed,
+    }));
+  }, [accounts, cashFlows]);
 
   const buildFinanceSheet = (): XlsxSheet => {
     // На вкладке «Справочник» выгружаем активную подвкладку.
@@ -410,7 +415,7 @@ export function FinanceView({ data }: { data: FinanceData }) {
           onDateFilterChange={setDateFilter}
         />
 
-        <FinanceKpiBlock rows={filteredCashFlows} balance={accountBalanceTotal} articles={articles} />
+        <FinanceKpiBlock rows={filteredCashFlows} accounts={balanceTileAccounts} articles={articles} />
 
         <SegmentTabs
           ariaLabel="Финансы"

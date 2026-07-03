@@ -17,6 +17,8 @@ export interface FinanceAccount {
   balanceMismatch?: boolean;
   /** Требует подтверждения (авто-создан импортом выписки) — операции скрыты в ДДС. */
   confirmed?: boolean;
+  /** Основной счёт — в плитках остатка показывается крупно (остальные мелко). */
+  isPrimary?: boolean;
 }
 
 export interface FinanceArticle {

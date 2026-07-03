@@ -1,9 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
-import { Pencil, ShieldCheck, ShieldQuestionMark, Trash2 } from "lucide-react";
+import { Pencil, ShieldCheck, ShieldQuestionMark, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { createAccount, deleteAccount, setAccountConfirmed, updateAccount } from "@/server/finance";
+import {
+  createAccount,
+  deleteAccount,
+  setAccountConfirmed,
+  setAccountPrimary,
+  updateAccount,
+} from "@/server/finance";
 import type { FinanceAccount } from "@/mocks/finance-fixtures";
 import { isAccountConfirmed } from "@/lib/account-balance";
 import { formatIsoDate, formatMoney } from "@/lib/format";
@@ -72,6 +78,15 @@ export function SettingsAccountsTab({
       render: (row) => (
         <div className="flex items-center gap-2">
           <span className="font-medium">{row.name}</span>
+          {row.isPrimary && (
+            <Badge
+              variant="outline"
+              className="gap-1 border-amber-300 text-amber-700 [&_svg]:size-3"
+            >
+              <Star className="fill-amber-400 stroke-amber-500" />
+              Основной
+            </Badge>
+          )}
           {row.balanceMismatch && (
             <Tooltip>
               <TooltipTrigger
@@ -135,9 +150,36 @@ export function SettingsAccountsTab({
     {
       key: "actions",
       header: "",
-      className: "w-24",
+      className: "w-40",
       render: (row) => (
         <div className="flex items-center justify-center gap-0.5">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className={tableActionClass}
+                  onClick={() =>
+                    run(async () => {
+                      const nextPrimary = !row.isPrimary;
+                      const updated = await setAccountPrimary(row.id, nextPrimary);
+                      onAccountsChange(accounts.map((a) => (a.id === row.id ? updated : a)));
+                      toast.success(
+                        nextPrimary ? "Счёт помечен основным" : "Пометка «основной» снята",
+                      );
+                    })
+                  }
+                >
+                  <Star className={row.isPrimary ? "fill-amber-400 stroke-amber-500" : ""} />
+                </Button>
+              }
+            />
+            <TooltipContent>
+              {row.isPrimary ? "Убрать из основных" : "Сделать основным"}
+            </TooltipContent>
+          </Tooltip>
           <Tooltip>
             <TooltipTrigger
               render={

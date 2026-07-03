@@ -74,6 +74,7 @@ function serAccount(a: AccountRow, balance: number): FinanceAccount {
     openingDate: a.balanceAsOf ? isoDay(a.balanceAsOf) : null,
     balanceMismatch: a.balanceMismatch,
     confirmed: a.confirmed,
+    isPrimary: a.isPrimary,
   };
 }
 
@@ -346,6 +347,19 @@ export async function updateAccount(
 export async function setAccountConfirmed(id: string, confirmed: boolean): Promise<FinanceAccount> {
   await prisma.account.update({ where: { id }, data: { confirmed } });
   await writeChangeLog({ entity: "Account", entityId: id, newValues: { confirmed } });
+  revalidatePath(PATH);
+  revalidatePath(SETTINGS_PATH);
+  return loadAccount(id);
+}
+
+/**
+ * Пометить счёт «основным» (или снять пометку). Основных может быть несколько.
+ * Влияет только на отображение в плитках остатка (дашборд/финансы) — расчёты
+ * не затрагивает.
+ */
+export async function setAccountPrimary(id: string, isPrimary: boolean): Promise<FinanceAccount> {
+  await prisma.account.update({ where: { id }, data: { isPrimary } });
+  await writeChangeLog({ entity: "Account", entityId: id, newValues: { isPrimary } });
   revalidatePath(PATH);
   revalidatePath(SETTINGS_PATH);
   return loadAccount(id);
