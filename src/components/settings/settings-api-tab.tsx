@@ -25,6 +25,10 @@ export function SettingsApiTab({ initialValues }: SettingsApiTabProps) {
   const [password, setPassword] = useState("");
   const [values, setValues] = useState<ApiCredentialValues>(initialValues);
   const [visible, setVisible] = useState<Set<string>>(new Set());
+  // Поля активируются (становятся редактируемыми) только по фокусу — до этого
+  // они readOnly, чтобы браузер не подставлял сохранённые логин/пароль системы
+  // в первые поля формы (Chrome игнорирует autocomplete="off").
+  const [activated, setActivated] = useState<Set<string>>(new Set());
   const [saving, startSave] = useTransition();
   const [unlocking, startUnlock] = useTransition();
 
@@ -44,7 +48,12 @@ export function SettingsApiTab({ initialValues }: SettingsApiTabProps) {
   const lock = () => {
     setUnlocked(false);
     setVisible(new Set());
+    setActivated(new Set());
     setValues(initialValues);
+  };
+
+  const activate = (key: string) => {
+    setActivated((prev) => (prev.has(key) ? prev : new Set(prev).add(key)));
   };
 
   const toggleVisible = (key: string) => {
@@ -142,9 +151,14 @@ export function SettingsApiTab({ initialValues }: SettingsApiTabProps) {
                     <div className="relative">
                       <Input
                         id={`cred-${field.key}`}
+                        name={`cred-nofill-${field.key}`}
                         type={field.secret && !shown ? "password" : "text"}
-                        autoComplete="off"
+                        autoComplete="new-password"
                         spellCheck={false}
+                        readOnly={!activated.has(field.key)}
+                        onFocus={() => activate(field.key)}
+                        data-1p-ignore
+                        data-lpignore="true"
                         value={values[field.key] ?? ""}
                         onChange={(e) => setValue(field.key, e.target.value)}
                         className={`${fieldClass} ${field.secret ? "pr-11" : ""} font-mono`}
