@@ -20,19 +20,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-/** Базовый набор — используется, если справочник категорий ещё пуст. */
-const DEFAULT_ARTICLE_CATEGORIES = [
-  "Продажи",
-  "Прочее",
-  "Материалы",
-  "Производственные (накладные)",
-  "Зарплата",
-  "Административные",
-  "Финансовые",
-] as const;
-
-const DEFAULT_CATEGORY = "Материалы";
-
 export interface ArticleFormValues {
   name: string;
   flowType: "INCOME" | "EXPENSE";
@@ -63,15 +50,13 @@ export function ArticleFormDialog({
 
   const categoryNames = useMemo(() => {
     const names = (categories ?? []).map((c) => c.name);
-    if (names.length === 0) return [...DEFAULT_ARTICLE_CATEGORIES];
     // При редактировании гарантируем, что текущая категория статьи есть в списке.
     if (article && !names.includes(article.categoryName)) return [article.categoryName, ...names];
     return names;
   }, [categories, article]);
 
-  const defaultCategory = categoryNames.includes(DEFAULT_CATEGORY)
-    ? DEFAULT_CATEGORY
-    : categoryNames[0];
+  const noCategories = categoryNames.length === 0;
+  const defaultCategory = categoryNames[0] ?? "";
 
   const [name, setName] = useState("");
   const [flowType, setFlowType] = useState<"INCOME" | "EXPENSE">("EXPENSE");
@@ -94,7 +79,7 @@ export function ArticleFormDialog({
   );
 
   const isOverhead = categoryName === "Производственные (накладные)";
-  const canSubmit = name.trim().length > 0 && categoryName.length > 0;
+  const canSubmit = name.trim().length > 0 && categoryName.length > 0 && !noCategories;
 
   const handleSubmit = () => {
     const trimmed = name.trim();
@@ -155,18 +140,24 @@ export function ArticleFormDialog({
       </Field>
 
       <Field id="art-category" label="Категория" required>
-        <Select value={categoryName} onValueChange={(v) => setCategoryName(v ?? "")}>
-          <SelectTrigger className={selectTriggerClass}>
-            <SelectValue>{categoryName}</SelectValue>
-          </SelectTrigger>
-          <SelectContent {...formSelectContentProps}>
-            {categoryNames.map((c) => (
-              <SelectItem key={c} value={c} className="cursor-pointer rounded-lg">
-                {c}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {noCategories ? (
+          <p className="text-muted-foreground rounded-xl bg-tag-blue-bg/40 px-3 py-2 text-xs leading-relaxed">
+            Сначала создайте категорию во вкладке «Категории».
+          </p>
+        ) : (
+          <Select value={categoryName} onValueChange={(v) => setCategoryName(v ?? "")}>
+            <SelectTrigger className={selectTriggerClass}>
+              <SelectValue>{categoryName}</SelectValue>
+            </SelectTrigger>
+            <SelectContent {...formSelectContentProps}>
+              {categoryNames.map((c) => (
+                <SelectItem key={c} value={c} className="cursor-pointer rounded-lg">
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </Field>
 
       <Field id="art-parent" label="Корневая статья">
