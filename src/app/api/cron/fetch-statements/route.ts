@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { readMailConfig, runMailIntakeAndLog } from "@/server/statement-mail";
 
 // IMAP + Prisma требуют Node.js-рантайм (не Edge); ответ не кэшируем.
@@ -5,6 +6,16 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // Приём выписок с почты может идти дольше стандартного лимита.
 export const maxDuration = 300;
+
+/**
+ * Сравнение секрета за постоянное время (защита от timing-атак). Хэшируем оба
+ * значения в фиксированную длину, чтобы не утекала и длина токена.
+ */
+function secretsEqual(a: string, b: string): boolean {
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
 
 /**
  * Приём банковских выписок с почты по расписанию. Вызывается host-cron через
@@ -23,7 +34,7 @@ export async function POST(req: Request) {
 
   const auth = req.headers.get("authorization") ?? "";
   const provided = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (provided !== secret) {
+  if (!provided || !secretsEqual(provided, secret)) {
     return Response.json({ error: "Неавторизовано" }, { status: 401 });
   }
 
