@@ -23,6 +23,7 @@ import {
   createDeal,
   createStatement,
   createTransfer,
+  convertCashFlowToTransfer,
   deleteArticle,
   deleteArticleCategory,
   deleteAutoRule,
@@ -34,6 +35,7 @@ import {
   importStatement,
   reapplyAutoRules,
   setDealStatus,
+  unlinkTransfer,
   updateArticle,
   updateArticleCategory,
   updateAutoRule,
@@ -61,6 +63,7 @@ import {
 } from "@/components/finance/finance-reference-tab";
 import { CashflowFormDialog } from "@/components/finance/cashflow-form-dialog";
 import { TransferFormDialog } from "@/components/finance/transfer-form-dialog";
+import { ConvertToTransferDialog } from "@/components/finance/convert-to-transfer-dialog";
 import { ArticleFormDialog } from "@/components/finance/article-form-dialog";
 import {
   DealFormDialog,
@@ -102,6 +105,8 @@ export function FinanceView({ data }: { data: FinanceData }) {
 
   const [cashflowDialogOpen, setCashflowDialogOpen] = useState(false);
   const [transferDialogOpen, setTransferDialogOpen] = useState(false);
+  const [convertDialogOpen, setConvertDialogOpen] = useState(false);
+  const [convertRow, setConvertRow] = useState<FinanceCashFlowRow | null>(null);
   const [articleDialogOpen, setArticleDialogOpen] = useState(false);
   const [editingArticle, setEditingArticle] = useState<FinanceArticle | null>(null);
   const [dealDialogOpen, setDealDialogOpen] = useState(false);
@@ -471,6 +476,22 @@ export function FinanceView({ data }: { data: FinanceData }) {
                 toast.success(removed.length > 1 ? "Перевод удалён" : "Операция удалена");
               })
             }
+            onConvertToTransfer={(row) => {
+              setConvertRow(row);
+              setConvertDialogOpen(true);
+            }}
+            onUnlinkTransfer={(id) =>
+              run(async () => {
+                const res = await unlinkTransfer(id);
+                const removedSet = new Set(res.removedIds);
+                setCashFlows((prev) =>
+                  prev
+                    .filter((r) => !removedSet.has(r.id))
+                    .map((r) => (r.id === res.updated.id ? res.updated : r)),
+                );
+                toast.success("Перевод расцеплён");
+              })
+            }
             onAutoRuleCreated={(values) =>
               run(async () => {
                 const rule = await createAutoRule(values);
@@ -662,6 +683,25 @@ export function FinanceView({ data }: { data: FinanceData }) {
             toast.success("Перевод добавлен");
           })
         }
+      />
+
+      <ConvertToTransferDialog
+        open={convertDialogOpen}
+        row={convertRow}
+        accounts={accounts.filter((a) => isAccountConfirmed(a.confirmed))}
+        onOpenChange={setConvertDialogOpen}
+        onSubmit={(otherAccountId) => {
+          const source = convertRow;
+          if (!source) return;
+          run(async () => {
+            const [sourceRow, otherRow] = await convertCashFlowToTransfer(source.id, otherAccountId);
+            setCashFlows((prev) => [
+              otherRow,
+              ...prev.map((r) => (r.id === sourceRow.id ? sourceRow : r)),
+            ]);
+            toast.success("Операция стала переводом");
+          });
+        }}
       />
 
       <ArticleFormDialog

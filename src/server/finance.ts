@@ -979,6 +979,102 @@ export async function deleteCashFlow(id: string): Promise<string[]> {
   return removedIds;
 }
 
+/**
+ * Превратить обычную операцию в перевод между своими счетами. Пример: оплата с
+ * р/с, а деньги получены наличными — операция должна стать переводом на счёт
+ * «Наличные», а не расходом. Исходная нога помечается `isTransfer` (снимаются
+ * статья/контрагент/сделка), на втором счёте создаётся встречная нога с общим
+ * `transferId`. Обе перестают считаться доходом/расходом. Возвращает обе ноги.
+ */
+export async function convertCashFlowToTransfer(
+  id: string,
+  otherAccountId: string,
+): Promise<FinanceCashFlowRow[]> {
+  const source = await prisma.cashFlow.findUnique({ where: { id } });
+  if (!source) throw new Error("Операция не найдена");
+  if (source.isTransfer) throw new Error("Операция уже является переводом");
+  if (!otherAccountId) throw new Error("Выберите второй счёт");
+  if (otherAccountId === source.accountId) {
+    throw new Error("Второй счёт должен отличаться от счёта операции");
+  }
+  const other = await prisma.account.findUnique({ where: { id: otherAccountId } });
+  if (!other) throw new Error("Счёт не найден");
+
+  const transferId = randomUUID();
+  // Списание с р/с → деньги пришли на второй счёт (зачисление), и наоборот.
+  const oppositeType = source.flowType === "INCOME" ? "EXPENSE" : "INCOME";
+  const note = source.description?.trim() || "";
+
+  const [, otherLeg] = await prisma.$transaction([
+    prisma.cashFlow.update({
+      where: { id },
+      data: {
+        isTransfer: true,
+        transferId,
+        isAutoAssigned: true,
+        counterpartyId: null,
+        articleId: null,
+        dealId: null,
+      },
+    }),
+    prisma.cashFlow.create({
+      data: {
+        amount: source.amount,
+        date: source.date,
+        flowType: oppositeType,
+        accountId: other.id,
+        description:
+          note || `Перевод ${source.flowType === "INCOME" ? "на" : "с"} «${other.name}»`,
+        isTransfer: true,
+        isAutoAssigned: true,
+        transferId,
+      },
+    }),
+  ]);
+
+  // Операция могла быть привязана к сделке (её доставка) — пересчитать.
+  if (source.dealId) await syncDeal(source.dealId);
+
+  await writeChangeLog({
+    entity: "CashFlow",
+    entityId: id,
+    newValues: { convertedToTransfer: other.name, amount: num(source.amount) },
+  });
+  revalidatePath(PATH);
+  const [sourceRow, otherRow] = await Promise.all([loadCashFlow(id), loadCashFlow(otherLeg.id)]);
+  return [sourceRow, otherRow];
+}
+
+/**
+ * Расцепить перевод: вернуть операцию в обычный доход/расход. Сохраняем ногу из
+ * банковской выписки (реальная операция), удаляем встречную (ручную/наличную).
+ * Если ни одна нога не из выписки (перевод заведён формой) — сохраняем ту, по
+ * которой вызвали. Сохранённая нога помечается «не разнесена». Возвращает id
+ * удалённых строк и обновлённую операцию.
+ */
+export async function unlinkTransfer(
+  id: string,
+): Promise<{ removedIds: string[]; updated: FinanceCashFlowRow }> {
+  const leg = await prisma.cashFlow.findUnique({ where: { id } });
+  if (!leg || !leg.isTransfer || !leg.transferId) throw new Error("Это не перевод");
+
+  const legs = await prisma.cashFlow.findMany({ where: { transferId: leg.transferId } });
+  const keep = legs.find((l) => l.statementId) ?? leg;
+  const removed = legs.filter((l) => l.id !== keep.id);
+
+  await prisma.$transaction([
+    prisma.cashFlow.deleteMany({ where: { id: { in: removed.map((l) => l.id) } } }),
+    prisma.cashFlow.update({
+      where: { id: keep.id },
+      data: { isTransfer: false, transferId: null, isAutoAssigned: false },
+    }),
+  ]);
+
+  await writeChangeLog({ entity: "CashFlow", entityId: keep.id, newValues: { unlinkedTransfer: true } });
+  revalidatePath(PATH);
+  return { removedIds: removed.map((l) => l.id), updated: await loadCashFlow(keep.id) };
+}
+
 // ============================ СДЕЛКИ → СЕБЕСТОИМОСТЬ =======================
 
 /**

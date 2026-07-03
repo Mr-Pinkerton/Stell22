@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { Trash2 } from "lucide-react";
+import { ArrowLeftRight, Trash2, Unlink } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   groupCashFlowsByDate,
@@ -80,6 +80,8 @@ interface FinanceCashflowTabProps {
   autoRules: FinanceAutoRule[];
   onAssign?: (id: string, patch: CashflowAssignPatch) => void;
   onDelete?: (id: string) => void;
+  onConvertToTransfer?: (row: FinanceCashFlowRow) => void;
+  onUnlinkTransfer?: (id: string) => void;
   onAutoRuleCreated?: (values: AutoRuleFormValues) => void;
   onGoToRule?: (ruleId: string) => void;
 }
@@ -92,6 +94,8 @@ export function FinanceCashflowTab({
   autoRules,
   onAssign,
   onDelete,
+  onConvertToTransfer,
+  onUnlinkTransfer,
   onAutoRuleCreated,
   onGoToRule,
 }: FinanceCashflowTabProps) {
@@ -237,6 +241,44 @@ export function FinanceCashflowTab({
                                     matchedRule ? onGoToRule?.(matchedRule.id) : openRule(row)
                                   }
                                 />
+                              )}
+                              {!row.isTransfer && onConvertToTransfer && (
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className={tableActionClass}
+                                        aria-label="Сделать переводом"
+                                        onClick={() => onConvertToTransfer(row)}
+                                      >
+                                        <ArrowLeftRight />
+                                      </Button>
+                                    }
+                                  />
+                                  <TooltipContent>Сделать переводом</TooltipContent>
+                                </Tooltip>
+                              )}
+                              {row.isTransfer && onUnlinkTransfer && (
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className={tableActionClass}
+                                        aria-label="Убрать перевод"
+                                        onClick={() => onUnlinkTransfer(row.id)}
+                                      >
+                                        <Unlink />
+                                      </Button>
+                                    }
+                                  />
+                                  <TooltipContent>Убрать перевод</TooltipContent>
+                                </Tooltip>
                               )}
                               <Tooltip>
                                 <TooltipTrigger
