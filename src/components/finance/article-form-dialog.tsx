@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { useJustOpened } from "@/hooks/use-just-opened";
-import type { FinanceArticle } from "@/mocks/finance-fixtures";
+import type { FinanceArticle, FinanceCategory } from "@/mocks/finance-fixtures";
 import {
   Field,
   FinanceFormDialog,
@@ -20,7 +20,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const ARTICLE_CATEGORIES = [
+/** Базовый набор — используется, если справочник категорий ещё пуст. */
+const DEFAULT_ARTICLE_CATEGORIES = [
   "Продажи",
   "Прочее",
   "Материалы",
@@ -29,6 +30,8 @@ const ARTICLE_CATEGORIES = [
   "Административные",
   "Финансовые",
 ] as const;
+
+const DEFAULT_CATEGORY = "Материалы";
 
 export interface ArticleFormValues {
   name: string;
@@ -41,6 +44,9 @@ export interface ArticleFormValues {
 interface ArticleFormDialogProps {
   open: boolean;
   articles: FinanceArticle[];
+  categories?: FinanceCategory[];
+  /** Если задана — режим редактирования. */
+  article?: FinanceArticle | null;
   onOpenChange: (open: boolean) => void;
   onSubmit?: (values: ArticleFormValues) => void;
 }
@@ -48,26 +54,43 @@ interface ArticleFormDialogProps {
 export function ArticleFormDialog({
   open,
   articles,
+  categories,
+  article,
   onOpenChange,
   onSubmit,
 }: ArticleFormDialogProps) {
+  const isEdit = Boolean(article);
+
+  const categoryNames = useMemo(() => {
+    const names = (categories ?? []).map((c) => c.name);
+    if (names.length === 0) return [...DEFAULT_ARTICLE_CATEGORIES];
+    // При редактировании гарантируем, что текущая категория статьи есть в списке.
+    if (article && !names.includes(article.categoryName)) return [article.categoryName, ...names];
+    return names;
+  }, [categories, article]);
+
+  const defaultCategory = categoryNames.includes(DEFAULT_CATEGORY)
+    ? DEFAULT_CATEGORY
+    : categoryNames[0];
+
   const [name, setName] = useState("");
   const [flowType, setFlowType] = useState<"INCOME" | "EXPENSE">("EXPENSE");
-  const [categoryName, setCategoryName] = useState<string>(ARTICLE_CATEGORIES[2]);
+  const [categoryName, setCategoryName] = useState<string>(defaultCategory);
   const [parentId, setParentId] = useState("");
   const [description, setDescription] = useState("");
 
   if (useJustOpened(open)) {
-    setName("");
-    setFlowType("EXPENSE");
-    setCategoryName(ARTICLE_CATEGORIES[2]);
-    setParentId("");
-    setDescription("");
+    setName(article?.name ?? "");
+    setFlowType(article?.flowType ?? "EXPENSE");
+    setCategoryName(article?.categoryName ?? defaultCategory);
+    setParentId(article?.parentId ?? "");
+    setDescription(article?.description ?? "");
   }
 
+  // Родителем может быть корневая статья того же типа, кроме самой себя.
   const rootArticles = useMemo(
-    () => articles.filter((a) => a.flowType === flowType && !a.parentId),
-    [articles, flowType],
+    () => articles.filter((a) => a.flowType === flowType && !a.parentId && a.id !== article?.id),
+    [articles, flowType, article],
   );
 
   const isOverhead = categoryName === "Производственные (накладные)";
@@ -89,10 +112,10 @@ export function ArticleFormDialog({
   return (
     <FinanceFormDialog
       open={open}
-      title="Добавить статью"
+      title={isEdit ? "Редактировать статью" : "Добавить статью"}
       onOpenChange={onOpenChange}
       onSubmit={handleSubmit}
-      submitLabel="Добавить"
+      submitLabel={isEdit ? "Сохранить" : "Добавить"}
       submitDisabled={!canSubmit}
     >
       <Field id="art-name" label="Название" required>
@@ -137,7 +160,7 @@ export function ArticleFormDialog({
             <SelectValue>{categoryName}</SelectValue>
           </SelectTrigger>
           <SelectContent {...formSelectContentProps}>
-            {ARTICLE_CATEGORIES.map((c) => (
+            {categoryNames.map((c) => (
               <SelectItem key={c} value={c} className="cursor-pointer rounded-lg">
                 {c}
               </SelectItem>

@@ -1,10 +1,13 @@
 "use client";
 
 import { useMemo } from "react";
+import { Pencil, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { FinanceArticle } from "@/mocks/finance-fixtures";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   TableBody,
   TableCell,
@@ -13,7 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-const COL_WIDTHS = ["28%", "24%", "12%", "36%"] as const;
+const COL_WIDTHS = ["26%", "22%", "10%", "30%", "12%"] as const;
 
 const cellPad = "px-4 first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
 
@@ -23,14 +26,24 @@ const headLeftClass = cn(headClass, "text-left");
 
 const headCenterClass = cn(headClass, "text-center");
 
+const tableActionClass =
+  "text-muted-foreground hover:text-foreground hover:bg-muted/60 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
+
+const tableActionDestructiveClass =
+  "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
+
 function ArticleSection({
   title,
   flowType,
   articles,
+  onEdit,
+  onDelete,
 }: {
   title: string;
   flowType: FinanceArticle["flowType"];
   articles: FinanceArticle[];
+  onEdit?: (article: FinanceArticle) => void;
+  onDelete?: (article: FinanceArticle) => void;
 }) {
   const roots = useMemo(
     () => articles.filter((a) => a.flowType === flowType && !a.parentId),
@@ -69,6 +82,7 @@ function ArticleSection({
                 <TableHead className={cn(cellPad, headCenterClass)}>Категория</TableHead>
                 <TableHead className={cn(cellPad, headCenterClass)}>Субстатья</TableHead>
                 <TableHead className={cn(cellPad, headCenterClass)}>Описание</TableHead>
+                <TableHead className={cn(cellPad, headCenterClass)} />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -115,6 +129,42 @@ function ArticleSection({
                         {row.description ?? "—"}
                       </p>
                     </TableCell>
+                    <TableCell className={cn(cellPad, "align-middle")}>
+                      <div className="flex items-center justify-center gap-0.5">
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className={tableActionClass}
+                                onClick={() => onEdit?.(row)}
+                              >
+                                <Pencil />
+                              </Button>
+                            }
+                          />
+                          <TooltipContent>Редактировать</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className={tableActionDestructiveClass}
+                                onClick={() => onDelete?.(row)}
+                              >
+                                <Trash2 />
+                              </Button>
+                            }
+                          />
+                          <TooltipContent>Удалить</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))
               )}
@@ -128,13 +178,27 @@ function ArticleSection({
 
 interface FinanceArticlesTabProps {
   articles: FinanceArticle[];
+  onEdit?: (article: FinanceArticle) => void;
+  onDelete?: (article: FinanceArticle) => void;
 }
 
-export function FinanceArticlesTab({ articles }: FinanceArticlesTabProps) {
+export function FinanceArticlesTab({ articles, onEdit, onDelete }: FinanceArticlesTabProps) {
   return (
     <div className="space-y-8">
-      <ArticleSection title="Поступления" flowType="INCOME" articles={articles} />
-      <ArticleSection title="Списания" flowType="EXPENSE" articles={articles} />
+      <ArticleSection
+        title="Поступления"
+        flowType="INCOME"
+        articles={articles}
+        onEdit={onEdit}
+        onDelete={onDelete}
+      />
+      <ArticleSection
+        title="Списания"
+        flowType="EXPENSE"
+        articles={articles}
+        onEdit={onEdit}
+        onDelete={onDelete}
+      />
     </div>
   );
 }

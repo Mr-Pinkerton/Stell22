@@ -8,6 +8,7 @@ import type {
   FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { formSelectContentProps } from "@/components/nomenclature/form-shared";
+import { scrollThinY } from "@/lib/scroll-classes";
 import {
   Select,
   SelectContent,
@@ -18,6 +19,22 @@ import {
 
 const inlineSelectTriggerClass =
   "border-border bg-card hover:border-[#98a2b3] focus-visible:border-ring data-[size=default]:h-8 mx-auto h-8 w-full max-w-[12rem] cursor-pointer rounded-lg border px-2 text-xs font-normal";
+
+/** В ячейке ДДС колонка шире триггера — показываем имя целиком. */
+const inlineCounterpartyTriggerClass = cn(inlineSelectTriggerClass, "max-w-full");
+
+/** Список контрагентов: шире ячейки, выше — длинные названия и длинный справочник. */
+const counterpartySelectContentProps = {
+  ...formSelectContentProps,
+  className: cn(
+    formSelectContentProps.className,
+    scrollThinY,
+    "!w-auto min-w-[20rem] max-w-[min(32rem,92vw)] max-h-[min(24rem,var(--available-height))]",
+  ),
+};
+
+const counterpartySelectItemClass =
+  "cursor-pointer rounded-lg text-xs [&_span]:whitespace-normal [&_span]:break-words";
 
 const inlineSelectTriggerAmberClass = cn(
   inlineSelectTriggerClass,
@@ -47,15 +64,15 @@ export function CashflowCounterpartySelect({
       value={counterpartyId}
       onValueChange={(v) => onAssign({ counterpartyId: v || null })}
     >
-      <SelectTrigger className={inlineSelectTriggerClass}>
+      <SelectTrigger className={inlineCounterpartyTriggerClass}>
         <SelectValue placeholder="—">{row.counterpartyName ?? "—"}</SelectValue>
       </SelectTrigger>
-      <SelectContent {...formSelectContentProps}>
-        <SelectItem value="" className="cursor-pointer rounded-lg text-xs">
+      <SelectContent {...counterpartySelectContentProps}>
+        <SelectItem value="" className={counterpartySelectItemClass}>
           —
         </SelectItem>
         {counterparties.map((c) => (
-          <SelectItem key={c.id} value={c.id} className="cursor-pointer rounded-lg text-xs">
+          <SelectItem key={c.id} value={c.id} className={counterpartySelectItemClass}>
             {c.name}
           </SelectItem>
         ))}

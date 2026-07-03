@@ -35,6 +35,15 @@ export interface FinanceCounterparty {
   inn?: string | null;
 }
 
+export interface FinanceCategory {
+  id: string;
+  name: string;
+  /** «Производственные (накладные)» — участвует в распределении накладных. */
+  isOverhead: boolean;
+  /** Сколько статей относится к категории (для запрета удаления непустой). */
+  articleCount: number;
+}
+
 export interface FinanceDeal {
   id: string;
   name: string;

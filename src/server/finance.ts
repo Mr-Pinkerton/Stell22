@@ -21,6 +21,7 @@ import type {
   FinanceArticle,
   FinanceAutoRule,
   FinanceCashFlowRow,
+  FinanceCategory,
   FinanceCounterparty,
   FinanceDeal,
   FinanceStatementRow,
@@ -100,6 +101,7 @@ function serAccountsWithBalances(accounts: AccountRow[], flows: BalanceFlowRow[]
 export interface FinanceData {
   accounts: FinanceAccount[];
   articles: FinanceArticle[];
+  categories: FinanceCategory[];
   counterparties: FinanceCounterparty[];
   deals: FinanceDeal[];
   autoRules: FinanceAutoRule[];
@@ -196,7 +198,7 @@ function serCashFlow(cf: CashFlowWithRefs): FinanceCashFlowRow {
 }
 
 export async function getFinanceData(): Promise<FinanceData> {
-  const [accounts, allFlows, articles, counterparties, deals, autoRules, cashFlows, statements, batches] =
+  const [accounts, allFlows, articles, categories, counterparties, deals, autoRules, cashFlows, statements, batches] =
     await Promise.all([
       prisma.account.findMany({ orderBy: { name: "asc" } }),
       // Остаток счёта считаем по ВСЕМ его операциям (даже в карантине) — на
@@ -205,6 +207,10 @@ export async function getFinanceData(): Promise<FinanceData> {
         select: { accountId: true, date: true, flowType: true, amount: true },
       }),
       prisma.article.findMany({ include: { category: true }, orderBy: { name: "asc" } }),
+      prisma.articleCategory.findMany({
+        include: { _count: { select: { articles: true } } },
+        orderBy: { name: "asc" },
+      }),
       prisma.counterparty.findMany({ orderBy: { name: "asc" } }),
       prisma.deal.findMany({ include: { items: { include: { batch: true } } }, orderBy: { name: "asc" } }),
       prisma.autoRule.findMany({ include: { counterparty: true, article: true } }),
@@ -239,6 +245,7 @@ export async function getFinanceData(): Promise<FinanceData> {
   return {
     accounts: serAccountsWithBalances(accounts, allFlows),
     articles: articles.map(serArticle),
+    categories: categories.map(serCategory),
     counterparties: counterparties.map((c) => ({ id: c.id, name: c.name, inn: c.inn })),
     deals: deals.map((d) => serDeal(d, expenseByDeal)),
     autoRules: autoRules.map((r) => serAutoRule(r, dealNameById)),
@@ -412,6 +419,89 @@ export async function deleteCounterparty(id: string): Promise<void> {
   revalidatePath(PATH);
 }
 
+// ============================ КАТЕГОРИИ СТАТЕЙ =============================
+
+type CategoryWithCount = Prisma.ArticleCategoryGetPayload<{
+  include: { _count: { select: { articles: true } } };
+}>;
+
+function serCategory(c: CategoryWithCount): FinanceCategory {
+  return { id: c.id, name: c.name, isOverhead: c.isOverhead, articleCount: c._count.articles };
+}
+
+async function loadCategory(id: string): Promise<FinanceCategory> {
+  const category = await prisma.articleCategory.findUniqueOrThrow({
+    where: { id },
+    include: { _count: { select: { articles: true } } },
+  });
+  return serCategory(category);
+}
+
+/** Категории статей со счётчиком статей (для Справочника и форм). */
+export async function getArticleCategories(): Promise<FinanceCategory[]> {
+  const categories = await prisma.articleCategory.findMany({
+    include: { _count: { select: { articles: true } } },
+    orderBy: { name: "asc" },
+  });
+  return categories.map(serCategory);
+}
+
+export async function createArticleCategory(
+  name: string,
+  isOverhead: boolean,
+): Promise<FinanceCategory> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Укажите название категории");
+  const existing = await prisma.articleCategory.findFirst({ where: { name: trimmed } });
+  if (existing) throw new Error("Категория с таким названием уже есть");
+
+  const created = await prisma.articleCategory.create({
+    data: { name: trimmed, isOverhead },
+  });
+  await writeChangeLog({
+    entity: "ArticleCategory",
+    entityId: created.id,
+    newValues: { name: trimmed, isOverhead },
+  });
+  revalidatePath(PATH);
+  return loadCategory(created.id);
+}
+
+export async function updateArticleCategory(
+  id: string,
+  name: string,
+  isOverhead: boolean,
+): Promise<FinanceCategory> {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("Укажите название категории");
+  const clash = await prisma.articleCategory.findFirst({
+    where: { name: trimmed, id: { not: id } },
+  });
+  if (clash) throw new Error("Категория с таким названием уже есть");
+
+  await prisma.articleCategory.update({
+    where: { id },
+    data: { name: trimmed, isOverhead },
+  });
+  await writeChangeLog({
+    entity: "ArticleCategory",
+    entityId: id,
+    newValues: { name: trimmed, isOverhead },
+  });
+  revalidatePath(PATH);
+  return loadCategory(id);
+}
+
+export async function deleteArticleCategory(id: string): Promise<void> {
+  const count = await prisma.article.count({ where: { categoryId: id } });
+  if (count > 0) {
+    throw new Error("Нельзя удалить категорию со статьями. Сначала перенесите статьи.");
+  }
+  await prisma.articleCategory.delete({ where: { id } });
+  await writeChangeLog({ entity: "ArticleCategory", entityId: id, oldValues: { deleted: true } });
+  revalidatePath(PATH);
+}
+
 // ============================ СТАТЬИ =======================================
 
 /** Найти категорию по имени или создать (накладные — по фикс. имени). */
@@ -450,6 +540,60 @@ export async function createArticle(values: ArticleFormValues): Promise<FinanceA
 
   revalidatePath(PATH);
   return serArticle(created);
+}
+
+export async function updateArticle(
+  id: string,
+  values: ArticleFormValues,
+): Promise<FinanceArticle> {
+  const name = values.name.trim();
+  if (!name) throw new Error("Укажите название статьи");
+  if (!values.categoryName.trim()) throw new Error("Укажите категорию");
+  if (values.parentId === id) throw new Error("Статья не может быть своей субстатьёй");
+
+  const updated = await prisma.$transaction(async (tx) => {
+    const categoryId = await resolveCategoryId(tx, values.categoryName.trim());
+    const article = await tx.article.update({
+      where: { id },
+      data: {
+        name,
+        flowType: values.flowType,
+        categoryId,
+        parentId: values.parentId,
+        description: values.description.trim() || null,
+      },
+      include: { category: true },
+    });
+    await writeChangeLog(
+      { entity: "Article", entityId: id, newValues: { name, category: values.categoryName } },
+      tx,
+    );
+    return article;
+  });
+
+  revalidatePath(PATH);
+  return serArticle(updated);
+}
+
+export async function deleteArticle(id: string): Promise<void> {
+  const [children, cashFlows, autoRules] = await Promise.all([
+    prisma.article.count({ where: { parentId: id } }),
+    prisma.cashFlow.count({ where: { articleId: id } }),
+    prisma.autoRule.count({ where: { articleId: id } }),
+  ]);
+  if (children > 0) {
+    throw new Error("Нельзя удалить статью с субстатьями. Сначала удалите/перенесите субстатьи.");
+  }
+  if (cashFlows > 0) {
+    throw new Error(`Статья используется в операциях ДДС (${cashFlows}). Сначала перенесите их.`);
+  }
+  if (autoRules > 0) {
+    throw new Error("Статья используется в автоправилах. Сначала измените правила.");
+  }
+
+  await prisma.article.delete({ where: { id } });
+  await writeChangeLog({ entity: "Article", entityId: id, oldValues: { deleted: true } });
+  revalidatePath(PATH);
 }
 
 // ============================ АВТОПРАВИЛА ==================================

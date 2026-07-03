@@ -5,6 +5,7 @@ import { ArrowLeftRight, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
 import type {
+  FinanceArticle,
   FinanceAutoRule,
   FinanceCashFlowRow,
   FinanceDeal,
@@ -15,12 +16,15 @@ import {
   type FinanceData,
   assignCashFlow,
   createArticle,
+  createArticleCategory,
   createAutoRule,
   createCashFlow,
   createCounterparty,
   createDeal,
   createStatement,
   createTransfer,
+  deleteArticle,
+  deleteArticleCategory,
   deleteAutoRule,
   deleteCashFlow,
   deleteCounterparty,
@@ -30,6 +34,8 @@ import {
   importStatement,
   reapplyAutoRules,
   setDealStatus,
+  updateArticle,
+  updateArticleCategory,
   updateAutoRule,
   updateCounterparty,
   updateDeal,
@@ -46,11 +52,13 @@ const dealStatusLabel = (s: string) =>
   s === "OPEN" ? "Открыта" : s === "ARCHIVED" ? "Архив" : s;
 import { FinanceKpiBlock } from "@/components/finance/finance-kpi-block";
 import { FinanceCashflowTab } from "@/components/finance/finance-cashflow-tab";
-import { FinanceArticlesTab } from "@/components/finance/finance-articles-tab";
 import { FinanceAutoRulesTab } from "@/components/finance/finance-auto-rules-tab";
 import { FinanceDealsTab } from "@/components/finance/finance-deals-tab";
 import { FinanceStatementsTab } from "@/components/finance/finance-statements-tab";
-import { FinanceCounterpartiesTab } from "@/components/finance/finance-counterparties-tab";
+import {
+  FinanceReferenceTab,
+  type ReferenceTab,
+} from "@/components/finance/finance-reference-tab";
 import { CashflowFormDialog } from "@/components/finance/cashflow-form-dialog";
 import { TransferFormDialog } from "@/components/finance/transfer-form-dialog";
 import { ArticleFormDialog } from "@/components/finance/article-form-dialog";
@@ -61,21 +69,14 @@ import {
 import { StatementUploadDialog } from "@/components/finance/statement-upload-dialog";
 import { Button } from "@/components/ui/button";
 
-type FinanceTab =
-  | "cashflow"
-  | "articles"
-  | "rules"
-  | "deals"
-  | "statements"
-  | "counterparties";
+type FinanceTab = "cashflow" | "reference" | "rules" | "deals" | "statements";
 
 const TABS: { key: FinanceTab; label: string }[] = [
   { key: "cashflow", label: "ДДС" },
-  { key: "articles", label: "Статьи" },
+  { key: "reference", label: "Справочник" },
   { key: "rules", label: "Автоправила" },
   { key: "deals", label: "Сделки" },
   { key: "statements", label: "Выписки" },
-  { key: "counterparties", label: "Контрагенты" },
 ];
 
 const tabActionButtonClass =
@@ -87,10 +88,13 @@ export function FinanceView({ data }: { data: FinanceData }) {
   const [, startTransition] = useTransition();
   const [exporting, startExport] = useTransition();
 
+  const [referenceTab, setReferenceTab] = useState<ReferenceTab>("articles");
+
   const { batchOptions } = data;
   const [accounts, setAccounts] = useState(data.accounts);
   const [cashFlows, setCashFlows] = useState(data.cashFlows);
   const [articles, setArticles] = useState(data.articles);
+  const [categories, setCategories] = useState(data.categories);
   const [autoRules, setAutoRules] = useState(data.autoRules);
   const [counterparties, setCounterparties] = useState(data.counterparties);
   const [deals, setDeals] = useState(data.deals);
@@ -99,12 +103,15 @@ export function FinanceView({ data }: { data: FinanceData }) {
   const [cashflowDialogOpen, setCashflowDialogOpen] = useState(false);
   const [transferDialogOpen, setTransferDialogOpen] = useState(false);
   const [articleDialogOpen, setArticleDialogOpen] = useState(false);
+  const [editingArticle, setEditingArticle] = useState<FinanceArticle | null>(null);
   const [dealDialogOpen, setDealDialogOpen] = useState(false);
   const [editingDeal, setEditingDeal] = useState<FinanceDeal | null>(null);
   const [statementDialogOpen, setStatementDialogOpen] = useState(false);
   const [highlightRuleId, setHighlightRuleId] = useState<string | null>(null);
 
   const counterpartyCreateRef = useRef<(() => void) | null>(null);
+  const categoryCreateRef = useRef<(() => void) | null>(null);
+  const accountCreateRef = useRef<(() => void) | null>(null);
 
   const filteredCashFlows = useMemo(
     () => cashFlows.filter((row) => matchesDateFilter(row.date, dateFilter)),
@@ -136,7 +143,9 @@ export function FinanceView({ data }: { data: FinanceData }) {
   );
 
   const buildFinanceSheet = (): XlsxSheet => {
-    switch (activeTab) {
+    // На вкладке «Справочник» выгружаем активную подвкладку.
+    const exportKey = activeTab === "reference" ? referenceTab : activeTab;
+    switch (exportKey) {
       case "articles":
         return {
           name: "Статьи",
@@ -151,6 +160,38 @@ export function FinanceView({ data }: { data: FinanceData }) {
             flowType: flowTypeLabel(a.flowType),
             category: a.categoryName,
             overhead: a.isOverhead ? "Да" : "Нет",
+          })),
+        };
+      case "categories":
+        return {
+          name: "Категории",
+          columns: [
+            { header: "Название", key: "name", width: 32 },
+            { header: "Накладные", key: "overhead", width: 12 },
+            { header: "Статей", key: "count", numFmt: XLSX_FMT.int },
+          ],
+          rows: categories.map((c) => ({
+            name: c.name,
+            overhead: c.isOverhead ? "Да" : "Нет",
+            count: c.articleCount,
+          })),
+        };
+      case "accounts":
+        return {
+          name: "Счета",
+          columns: [
+            { header: "Счёт", key: "name", width: 32 },
+            { header: "Начальный остаток", key: "opening", numFmt: XLSX_FMT.money },
+            { header: "На дату", key: "date", width: 14 },
+            { header: "Остаток", key: "balance", numFmt: XLSX_FMT.money },
+            { header: "Подтверждён", key: "confirmed", width: 14 },
+          ],
+          rows: accounts.map((a) => ({
+            name: a.name,
+            opening: a.openingBalance ?? 0,
+            date: a.openingDate ? formatIsoDate(a.openingDate) : "",
+            balance: a.balance,
+            confirmed: a.confirmed === false ? "Нет" : "Да",
           })),
         };
       case "rules":
@@ -259,6 +300,14 @@ export function FinanceView({ data }: { data: FinanceData }) {
     counterpartyCreateRef.current = fn;
   }, []);
 
+  const registerCategoryCreate = useCallback((fn: () => void) => {
+    categoryCreateRef.current = fn;
+  }, []);
+
+  const registerAccountCreate = useCallback((fn: () => void) => {
+    accountCreateRef.current = fn;
+  }, []);
+
   /** Обёртка server action: ловит ошибки и показывает тост. */
   const run = useCallback(
     (fn: () => Promise<void>) => {
@@ -294,13 +343,31 @@ export function FinanceView({ data }: { data: FinanceData }) {
   const replaceDeal = (deal: FinanceDeal) =>
     setDeals((prev) => prev.map((d) => (d.id === deal.id ? deal : d)));
 
+  const handleAddReference = () => {
+    switch (referenceTab) {
+      case "articles":
+        setEditingArticle(null);
+        setArticleDialogOpen(true);
+        break;
+      case "categories":
+        categoryCreateRef.current?.();
+        break;
+      case "counterparties":
+        counterpartyCreateRef.current?.();
+        break;
+      case "accounts":
+        accountCreateRef.current?.();
+        break;
+    }
+  };
+
   const handleAdd = () => {
     switch (activeTab) {
       case "cashflow":
         setCashflowDialogOpen(true);
         break;
-      case "articles":
-        setArticleDialogOpen(true);
+      case "reference":
+        handleAddReference();
         break;
       case "rules":
         run(async () => {
@@ -322,9 +389,6 @@ export function FinanceView({ data }: { data: FinanceData }) {
         break;
       case "statements":
         setStatementDialogOpen(true);
-        break;
-      case "counterparties":
-        counterpartyCreateRef.current?.();
         break;
     }
   };
@@ -415,7 +479,92 @@ export function FinanceView({ data }: { data: FinanceData }) {
             }}
           />
         )}
-        {activeTab === "articles" && <FinanceArticlesTab articles={articles} />}
+        {activeTab === "reference" && (
+          <FinanceReferenceTab
+            activeSubTab={referenceTab}
+            onSubTabChange={setReferenceTab}
+            articles={articles}
+            onArticleEdit={(article) => {
+              setEditingArticle(article);
+              setArticleDialogOpen(true);
+            }}
+            onArticleDelete={(article) =>
+              run(async () => {
+                await deleteArticle(article.id);
+                setArticles((prev) => prev.filter((a) => a.id !== article.id));
+                toast.success("Статья удалена");
+              })
+            }
+            categories={categories}
+            onRegisterCategoryCreate={registerCategoryCreate}
+            onCategoryCreate={(values) =>
+              run(async () => {
+                const category = await createArticleCategory(values.name, values.isOverhead);
+                setCategories((prev) =>
+                  [...prev, category].sort((a, b) => a.name.localeCompare(b.name)),
+                );
+                toast.success("Категория добавлена");
+              })
+            }
+            onCategoryUpdate={(id, values) =>
+              run(async () => {
+                const prevName = categories.find((c) => c.id === id)?.name;
+                const category = await updateArticleCategory(id, values.name, values.isOverhead);
+                setCategories((prev) => prev.map((c) => (c.id === id ? category : c)));
+                // Статьи хранят имя категории строкой — синхронизируем при переименовании.
+                if (prevName && prevName !== category.name) {
+                  setArticles((prev) =>
+                    prev.map((a) =>
+                      a.categoryName === prevName
+                        ? { ...a, categoryName: category.name, isOverhead: category.isOverhead }
+                        : a,
+                    ),
+                  );
+                }
+                toast.success("Категория обновлена");
+              })
+            }
+            onCategoryDelete={(id) =>
+              run(async () => {
+                await deleteArticleCategory(id);
+                setCategories((prev) => prev.filter((c) => c.id !== id));
+                toast.success("Категория удалена");
+              })
+            }
+            counterparties={counterparties}
+            onRegisterCounterpartyCreate={registerCounterpartyCreate}
+            onCounterpartyCreate={(name, inn) =>
+              run(async () => {
+                const cp = await createCounterparty(name, inn);
+                setCounterparties((prev) =>
+                  [...prev, cp].sort((a, b) => a.name.localeCompare(b.name)),
+                );
+                toast.success("Контрагент добавлен");
+              })
+            }
+            onCounterpartyUpdate={(id, name, inn) =>
+              run(async () => {
+                const cp = await updateCounterparty(id, name, inn);
+                setCounterparties((prev) =>
+                  prev
+                    .map((c) => (c.id === id ? cp : c))
+                    .sort((a, b) => a.name.localeCompare(b.name)),
+                );
+                toast.success("Контрагент обновлён");
+              })
+            }
+            onCounterpartyDelete={(id) =>
+              run(async () => {
+                await deleteCounterparty(id);
+                setCounterparties((prev) => prev.filter((c) => c.id !== id));
+                toast.success("Контрагент удалён");
+              })
+            }
+            accounts={accounts}
+            onAccountsChange={setAccounts}
+            onRegisterAccountCreate={registerAccountCreate}
+          />
+        )}
         {activeTab === "rules" && (
           <FinanceAutoRulesTab
             rules={autoRules}
@@ -479,39 +628,6 @@ export function FinanceView({ data }: { data: FinanceData }) {
             }
           />
         )}
-        {activeTab === "counterparties" && (
-          <FinanceCounterpartiesTab
-            counterparties={counterparties}
-            onRegisterCreate={registerCounterpartyCreate}
-            onCreate={(name, inn) =>
-              run(async () => {
-                const cp = await createCounterparty(name, inn);
-                setCounterparties((prev) =>
-                  [...prev, cp].sort((a, b) => a.name.localeCompare(b.name)),
-                );
-                toast.success("Контрагент добавлен");
-              })
-            }
-            onUpdate={(id, name, inn) =>
-              run(async () => {
-                const cp = await updateCounterparty(id, name, inn);
-                setCounterparties((prev) =>
-                  prev
-                    .map((c) => (c.id === id ? cp : c))
-                    .sort((a, b) => a.name.localeCompare(b.name)),
-                );
-                toast.success("Контрагент обновлён");
-              })
-            }
-            onDelete={(id) =>
-              run(async () => {
-                await deleteCounterparty(id);
-                setCounterparties((prev) => prev.filter((c) => c.id !== id));
-                toast.success("Контрагент удалён");
-              })
-            }
-          />
-        )}
       </div>
 
       <CashflowFormDialog
@@ -546,12 +662,20 @@ export function FinanceView({ data }: { data: FinanceData }) {
       <ArticleFormDialog
         open={articleDialogOpen}
         articles={articles}
+        categories={categories}
+        article={editingArticle}
         onOpenChange={setArticleDialogOpen}
         onSubmit={(values) =>
           run(async () => {
-            const article = await createArticle(values);
-            setArticles((prev) => [...prev, article]);
-            toast.success("Статья добавлена");
+            if (editingArticle) {
+              const article = await updateArticle(editingArticle.id, values);
+              setArticles((prev) => prev.map((a) => (a.id === editingArticle.id ? article : a)));
+              toast.success("Статья обновлена");
+            } else {
+              const article = await createArticle(values);
+              setArticles((prev) => [...prev, article]);
+              toast.success("Статья добавлена");
+            }
           })
         }
       />
