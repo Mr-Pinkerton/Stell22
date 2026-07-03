@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState, useTransition } from "react";
-import { Pencil, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { Pencil, ShieldCheck, ShieldQuestionMark, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { createAccount, deleteAccount, updateAccount } from "@/server/finance";
+import { createAccount, deleteAccount, setAccountConfirmed, updateAccount } from "@/server/finance";
 import type { FinanceAccount } from "@/mocks/finance-fixtures";
+import { isAccountConfirmed } from "@/lib/account-balance";
 import { formatIsoDate, formatMoney } from "@/lib/format";
 import { DataTable, type Column } from "@/components/data-table";
 import { Badge } from "@/components/ui/badge";
@@ -52,6 +53,18 @@ export function SettingsAccountsTab({
       }
     });
 
+  // Неподтверждённые счета (карантин после автосоздания импортом) — наверх,
+  // чтобы их не пропустили.
+  const sortedAccounts = useMemo(
+    () =>
+      [...accounts].sort((a, b) => {
+        const confirmedDiff = Number(isAccountConfirmed(a.confirmed)) - Number(isAccountConfirmed(b.confirmed));
+        if (confirmedDiff !== 0) return confirmedDiff;
+        return a.name.localeCompare(b.name);
+      }),
+    [accounts],
+  );
+
   const columns: Column<FinanceAccount>[] = [
     {
       key: "name",
@@ -77,6 +90,31 @@ export function SettingsAccountsTab({
       ),
     },
     {
+      key: "confirmed",
+      header: "Статус",
+      className: "w-44",
+      render: (row) =>
+        isAccountConfirmed(row.confirmed) ? (
+          <Badge variant="outline" className="border-emerald-300 text-emerald-700">
+            Подтверждён
+          </Badge>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Badge variant="outline" className="border-amber-300 text-amber-700">
+                  Не подтверждён
+                </Badge>
+              }
+            />
+            <TooltipContent>
+              Счёт создан автоматически при импорте выписки. Его операции не
+              попадают в ДДС, пока счёт не подтверждён.
+            </TooltipContent>
+          </Tooltip>
+        ),
+    },
+    {
       key: "opening",
       header: "Начальный остаток",
       className: "w-40 tabular-nums",
@@ -100,6 +138,35 @@ export function SettingsAccountsTab({
       className: "w-24",
       render: (row) => (
         <div className="flex items-center justify-center gap-0.5">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className={tableActionClass}
+                  onClick={() =>
+                    run(async () => {
+                      const nextConfirmed = !isAccountConfirmed(row.confirmed);
+                      const updated = await setAccountConfirmed(row.id, nextConfirmed);
+                      onAccountsChange(accounts.map((a) => (a.id === row.id ? updated : a)));
+                      toast.success(
+                        nextConfirmed
+                          ? "Счёт подтверждён — операции появятся в ДДС"
+                          : "Подтверждение снято — операции скрыты из ДДС",
+                      );
+                    })
+                  }
+                >
+                  {isAccountConfirmed(row.confirmed) ? <ShieldCheck /> : <ShieldQuestionMark />}
+                </Button>
+              }
+            />
+            <TooltipContent>
+              {isAccountConfirmed(row.confirmed) ? "Снять подтверждение" : "Подтвердить счёт"}
+            </TooltipContent>
+          </Tooltip>
           <Tooltip>
             <TooltipTrigger
               render={
@@ -152,7 +219,7 @@ export function SettingsAccountsTab({
         <CardContent className="p-0">
           <DataTable
             columns={columns}
-            rows={accounts}
+            rows={sortedAccounts}
             empty="Счетов нет"
             padded
             className="border-0"

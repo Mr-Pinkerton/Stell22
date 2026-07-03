@@ -463,6 +463,12 @@ model Account {
   balanceAsOf     DateTime? // операции с этой даты (включительно) двигают остаток
   balanceMismatch Boolean   @default(false) // последняя выписка разошлась с расчётом
 
+  // Карантин авто-созданных счетов: счёт, заведённый импортом выписки,
+  // требует ручного подтверждения в Настройках. До подтверждения его
+  // операции не попадают в ДДС/KPI (чтобы «не тот» архив не всё испортил).
+  // Счета, созданные вручную, подтверждены сразу.
+  confirmed Boolean @default(true)
+
   cashFlows  CashFlow[]
   statements Statement[]
 }
@@ -523,6 +529,11 @@ model Statement {
   fileUrl    String?
   uploadedAt DateTime?
   mismatch   Boolean  @default(false) // «конечный остаток» разошёлся с расчётом
+
+  // Остатки из файла выписки (для восстановления якоря при откате).
+  openingBalance Decimal? @db.Decimal(14, 2)
+  closingBalance Decimal? @db.Decimal(14, 2)
+
   cashFlows  CashFlow[]
 }
 

@@ -66,3 +66,21 @@ export function totalAccountBalance(accounts: AccountWithAnchor[], flows: Balanc
   for (const balance of computeAccountBalances(accounts, flows).values()) sum += balance;
   return sum;
 }
+
+/**
+ * Двигать ли якорь остатка при импорте выписки: новая точка отсчёта (день
+ * после конца периода выписки) не должна быть раньше текущей — иначе старая
+ * выписка откатила бы остаток назад. Даты — ISO yyyy-mm-dd.
+ */
+export function shouldAdvanceAnchor(currentAsOf: string | null, newAsOf: string): boolean {
+  return currentAsOf == null || newAsOf >= currentAsOf;
+}
+
+/**
+ * Подтверждён ли счёт для целей ДДС/KPI. `undefined` трактуется как «да» —
+ * для обратной совместимости со старыми данными/фикстурами без этого поля
+ * (в БД у поля жёсткий default true, `undefined` там не встречается).
+ */
+export function isAccountConfirmed(confirmed: boolean | undefined): boolean {
+  return confirmed !== false;
+}

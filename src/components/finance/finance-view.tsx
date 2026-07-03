@@ -10,7 +10,7 @@ import type {
   FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { matchesDateFilter } from "@/lib/match-date-filter";
-import { totalAccountBalance } from "@/lib/account-balance";
+import { isAccountConfirmed, totalAccountBalance } from "@/lib/account-balance";
 import {
   type FinanceData,
   assignCashFlow,
@@ -113,14 +113,18 @@ export function FinanceView({ data }: { data: FinanceData }) {
 
   // Остаток на счетах считается от «якорей» по ВСЕМ операциям (без фильтра
   // периода) — это остаток на текущую дату, а не за выбранный период.
+  // Неподтверждённые счета (в карантине после импорта) в сумму не входят —
+  // как и их операции, которых нет в `cashFlows`.
   const accountBalanceTotal = useMemo(
     () =>
       totalAccountBalance(
-        accounts.map((a) => ({
-          id: a.id,
-          openingBalance: a.openingBalance ?? 0,
-          balanceAsOf: a.openingDate ?? null,
-        })),
+        accounts
+          .filter((a) => isAccountConfirmed(a.confirmed))
+          .map((a) => ({
+            id: a.id,
+            openingBalance: a.openingBalance ?? 0,
+            balanceAsOf: a.openingDate ?? null,
+          })),
         cashFlows.map((r) => ({
           accountId: r.accountId ?? "",
           date: r.date,
@@ -465,11 +469,12 @@ export function FinanceView({ data }: { data: FinanceData }) {
             onLoadDetail={(id) => getStatementDetail(id)}
             onDelete={(id) =>
               run(async () => {
-                const removed = await deleteStatement(id);
-                const removedSet = new Set(removed);
+                const res = await deleteStatement(id);
+                const removedSet = new Set(res.removedIds);
                 setStatements((prev) => prev.filter((s) => s.id !== id));
                 setCashFlows((prev) => prev.filter((c) => !removedSet.has(c.id)));
-                toast.success(`Выписка откачена (операций: ${removed.length})`);
+                setAccounts(res.accounts);
+                toast.success(`Выписка откачена (операций: ${res.removedIds.length})`);
               })
             }
           />
@@ -574,9 +579,22 @@ export function FinanceView({ data }: { data: FinanceData }) {
         open={statementDialogOpen}
         accounts={accounts}
         onOpenChange={setStatementDialogOpen}
-        onSubmit={(values) =>
+        onSubmit={(items) =>
           run(async () => {
-            if (values.is1C) {
+            let imported = 0;
+            let unassigned = 0;
+            let skipped = 0;
+
+            for (const values of items) {
+              if (!values.is1C) {
+                const row = await createStatement(values);
+                setStatements((prev) => [row, ...prev]);
+                toast.success(`Выписка «${values.fileName}» загружена`);
+                continue;
+              }
+
+              // Последовательно: каждый импорт может создать счёт, который
+              // следующая выписка уже найдёт по номеру (переводы между своими).
               const res = await importStatement(
                 values.content,
                 values.fileName,
@@ -586,16 +604,20 @@ export function FinanceView({ data }: { data: FinanceData }) {
               setCashFlows((prev) => [...res.newCashFlows, ...prev]);
               setAccounts(res.accounts);
               setCounterparties(res.counterparties);
+              imported += res.importedCount;
+              unassigned += res.unassignedCount;
+              skipped += res.skippedCount;
+              if (res.warning) toast.warning(`${values.fileName}: ${res.warning}`);
+            }
+
+            const total1C = items.filter((v) => v.is1C).length;
+            if (total1C > 0) {
               toast.success(
-                `Импортировано операций: ${res.importedCount}` +
-                  (res.unassignedCount ? `, без статьи: ${res.unassignedCount}` : "") +
-                  (res.skippedCount ? `, пропущено дублей: ${res.skippedCount}` : ""),
+                (total1C > 1 ? `Выписок: ${total1C}. ` : "") +
+                  `Импортировано операций: ${imported}` +
+                  (unassigned ? `, без статьи: ${unassigned}` : "") +
+                  (skipped ? `, пропущено дублей: ${skipped}` : ""),
               );
-              if (res.warning) toast.warning(res.warning);
-            } else {
-              const row = await createStatement(values);
-              setStatements((prev) => [row, ...prev]);
-              toast.success(`Выписка «${values.fileName}» загружена`);
             }
           })
         }

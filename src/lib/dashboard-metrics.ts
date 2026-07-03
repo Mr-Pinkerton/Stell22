@@ -13,6 +13,7 @@ import {
   type ExpenseChartSlice,
   type FinanceCashFlowRow,
 } from "@/mocks/finance-fixtures";
+import { isAccountConfirmed } from "@/lib/account-balance";
 import { defaultAppSettings } from "@/mocks/settings-fixtures";
 import { formatMoney } from "@/lib/format";
 import type { DashboardSource, ProductionEntry } from "@/server/dashboard";
@@ -135,7 +136,8 @@ export function buildDashboardKpi(
     incomeDelta: income - incomePrev,
     expense,
     expenseDelta: expense - expensePrev,
-    accountBalance: financeAccountBalance(source.accounts),
+    // Неподтверждённые счета (карантин авто-импорта) не учитываются в остатке.
+    accountBalance: financeAccountBalance(source.accounts.filter((a) => isAccountConfirmed(a.confirmed))),
   };
 }
 

@@ -15,6 +15,8 @@ export interface FinanceAccount {
   openingDate?: string | null;
   /** Последняя выписка разошлась с расчётным остатком (бейдж «≠»). */
   balanceMismatch?: boolean;
+  /** Требует подтверждения (авто-создан импортом выписки) — операции скрыты в ДДС. */
+  confirmed?: boolean;
 }
 
 export interface FinanceArticle {

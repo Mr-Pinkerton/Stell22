@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   computeAccountBalance,
   computeAccountBalances,
+  isAccountConfirmed,
+  shouldAdvanceAnchor,
   signedFlow,
   totalAccountBalance,
   type BalanceFlow,
@@ -84,5 +86,31 @@ describe("computeAccountBalances / totalAccountBalance", () => {
     expect(totalAccountBalance([{ id: "x", openingBalance: 777, balanceAsOf: "2026-01-01" }], [])).toBe(
       777,
     );
+  });
+});
+
+describe("shouldAdvanceAnchor", () => {
+  it("якоря ещё нет → двигаем", () => {
+    expect(shouldAdvanceAnchor(null, "2026-06-15")).toBe(true);
+  });
+
+  it("выписка новее или за тот же день → двигаем (повторная загрузка/корректировка)", () => {
+    expect(shouldAdvanceAnchor("2026-06-10", "2026-06-15")).toBe(true);
+    expect(shouldAdvanceAnchor("2026-06-10", "2026-06-10")).toBe(true);
+  });
+
+  it("старая выписка → якорь не трогаем (иначе откат остатка назад)", () => {
+    expect(shouldAdvanceAnchor("2026-06-15", "2026-06-10")).toBe(false);
+  });
+});
+
+describe("isAccountConfirmed", () => {
+  it("true и undefined считаются подтверждёнными (обратная совместимость)", () => {
+    expect(isAccountConfirmed(true)).toBe(true);
+    expect(isAccountConfirmed(undefined)).toBe(true);
+  });
+
+  it("false — счёт в карантине (скрыт из ДДС/KPI)", () => {
+    expect(isAccountConfirmed(false)).toBe(false);
   });
 });

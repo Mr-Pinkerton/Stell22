@@ -12,6 +12,7 @@ import { is1CStatement, parse1CStatement } from "@/lib/bank-statement-1c";
 import {
   computeAccountBalance,
   computeAccountBalances,
+  shouldAdvanceAnchor,
   type BalanceFlow,
 } from "@/lib/account-balance";
 import type { FlowType } from "@/types/domain";
@@ -71,6 +72,7 @@ function serAccount(a: AccountRow, balance: number): FinanceAccount {
     openingBalance: num(a.openingBalance),
     openingDate: a.balanceAsOf ? isoDay(a.balanceAsOf) : null,
     balanceMismatch: a.balanceMismatch,
+    confirmed: a.confirmed,
   };
 }
 
@@ -194,14 +196,25 @@ function serCashFlow(cf: CashFlowWithRefs): FinanceCashFlowRow {
 }
 
 export async function getFinanceData(): Promise<FinanceData> {
-  const [accounts, articles, counterparties, deals, autoRules, cashFlows, statements, batches] =
+  const [accounts, allFlows, articles, counterparties, deals, autoRules, cashFlows, statements, batches] =
     await Promise.all([
       prisma.account.findMany({ orderBy: { name: "asc" } }),
+      // Остаток счёта считаем по ВСЕМ его операциям (даже в карантине) — на
+      // Финансах видно реальный банковский остаток независимо от подтверждения.
+      prisma.cashFlow.findMany({
+        select: { accountId: true, date: true, flowType: true, amount: true },
+      }),
       prisma.article.findMany({ include: { category: true }, orderBy: { name: "asc" } }),
       prisma.counterparty.findMany({ orderBy: { name: "asc" } }),
       prisma.deal.findMany({ include: { items: { include: { batch: true } } }, orderBy: { name: "asc" } }),
       prisma.autoRule.findMany({ include: { counterparty: true, article: true } }),
+      // Счета в карантине (авто-созданные импортом, не подтверждены) не
+      // попадают в ДДС/KPI/себестоимость сделок — только в Настройки на
+      // проверку. Просмотр операций конкретной выписки (getStatementDetail)
+      // и её счётчики (serStatement, отдельный запрос ниже) не фильтруются —
+      // это инструмент проверки ДО подтверждения.
       prisma.cashFlow.findMany({
+        where: { account: { confirmed: true } },
         include: { account: true, counterparty: true, article: true, deal: true },
         orderBy: { date: "desc" },
       }),
@@ -214,7 +227,8 @@ export async function getFinanceData(): Promise<FinanceData> {
 
   const dealNameById = new Map(deals.map((d) => [d.id, d.name]));
 
-  // Сумма расходных операций по каждой сделке (для доставки/доп. расходов).
+  // Сумма расходных операций по каждой сделке (для доставки/доп. расходов);
+  // считаем только по подтверждённым счетам, как и остальную ДДС.
   const expenseByDeal = new Map<string, number>();
   for (const cf of cashFlows) {
     if (cf.dealId && cf.flowType === "EXPENSE") {
@@ -223,7 +237,7 @@ export async function getFinanceData(): Promise<FinanceData> {
   }
 
   return {
-    accounts: serAccountsWithBalances(accounts, cashFlows),
+    accounts: serAccountsWithBalances(accounts, allFlows),
     articles: articles.map(serArticle),
     counterparties: counterparties.map((c) => ({ id: c.id, name: c.name, inn: c.inn })),
     deals: deals.map((d) => serDeal(d, expenseByDeal)),
@@ -311,6 +325,20 @@ export async function updateAccount(
     entityId: id,
     newValues: { name, openingBalance: values.openingBalance, openingDate: values.openingDate },
   });
+  revalidatePath(PATH);
+  revalidatePath(SETTINGS_PATH);
+  return loadAccount(id);
+}
+
+/**
+ * Подтверждение счёта, авто-созданного импортом выписки. До подтверждения
+ * его операции не участвуют в ДДС/KPI/себестоимости сделок — только сам
+ * счёт и его остаток видны в Настройках для проверки. Можно и снять
+ * подтверждение обратно, если счёт завели по ошибке (не удаляя данные).
+ */
+export async function setAccountConfirmed(id: string, confirmed: boolean): Promise<FinanceAccount> {
+  await prisma.account.update({ where: { id }, data: { confirmed } });
+  await writeChangeLog({ entity: "Account", entityId: id, newValues: { confirmed } });
   revalidatePath(PATH);
   revalidatePath(SETTINGS_PATH);
   return loadAccount(id);
@@ -1055,6 +1083,8 @@ export async function importStatement(
   let unassigned = 0;
   let skipped = 0;
   let warning: string | null = null;
+  let isNewAccount = false;
+  let accountConfirmed = true;
 
   const statementId = await prisma.$transaction(async (tx) => {
     // Счёт: по номеру → по явной привязке → создаём новый.
@@ -1063,9 +1093,12 @@ export async function importStatement(
       account = await tx.account.findUnique({ where: { id: bindAccountId } });
     }
 
+    isNewAccount = !account;
     if (!account) {
       // Новый счёт: точка отсчёта = «начальный остаток» выписки на дату начала
       // периода. Так расчёт (якорь + операции периода) сойдётся с «конечным».
+      // Карантин: авто-созданный счёт не подтверждён — его операции не попадут
+      // в ДДС/KPI, пока пользователь не подтвердит его в Настройках → Счета.
       account = await tx.account.create({
         data: {
           name: `Счёт ••${last4(ourNumber)}`,
@@ -1074,6 +1107,7 @@ export async function importStatement(
           openingBalance: parsed.openingBalance != null ? parsed.openingBalance.toFixed(2) : 0,
           balanceAsOf: dayToDate(statementStart),
           balance: parsed.closingBalance != null ? parsed.closingBalance.toFixed(2) : 0,
+          confirmed: false,
         },
       });
     } else {
@@ -1086,6 +1120,8 @@ export async function importStatement(
       }
     }
 
+    accountConfirmed = account.confirmed;
+
     // Точка отсчёта ДО импорта — по ней сверяем расчётный остаток с выпиской.
     const priorOpening = num(account.openingBalance);
     const priorAsOf = account.balanceAsOf ? isoDay(account.balanceAsOf) : null;
@@ -1096,6 +1132,8 @@ export async function importStatement(
         accountId: account.id,
         fileUrl: fileName || null,
         uploadedAt: new Date(),
+        openingBalance: parsed.openingBalance != null ? parsed.openingBalance.toFixed(2) : null,
+        closingBalance: parsed.closingBalance != null ? parsed.closingBalance.toFixed(2) : null,
       },
     });
 
@@ -1162,8 +1200,23 @@ export async function importStatement(
     // выписки и переносим точку отсчёта на конец периода. Расчётный остаток
     // (прошлый якорь + операции периода) сверяем с фактом; при расхождении
     // ставим бейдж «≠» на счёт и выписку, но оставляем сумму из выписки.
+    //
+    // Защита от отката: выписка за прошлый период (конец раньше текущей точки
+    // отсчёта) якорь НЕ двигает — иначе повторная загрузка старого архива
+    // вернула бы остаток в прошлое. Операции при этом импортируются как обычно
+    // (дедупликация отсеет повторы).
+    const advanceAnchor = shouldAdvanceAnchor(
+      priorAsOf,
+      isoDay(dayToDate(statementDate, 1)),
+    );
+    if (parsed.closingBalance != null && !advanceAnchor) {
+      warning =
+        `Выписка за прошлый период (по ${statementDate}) — остаток счёта не изменён, ` +
+        `текущая точка отсчёта (${priorAsOf}) новее.`;
+    }
+
     let mismatch = false;
-    if (parsed.closingBalance != null) {
+    if (parsed.closingBalance != null && advanceAnchor) {
       const accountFlows = await tx.cashFlow.findMany({
         where: { accountId: account.id },
         select: { accountId: true, date: true, flowType: true, amount: true },
@@ -1204,6 +1257,13 @@ export async function importStatement(
     return statement.id;
   });
 
+  if (isNewAccount) {
+    const quarantineNote =
+      "Счёт создан автоматически и не подтверждён — его операции скрыты в ДДС до " +
+      "подтверждения в Настройках → Счета.";
+    warning = warning ? `${warning} ${quarantineNote}` : quarantineNote;
+  }
+
   await writeChangeLog({
     entity: "Statement",
     entityId: statementId,
@@ -1225,11 +1285,15 @@ export async function importStatement(
     prisma.counterparty.findMany({ orderBy: { name: "asc" } }),
   ]);
 
-  const newCashFlows = await prisma.cashFlow.findMany({
-    where: { statementId },
-    include: { account: true, counterparty: true, article: true, deal: true },
-    orderBy: { date: "desc" },
-  });
+  // Операции счёта в карантине не отдаём в ДДС клиента (даже как «новые»
+  // после импорта) — подтверждение в Настройках подтянет их сразу.
+  const newCashFlows = accountConfirmed
+    ? await prisma.cashFlow.findMany({
+        where: { statementId },
+        include: { account: true, counterparty: true, article: true, deal: true },
+        orderBy: { date: "desc" },
+      })
+    : [];
 
   revalidatePath(PATH);
   revalidatePath(SETTINGS_PATH);
@@ -1255,15 +1319,26 @@ export async function getStatementDetail(id: string): Promise<FinanceCashFlowRow
   return flows.map(serCashFlow);
 }
 
+export interface DeleteStatementResult {
+  /** id удалённых операций ДДС (для очистки UI). */
+  removedIds: string[];
+  /** Счета с пересчитанными остатками (якорь мог восстановиться). */
+  accounts: FinanceAccount[];
+}
+
 /**
  * Откат выписки: удаляет её операции ДДС и саму выписку, пересчитывает
- * затронутые сделки. Возвращает id удалённых операций (для очистки UI).
+ * затронутые сделки. Если выписка держала якорь остатка счёта — якорь
+ * восстанавливается из последней оставшейся выписки этого счёта.
  */
-export async function deleteStatement(id: string): Promise<string[]> {
-  const flows = await prisma.cashFlow.findMany({
-    where: { statementId: id },
-    select: { id: true, dealId: true },
-  });
+export async function deleteStatement(id: string): Promise<DeleteStatementResult> {
+  const [stmt, flows] = await Promise.all([
+    prisma.statement.findUnique({ where: { id } }),
+    prisma.cashFlow.findMany({
+      where: { statementId: id },
+      select: { id: true, dealId: true },
+    }),
+  ]);
   const removedIds = flows.map((f) => f.id);
   const affectedDeals = new Set(
     flows.map((f) => f.dealId).filter((d): d is string => Boolean(d)),
@@ -1272,10 +1347,40 @@ export async function deleteStatement(id: string): Promise<string[]> {
   await prisma.$transaction(async (tx) => {
     await tx.cashFlow.deleteMany({ where: { statementId: id } });
     await tx.statement.delete({ where: { id } });
+
+    // Восстановление якоря: если точка отсчёта счёта была установлена именно
+    // этой выпиской (день после её конца), переносим её на последнюю из
+    // оставшихся выписок с остатком. Если таких нет — якорь не трогаем
+    // (его можно поправить вручную в Настройках → Счета).
+    if (stmt?.accountId && stmt.closingBalance != null) {
+      const account = await tx.account.findUnique({ where: { id: stmt.accountId } });
+      const anchorHeldByStmt =
+        account?.balanceAsOf != null &&
+        account.balanceAsOf.getTime() === dayToDate(isoDay(stmt.date), 1).getTime();
+
+      if (account && anchorHeldByStmt) {
+        const prev = await tx.statement.findFirst({
+          where: { accountId: account.id, closingBalance: { not: null } },
+          orderBy: { date: "desc" },
+        });
+        if (prev?.closingBalance != null) {
+          await tx.account.update({
+            where: { id: account.id },
+            data: {
+              balance: prev.closingBalance,
+              openingBalance: prev.closingBalance,
+              balanceAsOf: dayToDate(isoDay(prev.date), 1),
+              balanceMismatch: prev.mismatch,
+            },
+          });
+        }
+      }
+    }
   });
   await writeChangeLog({ entity: "Statement", entityId: id, oldValues: { deleted: true } });
 
   for (const dealId of affectedDeals) await syncDeal(dealId);
   revalidatePath(PATH);
-  return removedIds;
+  revalidatePath(SETTINGS_PATH);
+  return { removedIds, accounts: await getAccounts() };
 }

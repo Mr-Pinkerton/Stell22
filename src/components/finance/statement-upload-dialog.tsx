@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { Upload } from "lucide-react";
+import { unzipSync } from "fflate";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import { cn } from "@/lib/utils";
 import { is1CStatement, parse1CStatement } from "@/lib/bank-statement-1c";
@@ -40,29 +41,37 @@ interface StatementUploadDialogProps {
   open: boolean;
   accounts: FinanceAccount[];
   onOpenChange: (open: boolean) => void;
-  onSubmit?: (values: StatementUploadValues) => void;
+  /** Одна или несколько выписок (ZIP-архив) — импортируются по порядку. */
+  onSubmit?: (values: StatementUploadValues[]) => void;
 }
 
-interface Preview {
+/** Разобранная 1С-выписка из файла или записи архива. */
+interface ParsedStatement {
+  fileName: string;
+  content: string;
   accountNumber: string | null;
   dateStart: string | null;
   dateEnd: string | null;
   operations: number;
-  matchedAccountId: string | null;
+  matchedAccountName: string | null;
 }
 
 const CREATE_NEW = "__new__";
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
-/** Декодирование файла выписки по объявленной кодировке 1С (Windows/UTF8/DOS). */
-async function decodeStatementFile(file: File): Promise<string> {
-  const buf = await file.arrayBuffer();
-  let text = new TextDecoder("windows-1251").decode(buf);
+/** Декодирование текста выписки по объявленной кодировке 1С (Windows/UTF8/DOS). */
+function decodeStatementBytes(buf: ArrayBuffer | Uint8Array): string {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let text = new TextDecoder("windows-1251").decode(bytes);
   const enc = text.match(/Кодировка\s*=\s*(\S+)/)?.[1]?.toUpperCase() ?? "";
-  if (enc.includes("UTF")) text = new TextDecoder("utf-8").decode(buf);
-  else if (enc.includes("DOS") || enc.includes("866")) text = new TextDecoder("ibm866").decode(buf);
+  if (enc.includes("UTF")) text = new TextDecoder("utf-8").decode(bytes);
+  else if (enc.includes("DOS") || enc.includes("866")) text = new TextDecoder("ibm866").decode(bytes);
   return text;
+}
+
+function isZipFile(file: File): boolean {
+  return file.name.toLowerCase().endsWith(".zip") || file.type.includes("zip");
 }
 
 export function StatementUploadDialog({
@@ -75,77 +84,126 @@ export function StatementUploadDialog({
   const [dateText, setDateText] = useState("");
   const [accountId, setAccountId] = useState("");
   const [fileName, setFileName] = useState("");
-  const [content, setContent] = useState("");
-  const [is1C, setIs1C] = useState(false);
-  const [preview, setPreview] = useState<Preview | null>(null);
+  // Одна не-1С выписка (ручные реквизиты) ИЛИ список 1С-выписок (файл/архив).
+  const [parsed, setParsed] = useState<ParsedStatement[]>([]);
+  const [isPlainFile, setIsPlainFile] = useState(false);
+  const [skippedEntries, setSkippedEntries] = useState(0);
   const [bindId, setBindId] = useState<string>(CREATE_NEW);
 
   if (useJustOpened(open)) {
     setDateText(isoToDisplayDate(todayIso()));
     setAccountId(accounts[0]?.id ?? "");
     setFileName("");
-    setContent("");
-    setIs1C(false);
-    setPreview(null);
+    setParsed([]);
+    setIsPlainFile(false);
+    setSkippedEntries(0);
     setBindId(CREATE_NEW);
   }
+
+  const toParsed = (name: string, text: string): ParsedStatement => {
+    const st = parse1CStatement(text);
+    const matched = st.accountNumber
+      ? accounts.find((a) => a.accountNumber === st.accountNumber)?.name ?? null
+      : null;
+    return {
+      fileName: name,
+      content: text,
+      accountNumber: st.accountNumber,
+      dateStart: st.dateStart,
+      dateEnd: st.dateEnd,
+      operations: st.documents.length,
+      matchedAccountName: matched,
+    };
+  };
 
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
     setFileName(file.name);
-    const text = await decodeStatementFile(file);
-    const detected = is1CStatement(text);
-    setContent(text);
-    setIs1C(detected);
-    if (detected) {
-      const st = parse1CStatement(text);
-      const matched = st.accountNumber
-        ? accounts.find((a) => a.accountNumber === st.accountNumber)?.id ?? null
-        : null;
-      setPreview({
-        accountNumber: st.accountNumber,
-        dateStart: st.dateStart,
-        dateEnd: st.dateEnd,
-        operations: st.documents.length,
-        matchedAccountId: matched,
-      });
-      setBindId(CREATE_NEW);
+    setBindId(CREATE_NEW);
+    setSkippedEntries(0);
+
+    if (isZipFile(file)) {
+      // ZIP: каждая запись — потенциальная выписка; не-1С записи пропускаем.
+      const buf = new Uint8Array(await file.arrayBuffer());
+      let entries: Record<string, Uint8Array>;
+      try {
+        entries = unzipSync(buf);
+      } catch {
+        setParsed([]);
+        setIsPlainFile(false);
+        setSkippedEntries(-1);
+        return;
+      }
+      const items: ParsedStatement[] = [];
+      let skipped = 0;
+      for (const [name, bytes] of Object.entries(entries)) {
+        if (name.endsWith("/") || bytes.length === 0) continue; // папки
+        const text = decodeStatementBytes(bytes);
+        if (is1CStatement(text)) items.push(toParsed(name.split("/").pop() ?? name, text));
+        else skipped += 1;
+      }
+      // Стабильный порядок импорта: по дате начала периода, затем по имени.
+      items.sort(
+        (a, b) =>
+          (a.dateStart ?? "").localeCompare(b.dateStart ?? "") ||
+          a.fileName.localeCompare(b.fileName),
+      );
+      setParsed(items);
+      setIsPlainFile(false);
+      setSkippedEntries(skipped);
+      return;
+    }
+
+    const text = decodeStatementBytes(await file.arrayBuffer());
+    if (is1CStatement(text)) {
+      setParsed([toParsed(file.name, text)]);
+      setIsPlainFile(false);
     } else {
-      setPreview(null);
+      setParsed([]);
+      setIsPlainFile(true);
     }
   };
 
-  // Для 1С реквизиты берутся из файла; для прочих форматов — поля вручную.
-  const canSubmit = is1C
-    ? fileName.length > 0
-    : parseDisplayDate(dateText) != null && accountId.length > 0 && fileName.length > 0;
+  const single1C = !isPlainFile && parsed.length === 1 ? parsed[0] : null;
+  const multi1C = !isPlainFile && parsed.length > 1;
+
+  const canSubmit = isPlainFile
+    ? parseDisplayDate(dateText) != null && accountId.length > 0 && fileName.length > 0
+    : parsed.length > 0;
 
   const handleSubmit = () => {
-    if (is1C) {
-      const bindAccountId =
-        preview?.matchedAccountId ?? (bindId === CREATE_NEW ? null : bindId);
-      onSubmit?.({
-        date: "",
-        accountName: "",
-        fileName,
-        content,
-        is1C: true,
-        bindAccountId,
-      });
+    if (isPlainFile) {
+      const iso = parseDisplayDate(dateText);
+      const account = accounts.find((a) => a.id === accountId);
+      if (!iso || !account || !fileName) return;
+      onSubmit?.([
+        {
+          date: iso,
+          accountName: account.name,
+          fileName,
+          content: "",
+          is1C: false,
+          bindAccountId: null,
+        },
+      ]);
       onOpenChange(false);
       return;
     }
-    const iso = parseDisplayDate(dateText);
-    const account = accounts.find((a) => a.id === accountId);
-    if (!iso || !account || !fileName) return;
-    onSubmit?.({
-      date: iso,
-      accountName: account.name,
-      fileName,
-      content: "",
-      is1C: false,
-      bindAccountId: null,
-    });
+
+    if (parsed.length === 0) return;
+    onSubmit?.(
+      parsed.map((p) => ({
+        date: "",
+        accountName: "",
+        fileName: p.fileName,
+        content: p.content,
+        is1C: true,
+        // Ручная привязка имеет смысл только для одиночного нераспознанного
+        // файла; в архиве каждый файл распределяется по своему РасчСчёту.
+        bindAccountId:
+          single1C && !single1C.matchedAccountName && bindId !== CREATE_NEW ? bindId : null,
+      })),
+    );
     onOpenChange(false);
   };
 
@@ -155,15 +213,16 @@ export function StatementUploadDialog({
       title="Загрузить выписку"
       onOpenChange={onOpenChange}
       onSubmit={handleSubmit}
-      submitLabel="Загрузить"
+      submitLabel={parsed.length > 1 ? `Загрузить (${parsed.length})` : "Загрузить"}
       submitDisabled={!canSubmit}
     >
       <p className="text-muted-foreground text-sm">
-        Формат 1С (kl_to_1c) разносится автоматически: счёт, контрагенты и операции
-        берутся из файла. Для других форматов укажите дату и счёт вручную.
+        Формат 1С (kl_to_1c) и ZIP-архивы с такими файлами разносятся автоматически:
+        счёт, контрагенты и операции берутся из файлов. Для других форматов укажите
+        дату и счёт вручную.
       </p>
 
-      {!is1C && (
+      {isPlainFile && (
         <>
           <Field id="st-date" label="Дата" required>
             <DateFieldInput id="st-date" value={dateText} onChange={setDateText} />
@@ -188,12 +247,12 @@ export function StatementUploadDialog({
         </>
       )}
 
-      <Field id="st-file" label="Файл выписки" required>
+      <Field id="st-file" label="Файл выписки или ZIP-архив" required>
         <input
           ref={fileRef}
           id="st-file"
           type="file"
-          accept=".csv,.txt,.xml,.pdf"
+          accept=".csv,.txt,.xml,.pdf,.zip"
           className="sr-only"
           onChange={(e) => void handleFile(e.target.files?.[0])}
         />
@@ -210,23 +269,60 @@ export function StatementUploadDialog({
         </button>
       </Field>
 
-      {is1C && preview && (
+      {skippedEntries === -1 && (
+        <p className="text-destructive text-sm">Не удалось распаковать архив.</p>
+      )}
+
+      {fileName && !isPlainFile && parsed.length === 0 && skippedEntries >= 0 && (
+        <p className="text-destructive text-sm">
+          В файле не найдено выписок формата 1С (kl_to_1c).
+        </p>
+      )}
+
+      {single1C && (
         <div className="border-border bg-muted/30 space-y-1 rounded-lg border px-3 py-2.5 text-sm">
           <p className="text-foreground font-medium">Формат 1С распознан</p>
-          <p className="text-muted-foreground">Счёт: {preview.accountNumber ?? "—"}</p>
+          <p className="text-muted-foreground">Счёт: {single1C.accountNumber ?? "—"}</p>
           <p className="text-muted-foreground">
-            Период: {preview.dateStart ?? "—"} — {preview.dateEnd ?? "—"}
+            Период: {single1C.dateStart ?? "—"} — {single1C.dateEnd ?? "—"}
           </p>
-          <p className="text-muted-foreground">Операций: {preview.operations}</p>
-          {preview.matchedAccountId && (
-            <p className="text-muted-foreground">
-              Счёт распознан: {accounts.find((a) => a.id === preview.matchedAccountId)?.name}
-            </p>
+          <p className="text-muted-foreground">Операций: {single1C.operations}</p>
+          {single1C.matchedAccountName && (
+            <p className="text-muted-foreground">Счёт распознан: {single1C.matchedAccountName}</p>
           )}
         </div>
       )}
 
-      {is1C && preview && !preview.matchedAccountId && (
+      {multi1C && (
+        <div className="border-border bg-muted/30 space-y-2 rounded-lg border px-3 py-2.5 text-sm">
+          <p className="text-foreground font-medium">
+            Выписок в архиве: {parsed.length}
+            {skippedEntries > 0 && (
+              <span className="text-muted-foreground font-normal">
+                {" "}
+                (пропущено не-1С файлов: {skippedEntries})
+              </span>
+            )}
+          </p>
+          <ul className="space-y-1.5">
+            {parsed.map((p) => (
+              <li key={p.fileName} className="text-muted-foreground">
+                <span className="text-foreground">••{p.accountNumber?.slice(-4) ?? "????"}</span>
+                {" · "}
+                {p.dateStart ?? "—"} — {p.dateEnd ?? "—"}
+                {" · операций: "}
+                {p.operations}
+                {" · "}
+                {p.matchedAccountName ?? (
+                  <span className="text-amber-700">новый счёт</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {single1C && !single1C.matchedAccountName && (
         <Field id="st-bind" label="Привязать к счёту">
           <Select value={bindId} onValueChange={(v) => setBindId(v ?? CREATE_NEW)}>
             <SelectTrigger className={selectTriggerClass}>
