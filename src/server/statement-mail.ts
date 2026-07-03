@@ -83,6 +83,29 @@ async function ignoringRevalidate<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Человекочитаемое описание ошибки IMAP. У imapflow generic-текст «Command
+ * failed» бесполезен — вытаскиваем ответ сервера, код и признак авторизации.
+ */
+function describeError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const e = err as Error & {
+    code?: string;
+    responseText?: string;
+    response?: string;
+    serverResponseCode?: string;
+    authenticationFailed?: boolean;
+  };
+  const parts: string[] = [];
+  if (e.authenticationFailed) parts.push("ошибка авторизации IMAP (проверьте логин/пароль ящика)");
+  const serverText = e.responseText || e.response;
+  if (serverText) parts.push(serverText);
+  if (e.serverResponseCode) parts.push(`код ${e.serverResponseCode}`);
+  if (e.code) parts.push(`[${e.code}]`);
+  if (e.message && !parts.some((p) => p.includes(e.message))) parts.push(e.message);
+  return parts.join(" ").trim() || "неизвестная ошибка";
+}
+
 interface ExtractedStatement {
   fileName: string;
   content: string;
@@ -194,8 +217,7 @@ export async function runMailIntake(config: MailIntakeConfig): Promise<MailIntak
           }
         } catch (err) {
           result.ok = false;
-          const msg = err instanceof Error ? err.message : String(err);
-          result.errors.push(`UID ${uid}: ${msg}`);
+          result.errors.push(`UID ${uid}: ${describeError(err)}`);
         }
       }
     } finally {
@@ -228,7 +250,7 @@ export async function runMailIntakeAndLog(): Promise<MailIntakeResult> {
   try {
     result = await runMailIntake(config);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = describeError(err);
     result = {
       ok: false,
       disabled: false,
