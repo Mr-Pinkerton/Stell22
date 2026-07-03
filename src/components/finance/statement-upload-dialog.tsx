@@ -5,7 +5,7 @@ import { Upload } from "lucide-react";
 import { unzipSync } from "fflate";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import { cn } from "@/lib/utils";
-import { is1CStatement, parse1CStatement } from "@/lib/bank-statement-1c";
+import { is1CStatement, parse1CStatement, decodeStatementBytes } from "@/lib/bank-statement-1c";
 import type { FinanceAccount } from "@/mocks/finance-fixtures";
 import {
   DateFieldInput,
@@ -59,16 +59,6 @@ interface ParsedStatement {
 const CREATE_NEW = "__new__";
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
-
-/** Декодирование текста выписки по объявленной кодировке 1С (Windows/UTF8/DOS). */
-function decodeStatementBytes(buf: ArrayBuffer | Uint8Array): string {
-  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-  let text = new TextDecoder("windows-1251").decode(bytes);
-  const enc = text.match(/Кодировка\s*=\s*(\S+)/)?.[1]?.toUpperCase() ?? "";
-  if (enc.includes("UTF")) text = new TextDecoder("utf-8").decode(bytes);
-  else if (enc.includes("DOS") || enc.includes("866")) text = new TextDecoder("ibm866").decode(bytes);
-  return text;
-}
 
 function isZipFile(file: File): boolean {
   return file.name.toLowerCase().endsWith(".zip") || file.type.includes("zip");

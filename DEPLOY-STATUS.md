@@ -57,6 +57,37 @@ docker compose -f docker-compose.prod.yml exec app \
 
 Обновляет одну запись админа (id `user-admin`), дубля не создаёт.
 
+## Приём выписок с почты (IMAP)
+
+Банк присылает выписки 1С (`.txt`/`.zip`) на выделенный ящик (`tochka@stell22.ru`).
+Cron-эндпойнт `/api/cron/fetch-statements` раз в час забирает непрочитанные
+письма, распаковывает вложения и импортирует их той же логикой, что и ручная
+загрузка (дедупликация, якорь остатка, карантин новых счетов).
+
+Настройка (в `/root/Stell22/.env`, затем пересборка — см. «Обновление»):
+
+```env
+CRON_SECRET=<openssl rand -hex 24>
+MAIL_IMAP_HOST=imap.beget.com
+MAIL_IMAP_PORT=993
+MAIL_IMAP_SECURE=true
+MAIL_IMAP_USER=tochka@stell22.ru
+MAIL_IMAP_PASSWORD=<пароль ящика>
+MAIL_ALLOWED_SENDERS=informer@tochka.com   # отправитель банка «Точка»
+MAIL_MARK_SEEN=true
+```
+
+Host-cron (раз в час). Через Caddy наружу; `-m 300` — таймаут:
+
+```bash
+0 * * * * curl -fsS -m 300 -X POST -H "Authorization: Bearer СЕКРЕТ" https://stell22.ru/api/cron/fetch-statements >> /root/Stell22/mail.log 2>&1
+```
+
+- Итог каждого прогона — в **Настройки → Логи** (источник «Выписки (почта)»);
+  пустые прогоны без ошибок не логируются.
+- Проверить вручную: тот же `curl` (ответ — JSON со счётчиками).
+- Пусто `MAIL_IMAP_HOST` или `CRON_SECRET` → приём отключён (503/`disabled`).
+
 ## Частые команды
 
 | Задача | Команда |

@@ -33,6 +33,17 @@ services:
       NODE_ENV: production
       # Мониторинг ошибок (необязательно): вставьте DSN из Sentry в .env.
       SENTRY_DSN: ${SENTRY_DSN:-}
+      # Приём выписок с почты (необязательно). Триггерится cron-эндпойнтом
+      # /api/cron/fetch-statements (host-cron через curl). Пусто = приём отключён.
+      CRON_SECRET: ${CRON_SECRET:-}
+      MAIL_IMAP_HOST: ${MAIL_IMAP_HOST:-}
+      MAIL_IMAP_PORT: ${MAIL_IMAP_PORT:-993}
+      MAIL_IMAP_SECURE: ${MAIL_IMAP_SECURE:-true}
+      MAIL_IMAP_USER: ${MAIL_IMAP_USER:-}
+      MAIL_IMAP_PASSWORD: ${MAIL_IMAP_PASSWORD:-}
+      MAIL_IMAP_MAILBOX: ${MAIL_IMAP_MAILBOX:-INBOX}
+      MAIL_ALLOWED_SENDERS: ${MAIL_ALLOWED_SENDERS:-}
+      MAIL_MARK_SEEN: ${MAIL_MARK_SEEN:-true}
     expose:
       - "3000"
     healthcheck:

@@ -44,6 +44,21 @@ export function is1CStatement(text: string): boolean {
   return text.trimStart().startsWith("1CClientBankExchange");
 }
 
+/**
+ * Декодирование байтов выписки 1С по объявленной кодировке (Windows-1251 по
+ * умолчанию, либо UTF-8 / DOS-866 из строки «Кодировка=…»). Работает и в
+ * браузере, и в Node (глобальный `TextDecoder`). Используется загрузкой файла
+ * в UI и приёмом выписок с почты.
+ */
+export function decodeStatementBytes(buf: ArrayBuffer | Uint8Array): string {
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let text = new TextDecoder("windows-1251").decode(bytes);
+  const enc = text.match(/Кодировка\s*=\s*(\S+)/)?.[1]?.toUpperCase() ?? "";
+  if (enc.includes("UTF")) text = new TextDecoder("utf-8").decode(bytes);
+  else if (enc.includes("DOS") || enc.includes("866")) text = new TextDecoder("ibm866").decode(bytes);
+  return text;
+}
+
 export function parse1CStatement(text: string): Bank1CStatement {
   const result: Bank1CStatement = {
     accountNumber: null,
