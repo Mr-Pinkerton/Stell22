@@ -36,11 +36,6 @@ export const API_CREDENTIAL_GROUPS: ApiCredentialGroup[] = [
       { key: "wb.token", label: "Токен", placeholder: "eyJhbGciOi…", secret: true },
     ],
   },
-  {
-    service: "Банк (выписки)",
-    description: "Загрузка выписок в ДДС.",
-    fields: [{ key: "bank.token", label: "Токен", placeholder: "bank_…", secret: true }],
-  },
 ];
 
 /** Все ключи полей (для валидации при сохранении). */
