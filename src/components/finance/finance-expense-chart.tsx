@@ -87,9 +87,11 @@ function buildSegments(slices: ExpenseChartSlice[]): ChartSegment[] {
 
 interface FinanceExpenseChartProps {
   slices: ExpenseChartSlice[];
+  /** Диаметр в пикселях (геометрия задана viewBox, меняется только масштаб). */
+  size?: number;
 }
 
-export function FinanceExpenseChart({ slices }: FinanceExpenseChartProps) {
+export function FinanceExpenseChart({ slices, size = SIZE }: FinanceExpenseChartProps) {
   const segments = useMemo(() => buildSegments(slices), [slices]);
 
   if (slices.length === 0) {
@@ -101,8 +103,8 @@ export function FinanceExpenseChart({ slices }: FinanceExpenseChartProps) {
   return (
     <div className="flex justify-center">
       <svg
-        width={SIZE}
-        height={SIZE}
+        width={size}
+        height={size}
         viewBox={`0 0 ${SIZE} ${SIZE}`}
         role="img"
         aria-label="Круговая диаграмма расходов по статьям. Наведите на сегмент для деталей."

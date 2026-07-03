@@ -219,8 +219,8 @@ export function DashboardChartsRow({
           <CardHeader className="pb-2">
             <CardTitle className="text-base">Структура расходов</CardTitle>
           </CardHeader>
-          <CardContent className="flex min-h-[14rem] items-center justify-center">
-            <FinanceExpenseChart slices={expense} />
+          <CardContent className="flex min-h-[17rem] items-center justify-center pt-6">
+            <FinanceExpenseChart slices={expense} size={248} />
           </CardContent>
         </Card>
 
