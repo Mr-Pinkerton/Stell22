@@ -13,6 +13,11 @@ const montserrat = Montserrat({
 export const metadata: Metadata = {
   title: "Stell22",
   description: "Система учёта производства, склада и себестоимости изделий",
+  robots: {
+    index: false,
+    follow: false,
+    googleBot: { index: false, follow: false },
+  },
 };
 
 export default function RootLayout({

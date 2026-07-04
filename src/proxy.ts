@@ -7,6 +7,13 @@ import { SESSION_COOKIE, decryptSession } from "@/lib/session";
 // в мутациях; здесь лишь быстрый редирект неаутентифицированных.
 const PUBLIC_PATHS = ["/login", "/terminal"];
 
+const NOINDEX_HEADER = "noindex, nofollow, noarchive, nosnippet";
+
+function withNoIndex(response: NextResponse) {
+  response.headers.set("X-Robots-Tag", NOINDEX_HEADER);
+  return response;
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const isPublic = PUBLIC_PATHS.some(
@@ -17,14 +24,14 @@ export async function proxy(request: NextRequest) {
   const session = await decryptSession(token);
 
   if (!session && !isPublic) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return withNoIndex(NextResponse.redirect(new URL("/login", request.url)));
   }
 
   if (session && pathname === "/login") {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
+    return withNoIndex(NextResponse.redirect(new URL("/dashboard", request.url)));
   }
 
-  return NextResponse.next();
+  return withNoIndex(NextResponse.next());
 }
 
 export const config = {
