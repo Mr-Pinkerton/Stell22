@@ -11,7 +11,7 @@ const montserrat = Montserrat({
 });
 
 export const metadata: Metadata = {
-  title: "Stell22 — учёт производства и себестоимости",
+  title: "Stell22",
   description: "Система учёта производства, склада и себестоимости изделий",
 };
 
