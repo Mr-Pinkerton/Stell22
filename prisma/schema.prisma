@@ -233,7 +233,11 @@ model Detail {
 model Product {
   id            String        @id @default(cuid())
   name          String
-  sku           String // артикул (как в МП)
+  // Артикулы маркетплейсов у одного изделия различаются, поэтому храним оба.
+  // Синхронизация МП сопоставляет продажи/поставки/остатки по своему артикулу:
+  // Ozon — по skuOzon, WB — по skuWb.
+  skuOzon       String // offer_id (Ozon)
+  skuWb         String // supplierArticle (Wildberries)
   sort          Sort
   salePrice     Decimal       @db.Decimal(14, 2) // цена ПРОДАЖИ (не себестоимость)
   packagingId   String?

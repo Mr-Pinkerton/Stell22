@@ -55,6 +55,20 @@ function toNumber(value: { toNumber: () => number } | number | null): number {
   return typeof value === "object" && "toNumber" in value ? value.toNumber() : Number(value);
 }
 
+/**
+ * Артикул записи МП → название изделия. У изделия два артикула (Ozon и WB),
+ * поэтому в карту заносим оба ключа — так продажи/остатки/поставки любого МП
+ * находят изделие по своему артикулу.
+ */
+function buildNameBySku(products: { name: string; skuOzon: string; skuWb: string }[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const p of products) {
+    if (p.skuOzon) map.set(p.skuOzon, p.name);
+    if (p.skuWb) map.set(p.skuWb, p.name);
+  }
+  return map;
+}
+
 // ============================ ОТЧЁТ «ПРОДАЖИ» ==============================
 
 export interface SalesData {
@@ -71,11 +85,11 @@ export interface SalesData {
 export async function getSalesData(): Promise<SalesData> {
   const [sales, products, lastStock] = await Promise.all([
     prisma.sale.findMany({ orderBy: { date: "desc" } }),
-    prisma.product.findMany({ select: { id: true, name: true, sku: true } }),
+    prisma.product.findMany({ select: { id: true, name: true, skuOzon: true, skuWb: true } }),
     prisma.mpStock.findFirst({ orderBy: { syncedAt: "desc" }, select: { syncedAt: true } }),
   ]);
 
-  const nameBySku = new Map(products.map((p) => [p.sku, p.name]));
+  const nameBySku = buildNameBySku(products);
   const nameById = new Map(products.map((p) => [p.id, p.name]));
 
   const agg = new Map<string, SalesReportRow>();
@@ -113,9 +127,9 @@ export async function getSalesData(): Promise<SalesData> {
 export async function getMpStock(): Promise<MpStockRow[]> {
   const [stock, products] = await Promise.all([
     prisma.mpStock.findMany({ orderBy: [{ marketplace: "asc" }, { sku: "asc" }] }),
-    prisma.product.findMany({ select: { sku: true, name: true } }),
+    prisma.product.findMany({ select: { name: true, skuOzon: true, skuWb: true } }),
   ]);
-  const nameBySku = new Map(products.map((p) => [p.sku, p.name]));
+  const nameBySku = buildNameBySku(products);
   return stock.map((s) => ({
     id: s.id,
     marketplace: s.marketplace as Marketplace,
@@ -130,9 +144,9 @@ export async function getMpStock(): Promise<MpStockRow[]> {
 export async function getSupplies(): Promise<ShipmentRow[]> {
   const [supplies, products] = await Promise.all([
     prisma.supply.findMany({ orderBy: { createdAt: "desc" } }),
-    prisma.product.findMany({ select: { sku: true, name: true } }),
+    prisma.product.findMany({ select: { name: true, skuOzon: true, skuWb: true } }),
   ]);
-  const nameBySku = new Map(products.map((p) => [p.sku, p.name]));
+  const nameBySku = buildNameBySku(products);
   return supplies.map((s) => ({
     id: s.id,
     date: (s.acceptedAt ?? s.createdAt).toISOString(),
@@ -151,7 +165,8 @@ export async function getSupplies(): Promise<ShipmentRow[]> {
 
 interface ActiveProduct {
   id: string;
-  sku: string;
+  skuOzon: string;
+  skuWb: string;
   salePrice: number;
 }
 
@@ -172,8 +187,8 @@ function fetchWbSalesRaw(products: ActiveProduct[], now: Date, rand: () => numbe
       const isReturn = rand() < 0.1; // ~10% возвраты
       out.push({
         date: now.toISOString(),
-        supplierArticle: p.sku,
-        saleID: `${isReturn ? "R" : "S"}-${stamp}-${p.sku}-${i}`,
+        supplierArticle: p.skuWb,
+        saleID: `${isReturn ? "R" : "S"}-${stamp}-${p.skuWb}-${i}`,
         finishedPrice: Math.round(p.salePrice * (0.9 + rand() * 0.2)),
       });
     }
@@ -184,12 +199,12 @@ function fetchWbSalesRaw(products: ActiveProduct[], now: Date, rand: () => numbe
 function fetchOzonPostingsRaw(products: ActiveProduct[], now: Date, rand: () => number): OzonPostingRaw[] {
   const stamp = now.getTime();
   return products.map((p) => ({
-    posting_number: `${stamp}-${p.sku}`,
+    posting_number: `${stamp}-${p.skuOzon}`,
     status: "delivered",
     created_at: now.toISOString(),
     products: [
       {
-        offer_id: p.sku,
+        offer_id: p.skuOzon,
         quantity: 1 + Math.floor(rand() * 3), // 1..3
         price: p.salePrice.toFixed(2),
       },
@@ -208,7 +223,7 @@ function fetchWbIncomesRaw(products: ActiveProduct[], now: Date): WbIncomeRaw[] 
       number: `WB-INC-${900000 + idx}`,
       date: now.toISOString(),
       dateClose: accepted ? now.toISOString() : null,
-      supplierArticle: p.sku,
+      supplierArticle: p.skuWb,
       quantity: 5 + (idx % 4),
       warehouseName: "Коледино",
     };
@@ -216,7 +231,7 @@ function fetchWbIncomesRaw(products: ActiveProduct[], now: Date): WbIncomeRaw[] 
 }
 
 function fetchOzonSupplyOrdersRaw(products: ActiveProduct[], now: Date): OzonSupplyOrderRaw[] {
-  const items = products.map((p, idx) => ({ offer_id: p.sku, quantity: 3 + (idx % 3) }));
+  const items = products.map((p, idx) => ({ offer_id: p.skuOzon, quantity: 3 + (idx % 3) }));
   if (items.length === 0) return [];
   return [
     {
@@ -231,14 +246,14 @@ function fetchOzonSupplyOrdersRaw(products: ActiveProduct[], now: Date): OzonSup
 
 function fetchWbStockRaw(products: ActiveProduct[], rand: () => number): WbStockRaw[] {
   return products.map((p) => ({
-    supplierArticle: p.sku,
+    supplierArticle: p.skuWb,
     quantity: 10 + Math.floor(rand() * 25),
   }));
 }
 
 function fetchOzonStockRaw(products: ActiveProduct[], rand: () => number): OzonStockRaw[] {
   return products.map((p) => ({
-    offer_id: p.sku,
+    offer_id: p.skuOzon,
     present: 10 + Math.floor(rand() * 25),
   }));
 }
@@ -319,7 +334,7 @@ async function fetchMarketplaceData(
   const ozonStocks: NormalizedStock[] = [];
 
   const rand = makeRand(to.getTime());
-  const offerIds = products.map((p) => p.sku);
+  const offerIds = products.map((p) => p.skuOzon).filter(Boolean);
   const stockReplace = { wb: false, ozon: false };
   const ozonCancelledExternalIds: string[] = [];
 
@@ -504,10 +519,15 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
 
   const products: ActiveProduct[] = dbProducts.map((p) => ({
     id: p.id,
-    sku: p.sku,
+    skuOzon: p.skuOzon,
+    skuWb: p.skuWb,
     salePrice: toNumber(p.salePrice),
   }));
-  const idBySku = new Map(products.map((p) => [p.sku, p.id]));
+  // Сопоставление по МП: продажи/поставки/остатки Ozon ищем по skuOzon, WB — по skuWb.
+  const idByOzonSku = new Map(products.filter((p) => p.skuOzon).map((p) => [p.skuOzon, p.id]));
+  const idByWbSku = new Map(products.filter((p) => p.skuWb).map((p) => [p.skuWb, p.id]));
+  const productIdForRecord = (marketplace: string, sku: string): string | null =>
+    (marketplace === "OZON" ? idByOzonSku.get(sku) : idByWbSku.get(sku)) ?? null;
 
   const fetched = await fetchMarketplaceData(products, since, now);
   const {
@@ -560,7 +580,7 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
           marketplace: s.marketplace,
           externalId: s.externalId,
           sku: s.sku,
-          productId: idBySku.get(s.sku) ?? null,
+          productId: productIdForRecord(s.marketplace, s.sku),
           quantity: s.quantity,
           revenue: new Decimal(s.revenue).toFixed(2),
           isReturn: s.isReturn,
@@ -576,7 +596,7 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
     }
 
     for (const s of supplies) {
-      const productId = idBySku.get(s.sku) ?? null;
+      const productId = productIdForRecord(s.marketplace, s.sku);
       const key = {
         marketplace_externalId_sku: {
           marketplace: s.marketplace,

@@ -116,7 +116,14 @@ export function ProductsTable({
                 </div>
               </TableCell>
               <TableCell className={cn(expandableSummaryCellClass, "text-center tabular-nums")}>
-                {row.sku}
+                <div className="flex flex-col items-center leading-tight">
+                  <span>
+                    <span className="text-muted-foreground text-[0.65rem]">OZ</span> {row.skuOzon || "—"}
+                  </span>
+                  <span>
+                    <span className="text-muted-foreground text-[0.65rem]">WB</span> {row.skuWb || "—"}
+                  </span>
+                </div>
               </TableCell>
               <TableCell className={cn(expandableSummaryCellClass, "text-center")}>
                 {SORT_SHORT[row.sort]}

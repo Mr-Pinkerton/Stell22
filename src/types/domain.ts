@@ -86,7 +86,10 @@ export interface ProductDetail {
 export interface Product {
   id: string;
   name: string;
-  sku: string;
+  /** Артикул Ozon (offer_id). */
+  skuOzon: string;
+  /** Артикул Wildberries (supplierArticle). */
+  skuWb: string;
   sort: Sort;
   salePrice: number;
   packagingId?: string | null;

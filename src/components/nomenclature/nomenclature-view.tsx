@@ -215,7 +215,7 @@ export function NomenclatureView({
   const visible = (status: "ACTIVE" | "ARCHIVED") => showArchive || status !== "ARCHIVED";
 
   const productRows = partitionActiveArchived(
-    products.filter((p) => visible(p.status) && matchesSearch(`${p.name} ${p.sku}`)),
+    products.filter((p) => visible(p.status) && matchesSearch(`${p.name} ${p.skuOzon} ${p.skuWb}`)),
     (p) => p.status === "ARCHIVED",
   );
   const detailRows = partitionActiveArchived(
@@ -242,14 +242,16 @@ export function NomenclatureView({
         name: "Изделия",
         columns: [
           { header: "Название", key: "name", width: 28 },
-          { header: "Артикул", key: "sku" },
+          { header: "Артикул Ozon", key: "skuOzon", width: 16 },
+          { header: "Артикул WB", key: "skuWb", width: 16 },
           { header: "Сорт", key: "sort", width: 12 },
           { header: "Детали, шт", key: "details", numFmt: XLSX_FMT.int },
           { header: "Статус", key: "status", width: 14 },
         ],
         rows: productRows.map((p) => ({
           name: p.name,
-          sku: p.sku,
+          skuOzon: p.skuOzon,
+          skuWb: p.skuWb,
           sort: SORT_SHORT[p.sort],
           details: p.details.reduce((sum, d) => sum + d.quantity, 0),
           status: statusText(p.status),

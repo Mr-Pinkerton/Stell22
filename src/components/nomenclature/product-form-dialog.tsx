@@ -88,7 +88,8 @@ function ProductFormBody({
   const otherItems = useMemo(() => items.filter((n) => n.type === "OTHER"), [items]);
 
   const [name, setName] = useState(product?.name ?? "");
-  const [sku, setSku] = useState(product?.sku ?? "");
+  const [skuOzon, setSkuOzon] = useState(product?.skuOzon ?? "");
+  const [skuWb, setSkuWb] = useState(product?.skuWb ?? "");
   const [salePrice, setSalePrice] = useState<number | null>(product?.salePrice ?? null);
   const [sort, setSort] = useState<Sort | "">(product?.sort ?? "");
   const [packagingId, setPackagingId] = useState(product?.packagingId ?? "");
@@ -153,14 +154,20 @@ function ProductFormBody({
     });
   };
 
-  const canSubmit = name.trim().length > 0 && sku.trim().length > 0 && sort !== "" && !pending;
+  const canSubmit =
+    name.trim().length > 0 &&
+    skuOzon.trim().length > 0 &&
+    skuWb.trim().length > 0 &&
+    sort !== "" &&
+    !pending;
 
   const handleSubmit = async () => {
     // Проверяем sort первым — это сужает тип до Sort. Кнопка и так disabled при !canSubmit.
     if (sort === "" || !canSubmit) return;
     await onSubmit?.({
       name,
-      sku,
+      skuOzon,
+      skuWb,
       sort,
       salePrice,
       packagingId: packagingId || null,
@@ -195,23 +202,32 @@ function ProductFormBody({
 
             <div className="scrollbar-thin-y max-h-[min(75vh,40rem)] space-y-5 overflow-y-auto px-6 py-6">
               <FormSection title="Основная информация">
+                <Field id="prod-name" label="Название" required>
+                  <Input
+                    id="prod-name"
+                    className={fieldClass}
+                    placeholder="Полка настенная"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </Field>
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Field id="prod-name" label="Название" required>
+                  <Field id="prod-sku-ozon" label="Артикул Ozon" required>
                     <Input
-                      id="prod-name"
+                      id="prod-sku-ozon"
                       className={fieldClass}
-                      placeholder="Полка настенная"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
+                      placeholder="OZ-001"
+                      value={skuOzon}
+                      onChange={(e) => setSkuOzon(e.target.value)}
                     />
                   </Field>
-                  <Field id="prod-sku" label="Артикул" required>
+                  <Field id="prod-sku-wb" label="Артикул WB" required>
                     <Input
-                      id="prod-sku"
+                      id="prod-sku-wb"
                       className={fieldClass}
-                      placeholder="ART-001"
-                      value={sku}
-                      onChange={(e) => setSku(e.target.value)}
+                      placeholder="WB-001"
+                      value={skuWb}
+                      onChange={(e) => setSkuWb(e.target.value)}
                     />
                   </Field>
                 </div>

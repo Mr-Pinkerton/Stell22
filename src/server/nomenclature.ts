@@ -58,7 +58,8 @@ function serializeProduct(p: ProductWithRelations): Product {
   return {
     id: p.id,
     name: p.name,
-    sku: p.sku,
+    skuOzon: p.skuOzon,
+    skuWb: p.skuWb,
     sort: p.sort,
     salePrice: toNum(p.salePrice) ?? 0,
     packagingId: p.packagingId,
@@ -280,7 +281,8 @@ export async function deleteNomenclatureItem(id: string): Promise<void> {
 
 export interface ProductFormValues {
   name: string;
-  sku: string;
+  skuOzon: string;
+  skuWb: string;
   sort: Sort;
   salePrice: number | null;
   packagingId: string | null;
@@ -291,7 +293,8 @@ export interface ProductFormValues {
 
 function validateProduct(v: ProductFormValues) {
   if (!v.name.trim()) throw new Error("Название изделия обязательно");
-  if (!v.sku.trim()) throw new Error("Артикул обязателен");
+  if (!v.skuOzon.trim()) throw new Error("Артикул Ozon обязателен");
+  if (!v.skuWb.trim()) throw new Error("Артикул WB обязателен");
 }
 
 export async function createProduct(values: ProductFormValues): Promise<Product> {
@@ -300,7 +303,8 @@ export async function createProduct(values: ProductFormValues): Promise<Product>
   const created = await prisma.product.create({
     data: {
       name: values.name.trim(),
-      sku: values.sku.trim(),
+      skuOzon: values.skuOzon.trim(),
+      skuWb: values.skuWb.trim(),
       sort: values.sort,
       salePrice: values.salePrice ?? 0,
       packagingId: values.packagingId || null,
@@ -339,7 +343,8 @@ export async function updateProduct(id: string, values: ProductFormValues): Prom
       where: { id },
       data: {
         name: values.name.trim(),
-        sku: values.sku.trim(),
+        skuOzon: values.skuOzon.trim(),
+        skuWb: values.skuWb.trim(),
         sort: values.sort,
         salePrice: values.salePrice ?? 0,
         packagingId: values.packagingId || null,

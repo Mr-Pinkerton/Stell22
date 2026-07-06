@@ -5,6 +5,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { buildStockSnapshot, type DetailStockRow as RawStockRow } from "@/lib/detail-stock";
+import { formatProductSku } from "@/lib/format";
 import type { Detail } from "@/types/domain";
 import type { ProductionStockRow, DetailStockRow } from "@/lib/warehouse-stock";
 import type {
@@ -62,7 +63,12 @@ export async function getWarehouseStock(): Promise<WarehouseStock> {
   const snapshot = buildStockSnapshot(domainDetails, rows);
 
   const productRows: ProductionStockRow[] = products
-    .map((p) => ({ id: p.id, name: p.name, sku: p.sku, quantity: productQty.get(p.id) ?? 0 }))
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      sku: formatProductSku(p.skuOzon, p.skuWb),
+      quantity: productQty.get(p.id) ?? 0,
+    }))
     .sort((a, b) => a.name.localeCompare(b.name, "ru"));
 
   const detailById = new Map(domainDetails.map((d) => [d.id, d]));

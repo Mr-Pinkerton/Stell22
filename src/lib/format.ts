@@ -26,6 +26,21 @@ export function formatMoney(value: number): string {
   return moneyFormatter.format(value);
 }
 
+/**
+ * Компактная подпись артикулов изделия для мест с одной колонкой/строкой.
+ * Одинаковые артикулы Ozon/WB → показываем один; иначе «OZ … · WB …».
+ * Пустые значения опускаем; если оба пусты — «—».
+ */
+export function formatProductSku(skuOzon: string, skuWb: string): string {
+  const oz = skuOzon.trim();
+  const wb = skuWb.trim();
+  if (oz && wb && oz === wb) return oz;
+  const parts: string[] = [];
+  if (oz) parts.push(`OZ ${oz}`);
+  if (wb) parts.push(`WB ${wb}`);
+  return parts.join(" · ") || "—";
+}
+
 /** Целое число с разделителем тысяч для полей ввода, напр. "1 234 567". */
 export function formatGroupedInteger(value: number): string {
   return groupedIntegerFormatter.format(Math.round(value));

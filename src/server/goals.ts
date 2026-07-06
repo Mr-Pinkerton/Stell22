@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { formatGoalMonthIso } from "@/lib/goals";
+import { formatProductSku } from "@/lib/format";
 import type { GoalRow } from "@/mocks/goals-fixtures";
 
 export interface GoalProductOption {
@@ -59,7 +60,11 @@ export async function getGoalsData(): Promise<GoalsData> {
 
   return {
     goals: rows,
-    products: products.map((p) => ({ id: p.id, name: p.name, sku: p.sku })),
+    products: products.map((p) => ({
+      id: p.id,
+      name: p.name,
+      sku: formatProductSku(p.skuOzon, p.skuWb),
+    })),
   };
 }
 

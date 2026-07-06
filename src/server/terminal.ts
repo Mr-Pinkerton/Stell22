@@ -116,7 +116,8 @@ function serProduct(p: ProductWithRel): Product {
   return {
     id: p.id,
     name: p.name,
-    sku: p.sku,
+    skuOzon: p.skuOzon,
+    skuWb: p.skuWb,
     sort: p.sort,
     salePrice: num(p.salePrice) ?? 0,
     packagingId: p.packagingId,

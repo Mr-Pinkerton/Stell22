@@ -170,7 +170,8 @@ async function main() {
       data: {
         id: p.id,
         name: p.name,
-        sku: p.sku,
+        skuOzon: p.skuOzon,
+        skuWb: p.skuWb,
         sort: p.sort,
         salePrice: p.salePrice,
         packagingId: p.packagingId ?? null,
@@ -440,11 +441,11 @@ async function main() {
   // «Синхронизировать» (server/marketplace — заглушка вместо Ozon/WB API).
   const priceById = new Map(products.map((p) => [p.id, p.salePrice]));
   const saleSeed: { mp: string; productId: string; sku: string; qty: number; date: string }[] = [
-    { mp: "OZON", productId: "prod-1", sku: "ART-001", qty: 48, date: "2026-06-10" },
-    { mp: "OZON", productId: "prod-2", sku: "ART-002", qty: 22, date: "2026-06-14" },
-    { mp: "WB", productId: "prod-1", sku: "ART-001", qty: 31, date: "2026-06-12" },
-    { mp: "WB", productId: "prod-2", sku: "ART-002", qty: 18, date: "2026-06-18" },
-    { mp: "OZON", productId: "prod-1", sku: "ART-001", qty: 27, date: "2026-06-24" },
+    { mp: "OZON", productId: "prod-1", sku: "OZ-001", qty: 48, date: "2026-06-10" },
+    { mp: "OZON", productId: "prod-2", sku: "OZ-002", qty: 22, date: "2026-06-14" },
+    { mp: "WB", productId: "prod-1", sku: "WB-001", qty: 31, date: "2026-06-12" },
+    { mp: "WB", productId: "prod-2", sku: "WB-002", qty: 18, date: "2026-06-18" },
+    { mp: "OZON", productId: "prod-1", sku: "OZ-001", qty: 27, date: "2026-06-24" },
   ];
   await prisma.sale.createMany({
     data: saleSeed.map((s) => ({
@@ -458,10 +459,10 @@ async function main() {
   });
   await prisma.mpStock.createMany({
     data: [
-      { marketplace: "OZON", sku: "ART-001", quantity: 28 },
-      { marketplace: "OZON", sku: "ART-002", quantity: 12 },
-      { marketplace: "WB", sku: "ART-001", quantity: 15 },
-      { marketplace: "WB", sku: "ART-002", quantity: 7 },
+      { marketplace: "OZON", sku: "OZ-001", quantity: 28 },
+      { marketplace: "OZON", sku: "OZ-002", quantity: 12 },
+      { marketplace: "WB", sku: "WB-001", quantity: 15 },
+      { marketplace: "WB", sku: "WB-002", quantity: 7 },
     ],
   });
 

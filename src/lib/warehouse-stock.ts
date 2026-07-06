@@ -5,6 +5,7 @@ import {
   stockSnapshot,
 } from "@/mocks/fixtures";
 import { productStock } from "@/mocks/warehouse-fixtures";
+import { formatProductSku } from "@/lib/format";
 import type { NomenclatureType, StockSnapshot } from "@/types/domain";
 
 export interface ProductionStockRow {
@@ -38,7 +39,7 @@ export function buildProductStockRows(
     .map((p) => ({
       id: p.id,
       name: p.name,
-      sku: p.sku,
+      sku: formatProductSku(p.skuOzon, p.skuWb),
       quantity: stock[p.id] ?? 0,
     }))
     .sort((a, b) => a.name.localeCompare(b.name, "ru"));

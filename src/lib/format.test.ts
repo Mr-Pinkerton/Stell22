@@ -6,9 +6,29 @@ import {
   formatIsoDateTime,
   formatLength,
   formatMoney,
+  formatProductSku,
   parseGroupedInteger,
   roundCashTo100,
 } from "@/lib/format";
+
+describe("formatProductSku", () => {
+  it("показывает оба артикула, когда они различаются", () => {
+    expect(formatProductSku("OZ-1", "WB-1")).toBe("OZ OZ-1 · WB WB-1");
+  });
+
+  it("схлопывает одинаковые артикулы в один", () => {
+    expect(formatProductSku("ART-1", "ART-1")).toBe("ART-1");
+  });
+
+  it("опускает пустой артикул", () => {
+    expect(formatProductSku("OZ-1", "")).toBe("OZ OZ-1");
+    expect(formatProductSku("", "WB-1")).toBe("WB WB-1");
+  });
+
+  it("отдаёт «—», если артикулов нет", () => {
+    expect(formatProductSku("", "")).toBe("—");
+  });
+});
 
 describe("roundCashTo100", () => {
   it("округляет вниз при остатке меньше 50", () => {

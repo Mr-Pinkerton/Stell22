@@ -7,6 +7,7 @@ import { OperationTile, OperationTileGrid } from "@/components/terminal/operatio
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
 import { submitUpakovka } from "@/server/terminal";
+import { formatProductSku } from "@/lib/format";
 import type { Employee, Product } from "@/types/domain";
 import type { TerminalData } from "@/components/terminal/types";
 
@@ -81,7 +82,7 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
               active={qty > 0}
               icon={<Package />}
               title={p.name}
-              subtitle={p.sku}
+              subtitle={formatProductSku(p.skuOzon, p.skuWb)}
               highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
               badge={qty === 0 && !disabled ? `${max} шт` : undefined}
               onClick={() => !disabled && setDialogProduct(p)}

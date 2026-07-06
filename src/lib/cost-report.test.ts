@@ -160,7 +160,8 @@ describe("buildCostProductRows", () => {
     {
       id: "p1",
       name: "Изделие 1",
-      sku: "ART-1",
+      skuOzon: "OZ-1",
+      skuWb: "WB-1",
       sort: "SORT1",
       salePrice: 100,
       packagingId: "n-pack",

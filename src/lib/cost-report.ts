@@ -17,6 +17,7 @@ import {
   sectionAreaM2,
   type Num,
 } from "@/lib/cost";
+import { formatProductSku } from "@/lib/format";
 import type { Batch, Detail, Employee, NomenclatureItem, Product, RailLot } from "@/types/domain";
 
 export interface ProducedLine {
@@ -404,7 +405,7 @@ export function buildCostProductRows(params: {
     return {
       id: pd.product.id,
       name: pd.product.name,
-      sku: pd.product.sku,
+      sku: formatProductSku(pd.product.skuOzon, pd.product.skuWb),
       material: pd.material.toDecimalPlaces(2).toNumber(),
       materialPct: pct(pd.material, pd.direct),
       work: pd.work.toDecimalPlaces(2).toNumber(),

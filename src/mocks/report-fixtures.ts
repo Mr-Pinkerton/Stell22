@@ -355,14 +355,14 @@ export const salesReportRows: SalesReportRow[] = [
   {
     id: "sr-1",
     productName: products[0].name,
-    sku: products[0].sku,
+    sku: products[0].skuOzon,
     soldQty: 124,
     revenue: 148_800,
   },
   {
     id: "sr-2",
     productName: products[1].name,
-    sku: products[1].sku,
+    sku: products[1].skuOzon,
     soldQty: 86,
     revenue: 129_000,
   },
