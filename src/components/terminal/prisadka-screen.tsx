@@ -112,6 +112,8 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
                   active={qty > 0}
                   icon={<Drill />}
                   title={t.detail.name}
+                  numberBadge={t.detail.detailNumber}
+                  titleNote={t.detail.sort === "SORT1" ? "1 сорт" : "2 сорт"}
                   subtitle={`${KIND_LABEL[t.kind]} · ожидает ${t.pending} шт · ${t.done} из ${t.total}`}
                   highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
                   badge={qty === 0 ? `${t.pending} шт` : undefined}

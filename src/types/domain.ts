@@ -70,6 +70,8 @@ export interface NomenclatureItem {
 export interface Detail {
   id: string;
   name: string;
+  /** Номер детали 1–9 (для упаковки). null у старых деталей до простановки. */
+  detailNumber: number | null;
   lengthM: number;
   detailType: RailType;
   sort: Sort;

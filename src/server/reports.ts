@@ -65,6 +65,7 @@ function serDetail(d: PrismaDetail): Detail {
   return {
     id: d.id,
     name: d.name,
+    detailNumber: d.detailNumber,
     lengthM: num(d.lengthM),
     detailType: d.detailType,
     sort: d.sort,

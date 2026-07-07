@@ -101,6 +101,10 @@ interface OperationTileProps {
   title: string;
   subtitle?: string;
   badge?: string;
+  /** Квадратный бейдж с номером детали (1–9) — после названия. */
+  numberBadge?: number | null;
+  /** Бледная приписка после названия и бейджа (напр. сорт детали). */
+  titleNote?: string;
   /** Крупная строка в шапке плитки, напр. «Взято 5 реек». */
   highlight?: { prefix?: string; value: number | string; label?: string };
   onClick?: () => void;
@@ -123,6 +127,8 @@ export function OperationTile({
   title,
   subtitle,
   badge,
+  numberBadge,
+  titleNote,
   highlight,
   onClick,
   onClear,
@@ -188,7 +194,19 @@ export function OperationTile({
                 className={cn("min-w-0 flex-1", onClick && "cursor-pointer active:opacity-90")}
                 onClick={disabled ? undefined : onClick}
               >
-                <span className="block truncate text-lg leading-tight font-semibold">{title}</span>
+                <span className="flex items-center gap-1.5">
+                  <span className="min-w-0 truncate text-lg leading-tight font-semibold">
+                    {title}
+                  </span>
+                  {numberBadge != null && (
+                    <span className="bg-brand/10 text-brand flex size-6 shrink-0 items-center justify-center rounded-md text-sm font-bold tabular-nums">
+                      {numberBadge}
+                    </span>
+                  )}
+                  {titleNote && (
+                    <span className="text-muted-foreground/70 shrink-0 text-sm">{titleNote}</span>
+                  )}
+                </span>
                 {subtitle && (
                   <span className="text-muted-foreground mt-1 block truncate text-base leading-snug">
                     {subtitle}

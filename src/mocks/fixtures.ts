@@ -475,6 +475,7 @@ function buildDetails(): Detail[] {
     {
       id: "det-1",
       name: "Полка 600",
+      detailNumber: 1,
       lengthM: 0.6,
       detailType: "POLKA",
       sort: "SORT1",
@@ -485,6 +486,7 @@ function buildDetails(): Detail[] {
     {
       id: "det-3",
       name: "Полка 800",
+      detailNumber: 2,
       lengthM: 0.8,
       detailType: "POLKA",
       sort: "SORT2",
@@ -495,6 +497,7 @@ function buildDetails(): Detail[] {
     {
       id: "det-4",
       name: "Канавка 600",
+      detailNumber: 3,
       lengthM: 0.6,
       detailType: "KANAVKA",
       sort: "SORT1",
@@ -505,6 +508,7 @@ function buildDetails(): Detail[] {
     {
       id: "det-2",
       name: "Канавка 720",
+      detailNumber: 4,
       lengthM: 0.72,
       detailType: "KANAVKA",
       sort: "SORT2",
@@ -530,6 +534,7 @@ function buildDetails(): Detail[] {
         group.push({
           id: `det-${seq++}`,
           name: `${DETAIL_TYPE_LABEL[detailType]} ${lengthMm}`,
+          detailNumber: ((n - 1) % 9) + 1,
           lengthM: lengthMm / 1000,
           detailType,
           sort,

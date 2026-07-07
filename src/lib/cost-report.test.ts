@@ -46,6 +46,7 @@ const employees: Employee[] = [
 
 const detail = (over: Partial<Detail> & Pick<Detail, "id" | "lengthM" | "sort">): Detail => ({
   name: over.id,
+  detailNumber: null,
   detailType: "POLKA",
   prisadkaTorcevaya: false,
   prisadkaPloskost: false,

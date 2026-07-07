@@ -118,6 +118,7 @@ async function main() {
     data: details.map((d) => ({
       id: d.id,
       name: d.name,
+      detailNumber: d.detailNumber,
       lengthM: d.lengthM,
       detailType: d.detailType,
       sort: d.sort,

@@ -218,6 +218,7 @@ model NomenclatureItem {
 model Detail {
   id                String        @id @default(cuid())
   name              String
+  detailNumber      Int? // номер детали 1–9 (для упаковки: сколько какого номера в коробку)
   lengthM           Decimal       @db.Decimal(12, 4)
   detailType        RailType
   sort              Sort

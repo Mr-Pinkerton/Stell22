@@ -47,6 +47,7 @@ export async function getWarehouseStock(): Promise<WarehouseStock> {
   const domainDetails: Detail[] = details.map((d) => ({
     id: d.id,
     name: d.name,
+    detailNumber: d.detailNumber,
     lengthM: num(d.lengthM),
     detailType: d.detailType,
     sort: d.sort,

@@ -30,6 +30,7 @@ function serializeDetail(d: PrismaDetail): Detail {
   return {
     id: d.id,
     name: d.name,
+    detailNumber: d.detailNumber,
     lengthM: toNum(d.lengthM) ?? 0,
     detailType: d.detailType,
     sort: d.sort,
@@ -97,6 +98,7 @@ export async function getNomenclatureData(): Promise<NomenclatureData> {
 
 export interface DetailFormValues {
   name: string;
+  detailNumber: number | null;
   lengthM: number | null;
   detailType: RailType;
   sort: Sort;
@@ -107,6 +109,7 @@ export interface DetailFormValues {
 function detailData(v: DetailFormValues) {
   return {
     name: v.name.trim(),
+    detailNumber: v.detailNumber,
     lengthM: v.lengthM ?? 0,
     detailType: v.detailType,
     sort: v.sort,

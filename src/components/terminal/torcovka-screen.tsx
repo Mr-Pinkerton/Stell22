@@ -174,6 +174,8 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
                   active={qty > 0}
                   icon={<Layers />}
                   title={d.name}
+                  numberBadge={d.detailNumber}
+                  titleNote={SORT_LABEL[d.sort]}
                   subtitle={formatLength(d.lengthM)}
                   highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
                   onClick={() => setDialog({ kind: "detail", detail: d })}
