@@ -163,18 +163,43 @@ export async function getInventoryDocs(): Promise<InventoryDocRow[]> {
   return Promise.all(docs.map(serializeDoc));
 }
 
-/** Черновик инвентаризации с авто-заполнением учётных остатков из БД. */
-export async function createInventoryDraft(): Promise<InventoryDocRow> {
+/**
+ * Черновик инвентаризации с авто-заполнением учётных остатков из БД.
+ *
+ * `includeAllActive` — режим ПЕРВИЧНОЙ инвентаризации: в черновик попадают все
+ * активные изделия/детали/номенклатура, включая позиции с нулевым учётным
+ * остатком. Так можно вписать фактические количества «с нуля» при старте
+ * учёта. В обычном режиме (сверка) берутся только позиции с остатком > 0.
+ */
+export async function createInventoryDraft(includeAllActive = false): Promise<InventoryDocRow> {
   const existing = await prisma.inventory.findFirst({ where: { status: "DRAFT" } });
   if (existing) throw new Error("Черновик инвентаризации уже существует");
 
   const stock = await getWarehouseStock();
   type Line = { refType: InventoryRefType; refId: string; accounted: number };
   const lines: Line[] = [];
-  for (const p of stock.products) if (p.quantity > 0) lines.push({ refType: "PRODUCT", refId: p.id, accounted: p.quantity });
-  for (const d of stock.details) if (d.ready > 0) lines.push({ refType: "DETAIL", refId: d.id, accounted: d.ready });
+  for (const p of stock.products)
+    if (includeAllActive || p.quantity > 0)
+      lines.push({ refType: "PRODUCT", refId: p.id, accounted: p.quantity });
+
+  if (includeAllActive) {
+    // stock.details содержит только детали с движением на складе; для первичной
+    // инвентаризации нужны ВСЕ активные детали (в т.ч. без остатка).
+    const activeDetails = await prisma.detail.findMany({
+      where: { status: "ACTIVE" },
+      select: { id: true },
+    });
+    const readyById = new Map(stock.details.map((d) => [d.id, d.ready]));
+    for (const d of activeDetails)
+      lines.push({ refType: "DETAIL", refId: d.id, accounted: readyById.get(d.id) ?? 0 });
+  } else {
+    for (const d of stock.details)
+      if (d.ready > 0) lines.push({ refType: "DETAIL", refId: d.id, accounted: d.ready });
+  }
+
   for (const n of [...stock.fasteners, ...stock.packaging, ...stock.other])
-    if (n.quantity > 0) lines.push({ refType: "NOMENCLATURE", refId: n.id, accounted: n.quantity });
+    if (includeAllActive || n.quantity > 0)
+      lines.push({ refType: "NOMENCLATURE", refId: n.id, accounted: n.quantity });
 
   const doc = await prisma.inventory.create({
     data: {

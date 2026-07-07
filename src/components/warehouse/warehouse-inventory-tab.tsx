@@ -11,7 +11,11 @@ import {
   inventoryDeviation,
   inventoryDeviationSum,
 } from "@/lib/warehouse-stock";
-import { conductInventory, updateInventoryLineActual } from "@/server/warehouse";
+import {
+  conductInventory,
+  createInventoryDraft,
+  updateInventoryLineActual,
+} from "@/server/warehouse";
 import { formatIsoDate, formatMoney } from "@/lib/format";
 import { scrollTableYClass } from "@/lib/scroll-classes";
 import { cn } from "@/lib/utils";
@@ -112,6 +116,18 @@ export function WarehouseInventoryTab({
     });
   };
 
+  const createPrimaryDraft = () => {
+    startTransition(async () => {
+      try {
+        const doc = await createInventoryDraft(true);
+        setDocs([doc, ...docs]);
+        toast.success("Создана первичная инвентаризация — впишите фактические остатки");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Ошибка создания");
+      }
+    });
+  };
+
   return (
     <div className="space-y-6">
       {draft ? (
@@ -169,7 +185,26 @@ export function WarehouseInventoryTab({
           </Card>
         </section>
       ) : (
-        <p className="text-muted-foreground text-sm">Черновик инвентаризации не создан.</p>
+        <div className="space-y-3">
+          <p className="text-muted-foreground text-sm">Черновик инвентаризации не создан.</p>
+          <div className="space-y-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="h-10 rounded-xl px-5"
+              disabled={pending}
+              onClick={createPrimaryDraft}
+            >
+              Первичная инвентаризация (все позиции)
+            </Button>
+            <p className="text-muted-foreground max-w-xl text-xs leading-relaxed">
+              Включит в черновик все активные изделия, детали и крепёж/упаковку —
+              даже с нулевым остатком. Впишите фактические количества и проведите,
+              чтобы задать стартовые остатки. Сырьё (рейки) вводится отдельно через
+              раздел «Закупки».
+            </p>
+          </div>
+        </div>
       )}
 
       {history.length > 0 && (
