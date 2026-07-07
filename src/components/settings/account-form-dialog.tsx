@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { FormDialog } from "@/components/form-dialog-shared";
+import { capitalizeFirst } from "@/lib/utils";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import {
   DateFieldInput,
@@ -36,11 +37,13 @@ export function AccountFormDialog({
   const [name, setName] = useState("");
   const [openingBalance, setOpeningBalance] = useState(0);
   const [openingDate, setOpeningDate] = useState("");
+  const [showErrors, setShowErrors] = useState(false);
 
   if (useJustOpened(open)) {
     setName(account?.name ?? "");
     setOpeningBalance(account?.openingBalance ?? account?.balance ?? 0);
     setOpeningDate(isoToDisplayDate(account?.openingDate) || todayDisplay());
+    setShowErrors(false);
   }
 
   const isoDate = parseDisplayDate(openingDate);
@@ -52,19 +55,26 @@ export function AccountFormDialog({
       onOpenChange={onOpenChange}
       title={account ? "Редактировать счёт" : "Добавить счёт"}
       submitLabel={account ? "Сохранить" : "Добавить"}
-      submitDisabled={!canSubmit}
+      canSubmit={canSubmit}
+      onInvalid={() => setShowErrors(true)}
       onSubmit={() => {
         if (!canSubmit || !isoDate) return;
         onSubmit({ name: name.trim(), openingBalance, openingDate: isoDate });
         onOpenChange(false);
       }}
     >
-      <Field id="acc-name" label="Название" required>
+      <Field
+        id="acc-name"
+        label="Название"
+        required
+        invalid={showErrors && !name.trim()}
+      >
         <Input
           id="acc-name"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => setName(capitalizeFirst(e.target.value))}
           className={fieldClass}
+          autoCapitalize="sentences"
           placeholder="Расчётный (Тинькофф)"
         />
       </Field>
@@ -80,7 +90,12 @@ export function AccountFormDialog({
           />
         </Field>
 
-        <Field id="acc-date" label="На дату" required>
+        <Field
+          id="acc-date"
+          label="На дату"
+          required
+          invalid={showErrors && !isoDate}
+        >
           <DateFieldInput id="acc-date" value={openingDate} onChange={setOpeningDate} />
         </Field>
       </div>

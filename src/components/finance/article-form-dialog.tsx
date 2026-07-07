@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { cn } from "@/lib/utils";
+import { capitalizeFirst, cn } from "@/lib/utils";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import type { FinanceArticle, FinanceCategory } from "@/mocks/finance-fixtures";
 import {
@@ -63,6 +63,7 @@ export function ArticleFormDialog({
   const [categoryName, setCategoryName] = useState<string>(defaultCategory);
   const [parentId, setParentId] = useState("");
   const [description, setDescription] = useState("");
+  const [showErrors, setShowErrors] = useState(false);
 
   if (useJustOpened(open)) {
     setName(article?.name ?? "");
@@ -70,6 +71,7 @@ export function ArticleFormDialog({
     setCategoryName(article?.categoryName ?? defaultCategory);
     setParentId(article?.parentId ?? "");
     setDescription(article?.description ?? "");
+    setShowErrors(false);
   }
 
   // Родителем может быть корневая статья того же типа, кроме самой себя.
@@ -101,14 +103,21 @@ export function ArticleFormDialog({
       onOpenChange={onOpenChange}
       onSubmit={handleSubmit}
       submitLabel={isEdit ? "Сохранить" : "Добавить"}
-      submitDisabled={!canSubmit}
+      canSubmit={canSubmit}
+      onInvalid={() => setShowErrors(true)}
     >
-      <Field id="art-name" label="Название" required>
+      <Field
+        id="art-name"
+        label="Название"
+        required
+        invalid={showErrors && !name.trim()}
+      >
         <Input
           id="art-name"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => setName(capitalizeFirst(e.target.value))}
           className={cn(fieldClass)}
+          autoCapitalize="sentences"
           placeholder="Название статьи"
         />
       </Field>
@@ -139,7 +148,12 @@ export function ArticleFormDialog({
         </Select>
       </Field>
 
-      <Field id="art-category" label="Категория" required>
+      <Field
+        id="art-category"
+        label="Категория"
+        required
+        invalid={showErrors && !noCategories && !categoryName}
+      >
         {noCategories ? (
           <p className="text-muted-foreground rounded-xl bg-tag-blue-bg/40 px-3 py-2 text-xs leading-relaxed">
             Сначала создайте категорию во вкладке «Категории».
@@ -189,8 +203,9 @@ export function ArticleFormDialog({
         <Input
           id="art-description"
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={(e) => setDescription(capitalizeFirst(e.target.value))}
           className={cn(fieldClass)}
+          autoCapitalize="sentences"
           placeholder="Необязательно"
         />
       </Field>

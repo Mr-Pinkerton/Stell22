@@ -76,6 +76,8 @@ interface AutoRuleEditorProps {
   className?: string;
   /** Поле ключевых слов — id для связи с label в модалке. */
   keywordsInputId?: string;
+  /** Подсветить обязательное поле «статья» оранжевым. */
+  articleInvalid?: boolean;
 }
 
 export function AutoRuleEditor({
@@ -85,6 +87,7 @@ export function AutoRuleEditor({
   onChange,
   className,
   keywordsInputId = "auto-rule-keywords",
+  articleInvalid,
 }: AutoRuleEditorProps) {
   const rowArticles = articles.filter((a) => a.flowType === value.flowType);
 
@@ -175,7 +178,12 @@ export function AutoRuleEditor({
           onChange({ articleName: article?.name ?? null });
         }}
       >
-        <SelectTrigger className={autoRuleCompactSelectClass}>
+        <SelectTrigger
+          className={cn(
+            autoRuleCompactSelectClass,
+            articleInvalid && "border-amber-400 bg-amber-50",
+          )}
+        >
           <SelectValue placeholder="Выберите">
             {value.articleName ?? "Выберите"}
           </SelectValue>

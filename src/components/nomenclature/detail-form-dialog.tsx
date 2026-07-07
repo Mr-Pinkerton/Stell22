@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { XIcon } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { capitalizeFirst, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { FormSubmitButton } from "@/components/form-dialog-shared";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -80,6 +81,7 @@ function DetailFormBody({
   const [sort, setSort] = useState<Sort>(detail?.sort ?? "SORT1");
   const [prisadkaTorcev, setPrisadkaTorcev] = useState(detail?.prisadkaTorcevaya ?? true);
   const [prisadkaPlosk, setPrisadkaPlosk] = useState(detail?.prisadkaPloskost ?? false);
+  const [showErrors, setShowErrors] = useState(false);
 
   const lengthNum = length ? Number(length.replace(",", ".")) : null;
   const canSubmit =
@@ -120,13 +122,19 @@ function DetailFormBody({
 
             <div className="scrollbar-thin-y max-h-[min(70vh,32rem)] space-y-5 overflow-y-auto px-6 py-6">
               <FormSection title="Основная информация">
-                <Field id="det-name" label="Название детали" required>
+                <Field
+                  id="det-name"
+                  label="Название детали"
+                  required
+                  invalid={showErrors && !name.trim()}
+                >
                   <Input
                     id="det-name"
                     className={fieldClass}
+                    autoCapitalize="sentences"
                     placeholder="Полка 720"
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={(e) => setName(capitalizeFirst(e.target.value))}
                   />
                 </Field>
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -151,7 +159,12 @@ function DetailFormBody({
                       </SelectContent>
                     </Select>
                   </Field>
-                  <Field id="det-length" label="Длина детали" required>
+                  <Field
+                    id="det-length"
+                    label="Длина детали"
+                    required
+                    invalid={showErrors && !(lengthNum != null && lengthNum > 0)}
+                  >
                     <div className="relative">
                       <Input
                         id="det-length"
@@ -242,13 +255,15 @@ function DetailFormBody({
               >
                 Отмена
               </Button>
-              <Button
+              <FormSubmitButton
                 className="h-10 rounded-xl px-5"
-                disabled={!canSubmit}
-                onClick={handleSubmit}
+                canSubmit={canSubmit}
+                pending={pending}
+                onInvalid={() => setShowErrors(true)}
+                onSubmit={handleSubmit}
               >
                 {isEdit ? "Сохранить" : "Создать деталь"}
-              </Button>
+              </FormSubmitButton>
             </DialogFooter>
     </>
   );

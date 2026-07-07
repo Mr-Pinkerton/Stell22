@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { cn } from "@/lib/utils";
+import { capitalizeFirst, cn } from "@/lib/utils";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import type {
   FinanceAccount,
@@ -77,6 +77,7 @@ export function CashflowFormDialog({
   const [description, setDescription] = useState("");
   const [articleId, setArticleId] = useState("");
   const [dealId, setDealId] = useState("");
+  const [showErrors, setShowErrors] = useState(false);
 
   if (useJustOpened(open)) {
     setDateText(isoToDisplayDate(todayIso()));
@@ -87,6 +88,7 @@ export function CashflowFormDialog({
     setDescription("");
     setArticleId("");
     setDealId("");
+    setShowErrors(false);
   }
 
   const articles = useMemo(
@@ -131,11 +133,17 @@ export function CashflowFormDialog({
       onOpenChange={onOpenChange}
       onSubmit={handleSubmit}
       submitLabel="Добавить"
-      submitDisabled={!canSubmit}
+      canSubmit={canSubmit}
+      onInvalid={() => setShowErrors(true)}
       maxWidth="sm:max-w-lg"
     >
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field id="cf-date" label="Дата" required>
+        <Field
+          id="cf-date"
+          label="Дата"
+          required
+          invalid={showErrors && parseDisplayDate(dateText) == null}
+        >
           <DateFieldInput id="cf-date" value={dateText} onChange={setDateText} />
         </Field>
 
@@ -167,7 +175,12 @@ export function CashflowFormDialog({
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field id="cf-amount" label="Сумма" required>
+        <Field
+          id="cf-amount"
+          label="Сумма"
+          required
+          invalid={showErrors && !(amount != null && amount > 0)}
+        >
           <MoneyInput
             id="cf-amount"
             value={amount}
@@ -176,7 +189,12 @@ export function CashflowFormDialog({
           />
         </Field>
 
-        <Field id="cf-account" label="Счёт" required>
+        <Field
+          id="cf-account"
+          label="Счёт"
+          required
+          invalid={showErrors && !accountId}
+        >
           <Select value={accountId} onValueChange={(v) => setAccountId(v ?? "")}>
             <SelectTrigger className={selectTriggerClass}>
               <SelectValue placeholder="Выберите счёт">
@@ -240,12 +258,18 @@ export function CashflowFormDialog({
         </Field>
       </div>
 
-      <Field id="cf-description" label="Назначение" required>
+      <Field
+        id="cf-description"
+        label="Назначение"
+        required
+        invalid={showErrors && !description.trim()}
+      >
         <Input
           id="cf-description"
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={(e) => setDescription(capitalizeFirst(e.target.value))}
           className={cn(fieldClass)}
+          autoCapitalize="sentences"
           placeholder="Назначение платежа"
         />
       </Field>

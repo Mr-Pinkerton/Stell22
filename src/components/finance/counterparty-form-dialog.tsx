@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { cn } from "@/lib/utils";
+import { capitalizeFirst, cn } from "@/lib/utils";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import type { FinanceCounterparty } from "@/mocks/finance-fixtures";
 import {
@@ -26,10 +26,12 @@ export function CounterpartyFormDialog({
 }: CounterpartyFormDialogProps) {
   const [name, setName] = useState("");
   const [inn, setInn] = useState("");
+  const [showErrors, setShowErrors] = useState(false);
 
   if (useJustOpened(open)) {
     setName(counterparty?.name ?? "");
     setInn(counterparty?.inn ?? "");
+    setShowErrors(false);
   }
 
   const handleSubmit = () => {
@@ -46,15 +48,22 @@ export function CounterpartyFormDialog({
       onOpenChange={onOpenChange}
       onSubmit={handleSubmit}
       submitLabel={counterparty ? "Сохранить" : "Добавить"}
-      submitDisabled={!name.trim()}
+      canSubmit={name.trim().length > 0}
+      onInvalid={() => setShowErrors(true)}
       maxWidth="sm:max-w-md"
     >
-      <Field id="cp-name" label="Название" required>
+      <Field
+        id="cp-name"
+        label="Название"
+        required
+        invalid={showErrors && !name.trim()}
+      >
         <Input
           id="cp-name"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => setName(capitalizeFirst(e.target.value))}
           className={cn(fieldClass)}
+          autoCapitalize="sentences"
           placeholder="ООО «Пример»"
         />
       </Field>

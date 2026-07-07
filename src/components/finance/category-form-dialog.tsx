@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { cn } from "@/lib/utils";
+import { capitalizeFirst, cn } from "@/lib/utils";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import type { FinanceCategory } from "@/mocks/finance-fixtures";
 import { Field, FinanceFormDialog, fieldClass } from "@/components/finance/finance-form-shared";
@@ -28,10 +28,12 @@ export function CategoryFormDialog({
 }: CategoryFormDialogProps) {
   const [name, setName] = useState("");
   const [isOverhead, setIsOverhead] = useState(false);
+  const [showErrors, setShowErrors] = useState(false);
 
   if (useJustOpened(open)) {
     setName(category?.name ?? "");
     setIsOverhead(category?.isOverhead ?? false);
+    setShowErrors(false);
   }
 
   const handleSubmit = () => {
@@ -48,15 +50,22 @@ export function CategoryFormDialog({
       onOpenChange={onOpenChange}
       onSubmit={handleSubmit}
       submitLabel={category ? "Сохранить" : "Добавить"}
-      submitDisabled={!name.trim()}
+      canSubmit={name.trim().length > 0}
+      onInvalid={() => setShowErrors(true)}
       maxWidth="sm:max-w-md"
     >
-      <Field id="cat-name" label="Название" required>
+      <Field
+        id="cat-name"
+        label="Название"
+        required
+        invalid={showErrors && !name.trim()}
+      >
         <Input
           id="cat-name"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => setName(capitalizeFirst(e.target.value))}
           className={cn(fieldClass)}
+          autoCapitalize="sentences"
           placeholder="Материалы"
         />
       </Field>

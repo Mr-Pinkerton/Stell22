@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { XIcon } from "lucide-react";
+import { capitalizeFirst } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { FormSubmitButton } from "@/components/form-dialog-shared";
 import {
   Dialog,
   DialogClose,
@@ -85,6 +87,7 @@ function NomenclatureItemFormBody({
   const titles = TYPE_TITLE[type];
   const [name, setName] = useState(item?.name ?? "");
   const [price, setPrice] = useState<number | null>(item?.unitPrice ?? null);
+  const [showErrors, setShowErrors] = useState(false);
 
   const canSubmit = name.trim().length > 0 && !pending;
 
@@ -115,13 +118,19 @@ function NomenclatureItemFormBody({
 
             <div className="space-y-5 px-6 py-6">
               <FormSection title="Основная информация">
-                <Field id="nom-name" label="Наименование" required>
+                <Field
+                  id="nom-name"
+                  label="Наименование"
+                  required
+                  invalid={showErrors && !name.trim()}
+                >
                   <Input
                     id="nom-name"
                     className={fieldClass}
+                    autoCapitalize="sentences"
                     placeholder="Название позиции"
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={(e) => setName(capitalizeFirst(e.target.value))}
                   />
                 </Field>
                 <Field id="nom-price" label="Цена за единицу" required>
@@ -145,13 +154,15 @@ function NomenclatureItemFormBody({
               >
                 Отмена
               </Button>
-              <Button
+              <FormSubmitButton
                 className="h-10 rounded-xl px-5"
-                disabled={!canSubmit}
-                onClick={handleSubmit}
+                canSubmit={canSubmit}
+                pending={pending}
+                onInvalid={() => setShowErrors(true)}
+                onSubmit={handleSubmit}
               >
                 {isEdit ? "Сохранить" : titles.submit}
-              </Button>
+              </FormSubmitButton>
             </DialogFooter>
     </>
   );

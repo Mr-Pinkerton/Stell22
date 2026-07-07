@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { GoalProductOption } from "@/server/goals";
+import { capitalizeFirst } from "@/lib/utils";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import {
   FormDialog,
@@ -45,11 +46,13 @@ export function GoalFormDialog({
   const [name, setName] = useState("");
   const [productId, setProductId] = useState(activeProducts[0]?.id ?? "");
   const [quantityRaw, setQuantityRaw] = useState("");
+  const [showErrors, setShowErrors] = useState(false);
 
   if (useJustOpened(open)) {
     setName("");
     setProductId(activeProducts[0]?.id ?? "");
     setQuantityRaw("");
+    setShowErrors(false);
   }
 
   const quantity = Number(quantityRaw);
@@ -87,20 +90,32 @@ export function GoalFormDialog({
       onOpenChange={onOpenChange}
       title="Создать цель"
       submitLabel="Добавить цель"
-      submitDisabled={!canSubmit || submitDisabled}
+      canSubmit={canSubmit && !submitDisabled}
+      onInvalid={() => setShowErrors(true)}
       onSubmit={handleSubmit}
     >
-      <Field id="goal-name" label="Название цели" required>
+      <Field
+        id="goal-name"
+        label="Название цели"
+        required
+        invalid={showErrors && !name.trim()}
+      >
           <Input
             id="goal-name"
             value={name}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => setName(capitalizeFirst(e.target.value))}
             className={fieldClass}
+            autoCapitalize="sentences"
             placeholder="Напр. Июнь — полки"
           />
         </Field>
 
-        <Field id="goal-product" label="Изделие" required>
+        <Field
+          id="goal-product"
+          label="Изделие"
+          required
+          invalid={showErrors && !productId}
+        >
           <Select
             value={productId}
             onValueChange={(v) => {
@@ -120,7 +135,12 @@ export function GoalFormDialog({
           </Select>
         </Field>
 
-        <Field id="goal-qty" label="Кол-во" required>
+        <Field
+          id="goal-qty"
+          label="Кол-во"
+          required
+          invalid={showErrors && !(Number.isFinite(quantity) && quantity > 0)}
+        >
           <Input
             id="goal-qty"
             type="number"

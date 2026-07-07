@@ -54,21 +54,34 @@ export function FormSection({ title, children }: { title: string; children: Reac
   );
 }
 
+/**
+ * Оранжевая подсветка незаполненного обязательного поля — показывается после
+ * клика по неактивной кнопке создания. Ловит input/textarea и триггер селекта.
+ */
+export const fieldInvalidClass = cn(
+  "[&_input]:border-amber-400 [&_input]:bg-amber-50",
+  "[&_textarea]:border-amber-400 [&_textarea]:bg-amber-50",
+  "[&_[data-slot=select-trigger]]:border-amber-400 [&_[data-slot=select-trigger]]:bg-amber-50",
+);
+
 export function Field({
   id,
   label,
   required,
+  invalid,
   className,
   children,
 }: {
   id: string;
   label: string;
   required?: boolean;
+  /** Подсветить поле оранжевым (не заполнено при попытке отправки). */
+  invalid?: boolean;
   className?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className={cn("grid gap-1.5", className)}>
+    <div className={cn("grid gap-1.5", invalid && fieldInvalidClass, className)}>
       <Label htmlFor={id}>
         {label}
         {required && <span className="text-destructive"> *</span>}

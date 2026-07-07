@@ -44,9 +44,11 @@ export function AutoRuleFormDialog({
   onSubmit,
 }: AutoRuleFormDialogProps) {
   const [draft, setDraft] = useState<AutoRuleEditorState>(emptyAutoRuleEditorState);
+  const [showErrors, setShowErrors] = useState(false);
 
   if (useJustOpened(open)) {
     setDraft(seed ? cashflowSeedToEditorState(seed) : emptyAutoRuleEditorState());
+    setShowErrors(false);
   }
 
   const handleSubmit = () => {
@@ -71,7 +73,8 @@ export function AutoRuleFormDialog({
       onOpenChange={onOpenChange}
       onSubmit={handleSubmit}
       submitLabel="Сохранить"
-      submitDisabled={!canSubmit}
+      canSubmit={canSubmit}
+      onInvalid={() => setShowErrors(true)}
       maxWidth="sm:max-w-3xl"
     >
       <p className="text-muted-foreground text-sm leading-relaxed">
@@ -83,6 +86,7 @@ export function AutoRuleFormDialog({
         counterparties={counterparties}
         onChange={(patch) => setDraft((prev) => ({ ...prev, ...patch }))}
         keywordsInputId="auto-rule-dialog-keywords"
+        articleInvalid={showErrors && !draft.articleName}
       />
     </FinanceFormDialog>
   );

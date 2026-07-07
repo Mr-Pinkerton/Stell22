@@ -9,7 +9,7 @@ import {
   fieldClass,
 } from "@/components/finance/finance-form-shared";
 import { scrollThinY } from "@/lib/scroll-classes";
-import { cn } from "@/lib/utils";
+import { capitalizeFirst, cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
@@ -41,6 +41,7 @@ export function DealFormDialog({ open, batches, deal, onOpenChange, onSubmit }: 
   const [name, setName] = useState("");
   const [nameManual, setNameManual] = useState(false);
   const [selectedBatches, setSelectedBatches] = useState<Set<string>>(new Set());
+  const [showErrors, setShowErrors] = useState(false);
 
   const selectedList = useMemo(() => [...selectedBatches], [selectedBatches]);
 
@@ -48,6 +49,7 @@ export function DealFormDialog({ open, batches, deal, onOpenChange, onSubmit }: 
     setName(deal?.name ?? "");
     setNameManual(Boolean(deal));
     setSelectedBatches(new Set(deal?.batchNames ?? []));
+    setShowErrors(false);
   }
 
   // Незаархивированные закупки + уже привязанные (даже если ушли в архив).
@@ -86,12 +88,19 @@ export function DealFormDialog({ open, batches, deal, onOpenChange, onSubmit }: 
       onOpenChange={onOpenChange}
       onSubmit={handleSubmit}
       submitLabel={deal ? "Сохранить" : "Добавить"}
-      submitDisabled={!canSubmit}
+      canSubmit={canSubmit}
+      onInvalid={() => setShowErrors(true)}
       maxWidth="sm:max-w-lg"
       bodyTall
     >
       <Field id="deal-batches" label="Закупки" required>
-        <div className={cn("border-border max-h-48 space-y-2 rounded-xl border p-3", scrollThinY)}>
+        <div
+          className={cn(
+            "border-border max-h-48 space-y-2 rounded-xl border p-3",
+            scrollThinY,
+            showErrors && selectedBatches.size === 0 && "border-amber-400 bg-amber-50",
+          )}
+        >
           {materialBatches.map((b) => (
             <label
               key={b.id}
@@ -108,15 +117,21 @@ export function DealFormDialog({ open, batches, deal, onOpenChange, onSubmit }: 
         </div>
       </Field>
 
-      <Field id="deal-name" label="Название сделки" required>
+      <Field
+        id="deal-name"
+        label="Название сделки"
+        required
+        invalid={showErrors && !effectiveName.trim()}
+      >
         <Input
           id="deal-name"
           value={effectiveName}
           onChange={(e) => {
             setNameManual(true);
-            setName(e.target.value);
+            setName(capitalizeFirst(e.target.value));
           }}
           className={fieldClass}
+          autoCapitalize="sentences"
           placeholder="Подставится из закупок"
         />
       </Field>

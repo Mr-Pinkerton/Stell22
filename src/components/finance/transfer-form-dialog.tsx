@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { ArrowRight } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { capitalizeFirst, cn } from "@/lib/utils";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import type { FinanceAccount } from "@/mocks/finance-fixtures";
 import {
@@ -95,6 +95,7 @@ export function TransferFormDialog({
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
   const [description, setDescription] = useState("");
+  const [showErrors, setShowErrors] = useState(false);
 
   if (useJustOpened(open)) {
     setDateText(isoToDisplayDate(todayIso()));
@@ -102,6 +103,7 @@ export function TransferFormDialog({
     setFromId(accounts[0]?.id ?? "");
     setToId(accounts[1]?.id ?? "");
     setDescription("");
+    setShowErrors(false);
   }
 
   const canSubmit =
@@ -133,15 +135,26 @@ export function TransferFormDialog({
       onOpenChange={onOpenChange}
       onSubmit={handleSubmit}
       submitLabel="Перевести"
-      submitDisabled={!canSubmit}
+      canSubmit={canSubmit}
+      onInvalid={() => setShowErrors(true)}
       maxWidth="sm:max-w-lg"
     >
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field id="tr-date" label="Дата" required>
+        <Field
+          id="tr-date"
+          label="Дата"
+          required
+          invalid={showErrors && parseDisplayDate(dateText) == null}
+        >
           <DateFieldInput id="tr-date" value={dateText} onChange={setDateText} />
         </Field>
 
-        <Field id="tr-amount" label="Сумма" required>
+        <Field
+          id="tr-amount"
+          label="Сумма"
+          required
+          invalid={showErrors && !(amount != null && amount > 0)}
+        >
           <MoneyInput
             id="tr-amount"
             value={amount}
@@ -152,7 +165,12 @@ export function TransferFormDialog({
       </div>
 
       <div className="grid items-end gap-3 sm:grid-cols-[1fr_auto_1fr]">
-        <Field id="tr-from" label="Со счёта" required>
+        <Field
+          id="tr-from"
+          label="Со счёта"
+          required
+          invalid={showErrors && !fromId}
+        >
           <AccountSelect
             value={fromId}
             onChange={setFromId}
@@ -166,7 +184,12 @@ export function TransferFormDialog({
           <ArrowRight className="size-5" />
         </div>
 
-        <Field id="tr-to" label="На счёт" required>
+        <Field
+          id="tr-to"
+          label="На счёт"
+          required
+          invalid={showErrors && (!toId || fromId === toId)}
+        >
           <AccountSelect
             value={toId}
             onChange={setToId}
@@ -181,8 +204,9 @@ export function TransferFormDialog({
         <Input
           id="tr-description"
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
+          onChange={(e) => setDescription(capitalizeFirst(e.target.value))}
           className={cn(fieldClass)}
+          autoCapitalize="sentences"
           placeholder="Например: пополнение расчётного счёта"
         />
       </Field>

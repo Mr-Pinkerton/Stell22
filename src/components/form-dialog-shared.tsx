@@ -32,6 +32,48 @@ export const formDialogCancelButtonClass = "h-10 cursor-pointer rounded-xl px-5"
 
 export const formDialogSubmitButtonClass = "h-10 cursor-pointer rounded-xl px-5";
 
+/**
+ * Кнопка отправки формы с подсказкой при неактивном состоянии: когда
+ * `canSubmit` = false, кнопка выглядит неактивной, но по клику вызывает
+ * `onInvalid` (форма подсвечивает незаполненные поля), а не сабмит.
+ */
+export function FormSubmitButton({
+  children,
+  canSubmit,
+  pending,
+  onSubmit,
+  onInvalid,
+  className,
+  variant,
+}: {
+  children: React.ReactNode;
+  canSubmit: boolean;
+  pending?: boolean;
+  onSubmit: () => void;
+  onInvalid: () => void;
+  className?: string;
+  variant?: React.ComponentProps<typeof Button>["variant"];
+}) {
+  return (
+    <Button
+      type="button"
+      variant={variant}
+      className={cn(formDialogSubmitButtonClass, !canSubmit && "opacity-50", className)}
+      disabled={pending}
+      onClick={() => {
+        if (pending) return;
+        if (!canSubmit) {
+          onInvalid();
+          return;
+        }
+        onSubmit();
+      }}
+    >
+      {children}
+    </Button>
+  );
+}
+
 export function FormDialogCloseButton({ compact = true }: { compact?: boolean }) {
   return (
     <DialogClose
@@ -60,6 +102,10 @@ interface FormDialogProps {
   bodyTall?: boolean;
   submitLabel?: string;
   submitDisabled?: boolean;
+  /** Если задан — кнопка становится «подсказывающей»: клик по неактивной вызывает onInvalid. */
+  canSubmit?: boolean;
+  pending?: boolean;
+  onInvalid?: () => void;
   onSubmit: () => void;
   children: React.ReactNode;
 }
@@ -72,6 +118,9 @@ export function FormDialog({
   bodyTall = false,
   submitLabel = "Сохранить",
   submitDisabled,
+  canSubmit,
+  pending,
+  onInvalid,
   onSubmit,
   children,
 }: FormDialogProps) {
@@ -98,14 +147,25 @@ export function FormDialog({
               >
                 Отмена
               </Button>
-              <Button
-                type="button"
-                className={formDialogSubmitButtonClass}
-                disabled={submitDisabled}
-                onClick={onSubmit}
-              >
-                {submitLabel}
-              </Button>
+              {onInvalid ? (
+                <FormSubmitButton
+                  canSubmit={canSubmit ?? true}
+                  pending={pending}
+                  onSubmit={onSubmit}
+                  onInvalid={onInvalid}
+                >
+                  {submitLabel}
+                </FormSubmitButton>
+              ) : (
+                <Button
+                  type="button"
+                  className={formDialogSubmitButtonClass}
+                  disabled={submitDisabled}
+                  onClick={onSubmit}
+                >
+                  {submitLabel}
+                </Button>
+              )}
             </DialogFooter>
           </>
         ) : null}

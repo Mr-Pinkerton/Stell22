@@ -2,8 +2,10 @@
 
 import { useState } from "react";
 import { XIcon } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { capitalizeFirst, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { FormSubmitButton } from "@/components/form-dialog-shared";
+import { fieldInvalidClass } from "@/components/nomenclature/form-shared";
 import {
   Dialog,
   DialogClose,
@@ -54,17 +56,19 @@ function Field({
   id,
   label,
   required,
+  invalid,
   className,
   children,
 }: {
   id: string;
   label: string;
   required?: boolean;
+  invalid?: boolean;
   className?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className={cn("grid gap-1.5", className)}>
+    <div className={cn("grid gap-1.5", invalid && fieldInvalidClass, className)}>
       <Label htmlFor={id}>
         {label}
         {required && <span className="text-destructive"> *</span>}
@@ -139,6 +143,7 @@ function EmployeeFormBody({
     employee?.ratePrisadkaTorcev ?? employee?.ratePrisadkaPloskt ?? null,
   );
   const [rateUp, setRateUp] = useState<number | null>(employee?.rateUpakovka ?? null);
+  const [showErrors, setShowErrors] = useState(false);
 
   const canSubmit = fullName.trim().length > 0 && !pending;
 
@@ -179,13 +184,20 @@ function EmployeeFormBody({
         <div className="scrollbar-thin-y max-h-[min(70vh,32rem)] space-y-5 overflow-y-auto px-6 py-6">
           <FormSection title="Основная информация">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
-              <Field id="emp-name" label="ФИО" required className="min-w-0 flex-1">
+              <Field
+                id="emp-name"
+                label="ФИО"
+                required
+                invalid={showErrors && !fullName.trim()}
+                className="min-w-0 flex-1"
+              >
                 <Input
                   id="emp-name"
                   className={fieldClass}
+                  autoCapitalize="words"
                   placeholder="Иванов Иван Иванович"
                   value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
+                  onChange={(e) => setFullName(capitalizeFirst(e.target.value))}
                 />
               </Field>
               <Field id="emp-birth" label="Дата рождения" className="w-full shrink-0 sm:w-36">
@@ -289,13 +301,15 @@ function EmployeeFormBody({
           >
             Отмена
           </Button>
-          <Button
+          <FormSubmitButton
             className="h-10 rounded-xl px-5"
-            disabled={!canSubmit}
-            onClick={handleSubmit}
+            canSubmit={canSubmit}
+            pending={pending}
+            onInvalid={() => setShowErrors(true)}
+            onSubmit={handleSubmit}
           >
             {isEdit ? "Сохранить" : "Создать сотрудника"}
-          </Button>
+          </FormSubmitButton>
         </DialogFooter>
     </>
   );

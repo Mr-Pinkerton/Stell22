@@ -2,7 +2,9 @@
 
 import { useMemo, useState } from "react";
 import { Plus, Trash2, XIcon } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { capitalizeFirst, cn } from "@/lib/utils";
+import { FormSubmitButton } from "@/components/form-dialog-shared";
+import { fieldInvalidClass } from "@/components/nomenclature/form-shared";
 import { sectionAreaM2, resolveRailQuantity } from "@/lib/batch-stats";
 import { allocatePackageCode } from "@/lib/package-code";
 import type { PurchaseBatchRow } from "@/lib/batch-stats";
@@ -118,17 +120,19 @@ function Field({
   id,
   label,
   required,
+  invalid,
   className,
   children,
 }: {
   id: string;
   label: string;
   required?: boolean;
+  invalid?: boolean;
   className?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className={cn("grid gap-1.5", className)}>
+    <div className={cn("grid gap-1.5", invalid && fieldInvalidClass, className)}>
       <Label htmlFor={id}>
         {label}
         {required && <span className="text-destructive"> *</span>}
@@ -233,6 +237,8 @@ function BatchFormBody({
   const [draftQty, setDraftQty] = useState("");
   const [draftRows, setDraftRows] = useState("");
   const [draftLayers, setDraftLayers] = useState("");
+  const [showErrors, setShowErrors] = useState(false);
+  const [railShowErrors, setRailShowErrors] = useState(false);
 
   const wMm = Number(sectionW) || 0;
   const hMm = Number(sectionH) || 0;
@@ -312,6 +318,7 @@ function BatchFormBody({
     setDraftQty("");
     setDraftRows("");
     setDraftLayers("");
+    setRailShowErrors(false);
   };
 
   const removeEntry = (id: string) => {
@@ -419,7 +426,13 @@ function BatchFormBody({
               Крепёж, упаковка и прочее — приход на склад без реек и пакетов.
             </p>
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field id="simple-name" label="Наименование" required className="sm:col-span-2">
+              <Field
+                id="simple-name"
+                label="Наименование"
+                required
+                invalid={showErrors && !simpleItemId}
+                className="sm:col-span-2"
+              >
                 <Select value={simpleItemId || undefined} onValueChange={(v) => setSimpleItemId(v ?? "")}>
                   <SelectTrigger id="simple-name" className={selectTriggerClass}>
                     <SelectValue placeholder="Из номенклатуры">
@@ -435,7 +448,12 @@ function BatchFormBody({
                   </SelectContent>
                 </Select>
               </Field>
-              <Field id="simple-qty" label="Количество" required>
+              <Field
+                id="simple-qty"
+                label="Количество"
+                required
+                invalid={showErrors && !(simpleQtyNum > 0)}
+              >
                 <Input
                   id="simple-qty"
                   className={narrowFieldClass}
@@ -445,7 +463,12 @@ function BatchFormBody({
                   onChange={(e) => setSimpleQty(e.target.value.replace(/[^\d]/g, ""))}
                 />
               </Field>
-              <Field id="simple-price" label="Цена за единицу" required>
+              <Field
+                id="simple-price"
+                label="Цена за единицу"
+                required
+                invalid={showErrors && simplePrice == null}
+              >
                 <MoneyInput
                   id="simple-price"
                   className={narrowFieldClass}
@@ -475,13 +498,20 @@ function BatchFormBody({
             <section className="space-y-4">
               <h3 className="text-sm font-semibold">Основная информация</h3>
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field id="batch-name" label="Название партии" required className="sm:col-span-2">
+                <Field
+                  id="batch-name"
+                  label="Название партии"
+                  required
+                  invalid={showErrors && !name.trim()}
+                  className="sm:col-span-2"
+                >
                   <Input
                     id="batch-name"
                     className={fieldClass}
+                    autoCapitalize="sentences"
                     placeholder="Волочек 2419"
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={(e) => setName(capitalizeFirst(e.target.value))}
                   />
                 </Field>
                 <Field id="batch-date" label="Дата закупки" className="sm:col-span-2">
@@ -495,7 +525,12 @@ function BatchFormBody({
                     onChange={(e) => setPurchaseDate(formatDateInput(e.target.value))}
                   />
                 </Field>
-                <Field id="batch-sw" label="Сечение — ширина, мм" required>
+                <Field
+                  id="batch-sw"
+                  label="Сечение — ширина, мм"
+                  required
+                  invalid={showErrors && !(wMm > 0)}
+                >
                   <Input
                     id="batch-sw"
                     className={narrowFieldClass}
@@ -504,7 +539,12 @@ function BatchFormBody({
                     onChange={(e) => setSectionW(e.target.value)}
                   />
                 </Field>
-                <Field id="batch-sh" label="Сечение — высота, мм" required>
+                <Field
+                  id="batch-sh"
+                  label="Сечение — высота, мм"
+                  required
+                  invalid={showErrors && !(hMm > 0)}
+                >
                   <Input
                     id="batch-sh"
                     className={narrowFieldClass}
@@ -555,7 +595,12 @@ function BatchFormBody({
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <Field id="rail-len" label="Длина рейки, м" required>
+                <Field
+                  id="rail-len"
+                  label="Длина рейки, м"
+                  required
+                  invalid={railShowErrors && !(Number(draftLength) > 0)}
+                >
                   <Input
                     id="rail-len"
                     className={narrowFieldClass}
@@ -575,7 +620,13 @@ function BatchFormBody({
 
               {addMode === "piece" ? (
                 <>
-                  <Field id="rail-qty" label="Количество реек" required className="max-w-xs">
+                  <Field
+                    id="rail-qty"
+                    label="Количество реек"
+                    required
+                    invalid={railShowErrors && resolvedDraftQty === null}
+                    className="max-w-xs"
+                  >
                     <Input
                       id="rail-qty"
                       className={narrowFieldClass}
@@ -591,7 +642,12 @@ function BatchFormBody({
               ) : (
                 <div className="space-y-2">
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                    <Field id="rail-qty-pkg" label="Количество реек" required>
+                    <Field
+                      id="rail-qty-pkg"
+                      label="Количество реек"
+                      required
+                      invalid={railShowErrors && resolvedDraftQty === null}
+                    >
                       <Input
                         id="rail-qty-pkg"
                         className={narrowFieldClass}
@@ -636,9 +692,14 @@ function BatchFormBody({
               <Button
                 type="button"
                 variant="brand"
-                className="h-10 cursor-pointer rounded-xl"
-                disabled={!canAddRail}
-                onClick={addRail}
+                className={cn("h-10 cursor-pointer rounded-xl", !canAddRail && "opacity-50")}
+                onClick={() => {
+                  if (!canAddRail) {
+                    setRailShowErrors(true);
+                    return;
+                  }
+                  addRail();
+                }}
               >
                 <Plus />
                 Добавить
@@ -716,7 +777,12 @@ function BatchFormBody({
             <section className="space-y-4">
               <h3 className="text-sm font-semibold">Финансовые данные</h3>
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <Field id="batch-cost" label="Стоимость партии" required>
+                <Field
+                  id="batch-cost"
+                  label="Стоимость партии"
+                  required
+                  invalid={showErrors && !((purchaseCost ?? 0) > 0)}
+                >
                   <MoneyInput
                     id="batch-cost"
                     className={narrowFieldClass}
@@ -757,9 +823,10 @@ function BatchFormBody({
               <Input
                 id="batch-note"
                 className={fieldClass}
+                autoCapitalize="sentences"
                 placeholder="Необязательно"
                 value={note}
-                onChange={(e) => setNote(e.target.value)}
+                onChange={(e) => setNote(capitalizeFirst(e.target.value))}
               />
             </Field>
           </>
@@ -775,17 +842,19 @@ function BatchFormBody({
         >
           Отмена
         </Button>
-        <Button
+        <FormSubmitButton
           className="h-10 cursor-pointer rounded-xl px-5"
-          disabled={!canSubmit}
-          onClick={handleSubmit}
+          canSubmit={canSubmit}
+          pending={pending}
+          onInvalid={() => setShowErrors(true)}
+          onSubmit={handleSubmit}
         >
           {kind === "simple"
             ? "Добавить закупку"
             : isEdit
               ? "Сохранить партию"
               : "Добавить партию"}
-        </Button>
+        </FormSubmitButton>
       </DialogFooter>
     </>
   );

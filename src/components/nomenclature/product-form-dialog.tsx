@@ -2,8 +2,9 @@
 
 import { useMemo, useState } from "react";
 import { Plus, Trash2, XIcon } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { capitalizeFirst, cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { FormSubmitButton } from "@/components/form-dialog-shared";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -114,6 +115,7 @@ function ProductFormBody({
   );
   const [draftDetailId, setDraftDetailId] = useState("");
   const [draftDetailQty, setDraftDetailQty] = useState("1");
+  const [showErrors, setShowErrors] = useState(false);
 
   const sortDetails = useMemo(
     () => (sort ? allDetails.filter((d) => d.sort === sort && d.status === "ACTIVE") : []),
@@ -202,17 +204,28 @@ function ProductFormBody({
 
             <div className="scrollbar-thin-y max-h-[min(75vh,40rem)] space-y-5 overflow-y-auto px-6 py-6">
               <FormSection title="Основная информация">
-                <Field id="prod-name" label="Название" required>
+                <Field
+                  id="prod-name"
+                  label="Название"
+                  required
+                  invalid={showErrors && !name.trim()}
+                >
                   <Input
                     id="prod-name"
                     className={fieldClass}
+                    autoCapitalize="sentences"
                     placeholder="Полка настенная"
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
+                    onChange={(e) => setName(capitalizeFirst(e.target.value))}
                   />
                 </Field>
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Field id="prod-sku-ozon" label="Артикул Ozon" required>
+                  <Field
+                    id="prod-sku-ozon"
+                    label="Артикул Ozon"
+                    required
+                    invalid={showErrors && !skuOzon.trim()}
+                  >
                     <Input
                       id="prod-sku-ozon"
                       className={fieldClass}
@@ -221,7 +234,12 @@ function ProductFormBody({
                       onChange={(e) => setSkuOzon(e.target.value)}
                     />
                   </Field>
-                  <Field id="prod-sku-wb" label="Артикул WB" required>
+                  <Field
+                    id="prod-sku-wb"
+                    label="Артикул WB"
+                    required
+                    invalid={showErrors && !skuWb.trim()}
+                  >
                     <Input
                       id="prod-sku-wb"
                       className={fieldClass}
@@ -232,7 +250,12 @@ function ProductFormBody({
                   </Field>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Field id="prod-sort" label="Сорт" required>
+                  <Field
+                    id="prod-sort"
+                    label="Сорт"
+                    required
+                    invalid={showErrors && sort === ""}
+                  >
                     <Select
                       value={sort || undefined}
                       onValueChange={(v) => setSort(v as Sort)}
@@ -504,13 +527,15 @@ function ProductFormBody({
               >
                 Отмена
               </Button>
-              <Button
+              <FormSubmitButton
                 className="h-10 rounded-xl px-5"
-                disabled={!canSubmit}
-                onClick={handleSubmit}
+                canSubmit={canSubmit}
+                pending={pending}
+                onInvalid={() => setShowErrors(true)}
+                onSubmit={handleSubmit}
               >
                 {isEdit ? "Сохранить" : "Создать изделие"}
-              </Button>
+              </FormSubmitButton>
             </DialogFooter>
     </>
   );
