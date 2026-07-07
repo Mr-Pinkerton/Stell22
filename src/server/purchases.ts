@@ -216,7 +216,7 @@ export async function createBatch(values: BatchFormValues): Promise<PurchaseBatc
           isPackage: r.mode === "package",
           code:
             r.mode === "package"
-              ? allocatePackageCode(r.lengthM, purchaseDate, usedCodes)
+              ? allocatePackageCode(r.lengthM, r.quantity, r.sort, usedCodes)
               : null,
           rows: r.rows ?? null,
           layers: r.layers ?? null,

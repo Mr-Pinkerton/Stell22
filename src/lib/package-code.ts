@@ -1,35 +1,32 @@
-import { TIME_ZONE } from "@/lib/format";
+import type { Sort } from "@/types/domain";
 
-/** DDMM в зоне проекта, напр. 30 июня → «3006». */
-export function packageDatePart(date: Date): string {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: TIME_ZONE,
-    day: "2-digit",
-    month: "2-digit",
-  }).formatToParts(date);
-  const day = parts.find((p) => p.type === "day")?.value ?? "01";
-  const month = parts.find((p) => p.type === "month")?.value ?? "01";
-  return `${day}${month}`;
-}
-
-/** Длина реек в пакете — целые метры (округление), 2 цифры: 3.0 м → «03». */
+/** Длина реек в дециметрах (десятых метра), 2 цифры: 2.4 м → «24», 3 м → «30». */
 export function packageLengthPart(lengthM: number): string {
-  const m = Math.min(99, Math.max(0, Math.round(lengthM)));
-  return String(m).padStart(2, "0");
+  const dm = Math.max(0, Math.round(lengthM * 10));
+  return String(dm).padStart(2, "0");
 }
 
-/** Базовый код пакета: ПАК-3006-03. */
-export function packageCodeBase(lengthM: number, purchaseDate: Date): string {
-  return `ПАК-${packageDatePart(purchaseDate)}-${packageLengthPart(lengthM)}`;
+/** Номер сорта 2 цифры: SORT1 → «01», SORT2 → «02». */
+export function packageSortPart(sort: Sort): string {
+  return sort === "SORT2" ? "02" : "01";
+}
+
+/**
+ * Базовый код пакета: ПАК-24-569-01, где
+ * 24 — длина реек (2.4 м), 569 — количество реек, 01 — сорт.
+ */
+export function packageCodeBase(lengthM: number, quantity: number, sort: Sort): string {
+  return `ПАК-${packageLengthPart(lengthM)}-${quantity}-${packageSortPart(sort)}`;
 }
 
 /** Уникальный код с учётом уже занятых (в партии или в БД). */
 export function allocatePackageCode(
   lengthM: number,
-  purchaseDate: Date,
+  quantity: number,
+  sort: Sort,
   usedCodes: Set<string>,
 ): string {
-  const base = packageCodeBase(lengthM, purchaseDate);
+  const base = packageCodeBase(lengthM, quantity, sort);
   if (!usedCodes.has(base)) {
     usedCodes.add(base);
     return base;

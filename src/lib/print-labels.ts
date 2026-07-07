@@ -28,7 +28,6 @@ export function printPackageLabels(labels: PackageLabel[]): boolean {
       <div class="label">
         <div class="title">${escapeHtml(l.title)}</div>
         <div class="code">${escapeHtml(l.code)}</div>
-        <div class="bars">${escapeHtml(l.code)}</div>
         <div class="subtitle">${escapeHtml(l.subtitle)}</div>
       </div>`,
     )
@@ -45,14 +44,15 @@ export function printPackageLabels(labels: PackageLabel[]): boolean {
       body { margin: 0; font-family: Arial, sans-serif; }
       .label {
         width: 58mm; height: 40mm; padding: 3mm;
-        display: flex; flex-direction: column; justify-content: space-between;
-        page-break-after: always; border: 1px dashed #bbb;
+        display: flex; flex-direction: column; justify-content: center; gap: 2mm;
+        border: 1px dashed #bbb; overflow: hidden;
       }
+      /* Разрыв только МЕЖДУ этикетками — без лишней пустой страницы в конце. */
+      .label:not(:last-child) { page-break-after: always; }
       .title { font-size: 10pt; font-weight: 600; text-align: center; }
-      .code { font-size: 16pt; font-weight: 700; text-align: center; letter-spacing: 1px; }
-      .bars {
-        font-family: "Libre Barcode 39", "Courier New", monospace;
-        font-size: 9pt; text-align: center; letter-spacing: 2px; color: #111;
+      .code {
+        font-size: 22pt; font-weight: 800; text-align: center; letter-spacing: 1px;
+        white-space: nowrap;
       }
       .subtitle { font-size: 9pt; text-align: center; color: #333; }
       @media print { .label { border: none; } }

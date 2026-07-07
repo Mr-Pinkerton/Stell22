@@ -87,12 +87,6 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function purchaseDateFromDisplay(display: string): Date {
-  const iso = displayDateToIso(display);
-  if (iso) return new Date(`${iso}T12:00:00`);
-  return new Date();
-}
-
 interface DraftRailEntry {
   id: string;
   mode: RailAddMode;
@@ -308,7 +302,7 @@ function BatchFormBody({
           layers: addMode === "package" && rowsNum && layersNum ? layersNum : undefined,
           code:
             addMode === "package"
-              ? allocatePackageCode(len, purchaseDateFromDisplay(purchaseDate), usedCodes)
+              ? allocatePackageCode(len, qty, draftSort, usedCodes)
               : undefined,
         },
       ];

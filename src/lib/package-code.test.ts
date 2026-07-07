@@ -2,37 +2,37 @@ import { describe, expect, it } from "vitest";
 import {
   allocatePackageCode,
   packageCodeBase,
-  packageDatePart,
   packageLengthPart,
+  packageSortPart,
 } from "./package-code";
 
-describe("packageDatePart", () => {
-  it("кодирует день и месяц как DDMM (Europe/Moscow)", () => {
-    expect(packageDatePart(new Date("2026-06-30T12:00:00Z"))).toBe("3006");
-    expect(packageDatePart(new Date("2026-01-05T12:00:00Z"))).toBe("0501");
+describe("packageLengthPart", () => {
+  it("кодирует длину в дециметрах, 2 цифры", () => {
+    expect(packageLengthPart(2.4)).toBe("24");
+    expect(packageLengthPart(3)).toBe("30");
+    expect(packageLengthPart(0.6)).toBe("06");
   });
 });
 
-describe("packageLengthPart", () => {
-  it("округляет длину до целых метров, 2 цифры", () => {
-    expect(packageLengthPart(3)).toBe("03");
-    expect(packageLengthPart(2.4)).toBe("02");
-    expect(packageLengthPart(0.6)).toBe("01");
+describe("packageSortPart", () => {
+  it("сорт 2 цифры", () => {
+    expect(packageSortPart("SORT1")).toBe("01");
+    expect(packageSortPart("SORT2")).toBe("02");
   });
 });
 
 describe("packageCodeBase", () => {
-  it("собирает ПАК-DDMM-LL", () => {
-    expect(packageCodeBase(3, new Date("2026-06-30T12:00:00Z"))).toBe("ПАК-3006-03");
+  it("собирает ПАК-длина-кол-во-сорт", () => {
+    expect(packageCodeBase(2.4, 569, "SORT1")).toBe("ПАК-24-569-01");
+    expect(packageCodeBase(3, 100, "SORT2")).toBe("ПАК-30-100-02");
   });
 });
 
 describe("allocatePackageCode", () => {
   it("добавляет суффикс при коллизии", () => {
     const used = new Set<string>();
-    const date = new Date("2026-06-30T12:00:00Z");
-    expect(allocatePackageCode(3, date, used)).toBe("ПАК-3006-03");
-    expect(allocatePackageCode(3, date, used)).toBe("ПАК-3006-03-2");
-    expect(allocatePackageCode(2.4, date, used)).toBe("ПАК-3006-02");
+    expect(allocatePackageCode(2.4, 569, "SORT1", used)).toBe("ПАК-24-569-01");
+    expect(allocatePackageCode(2.4, 569, "SORT1", used)).toBe("ПАК-24-569-01-2");
+    expect(allocatePackageCode(2.4, 300, "SORT2", used)).toBe("ПАК-24-300-02");
   });
 });
