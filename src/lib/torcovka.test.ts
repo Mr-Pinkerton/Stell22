@@ -5,36 +5,34 @@ describe("sumDetailLengthM", () => {
   it("суммирует длины по количеству", () => {
     expect(
       sumDetailLengthM([
-        { detailId: "a", quantity: 2, lengthM: 0.6 },
-        { detailId: "b", quantity: 1, lengthM: 0.72 },
+        { quantity: 2, lengthM: 0.6 },
+        { quantity: 1, lengthM: 0.72 },
       ]),
     ).toBe(1.92);
   });
 });
 
 describe("maxDetailQuantity", () => {
-  const picks = [{ detailId: "a", quantity: 2, lengthM: 0.6 }]; // 1.2 м занято
+  const picks = [{ quantity: 2, lengthM: 0.6 }]; // 1.2 м занято
 
   it("возвращает floor от оставшейся длины", () => {
     expect(
       maxDetailQuantity({
         takenLengthM: 2.4,
         picks,
-        detailId: "b",
-        detailLengthM: 0.6,
+        lengthM: 0.72,
       }),
-    ).toBe(2); // (2.4 - 1.2) / 0.6 = 2
+    ).toBe(1); // (2.4 - 1.2) / 0.72 = 1
   });
 
-  it("не учитывает текущую деталь в занятой длине", () => {
+  it("не учитывает текущую длину в занятой длине", () => {
     expect(
       maxDetailQuantity({
         takenLengthM: 2.4,
-        picks: [...picks, { detailId: "b", quantity: 1, lengthM: 0.6 }],
-        detailId: "b",
-        detailLengthM: 0.6,
+        picks: [...picks, { quantity: 1, lengthM: 0.72 }],
+        lengthM: 0.72,
       }),
-    ).toBe(2); // (2.4 - 1.2) / 0.6 — qty b не вычитается
+    ).toBe(1); // qty той же длины не вычитается: (2.4 - 1.2) / 0.72 = 1
   });
 
   it("0 при нулевой взятой длине", () => {
@@ -42,8 +40,7 @@ describe("maxDetailQuantity", () => {
       maxDetailQuantity({
         takenLengthM: 0,
         picks: [],
-        detailId: "a",
-        detailLengthM: 0.6,
+        lengthM: 0.6,
       }),
     ).toBe(0);
   });

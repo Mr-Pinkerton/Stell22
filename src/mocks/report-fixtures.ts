@@ -177,7 +177,7 @@ export const purchaseReportRows: PurchaseReportRow[] = purchaseBase.map((b) => {
   // Заявленное соотношение — по закупленным рейкам; факт — по сортам
   // произведённых деталей. Без производства факт = заявленному.
   const declared = sortSharesToPercents(declaredSortShares(batchLots));
-  const factShares = factSortShares(batchLines, allDetails);
+  const factShares = factSortShares(batchLines);
   const fact = batchLines.length > 0 ? sortSharesToPercents(factShares) : declared;
 
   const avgCostPerM3 = b.stats.volumeM3 > 0 ? Math.round(b.totalCost / b.stats.volumeM3) : 0;
@@ -205,7 +205,6 @@ const periodOverhead = periodOverheadFromCashFlows(financeCashFlows, overheadArt
 // и производственных фактах (mocks/production-facts) — Этап 9.
 export const costDetailRows: CostDetailRow[] = buildCostDetailRows({
   batches,
-  details: allDetails,
   employees,
   lines: producedLines,
 });

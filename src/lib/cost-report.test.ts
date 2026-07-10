@@ -46,7 +46,6 @@ const employees: Employee[] = [
 
 const detail = (over: Partial<Detail> & Pick<Detail, "id" | "lengthM" | "sort">): Detail => ({
   name: over.id,
-  detailNumber: null,
   detailType: "POLKA",
   prisadkaTorcevaya: false,
   prisadkaPloskost: false,
@@ -72,10 +71,11 @@ const batch: Batch = {
   purchaseDate: "2026-06-01",
 };
 
+// Произведённые заготовки: S1 итого 100 м (60 + 40), S2 итого 40 м.
 const lines: ProducedLine[] = [
-  { batchId: "bX", detailId: "dA", quantity: 100 }, // 60 м S1
-  { batchId: "bX", detailId: "dB", quantity: 100 }, // 40 м S1 → S1 итого 100 м
-  { batchId: "bX", detailId: "dC", quantity: 50 }, // 40 м S2
+  { batchId: "bX", lengthM: 0.6, sort: "SORT1", quantity: 100 }, // 60 м S1
+  { batchId: "bX", lengthM: 0.4, sort: "SORT1", quantity: 100 }, // 40 м S1
+  { batchId: "bX", lengthM: 0.8, sort: "SORT2", quantity: 50 }, // 40 м S2
 ];
 
 describe("averageRates", () => {
@@ -99,7 +99,7 @@ describe("detailWorkCost", () => {
 });
 
 describe("buildBatchSnapshots / detailMaterialCost", () => {
-  const snapshots = buildBatchSnapshots({ batches: [batch], details, lines });
+  const snapshots = buildBatchSnapshots({ batches: [batch], lines });
 
   it("распределяет стоимость партии по сортам", () => {
     const s = snapshots.get("bX")!;
@@ -127,19 +127,19 @@ describe("buildBatchSnapshots / detailMaterialCost", () => {
 
 describe("blendedCostPerMeter", () => {
   it("Σстоимость / Σдлина по сорту", () => {
-    const snapshots = buildBatchSnapshots({ batches: [batch], details, lines });
+    const snapshots = buildBatchSnapshots({ batches: [batch], lines });
     const pm = blendedCostPerMeter(snapshots);
     expect(pm.sort1.toNumber()).toBeCloseTo(7.142857, 5); // 714.2857/100
   });
 });
 
 describe("buildCostDetailRows", () => {
-  it("строка на каждую произведённую (партия×деталь)", () => {
-    const rows = buildCostDetailRows({ batches: [batch], details, employees, lines });
+  it("строка на каждую произведённую заготовку (партия×длина×сорт)", () => {
+    const rows = buildCostDetailRows({ batches: [batch], employees, lines });
     expect(rows).toHaveLength(3);
-    const a = rows.find((r) => r.id === "bX-dA")!;
+    const a = rows.find((r) => r.id === "bX-0.6-SORT1")!;
     expect(a.batchName).toBe("Тест");
-    expect(a.workCost).toBe(6.5);
+    expect(a.workCost).toBe(4.5); // торцовка S1, присадок у заготовки нет
     expect(a.materialCost).toBeCloseTo(4.29, 2);
     expect(a.costStatus).toBe("PRELIMINARY");
   });
@@ -148,7 +148,6 @@ describe("buildCostDetailRows", () => {
     const archived = { ...batch, status: "ARCHIVED" as const };
     const rows = buildCostDetailRows({
       batches: [archived],
-      details,
       employees,
       lines,
     });
@@ -167,7 +166,7 @@ describe("buildCostProductRows", () => {
       salePrice: 100,
       packagingId: "n-pack",
       status: "ACTIVE",
-      details: [{ detailId: "dA", quantity: 2 }],
+      details: [{ detailId: "dA", detailNumber: 1, quantity: 2 }],
       fastenerIds: [{ nomenclatureId: "n-screw", quantity: 4 }],
       extraIds: [],
     },
@@ -225,18 +224,18 @@ describe("declaredSortShares / factSortShares / sortSharesToPercents", () => {
     expect(sortSharesToPercents(shares)).toEqual({ sort1: 67, sort2: 33 });
   });
 
-  it("факт — по сортам произведённых деталей", () => {
-    const shares = factSortShares(lines, details); // S1 100м, S2 40м
+  it("факт — по сортам произведённых заготовок", () => {
+    const shares = factSortShares(lines); // S1 100м, S2 40м
     expect(sortSharesToPercents(shares)).toEqual({ sort1: 71, sort2: 29 });
   });
 
   it("нет данных → нули", () => {
-    expect(sortSharesToPercents(factSortShares([], details))).toEqual({ sort1: 0, sort2: 0 });
+    expect(sortSharesToPercents(factSortShares([]))).toEqual({ sort1: 0, sort2: 0 });
   });
 });
 
 describe("producedLinesFromOperations", () => {
-  it("берёт детали только из ТОРЦОВКИ и привязывает к партии", () => {
+  it("берёт заготовки только из ТОРЦОВКИ и привязывает к партии", () => {
     const rows = producedLinesFromOperations([
       {
         type: "TORCOVKA",
@@ -244,17 +243,17 @@ describe("producedLinesFromOperations", () => {
         productId: null,
         productQty: null,
         lines: [
-          { detailId: "dA", quantity: 100 },
-          { detailId: "dB", quantity: 50 },
+          { lengthM: 0.6, sort: "SORT1", quantity: 100 },
+          { lengthM: 0.4, sort: "SORT1", quantity: 50 },
         ],
       },
-      // присадка/упаковка/часы не дают произведённых деталей по партии
+      // присадка/упаковка/часы не дают произведённых заготовок по партии
       {
         type: "PRISADKA",
         batchId: null,
         productId: null,
         productQty: null,
-        lines: [{ detailId: "dA", quantity: 999 }],
+        lines: [{ lengthM: 0.6, sort: "SORT1", quantity: 999 }],
       },
       {
         type: "UPAKOVKA",
@@ -265,26 +264,26 @@ describe("producedLinesFromOperations", () => {
       },
     ]);
     expect(rows).toEqual([
-      { batchId: "bX", detailId: "dA", quantity: 100 },
-      { batchId: "bX", detailId: "dB", quantity: 50 },
+      { batchId: "bX", lengthM: 0.6, sort: "SORT1", quantity: 100 },
+      { batchId: "bX", lengthM: 0.4, sort: "SORT1", quantity: 50 },
     ]);
   });
 
-  it("суммирует дубликаты (партия × деталь) из разных операций", () => {
+  it("суммирует дубликаты (партия × длина × сорт) из разных операций", () => {
     const rows = producedLinesFromOperations([
-      { type: "TORCOVKA", batchId: "bX", productId: null, productQty: null, lines: [{ detailId: "dA", quantity: 30 }] },
-      { type: "TORCOVKA", batchId: "bX", productId: null, productQty: null, lines: [{ detailId: "dA", quantity: 20 }] },
-      { type: "TORCOVKA", batchId: "bY", productId: null, productQty: null, lines: [{ detailId: "dA", quantity: 5 }] },
+      { type: "TORCOVKA", batchId: "bX", productId: null, productQty: null, lines: [{ lengthM: 0.6, sort: "SORT1", quantity: 30 }] },
+      { type: "TORCOVKA", batchId: "bX", productId: null, productQty: null, lines: [{ lengthM: 0.6, sort: "SORT1", quantity: 20 }] },
+      { type: "TORCOVKA", batchId: "bY", productId: null, productQty: null, lines: [{ lengthM: 0.6, sort: "SORT1", quantity: 5 }] },
     ]);
     expect(rows).toEqual([
-      { batchId: "bX", detailId: "dA", quantity: 50 },
-      { batchId: "bY", detailId: "dA", quantity: 5 },
+      { batchId: "bX", lengthM: 0.6, sort: "SORT1", quantity: 50 },
+      { batchId: "bY", lengthM: 0.6, sort: "SORT1", quantity: 5 },
     ]);
   });
 
   it("игнорирует ТОРЦОВКУ без партии", () => {
     const rows = producedLinesFromOperations([
-      { type: "TORCOVKA", batchId: null, productId: null, productQty: null, lines: [{ detailId: "dA", quantity: 10 }] },
+      { type: "TORCOVKA", batchId: null, productId: null, productQty: null, lines: [{ lengthM: 0.6, sort: "SORT1", quantity: 10 }] },
     ]);
     expect(rows).toEqual([]);
   });

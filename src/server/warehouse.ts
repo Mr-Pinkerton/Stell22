@@ -4,7 +4,12 @@ import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
-import { buildStockSnapshot, type DetailStockRow as RawStockRow } from "@/lib/detail-stock";
+import {
+  blankKey,
+  buildStockSnapshot,
+  type BlankStockRow as RawBlankRow,
+  type DetailStockRow as RawStockRow,
+} from "@/lib/detail-stock";
 import { formatProductSku } from "@/lib/format";
 import type { Detail } from "@/types/domain";
 import type { ProductionStockRow, DetailStockRow } from "@/lib/warehouse-stock";
@@ -25,6 +30,7 @@ function num(value: Prisma.Decimal | number | null): number {
 
 export interface WarehouseStock {
   products: ProductionStockRow[];
+  blanks: ProductionStockRow[];
   details: DetailStockRow[];
   fasteners: ProductionStockRow[];
   packaging: ProductionStockRow[];
@@ -32,14 +38,16 @@ export interface WarehouseStock {
 }
 
 export async function getWarehouseStock(): Promise<WarehouseStock> {
-  const [products, productStock, details, detailStock, items, nomStock] = await Promise.all([
-    prisma.product.findMany({ where: { status: "ACTIVE" } }),
-    prisma.productStock.findMany(),
-    prisma.detail.findMany({ where: { status: "ACTIVE" } }),
-    prisma.detailStock.findMany(),
-    prisma.nomenclatureItem.findMany({ where: { status: "ACTIVE" } }),
-    prisma.nomenclatureStock.findMany(),
-  ]);
+  const [products, productStock, details, detailStock, blankStock, items, nomStock] =
+    await Promise.all([
+      prisma.product.findMany({ where: { status: "ACTIVE" } }),
+      prisma.productStock.findMany(),
+      prisma.detail.findMany({ where: { status: "ACTIVE" } }),
+      prisma.detailStock.findMany(),
+      prisma.blankStock.findMany(),
+      prisma.nomenclatureItem.findMany({ where: { status: "ACTIVE" } }),
+      prisma.nomenclatureStock.findMany(),
+    ]);
 
   const productQty = new Map(productStock.map((s) => [s.productId, s.quantity]));
   const nomQty = new Map(nomStock.map((s) => [s.nomenclatureId, s.quantity]));
@@ -47,7 +55,6 @@ export async function getWarehouseStock(): Promise<WarehouseStock> {
   const domainDetails: Detail[] = details.map((d) => ({
     id: d.id,
     name: d.name,
-    detailNumber: d.detailNumber,
     lengthM: num(d.lengthM),
     detailType: d.detailType,
     sort: d.sort,
@@ -61,7 +68,13 @@ export async function getWarehouseStock(): Promise<WarehouseStock> {
     ploskostDone: r.ploskostDone,
     quantity: r.quantity,
   }));
-  const snapshot = buildStockSnapshot(domainDetails, rows);
+  const blankRows: RawBlankRow[] = blankStock.map((b) => ({
+    lengthM: num(b.lengthM),
+    detailType: b.detailType,
+    sort: b.sort,
+    quantity: b.quantity,
+  }));
+  const snapshot = buildStockSnapshot(domainDetails, rows, blankRows);
 
   const productRows: ProductionStockRow[] = products
     .map((p) => ({
@@ -70,6 +83,21 @@ export async function getWarehouseStock(): Promise<WarehouseStock> {
       sku: formatProductSku(p.skuOzon, p.skuWb),
       quantity: productQty.get(p.id) ?? 0,
     }))
+    .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+
+  // Заготовки (нарезанные рейки до присадки).
+  const blankRowsView: ProductionStockRow[] = blankStock
+    .filter((b) => b.quantity > 0)
+    .map((b) => {
+      const len = num(b.lengthM);
+      const typeLabel = b.detailType === "POLKA" ? "полка" : "канавка";
+      const sortLabel = b.sort === "SORT1" ? "1 сорт" : "2 сорт";
+      return {
+        id: blankKey(len, b.detailType, b.sort),
+        name: `${len} м · ${typeLabel} · ${sortLabel}`,
+        quantity: b.quantity,
+      };
+    })
     .sort((a, b) => a.name.localeCompare(b.name, "ru"));
 
   const detailById = new Map(domainDetails.map((d) => [d.id, d]));
@@ -107,6 +135,7 @@ export async function getWarehouseStock(): Promise<WarehouseStock> {
 
   return {
     products: productRows,
+    blanks: blankRowsView,
     details: detailRows,
     fasteners: itemRows("FASTENER"),
     packaging: itemRows("PACKAGING"),
@@ -279,22 +308,42 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
       } else {
         // DETAIL: корректируем строку «готово» (все требуемые присадки выполнены).
         const detail = await tx.detail.findUniqueOrThrow({ where: { id: line.refId } });
-        await tx.detailStock.upsert({
-          where: {
-            detailId_torcevayaDone_ploskostDone: {
+        if (!detail.prisadkaTorcevaya && !detail.prisadkaPloskost) {
+          // Деталь без присадок — годна из заготовки, правим склад заготовок.
+          await tx.blankStock.upsert({
+            where: {
+              lengthM_detailType_sort: {
+                lengthM: detail.lengthM,
+                detailType: detail.detailType,
+                sort: detail.sort,
+              },
+            },
+            create: {
+              lengthM: detail.lengthM,
+              detailType: detail.detailType,
+              sort: detail.sort,
+              quantity: line.actualQty,
+            },
+            update: { quantity: line.actualQty },
+          });
+        } else {
+          await tx.detailStock.upsert({
+            where: {
+              detailId_torcevayaDone_ploskostDone: {
+                detailId: line.refId,
+                torcevayaDone: detail.prisadkaTorcevaya,
+                ploskostDone: detail.prisadkaPloskost,
+              },
+            },
+            create: {
               detailId: line.refId,
               torcevayaDone: detail.prisadkaTorcevaya,
               ploskostDone: detail.prisadkaPloskost,
+              quantity: line.actualQty,
             },
-          },
-          create: {
-            detailId: line.refId,
-            torcevayaDone: detail.prisadkaTorcevaya,
-            ploskostDone: detail.prisadkaPloskost,
-            quantity: line.actualQty,
-          },
-          update: { quantity: line.actualQty },
-        });
+            update: { quantity: line.actualQty },
+          });
+        }
       }
 
       await tx.inventoryLine.update({

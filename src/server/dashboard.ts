@@ -45,7 +45,7 @@ function num(value: { toNumber: () => number } | number | null): number {
 }
 
 export async function getDashboardData(): Promise<DashboardSource> {
-  const [finance, salary, waste, goalsData, purchases, ops, lots, details, nomStock, nomItems] =
+  const [finance, salary, waste, goalsData, purchases, ops, lots, nomStock, nomItems] =
     await Promise.all([
       getFinanceData(),
       getSalaryReport(),
@@ -57,13 +57,11 @@ export async function getDashboardData(): Promise<DashboardSource> {
         include: { lines: true },
       }),
       prisma.railLot.findMany({ select: { id: true, lengthM: true } }),
-      prisma.detail.findMany({ select: { id: true, lengthM: true } }),
       prisma.nomenclatureStock.findMany(),
       prisma.nomenclatureItem.findMany({ where: { minStock: { not: null } } }),
     ]);
 
   const lotLength = new Map(lots.map((l) => [l.id, num(l.lengthM)]));
-  const detailLength = new Map(details.map((d) => [d.id, num(d.lengthM)]));
 
   const production: ProductionEntry[] = [];
   const torcovkaByDay = new Map<string, { takenM: number; producedM: number }>();
@@ -73,10 +71,8 @@ export async function getDashboardData(): Promise<DashboardSource> {
       production.push({ occurredAt: op.workDate.toISOString(), quantity: op.productQty ?? 0 });
     } else {
       const takenM = (op.railLotId ? lotLength.get(op.railLotId) ?? 0 : 0) * (op.railsTaken ?? 0);
-      const producedM = op.lines.reduce(
-        (s, l) => s + (detailLength.get(l.detailId) ?? 0) * l.quantity,
-        0,
-      );
+      // Произведённые метры — из спецификации заготовки (длина × кол-во).
+      const producedM = op.lines.reduce((s, l) => s + num(l.blankLengthM) * l.quantity, 0);
       const acc = torcovkaByDay.get(date) ?? { takenM: 0, producedM: 0 };
       acc.takenM += takenM;
       acc.producedM += producedM;

@@ -70,7 +70,8 @@ function computeAmount(op: OpFull, maps: RefMaps): { quantity: number; amount: n
     productQty: op.productQty ?? 0,
     lines: op.lines.map((l) => ({
       quantity: l.quantity,
-      sort: maps.detail.get(l.detailId)?.sort,
+      // ЗП торцовки — по сорту заготовки; присадка — по флагам (сорт не нужен).
+      sort: l.blankSort ?? (l.detailId ? maps.detail.get(l.detailId)?.sort : undefined),
       prisadkaTorcevaya: l.prisadkaTorcevaya,
       prisadkaPloskost: l.prisadkaPloskost,
     })),
@@ -85,7 +86,10 @@ function serializeRow(op: OpFull, maps: RefMaps): ProductionEntryRow {
   const detailLines: ProductionDetailLine[] =
     op.type === "TORCOVKA" || op.type === "PRISADKA"
       ? op.lines.map((l) => ({
-          detailName: maps.detail.get(l.detailId)?.name ?? "—",
+          // Торцовка — заготовка (по длине), присадка — конкретная деталь.
+          detailName: l.detailId
+            ? (maps.detail.get(l.detailId)?.name ?? "—")
+            : `Заготовка ${num(l.blankLengthM)} м`,
           quantity: l.quantity,
           prisadkaTorcevaya: l.prisadkaTorcevaya,
           prisadkaPloskost: l.prisadkaPloskost,
@@ -259,10 +263,12 @@ export async function updateProductionLineQuantity(
     if (newQtyInt === line.quantity) return reloadRow(id);
     const kind: "torcev" | "plosk" = line.prisadkaTorcevaya ? "torcev" : "plosk";
 
+    if (!line.detailId) throw new Error("Строка присадки без детали");
+    const detailId = line.detailId;
     await prisma.$transaction(async (tx) => {
       await reversePrisadkaLine(tx, line);
       await tx.operationDetailLine.delete({ where: { id: line.id } });
-      await applyPrisadkaPick(tx, id, line.detailId, kind, newQtyInt);
+      await applyPrisadkaPick(tx, id, detailId, kind, newQtyInt);
       await writeChangeLog(
         {
           entity: "ProductionOperation",
@@ -284,46 +290,36 @@ export async function updateProductionLineQuantity(
 
   const line = op.lines[lineIndex];
   if (!line) throw new Error("Строка не найдена");
-  const delta = newQty - line.quantity;
+  const { blankLengthM, blankType, blankSort } = line;
+  if (blankLengthM == null || blankType == null || blankSort == null) {
+    throw new Error("Строка торцовки без спецификации заготовки");
+  }
+  const lineId = line.id;
+  const oldQty = line.quantity;
+  const delta = newQty - oldQty;
   if (delta === 0) return reloadRow(id);
 
   await prisma.$transaction(async (tx) => {
     if (delta < 0) {
-      // Уменьшаем — снимаем разницу с сырого остатка (нельзя в минус).
-      const dec = await tx.detailStock.updateMany({
-        where: {
-          detailId: line.detailId,
-          torcevayaDone: false,
-          ploskostDone: false,
-          quantity: { gte: -delta },
-        },
+      // Уменьшаем — снимаем разницу со склада заготовок (нельзя в минус).
+      const dec = await tx.blankStock.updateMany({
+        where: { lengthM: blankLengthM, detailType: blankType, sort: blankSort, quantity: { gte: -delta } },
         data: { quantity: { decrement: -delta } },
       });
-      if (dec.count === 0) throw new Error("Нельзя уменьшить: детали уже прошли присадку/упаковку");
+      if (dec.count === 0) throw new Error("Нельзя уменьшить: заготовки уже прошли присадку/упаковку");
     } else {
-      await tx.detailStock.upsert({
-        where: {
-          detailId_torcevayaDone_ploskostDone: {
-            detailId: line.detailId,
-            torcevayaDone: false,
-            ploskostDone: false,
-          },
-        },
-        create: {
-          detailId: line.detailId,
-          torcevayaDone: false,
-          ploskostDone: false,
-          quantity: delta,
-        },
+      await tx.blankStock.upsert({
+        where: { lengthM_detailType_sort: { lengthM: blankLengthM, detailType: blankType, sort: blankSort } },
+        create: { lengthM: blankLengthM, detailType: blankType, sort: blankSort, quantity: delta },
         update: { quantity: { increment: delta } },
       });
     }
-    await tx.operationDetailLine.update({ where: { id: line.id }, data: { quantity: newQty } });
+    await tx.operationDetailLine.update({ where: { id: lineId }, data: { quantity: newQty } });
     await writeChangeLog(
       {
         entity: "ProductionOperation",
         entityId: id,
-        newValues: { field: "Количество", oldValue: line.quantity, newValue: newQty },
+        newValues: { field: "Количество", oldValue: oldQty, newValue: newQty },
       },
       tx,
     );
@@ -363,19 +359,22 @@ export async function deleteProductionOperation(id: string): Promise<void> {
 
   await prisma.$transaction(async (tx) => {
     if (op.type === "TORCOVKA") {
-      // Снимаем произведённые детали с сырого остатка (нельзя в минус).
+      // Снимаем произведённые заготовки со склада заготовок (нельзя в минус).
       for (const l of op.lines) {
-        const dec = await tx.detailStock.updateMany({
+        if (l.blankLengthM == null || l.blankType == null || l.blankSort == null) {
+          throw new Error("Строка торцовки без спецификации заготовки");
+        }
+        const dec = await tx.blankStock.updateMany({
           where: {
-            detailId: l.detailId,
-            torcevayaDone: false,
-            ploskostDone: false,
+            lengthM: l.blankLengthM,
+            detailType: l.blankType,
+            sort: l.blankSort,
             quantity: { gte: l.quantity },
           },
           data: { quantity: { decrement: l.quantity } },
         });
         if (dec.count === 0) {
-          throw new Error("Нельзя удалить: детали уже прошли присадку/упаковку");
+          throw new Error("Нельзя удалить: заготовки уже прошли присадку/упаковку");
         }
       }
       // Рейки НЕ возвращаем — они уже распилены. Взятое сверх произведённого

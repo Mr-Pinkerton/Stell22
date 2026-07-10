@@ -2,7 +2,6 @@
 
 import type {
   Batch as PrismaBatch,
-  Detail as PrismaDetail,
   Prisma,
   RailLot as PrismaRailLot,
 } from "@prisma/client";
@@ -16,7 +15,7 @@ import {
   type OperationForCost,
 } from "@/lib/cost-report";
 import { batchWaste, employeeWaste } from "@/lib/waste";
-import type { Batch, Detail, RailLot } from "@/types/domain";
+import type { Batch, RailLot } from "@/types/domain";
 import type {
   PurchasePackageLine,
   PurchaseReportRow,
@@ -61,20 +60,6 @@ function serLot(l: PrismaRailLot): RailLot {
   };
 }
 
-function serDetail(d: PrismaDetail): Detail {
-  return {
-    id: d.id,
-    name: d.name,
-    detailNumber: d.detailNumber,
-    lengthM: num(d.lengthM),
-    detailType: d.detailType,
-    sort: d.sort,
-    prisadkaTorcevaya: d.prisadkaTorcevaya,
-    prisadkaPloskost: d.prisadkaPloskost,
-    status: d.status,
-  };
-}
-
 type TorcovkaOp = Prisma.ProductionOperationGetPayload<{ include: { lines: true } }>;
 
 function toOperationForCost(op: TorcovkaOp): OperationForCost {
@@ -83,7 +68,11 @@ function toOperationForCost(op: TorcovkaOp): OperationForCost {
     batchId: op.batchId,
     productId: op.productId,
     productQty: op.productQty,
-    lines: op.lines.map((l) => ({ detailId: l.detailId, quantity: l.quantity })),
+    lines: op.lines.map((l) => ({
+      lengthM: l.blankLengthM == null ? null : num(l.blankLengthM),
+      sort: l.blankSort,
+      quantity: l.quantity,
+    })),
   };
 }
 
@@ -96,10 +85,9 @@ function toOperationForCost(op: TorcovkaOp): OperationForCost {
  * Работник пакета — последний торцевавший из этого пакета (по дате операции).
  */
 export async function getPurchaseReport(): Promise<PurchaseReportRow[]> {
-  const [batches, lots, details, ops, employees] = await Promise.all([
+  const [batches, lots, ops, employees] = await Promise.all([
     prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
     prisma.railLot.findMany(),
-    prisma.detail.findMany(),
     prisma.productionOperation.findMany({
       where: { type: "TORCOVKA" },
       include: { lines: true },
@@ -110,7 +98,6 @@ export async function getPurchaseReport(): Promise<PurchaseReportRow[]> {
 
   const domainBatches = batches.map(serBatch);
   const domainLots = lots.map(serLot);
-  const domainDetails = details.map(serDetail);
   const producedLines = producedLinesFromOperations(ops.map(toOperationForCost));
 
   const empName = new Map(employees.map((e) => [e.id, e.fullName]));
@@ -127,9 +114,7 @@ export async function getPurchaseReport(): Promise<PurchaseReportRow[]> {
 
     const declared = sortSharesToPercents(declaredSortShares(batchLots));
     const fact =
-      batchLines.length > 0
-        ? sortSharesToPercents(factSortShares(batchLines, domainDetails))
-        : declared;
+      batchLines.length > 0 ? sortSharesToPercents(factSortShares(batchLines)) : declared;
 
     const area = batch.sectionWidthMm && batch.sectionHeightMm
       ? (batch.sectionWidthMm / 1000) * (batch.sectionHeightMm / 1000)
@@ -180,10 +165,9 @@ export interface WasteReport {
  * lib/waste, чтобы числа были внутренне согласованы (cost-integrity).
  */
 export async function getWasteReport(): Promise<WasteReport> {
-  const [batches, lots, details, ops, employees] = await Promise.all([
+  const [batches, lots, ops, employees] = await Promise.all([
     prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
     prisma.railLot.findMany(),
-    prisma.detail.findMany({ select: { id: true, lengthM: true } }),
     prisma.productionOperation.findMany({
       where: { type: "TORCOVKA" },
       include: { lines: true },
@@ -192,10 +176,10 @@ export async function getWasteReport(): Promise<WasteReport> {
   ]);
 
   const lotLength = new Map(lots.map((l) => [l.id, num(l.lengthM)]));
-  const detailLength = new Map(details.map((d) => [d.id, num(d.lengthM)]));
 
+  // Произведённые метры — из спецификации заготовки (длина × кол-во).
   const producedM = (op: TorcovkaOp) =>
-    op.lines.reduce((s, l) => s + (detailLength.get(l.detailId) ?? 0) * l.quantity, 0);
+    op.lines.reduce((s, l) => s + num(l.blankLengthM) * l.quantity, 0);
   const takenM = (op: TorcovkaOp) =>
     (op.railLotId ? lotLength.get(op.railLotId) ?? 0 : 0) * (op.railsTaken ?? 0);
 

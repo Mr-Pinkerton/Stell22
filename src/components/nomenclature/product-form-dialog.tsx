@@ -45,6 +45,7 @@ interface DraftFastener {
 interface DraftProductDetail {
   id: string;
   detailId: string;
+  detailNumber: number;
   quantity: number;
 }
 
@@ -107,6 +108,7 @@ function ProductFormBody({
       product?.details.map((d) => ({
         id: nextId("d"),
         detailId: d.detailId,
+        detailNumber: d.detailNumber,
         quantity: d.quantity,
       })) ?? [],
   );
@@ -114,6 +116,7 @@ function ProductFormBody({
     () => new Set(product?.extraIds ?? []),
   );
   const [draftDetailId, setDraftDetailId] = useState("");
+  const [draftDetailNumber, setDraftDetailNumber] = useState("1");
   const [draftDetailQty, setDraftDetailQty] = useState("1");
   const [showErrors, setShowErrors] = useState(false);
 
@@ -139,11 +142,15 @@ function ProductFormBody({
   const addDetailRow = () => {
     if (!sort || !draftDetailId) return;
     const qty = Math.max(1, parseInt(draftDetailQty, 10) || 1);
+    const number = Math.max(1, parseInt(draftDetailNumber, 10) || 1);
+    // Дубли (деталь + номер) не допускаем — номер в изделии уникален на деталь.
+    if (detailRows.some((r) => r.detailId === draftDetailId && r.detailNumber === number)) return;
     setDetailRows((rows) => [
       ...rows,
-      { id: nextId("d"), detailId: draftDetailId, quantity: qty },
+      { id: nextId("d"), detailId: draftDetailId, detailNumber: number, quantity: qty },
     ]);
     setDraftDetailId("");
+    setDraftDetailNumber("1");
     setDraftDetailQty("1");
   };
 
@@ -173,7 +180,11 @@ function ProductFormBody({
       sort,
       salePrice,
       packagingId: packagingId || null,
-      details: detailRows.map((r) => ({ detailId: r.detailId, quantity: r.quantity })),
+      details: detailRows.map((r) => ({
+        detailId: r.detailId,
+        detailNumber: r.detailNumber,
+        quantity: r.quantity,
+      })),
       fasteners: fastenerRows.map((r) => ({
         nomenclatureId: r.nomenclatureId,
         quantity: r.quantity,
@@ -451,6 +462,27 @@ function ProductFormBody({
                           </SelectContent>
                         </Select>
                       </Field>
+                      <Field id="prod-det-number" label="Номер" className="w-24">
+                        <Select
+                          value={draftDetailNumber}
+                          onValueChange={(v) => setDraftDetailNumber(v ?? "1")}
+                        >
+                          <SelectTrigger id="prod-det-number" className={selectTriggerClass}>
+                            <SelectValue>{draftDetailNumber}</SelectValue>
+                          </SelectTrigger>
+                          <SelectContent {...formSelectContentProps}>
+                            {Array.from({ length: 9 }, (_, i) => i + 1).map((n) => (
+                              <SelectItem
+                                key={n}
+                                value={String(n)}
+                                className="cursor-pointer rounded-lg"
+                              >
+                                {n}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </Field>
                       <Field id="prod-det-qty" label="Количество" className="w-24">
                         <Input
                           id="prod-det-qty"
@@ -480,6 +512,9 @@ function ProductFormBody({
                             key={row.id}
                             className="flex items-center gap-3 px-4 py-2.5 text-sm"
                           >
+                            <span className="bg-muted inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sm font-semibold">
+                              {row.detailNumber}
+                            </span>
                             <span className="min-w-0 flex-1 font-medium">
                               {detailNameById.get(row.detailId) ?? row.detailId}
                             </span>

@@ -73,7 +73,6 @@ function DetailFormBody({
 }) {
   const isEdit = Boolean(detail);
   const [name, setName] = useState(detail?.name ?? "");
-  const [detailNumber, setDetailNumber] = useState<number>(detail?.detailNumber ?? 1);
   const [length, setLength] = useState(() =>
     detail?.lengthM != null ? String(detail.lengthM).replace(".", ",") : "",
   );
@@ -91,7 +90,6 @@ function DetailFormBody({
     if (!canSubmit) return;
     await onSubmit?.({
       name,
-      detailNumber,
       lengthM: lengthNum,
       detailType,
       sort,
@@ -138,27 +136,6 @@ function DetailFormBody({
                   />
                 </Field>
                 <div className="grid gap-4 sm:grid-cols-2">
-                  <Field id="det-number" label="Номер детали" required>
-                    <Select
-                      value={String(detailNumber)}
-                      onValueChange={(v) => setDetailNumber(Number(v))}
-                    >
-                      <SelectTrigger id="det-number" className={selectTriggerClass}>
-                        <SelectValue>{detailNumber}</SelectValue>
-                      </SelectTrigger>
-                      <SelectContent {...formSelectContentProps}>
-                        {Array.from({ length: 9 }, (_, i) => i + 1).map((n) => (
-                          <SelectItem
-                            key={n}
-                            value={String(n)}
-                            className="cursor-pointer rounded-lg"
-                          >
-                            {n}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
                   <Field
                     id="det-length"
                     label="Длина детали"

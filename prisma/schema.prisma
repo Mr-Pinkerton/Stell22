@@ -218,7 +218,6 @@ model NomenclatureItem {
 model Detail {
   id                String        @id @default(cuid())
   name              String
-  detailNumber      Int? // номер детали 1–9 (для упаковки: сколько какого номера в коробку)
   lengthM           Decimal       @db.Decimal(12, 4)
   detailType        RailType
   sort              Sort
@@ -255,14 +254,17 @@ model Product {
 }
 
 model ProductDetail {
-  id        String  @id @default(cuid())
-  productId String
-  product   Product @relation(fields: [productId], references: [id])
-  detailId  String
-  detail    Detail  @relation(fields: [detailId], references: [id])
-  quantity  Int
+  id           String  @id @default(cuid())
+  productId    String
+  product      Product @relation(fields: [productId], references: [id])
+  detailId     String
+  detail       Detail  @relation(fields: [detailId], references: [id])
+  // Номер детали для упаковки (сколько какого номера в коробку). У одной детали
+  // в одном изделии может быть несколько номеров — по строке на номер.
+  detailNumber Int
+  quantity     Int
 
-  @@unique([productId, detailId])
+  @@unique([productId, detailId, detailNumber])
 }
 
 model ProductFastener {
@@ -329,20 +331,43 @@ model OperationDetailLine {
   id          String              @id @default(cuid())
   operationId String
   operation   ProductionOperation @relation(fields: [operationId], references: [id])
-  detailId    String
+  // TORCOVKA: выход — заготовка (detailId = null, спецификация в blank*).
+  // PRISADKA/UPAKOVKA: конкретная деталь (detailId задан).
+  detailId    String?
   quantity    Int
+
+  // Спецификация заготовки:
+  //  - TORCOVKA: произведённая заготовка (длина/тип/сорт) — источник для
+  //    себестоимости, отхода и ЗП торцовки (по сорту заготовки);
+  //  - PRISADKA (первая, sourceIsBlank=true): из какой заготовки взято.
+  blankLengthM Decimal? @db.Decimal(12, 4)
+  blankType    RailType?
+  blankSort    Sort?
 
   // для PRISADKA: какой тип выполнен
   prisadkaTorcevaya Boolean @default(false)
   prisadkaPloskost  Boolean @default(false)
 
-  // Провенанс списания: комбинация DetailStock, ОТКУДА взято это кол-во
-  // (для PRISADKA — до выполнения этого типа присадки; для UPAKOVKA — до
-  // потребления в изделие). Нужен для точного возврата на склад при правке/
-  // удалении операции — cost-integrity: нельзя редактировать/удалять без
-  // обратной разноски.
+  // Провенанс списания для обратной разноски (cost-integrity: нельзя
+  // редактировать/удалять без возврата на склад):
+  //  - sourceIsBlank=true → взято из BlankStock (blank* выше), возврат туда;
+  //  - иначе → из комбинации DetailStock (source*Done ниже).
+  sourceIsBlank       Boolean @default(false)
   sourceTorcevayaDone Boolean @default(false)
   sourcePloskostDone  Boolean @default(false)
+}
+
+// Остаток заготовок (нарезанных реек) до присадки. Ключ — физическая
+// спецификация; конкретная деталь определяется на присадке. Себестоимость
+// считается из операций, поэтому привязки к партии здесь нет.
+model BlankStock {
+  id         String   @id @default(cuid())
+  lengthM    Decimal  @db.Decimal(12, 4)
+  detailType RailType
+  sort       Sort
+  quantity   Int      @default(0)
+
+  @@unique([lengthM, detailType, sort])
 }
 
 // Провенанс списания крепежа/упаковки конкретной операцией УПАКОВКИ — состав

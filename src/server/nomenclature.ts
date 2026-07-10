@@ -30,7 +30,6 @@ function serializeDetail(d: PrismaDetail): Detail {
   return {
     id: d.id,
     name: d.name,
-    detailNumber: d.detailNumber,
     lengthM: toNum(d.lengthM) ?? 0,
     detailType: d.detailType,
     sort: d.sort,
@@ -65,7 +64,11 @@ function serializeProduct(p: ProductWithRelations): Product {
     salePrice: toNum(p.salePrice) ?? 0,
     packagingId: p.packagingId,
     status: p.status,
-    details: p.details.map((d) => ({ detailId: d.detailId, quantity: d.quantity })),
+    details: p.details.map((d) => ({
+      detailId: d.detailId,
+      detailNumber: d.detailNumber,
+      quantity: d.quantity,
+    })),
     fastenerIds: p.fasteners.map((f) => ({ nomenclatureId: f.nomenclatureId, quantity: f.quantity })),
     extraIds: p.extras.map((e) => e.nomenclatureId),
   };
@@ -98,7 +101,6 @@ export async function getNomenclatureData(): Promise<NomenclatureData> {
 
 export interface DetailFormValues {
   name: string;
-  detailNumber: number | null;
   lengthM: number | null;
   detailType: RailType;
   sort: Sort;
@@ -109,7 +111,6 @@ export interface DetailFormValues {
 function detailData(v: DetailFormValues) {
   return {
     name: v.name.trim(),
-    detailNumber: v.detailNumber,
     lengthM: v.lengthM ?? 0,
     detailType: v.detailType,
     sort: v.sort,
@@ -289,7 +290,7 @@ export interface ProductFormValues {
   sort: Sort;
   salePrice: number | null;
   packagingId: string | null;
-  details: { detailId: string; quantity: number }[];
+  details: { detailId: string; detailNumber: number; quantity: number }[];
   fasteners: { nomenclatureId: string; quantity: number }[];
   extraIds: string[];
 }
@@ -298,6 +299,13 @@ function validateProduct(v: ProductFormValues) {
   if (!v.name.trim()) throw new Error("Название изделия обязательно");
   if (!v.skuOzon.trim()) throw new Error("Артикул Ozon обязателен");
   if (!v.skuWb.trim()) throw new Error("Артикул WB обязателен");
+  // У одной детали в изделии номера должны различаться (мультистроки-номера).
+  const seen = new Set<string>();
+  for (const d of v.details) {
+    const key = `${d.detailId}::${d.detailNumber}`;
+    if (seen.has(key)) throw new Error("Повторяющийся номер детали в составе изделия");
+    seen.add(key);
+  }
 }
 
 export async function createProduct(values: ProductFormValues): Promise<Product> {
@@ -311,7 +319,13 @@ export async function createProduct(values: ProductFormValues): Promise<Product>
       sort: values.sort,
       salePrice: values.salePrice ?? 0,
       packagingId: values.packagingId || null,
-      details: { create: values.details.map((d) => ({ detailId: d.detailId, quantity: d.quantity })) },
+      details: {
+        create: values.details.map((d) => ({
+          detailId: d.detailId,
+          detailNumber: d.detailNumber,
+          quantity: d.quantity,
+        })),
+      },
       fasteners: {
         create: values.fasteners.map((f) => ({
           nomenclatureId: f.nomenclatureId,
@@ -351,7 +365,13 @@ export async function updateProduct(id: string, values: ProductFormValues): Prom
         sort: values.sort,
         salePrice: values.salePrice ?? 0,
         packagingId: values.packagingId || null,
-        details: { create: values.details.map((d) => ({ detailId: d.detailId, quantity: d.quantity })) },
+        details: {
+          create: values.details.map((d) => ({
+            detailId: d.detailId,
+            detailNumber: d.detailNumber,
+            quantity: d.quantity,
+          })),
+        },
         fasteners: {
           create: values.fasteners.map((f) => ({
             nomenclatureId: f.nomenclatureId,

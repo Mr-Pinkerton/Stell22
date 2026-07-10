@@ -475,7 +475,6 @@ function buildDetails(): Detail[] {
     {
       id: "det-1",
       name: "Полка 600",
-      detailNumber: 1,
       lengthM: 0.6,
       detailType: "POLKA",
       sort: "SORT1",
@@ -486,7 +485,6 @@ function buildDetails(): Detail[] {
     {
       id: "det-3",
       name: "Полка 800",
-      detailNumber: 2,
       lengthM: 0.8,
       detailType: "POLKA",
       sort: "SORT2",
@@ -497,7 +495,6 @@ function buildDetails(): Detail[] {
     {
       id: "det-4",
       name: "Канавка 600",
-      detailNumber: 3,
       lengthM: 0.6,
       detailType: "KANAVKA",
       sort: "SORT1",
@@ -508,7 +505,6 @@ function buildDetails(): Detail[] {
     {
       id: "det-2",
       name: "Канавка 720",
-      detailNumber: 4,
       lengthM: 0.72,
       detailType: "KANAVKA",
       sort: "SORT2",
@@ -534,7 +530,6 @@ function buildDetails(): Detail[] {
         group.push({
           id: `det-${seq++}`,
           name: `${DETAIL_TYPE_LABEL[detailType]} ${lengthMm}`,
-          detailNumber: ((n - 1) % 9) + 1,
           lengthM: lengthMm / 1000,
           detailType,
           sort,
@@ -562,7 +557,7 @@ export const products: Product[] = [
     salePrice: 1200,
     packagingId: "nom-2",
     status: "ACTIVE",
-    details: [{ detailId: "det-1", quantity: 2 }],
+    details: [{ detailId: "det-1", detailNumber: 1, quantity: 2 }],
     fastenerIds: [{ nomenclatureId: "nom-1", quantity: 8 }],
     extraIds: [],
   },
@@ -576,8 +571,8 @@ export const products: Product[] = [
     packagingId: "nom-2",
     status: "ACTIVE",
     details: [
-      { detailId: "det-3", quantity: 2 },
-      { detailId: "det-2", quantity: 1 },
+      { detailId: "det-3", detailNumber: 1, quantity: 2 },
+      { detailId: "det-2", detailNumber: 2, quantity: 1 },
     ],
     fastenerIds: [{ nomenclatureId: "nom-1", quantity: 12 }],
     extraIds: [],
@@ -667,6 +662,12 @@ export const terminalEntries: TerminalEntry[] = buildTerminalEntries();
 
 /** Срез остатков для прототипа терминала. */
 export const stockSnapshot: StockSnapshot = {
+  blanks: {
+    "0.6000|POLKA|SORT1": 120,
+    "0.8000|POLKA|SORT2": 80,
+    "0.6000|KANAVKA|SORT1": 40,
+    "0.7200|KANAVKA|SORT2": 60,
+  },
   detailsReady: {
     "det-1": 90,
     "det-2": 24,
