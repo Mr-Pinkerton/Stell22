@@ -560,7 +560,6 @@ export const products: Product[] = [
     skuOzon: "OZ-001",
     skuWb: "WB-001",
     sort: "SORT1",
-    salePrice: 1200,
     packagingId: "nom-2",
     status: "ACTIVE",
     details: [{ detailId: "det-1", quantity: 2 }],
@@ -573,7 +572,6 @@ export const products: Product[] = [
     skuOzon: "OZ-002",
     skuWb: "WB-002",
     sort: "SORT2",
-    salePrice: 1500,
     packagingId: "nom-2",
     status: "ACTIVE",
     details: [

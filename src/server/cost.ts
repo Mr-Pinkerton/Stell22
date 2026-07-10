@@ -105,7 +105,6 @@ function serProduct(p: ProductWithRelations): Product {
     skuOzon: p.skuOzon,
     skuWb: p.skuWb,
     sort: p.sort,
-    salePrice: num(p.salePrice),
     packagingId: p.packagingId,
     status: p.status,
     details: p.details.map((d) => ({

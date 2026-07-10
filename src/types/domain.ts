@@ -93,7 +93,6 @@ export interface Product {
   /** Артикул Wildberries (supplierArticle). */
   skuWb: string;
   sort: Sort;
-  salePrice: number;
   packagingId?: string | null;
   status: ProductStatus;
   details: ProductDetail[];

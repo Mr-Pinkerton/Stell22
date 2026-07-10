@@ -62,7 +62,6 @@ function serializeProduct(p: ProductWithRelations): Product {
     skuOzon: p.skuOzon,
     skuWb: p.skuWb,
     sort: p.sort,
-    salePrice: toNum(p.salePrice) ?? 0,
     packagingId: p.packagingId,
     status: p.status,
     details: p.details.map((d) => ({
@@ -323,7 +322,6 @@ export interface ProductFormValues {
   skuOzon: string;
   skuWb: string;
   sort: Sort;
-  salePrice: number | null;
   packagingId: string | null;
   details: { detailId: string; quantity: number }[];
   fasteners: { nomenclatureId: string; quantity: number }[];
@@ -351,7 +349,6 @@ export async function createProduct(values: ProductFormValues): Promise<Product>
       skuOzon: values.skuOzon.trim(),
       skuWb: values.skuWb.trim(),
       sort: values.sort,
-      salePrice: values.salePrice ?? 0,
       packagingId: values.packagingId || null,
       details: {
         create: values.details.map((d) => ({
@@ -396,7 +393,6 @@ export async function updateProduct(id: string, values: ProductFormValues): Prom
         skuOzon: values.skuOzon.trim(),
         skuWb: values.skuWb.trim(),
         sort: values.sort,
-        salePrice: values.salePrice ?? 0,
         packagingId: values.packagingId || null,
         details: {
           create: values.details.map((d) => ({

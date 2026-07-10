@@ -176,7 +176,6 @@ async function main() {
         skuOzon: p.skuOzon,
         skuWb: p.skuWb,
         sort: p.sort,
-        salePrice: p.salePrice,
         packagingId: p.packagingId ?? null,
         status: p.status,
         details: {
@@ -481,7 +480,11 @@ async function main() {
   // ===================== ПРОДАЖИ / ОСТАТКИ МП (стартовый снимок) ============
   // Имитация уже полученных с маркетплейсов данных; обновляется кнопкой
   // «Синхронизировать» (server/marketplace — заглушка вместо Ozon/WB API).
-  const priceById = new Map(products.map((p) => [p.id, p.salePrice]));
+  // Цена продажи у изделий не хранится — для демо-выручки берём фикс. базу.
+  const priceById = new Map<string, number>([
+    ["prod-1", 1200],
+    ["prod-2", 1500],
+  ]);
   const saleSeed: { mp: string; productId: string; sku: string; qty: number; date: string }[] = [
     { mp: "OZON", productId: "prod-1", sku: "OZ-001", qty: 48, date: "2026-06-10" },
     { mp: "OZON", productId: "prod-2", sku: "OZ-002", qty: 22, date: "2026-06-14" },

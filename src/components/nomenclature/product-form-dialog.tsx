@@ -14,7 +14,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { MoneyInput } from "@/components/ui/money-input";
 import {
   Select,
   SelectContent,
@@ -32,7 +31,6 @@ import {
   fieldClass,
   formAddButtonClass,
   formSelectContentProps,
-  narrowFieldClass,
   selectTriggerClass,
 } from "./form-shared";
 
@@ -91,7 +89,6 @@ function ProductFormBody({
   const [name, setName] = useState(product?.name ?? "");
   const [skuOzon, setSkuOzon] = useState(product?.skuOzon ?? "");
   const [skuWb, setSkuWb] = useState(product?.skuWb ?? "");
-  const [salePrice, setSalePrice] = useState<number | null>(product?.salePrice ?? null);
   const [sort, setSort] = useState<Sort | "">(product?.sort ?? "");
   const [packagingId, setPackagingId] = useState(product?.packagingId ?? "");
   const [fastenerRows, setFastenerRows] = useState<DraftFastener[]>(
@@ -173,7 +170,6 @@ function ProductFormBody({
       skuOzon,
       skuWb,
       sort,
-      salePrice,
       packagingId: packagingId || null,
       details: detailRows.map((r) => ({
         detailId: r.detailId,
@@ -279,15 +275,6 @@ function ProductFormBody({
                         </SelectItem>
                       </SelectContent>
                     </Select>
-                  </Field>
-                  <Field id="prod-sale" label="Цена продажи" required>
-                    <MoneyInput
-                      id="prod-sale"
-                      className={narrowFieldClass}
-                      suffix="₽"
-                      value={salePrice}
-                      onValueChange={setSalePrice}
-                    />
                   </Field>
                 </div>
               </FormSection>

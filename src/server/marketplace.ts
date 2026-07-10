@@ -167,7 +167,14 @@ interface ActiveProduct {
   id: string;
   skuOzon: string;
   skuWb: string;
-  salePrice: number;
+}
+
+// Заглушка цены: детерминированная база из артикула (у изделий нет поля цены —
+// реальные цены придут из API маркетплейса).
+function mockBasePrice(sku: string): number {
+  let h = 0;
+  for (let i = 0; i < sku.length; i++) h = (h * 31 + sku.charCodeAt(i)) & 0xffff;
+  return 800 + (h % 1200); // 800..1999 ₽
 }
 
 function makeRand(seed: number) {
@@ -189,7 +196,7 @@ function fetchWbSalesRaw(products: ActiveProduct[], now: Date, rand: () => numbe
         date: now.toISOString(),
         supplierArticle: p.skuWb,
         saleID: `${isReturn ? "R" : "S"}-${stamp}-${p.skuWb}-${i}`,
-        finishedPrice: Math.round(p.salePrice * (0.9 + rand() * 0.2)),
+        finishedPrice: Math.round(mockBasePrice(p.skuWb) * (0.9 + rand() * 0.2)),
       });
     }
   }
@@ -206,7 +213,7 @@ function fetchOzonPostingsRaw(products: ActiveProduct[], now: Date, rand: () => 
       {
         offer_id: p.skuOzon,
         quantity: 1 + Math.floor(rand() * 3), // 1..3
-        price: p.salePrice.toFixed(2),
+        price: mockBasePrice(p.skuOzon).toFixed(2),
       },
     ],
   }));
@@ -521,7 +528,6 @@ export async function syncMarketplacesAsUser(userId: string): Promise<SyncResult
     id: p.id,
     skuOzon: p.skuOzon,
     skuWb: p.skuWb,
-    salePrice: toNumber(p.salePrice),
   }));
   // Сопоставление по МП: продажи/поставки/остатки Ozon ищем по skuOzon, WB — по skuWb.
   const idByOzonSku = new Map(products.filter((p) => p.skuOzon).map((p) => [p.skuOzon, p.id]));

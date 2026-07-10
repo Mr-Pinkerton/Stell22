@@ -164,7 +164,6 @@ describe("buildCostProductRows", () => {
       skuOzon: "OZ-1",
       skuWb: "WB-1",
       sort: "SORT1",
-      salePrice: 100,
       packagingId: "n-pack",
       status: "ACTIVE",
       details: [{ detailId: "dA", quantity: 2 }],

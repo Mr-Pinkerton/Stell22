@@ -145,11 +145,6 @@ export function ProductsTable({
             {expanded && (
               <ExpandableDetailRow colSpan={COL_SPAN} className={expandableExpandedDetailClass}>
                 <div className={cn(expandableNestedWrapExpandedClass, "space-y-5")}>
-                  <p className="text-sm">
-                    <span className="text-muted-foreground">Цена продажи: </span>
-                    <span className="font-medium tabular-nums">{formatMoney(row.salePrice)}</span>
-                  </p>
-
                   <ProductSection title="Детали в изделии">
                     <NestedTable
                       headers={[...DETAIL_HEADERS]}

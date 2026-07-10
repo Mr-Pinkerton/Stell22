@@ -245,7 +245,6 @@ model Product {
   skuOzon       String // offer_id (Ozon)
   skuWb         String // supplierArticle (Wildberries)
   sort          Sort
-  salePrice     Decimal       @db.Decimal(14, 2) // цена ПРОДАЖИ (не себестоимость)
   packagingId   String?
   packaging     NomenclatureItem? @relation("ProductPackaging", fields: [packagingId], references: [id])
   status        ProductStatus @default(ACTIVE)
