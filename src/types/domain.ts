@@ -70,8 +70,8 @@ export interface NomenclatureItem {
 export interface Detail {
   id: string;
   name: string;
-  /** Номер детали 1–9 (для упаковки). null у старых деталей до простановки. */
-  detailNumber: number | null;
+  /** Уникальный номер детали (длина + присадки). Используется при упаковке. */
+  detailNumber: number;
   lengthM: number;
   detailType: RailType;
   sort: Sort;
@@ -121,10 +121,12 @@ export interface TerminalEntry {
  * В Части B заменяется реальным снимком из БД.
  */
 export interface StockSnapshot {
-  /** detailId → кол-во ГОТОВЫХ деталей (все присадки выполнены). */
+  /** Ключ заготовки `${lengthM}|${detailType}|${sort}` → кол-во заготовок. */
+  blanks: Record<string, number>;
+  /** detailId → кол-во ГОТОВЫХ деталей (все требуемые присадки выполнены). */
   detailsReady: Record<string, number>;
   /** nomenclatureId → остаток (крепёж/упаковка/разное). */
   nomenclature: Record<string, number>;
-  /** detailId → сколько деталей ждёт каждого типа присадки. */
+  /** detailId → сколько пригодных к каждому типу присадки (заготовки + частичные). */
   prisadkaPending: Record<string, { torcev: number; plosk: number }>;
 }

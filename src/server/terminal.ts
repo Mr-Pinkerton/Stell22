@@ -13,7 +13,14 @@ import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { archiveBatchIfDepleted } from "@/server/cost";
-import { allocate, buildStockSnapshot, isReady, type DetailStockRow } from "@/lib/detail-stock";
+import {
+  allocate,
+  buildStockSnapshot,
+  isReady,
+  requiredPrisadki,
+  type BlankStockRow,
+  type DetailStockRow,
+} from "@/lib/detail-stock";
 import type {
   Batch,
   Detail,
@@ -21,6 +28,8 @@ import type {
   NomenclatureItem,
   Product,
   RailLot,
+  RailType,
+  Sort,
   TerminalEntry,
 } from "@/types/domain";
 import type { TerminalData } from "@/components/terminal/types";
@@ -123,7 +132,10 @@ function serProduct(p: ProductWithRel): Product {
     salePrice: num(p.salePrice) ?? 0,
     packagingId: p.packagingId,
     status: p.status,
-    details: p.details.map((d) => ({ detailId: d.detailId, quantity: d.quantity })),
+    details: p.details.map((d) => ({
+      detailId: d.detailId,
+      quantity: d.quantity,
+    })),
     fastenerIds: p.fasteners.map((f) => ({ nomenclatureId: f.nomenclatureId, quantity: f.quantity })),
     extraIds: p.extras.map((e) => e.nomenclatureId),
   };
@@ -132,7 +144,7 @@ function serProduct(p: ProductWithRel): Product {
 // ============================ ЧТЕНИЕ =======================================
 
 export async function getTerminalData(): Promise<TerminalData> {
-  const [employees, batches, lots, details, products, items, stockRows, nomStock] =
+  const [employees, batches, lots, details, products, items, stockRows, blankRows, nomStock] =
     await Promise.all([
       prisma.employee.findMany({ where: { status: "ACTIVE" }, orderBy: { fullName: "asc" } }),
       prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
@@ -141,6 +153,7 @@ export async function getTerminalData(): Promise<TerminalData> {
       prisma.product.findMany({ include: { details: true, fasteners: true, extras: true } }),
       prisma.nomenclatureItem.findMany(),
       prisma.detailStock.findMany(),
+      prisma.blankStock.findMany(),
       prisma.nomenclatureStock.findMany(),
     ]);
 
@@ -157,6 +170,13 @@ export async function getTerminalData(): Promise<TerminalData> {
     quantity: r.quantity,
   }));
 
+  const blanks: BlankStockRow[] = blankRows.map((b) => ({
+    lengthM: num(b.lengthM) ?? 0,
+    detailType: b.detailType,
+    sort: b.sort,
+    quantity: b.quantity,
+  }));
+
   return {
     employees: employees.map(serEmployee),
     batches: batches.map(serBatch),
@@ -164,7 +184,7 @@ export async function getTerminalData(): Promise<TerminalData> {
     details: domainDetails,
     products: products.map(serProduct),
     nomenclature: items.map(serItem),
-    stock: buildStockSnapshot(domainDetails, rows, nomenclatureStock),
+    stock: buildStockSnapshot(domainDetails, rows, blanks, nomenclatureStock),
   };
 }
 
@@ -175,7 +195,12 @@ export interface TorcovkaInput {
   batchId: string;
   railLotId: string;
   railsTaken: number;
-  picks: { detailId: string; quantity: number }[];
+  /**
+   * Нарезанные заготовки по длине и ФАКТИЧЕСКОМУ сорту. Тип берётся из пакета,
+   * но сорт назначает работник: из пакета любого сорта могут выйти заготовки
+   * и 1, и 2 сорта (см. МОДЕЛЬ СЕБЕСТОИМОСТИ — факт vs заявленное).
+   */
+  picks: { lengthM: number; sort: Sort; quantity: number }[];
 }
 
 export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
@@ -183,9 +208,13 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
   if (railsTaken <= 0) throw new Error("Укажите количество взятых реек");
-  if (picks.length === 0) throw new Error("Не выбраны детали");
+  if (picks.length === 0) throw new Error("Не выбраны длины заготовок");
 
   await prisma.$transaction(async (tx) => {
+    // Тип заготовок определяется пакетом реек; фактический сорт — из pick.
+    const lot = await tx.railLot.findUnique({ where: { id: railLotId } });
+    if (!lot || lot.batchId !== batchId) throw new Error("Пакет реек не найден");
+
     // Атомарное списание: уйти в минус нельзя (cost-integrity).
     const dec = await tx.railLot.updateMany({
       where: { id: railLotId, batchId, remainingQuantity: { gte: railsTaken } },
@@ -201,24 +230,32 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
         railLotId,
         railsTaken,
         workDate: new Date(),
-        lines: { create: picks.map((p) => ({ detailId: p.detailId, quantity: p.quantity })) },
+        lines: {
+          create: picks.map((p) => ({
+            quantity: p.quantity,
+            blankLengthM: p.lengthM,
+            blankType: lot.railType,
+            blankSort: p.sort,
+          })),
+        },
       },
     });
 
-    // Произведённые детали приходуются на сырую стадию (присадки не сделаны).
+    // Произведённые заготовки приходуются на склад заготовок (конкретная деталь
+    // определится на присадке). Сорт — фактический, назначенный работником.
     for (const p of picks) {
-      await tx.detailStock.upsert({
+      await tx.blankStock.upsert({
         where: {
-          detailId_torcevayaDone_ploskostDone: {
-            detailId: p.detailId,
-            torcevayaDone: false,
-            ploskostDone: false,
+          lengthM_detailType_sort: {
+            lengthM: p.lengthM,
+            detailType: lot.railType,
+            sort: p.sort,
           },
         },
         create: {
-          detailId: p.detailId,
-          torcevayaDone: false,
-          ploskostDone: false,
+          lengthM: p.lengthM,
+          detailType: lot.railType,
+          sort: p.sort,
           quantity: p.quantity,
         },
         update: { quantity: { increment: p.quantity } },
@@ -258,13 +295,16 @@ export interface PrisadkaInput {
 }
 
 /**
- * Списывает `quantity` детали `detailId` для присадки типа `kind` с сырого/
- * частично присаженного остатка и приходует на результирующую комбинацию.
- * Один пик может распределиться по НЕСКОЛЬКИМ строкам-источникам с разной
- * комбинацией другого флага — на каждую создаётся своя строка
- * `OperationDetailLine` с провенансом (`sourceTorcevayaDone/PloskostDone`),
- * это нужно для точного возврата при правке/удалении операции.
- * Бросает при нехватке остатка (нельзя в минус — cost-integrity).
+ * Списывает `quantity` детали `detailId` для присадки типа `kind` и приходует
+ * на результирующую комбинацию.
+ * Источники (в порядке потребления):
+ *  1. частично присаженные детали `DetailStock`, где `kind` ещё не выполнен
+ *     (вторая присадка детали) — провенанс `source*Done`, `sourceIsBlank=false`;
+ *  2. заготовки `BlankStock` спецификации детали (первая присадка: заготовка
+ *     превращается в конкретную деталь) — провенанс `sourceIsBlank=true` +
+ *     `blank*` спецификация для точного возврата.
+ * На каждый источник — своя строка `OperationDetailLine` (для обратной разноски
+ * при правке/удалении). Бросает при нехватке (нельзя в минус — cost-integrity).
  */
 async function applyPrisadkaPick(
   tx: Prisma.TransactionClient,
@@ -273,7 +313,11 @@ async function applyPrisadkaPick(
   kind: "torcev" | "plosk",
   quantity: number,
 ): Promise<void> {
-  const sources = await tx.detailStock.findMany({
+  const detail = await tx.detail.findUniqueOrThrow({ where: { id: detailId } });
+  let left = quantity;
+
+  // 1. Частично присаженные детали (вторая присадка).
+  const partials = await tx.detailStock.findMany({
     where: {
       detailId,
       quantity: { gt: 0 },
@@ -281,18 +325,10 @@ async function applyPrisadkaPick(
     },
     orderBy: { id: "asc" },
   });
-  const takes = allocate(
-    sources.map((s) => s.quantity),
-    quantity,
-  ); // бросит при нехватке
-
-  for (let i = 0; i < sources.length; i++) {
-    const take = takes[i];
-    if (take <= 0) continue;
-    const src = sources[i];
-    // Атомарное списание с защитой от гонки: если параллельная транзакция
-    // уже увела остаток ниже take — count === 0 и весь $transaction откатится
-    // (нельзя в минус — cost-integrity).
+  for (const src of partials) {
+    if (left <= 0) break;
+    const take = Math.min(src.quantity, left);
+    // Атомарное списание с защитой от гонки (нельзя в минус — cost-integrity).
     const dec = await tx.detailStock.updateMany({
       where: { id: src.id, quantity: { gte: take } },
       data: { quantity: { decrement: take } },
@@ -314,10 +350,49 @@ async function applyPrisadkaPick(
         quantity: take,
         prisadkaTorcevaya: kind === "torcev",
         prisadkaPloskost: kind === "plosk",
+        sourceIsBlank: false,
         sourceTorcevayaDone: src.torcevayaDone,
         sourcePloskostDone: src.ploskostDone,
       },
     });
+    left -= take;
+  }
+
+  // 2. Заготовки спецификации детали (первая присадка).
+  if (left > 0) {
+    const dec = await tx.blankStock.updateMany({
+      where: {
+        lengthM: detail.lengthM,
+        detailType: detail.detailType,
+        sort: detail.sort,
+        quantity: { gte: left },
+      },
+      data: { quantity: { decrement: left } },
+    });
+    if (dec.count === 0) throw new Error("Недостаточно заготовок для присадки");
+    const torcevayaDone = kind === "torcev";
+    const ploskostDone = kind === "plosk";
+    await tx.detailStock.upsert({
+      where: {
+        detailId_torcevayaDone_ploskostDone: { detailId, torcevayaDone, ploskostDone },
+      },
+      create: { detailId, torcevayaDone, ploskostDone, quantity: left },
+      update: { quantity: { increment: left } },
+    });
+    await tx.operationDetailLine.create({
+      data: {
+        operationId,
+        detailId,
+        quantity: left,
+        prisadkaTorcevaya: kind === "torcev",
+        prisadkaPloskost: kind === "plosk",
+        sourceIsBlank: true,
+        blankLengthM: detail.lengthM,
+        blankType: detail.detailType,
+        blankSort: detail.sort,
+      },
+    });
+    left = 0;
   }
 }
 
@@ -329,15 +404,36 @@ async function applyPrisadkaPick(
  */
 export async function reversePrisadkaLine(
   tx: Prisma.TransactionClient,
-  line: { detailId: string; quantity: number; prisadkaTorcevaya: boolean; sourceTorcevayaDone: boolean; sourcePloskostDone: boolean },
+  line: {
+    detailId: string | null;
+    quantity: number;
+    prisadkaTorcevaya: boolean;
+    sourceIsBlank: boolean;
+    sourceTorcevayaDone: boolean;
+    sourcePloskostDone: boolean;
+    blankLengthM: Prisma.Decimal | number | null;
+    blankType: RailType | null;
+    blankSort: Sort | null;
+  },
 ): Promise<void> {
+  if (!line.detailId) throw new Error("Строка присадки без детали");
+  const detailId = line.detailId;
   const kind: "torcev" | "plosk" = line.prisadkaTorcevaya ? "torcev" : "plosk";
-  const destTorcev = kind === "torcev" ? true : line.sourceTorcevayaDone;
-  const destPlosk = kind === "plosk" ? true : line.sourcePloskostDone;
+  // Результирующая комбинация после этого типа присадки.
+  const destTorcev = line.sourceIsBlank
+    ? kind === "torcev"
+    : kind === "torcev"
+      ? true
+      : line.sourceTorcevayaDone;
+  const destPlosk = line.sourceIsBlank
+    ? kind === "plosk"
+    : kind === "plosk"
+      ? true
+      : line.sourcePloskostDone;
 
   const dec = await tx.detailStock.updateMany({
     where: {
-      detailId: line.detailId,
+      detailId,
       torcevayaDone: destTorcev,
       ploskostDone: destPlosk,
       quantity: { gte: line.quantity },
@@ -348,16 +444,40 @@ export async function reversePrisadkaLine(
     throw new Error("Нельзя изменить/удалить: деталь уже использована в упаковке или дальнейшей присадке");
   }
 
+  if (line.sourceIsBlank) {
+    // Первая присадка: возвращаем заготовку на склад заготовок.
+    if (line.blankLengthM == null || line.blankType == null || line.blankSort == null) {
+      throw new Error("Нет спецификации заготовки для возврата");
+    }
+    await tx.blankStock.upsert({
+      where: {
+        lengthM_detailType_sort: {
+          lengthM: line.blankLengthM,
+          detailType: line.blankType,
+          sort: line.blankSort,
+        },
+      },
+      create: {
+        lengthM: line.blankLengthM,
+        detailType: line.blankType,
+        sort: line.blankSort,
+        quantity: line.quantity,
+      },
+      update: { quantity: { increment: line.quantity } },
+    });
+    return;
+  }
+
   await tx.detailStock.upsert({
     where: {
       detailId_torcevayaDone_ploskostDone: {
-        detailId: line.detailId,
+        detailId,
         torcevayaDone: line.sourceTorcevayaDone,
         ploskostDone: line.sourcePloskostDone,
       },
     },
     create: {
-      detailId: line.detailId,
+      detailId,
       torcevayaDone: line.sourceTorcevayaDone,
       ploskostDone: line.sourcePloskostDone,
       quantity: line.quantity,
@@ -417,14 +537,49 @@ async function applyUpakovkaPick(
   });
   if (!product) throw new Error("Изделие не найдено");
 
-  // Списываем готовые детали (все требуемые присадки выполнены).
+  // Суммарная потребность по каждой детали изделия (одна деталь = одна строка
+  // состава; агрегируем на случай будущих дублей — важна общая потребность).
+  const neededByDetail = new Map<string, number>();
   for (const pd of product.details) {
-    const needed = pd.quantity * quantity;
+    if (pd.quantity <= 0) continue;
+    neededByDetail.set(pd.detailId, (neededByDetail.get(pd.detailId) ?? 0) + pd.quantity * quantity);
+  }
+
+  // Списываем готовые детали (все требуемые присадки выполнены). Деталь без
+  // присадок годна из заготовки — списываем прямо со склада заготовок.
+  for (const [detailId, needed] of neededByDetail) {
     if (needed <= 0) continue;
-    const detail = await tx.detail.findUniqueOrThrow({ where: { id: pd.detailId } });
+    const detail = await tx.detail.findUniqueOrThrow({ where: { id: detailId } });
+    const req = requiredPrisadki(detail);
+
+    if (!req.torcev && !req.plosk) {
+      const dec = await tx.blankStock.updateMany({
+        where: {
+          lengthM: detail.lengthM,
+          detailType: detail.detailType,
+          sort: detail.sort,
+          quantity: { gte: needed },
+        },
+        data: { quantity: { decrement: needed } },
+      });
+      if (dec.count === 0) throw new Error("Недостаточно заготовок для упаковки");
+      await tx.operationDetailLine.create({
+        data: {
+          operationId,
+          detailId,
+          quantity: needed,
+          sourceIsBlank: true,
+          blankLengthM: detail.lengthM,
+          blankType: detail.detailType,
+          blankSort: detail.sort,
+        },
+      });
+      continue;
+    }
+
     const rows = (
       await tx.detailStock.findMany({
-        where: { detailId: pd.detailId, quantity: { gt: 0 } },
+        where: { detailId, quantity: { gt: 0 } },
         orderBy: { id: "asc" },
       })
     ).filter((r) => isReady(detail, r.torcevayaDone, r.ploskostDone));
@@ -445,8 +600,9 @@ async function applyUpakovkaPick(
       await tx.operationDetailLine.create({
         data: {
           operationId,
-          detailId: pd.detailId,
+          detailId,
           quantity: take,
+          sourceIsBlank: false,
           sourceTorcevayaDone: rows[i].torcevayaDone,
           sourcePloskostDone: rows[i].ploskostDone,
         },
@@ -497,7 +653,16 @@ export async function reverseUpakovkaOperation(
   tx: Prisma.TransactionClient,
   productId: string,
   productQty: number,
-  detailLines: { detailId: string; quantity: number; sourceTorcevayaDone: boolean; sourcePloskostDone: boolean }[],
+  detailLines: {
+    detailId: string | null;
+    quantity: number;
+    sourceIsBlank: boolean;
+    sourceTorcevayaDone: boolean;
+    sourcePloskostDone: boolean;
+    blankLengthM: Prisma.Decimal | number | null;
+    blankType: RailType | null;
+    blankSort: Sort | null;
+  }[],
   nomenclatureLines: { nomenclatureId: string; quantity: number }[],
 ): Promise<void> {
   const dec = await tx.productStock.updateMany({
@@ -509,6 +674,30 @@ export async function reverseUpakovkaOperation(
   }
 
   for (const l of detailLines) {
+    if (l.sourceIsBlank) {
+      // Беcприсадочная деталь — возврат на склад заготовок.
+      if (l.blankLengthM == null || l.blankType == null || l.blankSort == null) {
+        throw new Error("Нет спецификации заготовки для возврата");
+      }
+      await tx.blankStock.upsert({
+        where: {
+          lengthM_detailType_sort: {
+            lengthM: l.blankLengthM,
+            detailType: l.blankType,
+            sort: l.blankSort,
+          },
+        },
+        create: {
+          lengthM: l.blankLengthM,
+          detailType: l.blankType,
+          sort: l.blankSort,
+          quantity: l.quantity,
+        },
+        update: { quantity: { increment: l.quantity } },
+      });
+      continue;
+    }
+    if (l.detailId == null) throw new Error("Строка упаковки без детали");
     await tx.detailStock.upsert({
       where: {
         detailId_torcevayaDone_ploskostDone: {
@@ -594,11 +783,7 @@ export async function submitHours(employeeId: string, hours: number): Promise<vo
 
 type OpWithLines = Prisma.ProductionOperationGetPayload<{ include: { lines: true } }>;
 
-function entryFromOperation(
-  op: OpWithLines,
-  emp: PrismaEmployee,
-  detailSort: Map<string, "SORT1" | "SORT2">,
-): TerminalEntry {
+function entryFromOperation(op: OpWithLines, emp: PrismaEmployee): TerminalEntry {
   let quantity = 0;
   let amount = 0;
 
@@ -609,11 +794,12 @@ function entryFromOperation(
     quantity = op.productQty ?? 0;
     amount = quantity * (num(emp.rateUpakovka) ?? 0);
   } else if (op.type === "TORCOVKA") {
+    // ЗП торцовки — по сорту произведённой заготовки.
     const r1 = num(emp.rateTorcovkaSort1) ?? 0;
     const r2 = num(emp.rateTorcovkaSort2) ?? 0;
     for (const l of op.lines) {
       quantity += l.quantity;
-      amount += l.quantity * (detailSort.get(l.detailId) === "SORT2" ? r2 : r1);
+      amount += l.quantity * (l.blankSort === "SORT2" ? r2 : r1);
     }
   } else {
     // PRISADKA
@@ -636,17 +822,15 @@ function entryFromOperation(
 }
 
 export async function getEmployeeEntries(employeeId: string): Promise<TerminalEntry[]> {
-  const [emp, ops, details] = await Promise.all([
+  const [emp, ops] = await Promise.all([
     prisma.employee.findUnique({ where: { id: employeeId } }),
     prisma.productionOperation.findMany({
       where: { employeeId },
       include: { lines: true },
       orderBy: { createdAt: "desc" },
     }),
-    prisma.detail.findMany({ select: { id: true, sort: true } }),
   ]);
   if (!emp) return [];
 
-  const detailSort = new Map(details.map((d) => [d.id, d.sort]));
-  return ops.map((op) => entryFromOperation(op, emp, detailSort));
+  return ops.map((op) => entryFromOperation(op, emp));
 }

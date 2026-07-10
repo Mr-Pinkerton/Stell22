@@ -4,14 +4,14 @@ import { useMemo, useState } from "react";
 import { toast } from "@/components/terminal/toast";
 import { Boxes, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { OperationTile, OperationTileGrid, OperationTileRow } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatLength } from "@/lib/format";
 import { maxDetailQuantity, sumDetailLengthM, type TorcovkaPick } from "@/lib/torcovka";
 import { submitTorcovka } from "@/server/terminal";
-import type { Batch, Detail, Employee, RailLot, Sort } from "@/types/domain";
+import type { Batch, Employee, RailLot, Sort } from "@/types/domain";
 import type { TerminalData } from "@/components/terminal/types";
 
 interface TorcovkaScreenProps {
@@ -20,18 +20,23 @@ interface TorcovkaScreenProps {
   onDone: () => void;
 }
 
-type Dialog = { kind: "rails" } | { kind: "detail"; detail: Detail } | null;
+type Dialog = { kind: "rails" } | { kind: "length"; lengthM: number; sort: Sort } | null;
 
 const SORT_LABEL: Record<Sort, string> = { SORT1: "1 сорт", SORT2: "2 сорт" };
+const SORT_TABS: Sort[] = ["SORT1", "SORT2"];
 
-const RAIL_LENGTH_LIMIT_MESSAGE = "Длина деталей превышает длину взятых реек";
+const RAIL_LENGTH_LIMIT_MESSAGE = "Длина заготовок превышает длину взятых реек";
+
+// Ключ выбора — длина + фактический сорт (из пакета любого сорта можно наложить
+// заготовки обоих сортов; факт vs заявленное определяет распределение стоимости).
+const pickKey = (lengthM: number, sort: Sort) => `${lengthM}|${sort}`;
 
 export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) {
   const [batchId, setBatchId] = useState<string | null>(null);
   const [lotId, setLotId] = useState<string | null>(null);
   const [railsTaken, setRailsTaken] = useState(0);
   const [picked, setPicked] = useState<Record<string, number>>({});
-  const [sort, setSort] = useState<Sort>("SORT1");
+  const [activeSort, setActiveSort] = useState<Sort>("SORT1");
   const [dialog, setDialog] = useState<Dialog>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -42,19 +47,24 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
   );
   const lot = lots.find((l) => l.id === lotId) ?? null;
 
-  const detailTiles = useMemo(() => {
+  // Заготовки нарезаются по длине; конкретная деталь определяется на присадке.
+  // Доступные длины — из каталога деталей соответствующего типа рейки.
+  const lengthTiles = useMemo(() => {
     if (!lot) return [];
-    return data.details.filter(
-      (d) => d.status === "ACTIVE" && d.detailType === lot.railType && d.sort === sort,
-    );
-  }, [data.details, lot, sort]);
+    const lengths = new Set<number>();
+    for (const d of data.details) {
+      if (d.status === "ACTIVE" && d.detailType === lot.railType) lengths.add(d.lengthM);
+    }
+    return [...lengths].sort((a, b) => a - b);
+  }, [data.details, lot]);
 
   const torcovkaPicks = useMemo((): TorcovkaPick[] => {
-    return Object.entries(picked).flatMap(([id, quantity]) => {
-      const d = data.details.find((x) => x.id === id);
-      return d && quantity > 0 ? [{ detailId: id, quantity, lengthM: d.lengthM }] : [];
+    return Object.entries(picked).flatMap(([key, quantity]) => {
+      if (quantity <= 0) return [];
+      const [len, sort] = key.split("|");
+      return [{ lengthM: Number(len), sort: sort as Sort, quantity }];
     });
-  }, [picked, data.details]);
+  }, [picked]);
 
   const takenLengthM = lot ? railsTaken * lot.lengthM : 0;
   const usedLengthM = sumDetailLengthM(torcovkaPicks);
@@ -93,9 +103,9 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         batchId,
         railLotId: lot.id,
         railsTaken,
-        picks: torcovkaPicks.map((p) => ({ detailId: p.detailId, quantity: p.quantity })),
+        picks: torcovkaPicks.map((p) => ({ lengthM: p.lengthM, sort: p.sort, quantity: p.quantity })),
       });
-      toast.success(`Торцовка внесена: ${pickedCount} дет., отход ${formatLength(wasteM)}`);
+      toast.success(`Торцовка внесена: ${pickedCount} заг., отход ${formatLength(wasteM)}`);
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
@@ -144,59 +154,66 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       )}
 
       {lot && (
-        <Section title="Детали">
+        <Section title="Заготовки">
           <div className="flex flex-col gap-5">
             <Tabs
-              value={sort}
-              onValueChange={(v) => setSort(v as Sort)}
+              value={activeSort}
+              onValueChange={(v) => setActiveSort(v as Sort)}
               className="items-center gap-4"
             >
               <TabsList className="h-auto gap-1.5 rounded-2xl p-1.5">
-                {(["SORT1", "SORT2"] as Sort[]).map((s) => (
-                  <TabsTrigger
-                    key={s}
-                    value={s}
-                    className="border-border bg-card/60 data-active:bg-card data-active:shadow-soft h-12 min-w-36 rounded-xl border px-8 text-lg font-semibold data-active:border-transparent"
-                  >
-                    {SORT_LABEL[s]}
-                  </TabsTrigger>
-                ))}
+                {SORT_TABS.map((s) => {
+                  const count = torcovkaPicks
+                    .filter((p) => p.sort === s)
+                    .reduce((a, p) => a + p.quantity, 0);
+                  return (
+                    <TabsTrigger
+                      key={s}
+                      value={s}
+                      className="border-border bg-card/60 data-active:bg-card data-active:shadow-soft h-12 min-w-36 rounded-xl border px-8 text-lg font-semibold data-active:border-transparent"
+                    >
+                      {SORT_LABEL[s]}
+                      {count > 0 && (
+                        <span className="text-brand ml-2 tabular-nums">{count}</span>
+                      )}
+                    </TabsTrigger>
+                  );
+                })}
               </TabsList>
             </Tabs>
 
             <OperationTileGrid>
-            {detailTiles.map((d) => {
-              const qty = picked[d.id] ?? 0;
-              return (
-                <OperationTile
-                  key={d.id}
-                  layout="grid"
-                  active={qty > 0}
-                  icon={<Layers />}
-                  title={d.name}
-                  numberBadge={d.detailNumber}
-                  titleNote={SORT_LABEL[d.sort]}
-                  subtitle={formatLength(d.lengthM)}
-                  highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
-                  onClick={() => setDialog({ kind: "detail", detail: d })}
-                  onClear={
-                    qty > 0
-                      ? () =>
-                          setPicked((p) => {
-                            const next = { ...p };
-                            delete next[d.id];
-                            return next;
-                          })
-                      : undefined
-                  }
-                />
-              );
-            })}
-            {detailTiles.length === 0 && (
-              <div className="col-span-full">
-                <Empty>Нет деталей этого типа и сорта</Empty>
-              </div>
-            )}
+              {lengthTiles.map((lengthM) => {
+                const key = pickKey(lengthM, activeSort);
+                const qty = picked[key] ?? 0;
+                return (
+                  <OperationTile
+                    key={key}
+                    layout="grid"
+                    active={qty > 0}
+                    icon={<Layers />}
+                    title={formatLength(lengthM)}
+                    subtitle={SORT_LABEL[activeSort]}
+                    highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
+                    onClick={() => setDialog({ kind: "length", lengthM, sort: activeSort })}
+                    onClear={
+                      qty > 0
+                        ? () =>
+                            setPicked((p) => {
+                              const next = { ...p };
+                              delete next[key];
+                              return next;
+                            })
+                        : undefined
+                    }
+                  />
+                );
+              })}
+              {lengthTiles.length === 0 && (
+                <div className="col-span-full">
+                  <Empty>Нет длин для этого типа рейки</Empty>
+                </div>
+              )}
             </OperationTileGrid>
           </div>
         </Section>
@@ -206,7 +223,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         <TerminalConfirmBar
           summary={
             <>
-              <span className="font-medium">{pickedCount} дет.</span>
+              <span className="font-medium">{pickedCount} заг.</span>
               <span
                 className={cn(
                   "ml-3",
@@ -235,23 +252,27 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         onClose={() => setDialog(null)}
       />
       <QuantityDialog
-        open={dialog?.kind === "detail"}
-        title={dialog?.kind === "detail" ? dialog.detail.name : ""}
-        initial={dialog?.kind === "detail" ? (picked[dialog.detail.id] ?? 0) : 0}
+        open={dialog?.kind === "length"}
+        title={
+          dialog?.kind === "length"
+            ? `Заготовка ${formatLength(dialog.lengthM)} · ${SORT_LABEL[dialog.sort]}`
+            : ""
+        }
+        initial={dialog?.kind === "length" ? (picked[pickKey(dialog.lengthM, dialog.sort)] ?? 0) : 0}
         max={
-          dialog?.kind === "detail" && lot && railsTaken > 0
+          dialog?.kind === "length" && lot && railsTaken > 0
             ? maxDetailQuantity({
                 takenLengthM,
                 picks: torcovkaPicks,
-                detailId: dialog.detail.id,
-                detailLengthM: dialog.detail.lengthM,
+                lengthM: dialog.lengthM,
+                sort: dialog.sort,
               })
             : undefined
         }
         limitMessage={RAIL_LENGTH_LIMIT_MESSAGE}
         onConfirm={(v) => {
-          if (dialog?.kind === "detail") {
-            setPicked((p) => ({ ...p, [dialog.detail.id]: v }));
+          if (dialog?.kind === "length") {
+            setPicked((p) => ({ ...p, [pickKey(dialog.lengthM, dialog.sort)]: v }));
           }
           setDialog(null);
         }}

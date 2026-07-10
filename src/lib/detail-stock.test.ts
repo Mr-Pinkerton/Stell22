@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { allocate, buildStockSnapshot, isReady, type DetailStockRow } from "@/lib/detail-stock";
+import {
+  allocate,
+  buildStockSnapshot,
+  isReady,
+  type BlankStockRow,
+  type DetailStockRow,
+} from "@/lib/detail-stock";
 import type { Detail } from "@/types/domain";
 
 function detail(over: Partial<Detail>): Detail {
   return {
     id: "d",
     name: "Деталь",
-    detailNumber: null,
+    detailNumber: 1,
     lengthM: 0.6,
     detailType: "POLKA",
     sort: "SORT1",
@@ -55,23 +61,24 @@ describe("allocate", () => {
 });
 
 describe("buildStockSnapshot", () => {
-  it("суммирует готовые детали (без присадок) в detailsReady", () => {
-    const d = detail({ id: "d1" });
-    const rows: DetailStockRow[] = [
-      { detailId: "d1", torcevayaDone: false, ploskostDone: false, quantity: 10 },
-      { detailId: "d1", torcevayaDone: false, ploskostDone: false, quantity: 5 },
+  it("заготовки складываются по ключу; деталь без присадок годна из заготовки", () => {
+    const d = detail({ id: "d1", lengthM: 0.6, detailType: "POLKA", sort: "SORT1" });
+    const blanks: BlankStockRow[] = [
+      { lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 10 },
+      { lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 5 },
     ];
-    const snap = buildStockSnapshot([d], rows);
+    const snap = buildStockSnapshot([d], [], blanks);
+    expect(snap.blanks["0.6000|POLKA|SORT1"]).toBe(15);
     expect(snap.detailsReady.d1).toBe(15);
     expect(snap.prisadkaPending.d1).toBeUndefined();
   });
 
-  it("деталь с обеими присадками на сырой стадии ждёт оба типа", () => {
+  it("деталь с обеими присадками: заготовка спецификации ждёт оба типа", () => {
     const d = detail({ id: "d2", prisadkaTorcevaya: true, prisadkaPloskost: true });
-    const rows: DetailStockRow[] = [
-      { detailId: "d2", torcevayaDone: false, ploskostDone: false, quantity: 8 },
+    const blanks: BlankStockRow[] = [
+      { lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 8 },
     ];
-    const snap = buildStockSnapshot([d], rows);
+    const snap = buildStockSnapshot([d], [], blanks);
     expect(snap.detailsReady.d2).toBeUndefined();
     expect(snap.prisadkaPending.d2).toEqual({ torcev: 8, plosk: 8 });
   });
@@ -87,13 +94,13 @@ describe("buildStockSnapshot", () => {
     expect(snap.detailsReady.d3).toBe(3);
   });
 
-  it("игнорирует нулевые и неизвестные строки, пробрасывает склад номенклатуры", () => {
+  it("игнорирует нулевые строки, пробрасывает склад номенклатуры", () => {
     const d = detail({ id: "d4" });
-    const rows: DetailStockRow[] = [
-      { detailId: "d4", torcevayaDone: false, ploskostDone: false, quantity: 0 },
-      { detailId: "unknown", torcevayaDone: false, ploskostDone: false, quantity: 9 },
+    const rows: DetailStockRow[] = [];
+    const blanks: BlankStockRow[] = [
+      { lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 0 },
     ];
-    const snap = buildStockSnapshot([d], rows, { "nom-1": 100 });
+    const snap = buildStockSnapshot([d], rows, blanks, { "nom-1": 100 });
     expect(snap.detailsReady.d4).toBeUndefined();
     expect(snap.nomenclature).toEqual({ "nom-1": 100 });
   });

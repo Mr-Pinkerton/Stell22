@@ -3,6 +3,7 @@
 // чистит таблицы. Запуск: `npm run db:seed` (или авто после `prisma migrate`).
 
 import { PrismaClient } from "@prisma/client";
+import type { RailType, Sort } from "../src/types/domain";
 import {
   batches,
   details,
@@ -58,6 +59,7 @@ async function main() {
     prisma.mpStock.deleteMany(),
     prisma.productStock.deleteMany(),
     prisma.detailStock.deleteMany(),
+    prisma.blankStock.deleteMany(),
     prisma.nomenclatureStock.deleteMany(),
     prisma.simplePurchase.deleteMany(),
     // каталог
@@ -203,18 +205,36 @@ async function main() {
   // крепёж/упаковку и приходует ГП. Метры произведённого < взятых (отход ~12%).
   // В Части B эти данные заменятся реальными внесениями терминала.
 
-  const addRawStock = (detailId: string, qty: number) =>
-    prisma.detailStock.upsert({
-      where: {
-        detailId_torcevayaDone_ploskostDone: {
-          detailId,
-          torcevayaDone: false,
-          ploskostDone: false,
-        },
-      },
-      create: { detailId, torcevayaDone: false, ploskostDone: false, quantity: qty },
+  const detailById = new Map(details.map((d) => [d.id, d]));
+
+  const addBlankStock = (lengthM: number, detailType: RailType, sort: Sort, qty: number) =>
+    prisma.blankStock.upsert({
+      where: { lengthM_detailType_sort: { lengthM, detailType, sort } },
+      create: { lengthM, detailType, sort, quantity: qty },
       update: { quantity: { increment: qty } },
     });
+
+  // Первая присадка: заготовка спецификации детали → деталь на стадии `to`.
+  const blankToDetail = async (
+    detailId: string,
+    to: { t: boolean; p: boolean },
+    qty: number,
+  ) => {
+    const d = detailById.get(detailId)!;
+    await prisma.blankStock.update({
+      where: {
+        lengthM_detailType_sort: { lengthM: d.lengthM, detailType: d.detailType, sort: d.sort },
+      },
+      data: { quantity: { decrement: qty } },
+    });
+    await prisma.detailStock.upsert({
+      where: {
+        detailId_torcevayaDone_ploskostDone: { detailId, torcevayaDone: to.t, ploskostDone: to.p },
+      },
+      create: { detailId, torcevayaDone: to.t, ploskostDone: to.p, quantity: qty },
+      update: { quantity: { increment: qty } },
+    });
+  };
 
   const moveStock = async (
     detailId: string,
@@ -245,6 +265,8 @@ async function main() {
     });
   };
 
+  // Демо-строки задаём через detailId для читаемости; торцовка производит
+  // заготовку спецификации этой детали (длина/тип/сорт).
   const torcovka = async (o: {
     employeeId: string;
     batchId: string;
@@ -257,6 +279,15 @@ async function main() {
       where: { id: o.railLotId },
       data: { remainingQuantity: { decrement: o.railsTaken } },
     });
+    const blankLines = o.lines.map((l) => {
+      const d = detailById.get(l.detailId)!;
+      return {
+        quantity: l.quantity,
+        blankLengthM: d.lengthM,
+        blankType: d.detailType,
+        blankSort: d.sort,
+      };
+    });
     await prisma.productionOperation.create({
       data: {
         type: "TORCOVKA",
@@ -265,10 +296,12 @@ async function main() {
         railLotId: o.railLotId,
         railsTaken: o.railsTaken,
         workDate: new Date(o.date),
-        lines: { create: o.lines },
+        lines: { create: blankLines },
       },
     });
-    for (const l of o.lines) await addRawStock(l.detailId, l.quantity);
+    for (const l of blankLines) {
+      await addBlankStock(l.blankLengthM, l.blankType, l.blankSort, l.quantity);
+    }
   };
 
   await torcovka({ employeeId: "emp-1", batchId: "batch-1", railLotId: "lot-1", railsTaken: 40, date: "2026-06-23", lines: [{ detailId: "det-1", quantity: 140 }] });
@@ -287,6 +320,9 @@ async function main() {
   }) => {
     const to =
       o.kind === "torcev" ? { t: true, p: o.from.p } : { t: o.from.t, p: true };
+    // Первая присадка (из «сырья») теперь идёт из заготовки, а не из детали.
+    const fromBlank = !o.from.t && !o.from.p;
+    const d = detailById.get(o.detailId)!;
     await prisma.productionOperation.create({
       data: {
         type: "PRISADKA",
@@ -301,14 +337,19 @@ async function main() {
               prisadkaPloskost: o.kind === "plosk",
               // Провенанс (откуда списано) — нужен для обратной разноски при
               // правке/удалении, см. src/server/terminal.ts.
+              sourceIsBlank: fromBlank,
               sourceTorcevayaDone: o.from.t,
               sourcePloskostDone: o.from.p,
+              ...(fromBlank
+                ? { blankLengthM: d.lengthM, blankType: d.detailType, blankSort: d.sort }
+                : {}),
             },
           ],
         },
       },
     });
-    await moveStock(o.detailId, o.from, to, o.quantity);
+    if (fromBlank) await blankToDetail(o.detailId, to, o.quantity);
+    else await moveStock(o.detailId, o.from, to, o.quantity);
   };
 
   await prisadka({ employeeId: "emp-1", detailId: "det-1", kind: "torcev", quantity: 200, date: "2026-06-26", from: { t: false, p: false } });

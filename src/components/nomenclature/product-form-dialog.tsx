@@ -122,8 +122,8 @@ function ProductFormBody({
     [sort, allDetails],
   );
 
-  const detailNameById = useMemo(
-    () => new Map(allDetails.map((d) => [d.id, d.name])),
+  const detailById = useMemo(
+    () => new Map(allDetails.map((d) => [d.id, d])),
     [allDetails],
   );
 
@@ -139,6 +139,8 @@ function ProductFormBody({
   const addDetailRow = () => {
     if (!sort || !draftDetailId) return;
     const qty = Math.max(1, parseInt(draftDetailQty, 10) || 1);
+    // Одна деталь входит одной строкой (номер — свойство самой детали).
+    if (detailRows.some((r) => r.detailId === draftDetailId)) return;
     setDetailRows((rows) => [
       ...rows,
       { id: nextId("d"), detailId: draftDetailId, quantity: qty },
@@ -173,7 +175,10 @@ function ProductFormBody({
       sort,
       salePrice,
       packagingId: packagingId || null,
-      details: detailRows.map((r) => ({ detailId: r.detailId, quantity: r.quantity })),
+      details: detailRows.map((r) => ({
+        detailId: r.detailId,
+        quantity: r.quantity,
+      })),
       fasteners: fastenerRows.map((r) => ({
         nomenclatureId: r.nomenclatureId,
         quantity: r.quantity,
@@ -435,7 +440,12 @@ function ProductFormBody({
                         >
                           <SelectTrigger id="prod-det-pick" className={selectTriggerClass}>
                             <SelectValue placeholder="Деталь">
-                              {sortDetails.find((d) => d.id === draftDetailId)?.name ?? "Деталь"}
+                              {draftDetailId
+                                ? (() => {
+                                    const d = sortDetails.find((x) => x.id === draftDetailId);
+                                    return d ? `№${d.detailNumber} · ${d.name}` : "Деталь";
+                                  })()
+                                : "Деталь"}
                             </SelectValue>
                           </SelectTrigger>
                           <SelectContent {...formSelectContentProps}>
@@ -445,7 +455,7 @@ function ProductFormBody({
                                 value={d.id}
                                 className="cursor-pointer rounded-lg"
                               >
-                                {d.name}
+                                №{d.detailNumber} · {d.name}
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -480,8 +490,11 @@ function ProductFormBody({
                             key={row.id}
                             className="flex items-center gap-3 px-4 py-2.5 text-sm"
                           >
+                            <span className="bg-muted inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sm font-semibold tabular-nums">
+                              {detailById.get(row.detailId)?.detailNumber ?? "?"}
+                            </span>
                             <span className="min-w-0 flex-1 font-medium">
-                              {detailNameById.get(row.detailId) ?? row.detailId}
+                              {detailById.get(row.detailId)?.name ?? row.detailId}
                             </span>
                             <Input
                               type="number"

@@ -33,6 +33,7 @@ describe("buildProductStockRows", () => {
 describe("buildDetailStockRows", () => {
   it("суммирует готовые и ожидающие присадку", () => {
     const snapshot: StockSnapshot = {
+      blanks: {},
       detailsReady: { "det-1": 10 },
       nomenclature: {},
       prisadkaPending: { "det-1": { torcev: 5, plosk: 3 } },
@@ -47,6 +48,7 @@ describe("buildDetailStockRows", () => {
 describe("buildNomenclatureStockRows", () => {
   it("фильтрует по типу номенклатуры", () => {
     const rows = buildNomenclatureStockRows("FASTENER", {
+      blanks: {},
       detailsReady: {},
       nomenclature: { "nom-1": 100 },
       prisadkaPending: {},

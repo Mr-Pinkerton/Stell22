@@ -1,6 +1,5 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { Decimal } from "decimal.js";
 import type {
   Batch as PrismaBatch,
@@ -109,7 +108,10 @@ function serProduct(p: ProductWithRelations): Product {
     salePrice: num(p.salePrice),
     packagingId: p.packagingId,
     status: p.status,
-    details: p.details.map((d) => ({ detailId: d.detailId, quantity: d.quantity })),
+    details: p.details.map((d) => ({
+      detailId: d.detailId,
+      quantity: d.quantity,
+    })),
     fastenerIds: p.fasteners.map((f) => ({ nomenclatureId: f.nomenclatureId, quantity: f.quantity })),
     extraIds: p.extras.map((e) => e.nomenclatureId),
   };
@@ -123,7 +125,11 @@ function toOperationForCost(op: OpWithLines): OperationForCost {
     batchId: op.batchId,
     productId: op.productId,
     productQty: op.productQty,
-    lines: op.lines.map((l) => ({ detailId: l.detailId, quantity: l.quantity })),
+    lines: op.lines.map((l) => ({
+      lengthM: l.blankLengthM == null ? null : num(l.blankLengthM),
+      sort: l.blankSort,
+      quantity: l.quantity,
+    })),
   };
 }
 
@@ -180,7 +186,6 @@ export async function getCostReport(): Promise<CostReport> {
   return {
     details: buildCostDetailRows({
       batches: domainBatches,
-      details: domainDetails,
       employees: domainEmployees,
       lines,
     }),
@@ -212,7 +217,6 @@ interface BatchSnapshotData {
 function computeBatchSnapshot(
   batch: PrismaBatch,
   allLines: ProducedLine[],
-  detailsById: Map<string, PrismaDetail>,
 ): BatchSnapshotData | null {
   const lines = allLines.filter((l) => l.batchId === batch.id);
   if (lines.length === 0) return null;
@@ -220,10 +224,8 @@ function computeBatchSnapshot(
   let len1 = D(0);
   let len2 = D(0);
   for (const line of lines) {
-    const detail = detailsById.get(line.detailId);
-    if (!detail) continue;
-    const len = dec(detail.lengthM).times(line.quantity);
-    if (detail.sort === "SORT1") len1 = len1.plus(len);
+    const len = dec(line.lengthM).times(line.quantity);
+    if (line.sort === "SORT1") len1 = len1.plus(len);
     else len2 = len2.plus(len);
   }
 
@@ -262,21 +264,17 @@ export async function recalcBatchCosts(opts: { batchId?: string; db?: Db } = {})
   if (batches.length === 0) return;
 
   const batchIds = batches.map((b) => b.id);
-  const [ops, details] = await Promise.all([
-    db.productionOperation.findMany({
-      where: { type: "TORCOVKA", batchId: { in: batchIds } },
-      include: { lines: true },
-    }),
-    db.detail.findMany(),
-  ]);
+  const ops = await db.productionOperation.findMany({
+    where: { type: "TORCOVKA", batchId: { in: batchIds } },
+    include: { lines: true },
+  });
 
   const lines = producedLinesFromOperations(ops.map(toOperationForCost));
-  const detailsById = new Map(details.map((d) => [d.id, d]));
 
   for (const batch of batches) {
     // У открытой партии возможен только PRELIMINARY-снапшот — заменяем его.
     await db.batchCost.deleteMany({ where: { batchId: batch.id, status: "PRELIMINARY" } });
-    const snapshot = computeBatchSnapshot(batch, lines, detailsById);
+    const snapshot = computeBatchSnapshot(batch, lines);
     if (!snapshot) continue;
     await db.batchCost.create({
       data: { batchId: batch.id, status: "PRELIMINARY", ...snapshot },
@@ -291,14 +289,12 @@ export async function recalcBatchCosts(opts: { batchId?: string; db?: Db } = {})
  * recalcBatchCosts партию пропускает (frozenAt != null).
  */
 async function freezeBatch(tx: Prisma.TransactionClient, batch: PrismaBatch): Promise<void> {
-  const details = await tx.detail.findMany();
   const ops = await tx.productionOperation.findMany({
     where: { type: "TORCOVKA", batchId: batch.id },
     include: { lines: true },
   });
   const lines = producedLinesFromOperations(ops.map(toOperationForCost));
-  const detailsById = new Map(details.map((d) => [d.id, d]));
-  const snapshot = computeBatchSnapshot(batch, lines, detailsById);
+  const snapshot = computeBatchSnapshot(batch, lines);
 
   await tx.batch.update({ where: { id: batch.id }, data: { frozenAt: new Date() } });
 

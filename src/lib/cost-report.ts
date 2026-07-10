@@ -18,11 +18,17 @@ import {
   type Num,
 } from "@/lib/cost";
 import { formatProductSku } from "@/lib/format";
-import type { Batch, Detail, Employee, NomenclatureItem, Product, RailLot } from "@/types/domain";
+import type { Batch, Detail, Employee, NomenclatureItem, Product, RailLot, Sort } from "@/types/domain";
 
+/**
+ * Произведённая по партии заготовка (нарезанная рейка). Ключ материала —
+ * длина+сорт: материальная стоимость зависит только от них (и партии), а не
+ * от того, какой конкретной деталью станет заготовка на присадке.
+ */
 export interface ProducedLine {
   batchId: string;
-  detailId: string;
+  lengthM: number;
+  sort: Sort;
   quantity: number;
 }
 
@@ -36,23 +42,31 @@ export interface OperationForCost {
   batchId: string | null;
   productId: string | null;
   productQty: number | null;
-  lines: { detailId: string; quantity: number }[];
+  /** Для ТОРЦОВКИ — спецификация заготовки (длина+сорт). */
+  lines: { lengthM: number | null; sort: Sort | null; quantity: number }[];
 }
 
 /**
- * Произведённые детали по партиям — из операций ТОРЦОВКИ (строки деталей).
- * Учёт строго по партии-источнику (cost-integrity): каждая деталь привязана
- * к своей партии. Дубликаты (партия × деталь) суммируются.
+ * Произведённые заготовки по партиям — из операций ТОРЦОВКИ.
+ * Учёт строго по партии-источнику (cost-integrity). Дубликаты
+ * (партия × длина × сорт) суммируются.
  */
 export function producedLinesFromOperations(ops: OperationForCost[]): ProducedLine[] {
   const acc = new Map<string, ProducedLine>();
   for (const op of ops) {
     if (op.type !== "TORCOVKA" || !op.batchId) continue;
     for (const line of op.lines) {
-      const key = `${op.batchId}::${line.detailId}`;
+      if (line.lengthM == null || line.sort == null) continue;
+      const key = `${op.batchId}::${line.lengthM}::${line.sort}`;
       const existing = acc.get(key);
       if (existing) existing.quantity += line.quantity;
-      else acc.set(key, { batchId: op.batchId, detailId: line.detailId, quantity: line.quantity });
+      else
+        acc.set(key, {
+          batchId: op.batchId,
+          lengthM: line.lengthM,
+          sort: line.sort,
+          quantity: line.quantity,
+        });
     }
   }
   return [...acc.values()];
@@ -104,6 +118,11 @@ export function detailWorkCost(detail: Detail, rates: AvgRates): Decimal {
   return sum;
 }
 
+/** Работа на одну заготовку = только торцовка по сорту (присадок ещё нет). */
+export function blankWorkCost(sort: Sort, rates: AvgRates): Decimal {
+  return sort === "SORT1" ? rates.torcovkaSort1 : rates.torcovkaSort2;
+}
+
 // --------------------------- распределение партий ---------------------------
 
 export interface BatchCostSnapshot {
@@ -119,17 +138,12 @@ export interface BatchCostSnapshot {
   lengthSort2: Decimal;
 }
 
-function lengthsBySort(
-  lines: ProducedLine[],
-  detailsById: Map<string, Detail>,
-): { sort1: Decimal; sort2: Decimal } {
+function lengthsBySort(lines: ProducedLine[]): { sort1: Decimal; sort2: Decimal } {
   let sort1 = ZERO;
   let sort2 = ZERO;
   for (const line of lines) {
-    const detail = detailsById.get(line.detailId);
-    if (!detail) continue;
-    const len = D(detail.lengthM).times(line.quantity);
-    if (detail.sort === "SORT1") sort1 = sort1.plus(len);
+    const len = D(line.lengthM).times(line.quantity);
+    if (line.sort === "SORT1") sort1 = sort1.plus(len);
     else sort2 = sort2.plus(len);
   }
   return { sort1, sort2 };
@@ -138,10 +152,8 @@ function lengthsBySort(
 /** Снапшоты распределения стоимости по каждой партии с производством. */
 export function buildBatchSnapshots(params: {
   batches: Batch[];
-  details: Detail[];
   lines: ProducedLine[];
 }): Map<string, BatchCostSnapshot> {
-  const detailsById = new Map(params.details.map((d) => [d.id, d]));
   const byBatch = new Map<string, ProducedLine[]>();
   for (const line of params.lines) {
     const list = byBatch.get(line.batchId) ?? [];
@@ -155,7 +167,7 @@ export function buildBatchSnapshots(params: {
     if (!lines || lines.length === 0) continue;
 
     const area = sectionAreaM2(batch.sectionWidthMm, batch.sectionHeightMm);
-    const { sort1, sort2 } = lengthsBySort(lines, detailsById);
+    const { sort1, sort2 } = lengthsBySort(lines);
 
     const dist = distributeBatchCost({
       totalCost: batch.totalCost,
@@ -200,10 +212,9 @@ export function declaredSortShares(lots: RailLot[]): SortShares {
   return total.isZero() ? { sort1: ZERO, sort2: ZERO } : { sort1: s1.div(total), sort2: s2.div(total) };
 }
 
-/** Фактическое соотношение сортов — по сортам произведённых деталей. */
-export function factSortShares(lines: ProducedLine[], details: Detail[]): SortShares {
-  const detailsById = new Map(details.map((d) => [d.id, d]));
-  const { sort1, sort2 } = lengthsBySort(lines, detailsById);
+/** Фактическое соотношение сортов — по сортам произведённых заготовок. */
+export function factSortShares(lines: ProducedLine[]): SortShares {
+  const { sort1, sort2 } = lengthsBySort(lines);
   const total = sort1.plus(sort2);
   return total.isZero() ? { sort1: ZERO, sort2: ZERO } : { sort1: sort1.div(total), sort2: sort2.div(total) };
 }
@@ -219,6 +230,12 @@ export function sortSharesToPercents(shares: SortShares): { sort1: number; sort2
 export function detailMaterialCost(snapshot: BatchCostSnapshot, detail: Detail): Decimal {
   const price = detail.sort === "SORT1" ? snapshot.pricePerM3Sort1 : snapshot.pricePerM3Sort2;
   return price.times(D(detail.lengthM)).times(snapshot.areaM2);
+}
+
+/** Материал на одну заготовку по партии (цена м³ с отходом × длина × сечение). */
+export function blankMaterialCost(snapshot: BatchCostSnapshot, lengthM: number, sort: Sort): Decimal {
+  const price = sort === "SORT1" ? snapshot.pricePerM3Sort1 : snapshot.pricePerM3Sort2;
+  return price.times(D(lengthM)).times(snapshot.areaM2);
 }
 
 /** Блендированная ₽/м по сорту детали (Σстоимость / Σдлина по всем партиям). */
@@ -253,31 +270,35 @@ export interface CostDetailRow {
   costStatus: "PRELIMINARY" | "FINAL";
 }
 
-/** Строки таба «Детали»: одна строка на (партия × деталь) произведённого. */
+/**
+ * Строки таба «Детали»: одна строка на произведённую заготовку
+ * (партия × длина × сорт). Конкретная деталь определяется на присадке, поэтому
+ * материальная себестоимость учитывается на уровне заготовки (длина+сорт).
+ */
 export function buildCostDetailRows(params: {
   batches: Batch[];
-  details: Detail[];
   employees: Employee[];
   lines: ProducedLine[];
 }): CostDetailRow[] {
-  const detailsById = new Map(params.details.map((d) => [d.id, d]));
   const batchesById = new Map(params.batches.map((b) => [b.id, b]));
   const rates = averageRates(params.employees);
   const snapshots = buildBatchSnapshots(params);
 
   const rows: CostDetailRow[] = [];
   for (const line of params.lines) {
-    const detail = detailsById.get(line.detailId);
     const batch = batchesById.get(line.batchId);
     const snapshot = snapshots.get(line.batchId);
-    if (!detail || !batch || !snapshot) continue;
+    if (!batch || !snapshot) continue;
 
+    const sortLabel = line.sort === "SORT1" ? "1 сорт" : "2 сорт";
     rows.push({
-      id: `${line.batchId}-${line.detailId}`,
-      name: detail.name,
+      id: `${line.batchId}-${line.lengthM}-${line.sort}`,
+      name: `Заготовка ${line.lengthM} м, ${sortLabel}`,
       batchName: batch.name,
-      workCost: detailWorkCost(detail, rates).toDecimalPlaces(2).toNumber(),
-      materialCost: detailMaterialCost(snapshot, detail).toDecimalPlaces(2).toNumber(),
+      workCost: blankWorkCost(line.sort, rates).toDecimalPlaces(2).toNumber(),
+      materialCost: blankMaterialCost(snapshot, line.lengthM, line.sort)
+        .toDecimalPlaces(2)
+        .toNumber(),
       costStatus: batch.status === "ARCHIVED" ? "FINAL" : "PRELIMINARY",
     });
   }
@@ -326,17 +347,24 @@ function computeProductDirect(
 ): ProductDirect {
   let material = ZERO;
   let work = ZERO;
-  const lines: ProductDirect["lines"] = [];
 
+  // Суммарное количество по детали: у одной детали в изделии может быть
+  // несколько номеров-строк (номер важен для упаковки, не для себестоимости).
+  const qtyByDetail = new Map<string, number>();
   for (const pd of product.details) {
-    const detail = detailsById.get(pd.detailId);
+    qtyByDetail.set(pd.detailId, (qtyByDetail.get(pd.detailId) ?? 0) + pd.quantity);
+  }
+
+  const lines: ProductDirect["lines"] = [];
+  for (const [detailId, quantity] of qtyByDetail) {
+    const detail = detailsById.get(detailId);
     if (!detail) continue;
     const perM = detail.sort === "SORT1" ? perMeter.sort1 : perMeter.sort2;
     const unitMaterial = perM.times(D(detail.lengthM));
     const unitWork = detailWorkCost(detail, rates);
-    material = material.plus(unitMaterial.times(pd.quantity));
-    work = work.plus(unitWork.times(pd.quantity));
-    lines.push({ detail, quantity: pd.quantity, material: unitMaterial, work: unitWork });
+    material = material.plus(unitMaterial.times(quantity));
+    work = work.plus(unitWork.times(quantity));
+    lines.push({ detail, quantity, material: unitMaterial, work: unitWork });
   }
 
   // Упаковка как работа — расценка упаковки за изделие.

@@ -65,7 +65,8 @@ function computeOp(op: OpFull, maps: RefMaps): ComputedOp {
     productQty: op.productQty ?? 0,
     lines: op.lines.map((l) => ({
       quantity: l.quantity,
-      sort: maps.detailSort.get(l.detailId),
+      // Торцовка — по сорту заготовки; присадка — по флагам (сорт не нужен).
+      sort: l.blankSort ?? (l.detailId ? maps.detailSort.get(l.detailId) : undefined),
       prisadkaTorcevaya: l.prisadkaTorcevaya,
       prisadkaPloskost: l.prisadkaPloskost,
     })),

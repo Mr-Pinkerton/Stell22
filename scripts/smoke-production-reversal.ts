@@ -203,9 +203,9 @@ async function testTorcovkaDeleteDoesNotReturnRails() {
   const lot = await prisma.railLot.findFirstOrThrow({ where: { remainingQuantity: { gte: 5 } } });
   const detail = await prisma.detail.findFirstOrThrow({ where: { detailType: lot.railType } });
 
-  const rawBefore =
-    (await prisma.detailStock.findFirst({
-      where: { detailId: detail.id, torcevayaDone: false, ploskostDone: false },
+  const blankBefore =
+    (await prisma.blankStock.findFirst({
+      where: { lengthM: detail.lengthM, detailType: detail.detailType, sort: detail.sort },
     }))?.quantity ?? 0;
   const remainingBefore = lot.remainingQuantity;
 
@@ -215,7 +215,7 @@ async function testTorcovkaDeleteDoesNotReturnRails() {
       batchId: lot.batchId,
       railLotId: lot.id,
       railsTaken: 5,
-      picks: [{ detailId: detail.id, quantity: 20 }],
+      picks: [{ lengthM: Number(detail.lengthM), sort: detail.sort, quantity: 20 }],
     }),
   );
 
@@ -229,18 +229,18 @@ async function testTorcovkaDeleteDoesNotReturnRails() {
   });
 
   // Удаляем запись — рейки НЕ должны вернуться в пакет (они уже распилены),
-  // а произведённые детали должны уйти с сырого остатка.
+  // а произведённые заготовки должны уйти со склада заготовок.
   await ignoringRevalidate(() => deleteProductionOperation(op.id));
 
   const remainingAfterDelete = (await prisma.railLot.findUniqueOrThrow({ where: { id: lot.id } }))
     .remainingQuantity;
   assertEqual(remainingAfterDelete, remainingBefore - 5, "рейки НЕ возвращены в пакет после удаления");
 
-  const rawAfterDelete =
-    (await prisma.detailStock.findFirst({
-      where: { detailId: detail.id, torcevayaDone: false, ploskostDone: false },
+  const blankAfterDelete =
+    (await prisma.blankStock.findFirst({
+      where: { lengthM: detail.lengthM, detailType: detail.detailType, sort: detail.sort },
     }))?.quantity ?? 0;
-  assertEqual(rawAfterDelete, rawBefore, "произведённые детали сняты с сырого остатка");
+  assertEqual(blankAfterDelete, blankBefore, "произведённые заготовки сняты со склада заготовок");
 
   console.log(
     "OK   5 реек остаются «взятыми» без записи о производстве — это и есть отход по партии",
