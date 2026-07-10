@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { OperationTile, OperationTileGrid, OperationTileRow } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatLength } from "@/lib/format";
 import { maxDetailQuantity, sumDetailLengthM, type TorcovkaPick } from "@/lib/torcovka";
 import { submitTorcovka } from "@/server/terminal";
@@ -19,19 +20,23 @@ interface TorcovkaScreenProps {
   onDone: () => void;
 }
 
-type Dialog = { kind: "rails" } | { kind: "length"; lengthM: number } | null;
+type Dialog = { kind: "rails" } | { kind: "length"; lengthM: number; sort: Sort } | null;
 
 const SORT_LABEL: Record<Sort, string> = { SORT1: "1 сорт", SORT2: "2 сорт" };
+const SORT_TABS: Sort[] = ["SORT1", "SORT2"];
 
 const RAIL_LENGTH_LIMIT_MESSAGE = "Длина заготовок превышает длину взятых реек";
 
-const lenKey = (lengthM: number) => lengthM.toString();
+// Ключ выбора — длина + фактический сорт (из пакета любого сорта можно наложить
+// заготовки обоих сортов; факт vs заявленное определяет распределение стоимости).
+const pickKey = (lengthM: number, sort: Sort) => `${lengthM}|${sort}`;
 
 export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) {
   const [batchId, setBatchId] = useState<string | null>(null);
   const [lotId, setLotId] = useState<string | null>(null);
   const [railsTaken, setRailsTaken] = useState(0);
   const [picked, setPicked] = useState<Record<string, number>>({});
+  const [activeSort, setActiveSort] = useState<Sort>("SORT1");
   const [dialog, setDialog] = useState<Dialog>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -54,9 +59,11 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
   }, [data.details, lot]);
 
   const torcovkaPicks = useMemo((): TorcovkaPick[] => {
-    return Object.entries(picked).flatMap(([key, quantity]) =>
-      quantity > 0 ? [{ lengthM: Number(key), quantity }] : [],
-    );
+    return Object.entries(picked).flatMap(([key, quantity]) => {
+      if (quantity <= 0) return [];
+      const [len, sort] = key.split("|");
+      return [{ lengthM: Number(len), sort: sort as Sort, quantity }];
+    });
   }, [picked]);
 
   const takenLengthM = lot ? railsTaken * lot.lengthM : 0;
@@ -96,7 +103,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         batchId,
         railLotId: lot.id,
         railsTaken,
-        picks: torcovkaPicks.map((p) => ({ lengthM: p.lengthM, quantity: p.quantity })),
+        picks: torcovkaPicks.map((p) => ({ lengthM: p.lengthM, sort: p.sort, quantity: p.quantity })),
       });
       toast.success(`Торцовка внесена: ${pickedCount} заг., отход ${formatLength(wasteM)}`);
       onDone();
@@ -147,40 +154,68 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       )}
 
       {lot && (
-        <Section title={`Заготовки · ${SORT_LABEL[lot.sort]}`}>
-          <OperationTileGrid>
-            {lengthTiles.map((lengthM) => {
-              const key = lenKey(lengthM);
-              const qty = picked[key] ?? 0;
-              return (
-                <OperationTile
-                  key={key}
-                  layout="grid"
-                  active={qty > 0}
-                  icon={<Layers />}
-                  title={formatLength(lengthM)}
-                  subtitle={SORT_LABEL[lot.sort]}
-                  highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
-                  onClick={() => setDialog({ kind: "length", lengthM })}
-                  onClear={
-                    qty > 0
-                      ? () =>
-                          setPicked((p) => {
-                            const next = { ...p };
-                            delete next[key];
-                            return next;
-                          })
-                      : undefined
-                  }
-                />
-              );
-            })}
-            {lengthTiles.length === 0 && (
-              <div className="col-span-full">
-                <Empty>Нет длин для этого типа рейки</Empty>
-              </div>
-            )}
-          </OperationTileGrid>
+        <Section title="Заготовки">
+          <div className="flex flex-col gap-5">
+            <Tabs
+              value={activeSort}
+              onValueChange={(v) => setActiveSort(v as Sort)}
+              className="items-center gap-4"
+            >
+              <TabsList className="h-auto gap-1.5 rounded-2xl p-1.5">
+                {SORT_TABS.map((s) => {
+                  const count = torcovkaPicks
+                    .filter((p) => p.sort === s)
+                    .reduce((a, p) => a + p.quantity, 0);
+                  return (
+                    <TabsTrigger
+                      key={s}
+                      value={s}
+                      className="border-border bg-card/60 data-active:bg-card data-active:shadow-soft h-12 min-w-36 rounded-xl border px-8 text-lg font-semibold data-active:border-transparent"
+                    >
+                      {SORT_LABEL[s]}
+                      {count > 0 && (
+                        <span className="text-brand ml-2 tabular-nums">{count}</span>
+                      )}
+                    </TabsTrigger>
+                  );
+                })}
+              </TabsList>
+            </Tabs>
+
+            <OperationTileGrid>
+              {lengthTiles.map((lengthM) => {
+                const key = pickKey(lengthM, activeSort);
+                const qty = picked[key] ?? 0;
+                return (
+                  <OperationTile
+                    key={key}
+                    layout="grid"
+                    active={qty > 0}
+                    icon={<Layers />}
+                    title={formatLength(lengthM)}
+                    subtitle={SORT_LABEL[activeSort]}
+                    highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
+                    onClick={() => setDialog({ kind: "length", lengthM, sort: activeSort })}
+                    onClear={
+                      qty > 0
+                        ? () =>
+                            setPicked((p) => {
+                              const next = { ...p };
+                              delete next[key];
+                              return next;
+                            })
+                        : undefined
+                    }
+                  />
+                );
+              })}
+              {lengthTiles.length === 0 && (
+                <div className="col-span-full">
+                  <Empty>Нет длин для этого типа рейки</Empty>
+                </div>
+              )}
+            </OperationTileGrid>
+          </div>
         </Section>
       )}
 
@@ -218,21 +253,26 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       />
       <QuantityDialog
         open={dialog?.kind === "length"}
-        title={dialog?.kind === "length" ? `Заготовка ${formatLength(dialog.lengthM)}` : ""}
-        initial={dialog?.kind === "length" ? (picked[lenKey(dialog.lengthM)] ?? 0) : 0}
+        title={
+          dialog?.kind === "length"
+            ? `Заготовка ${formatLength(dialog.lengthM)} · ${SORT_LABEL[dialog.sort]}`
+            : ""
+        }
+        initial={dialog?.kind === "length" ? (picked[pickKey(dialog.lengthM, dialog.sort)] ?? 0) : 0}
         max={
           dialog?.kind === "length" && lot && railsTaken > 0
             ? maxDetailQuantity({
                 takenLengthM,
                 picks: torcovkaPicks,
                 lengthM: dialog.lengthM,
+                sort: dialog.sort,
               })
             : undefined
         }
         limitMessage={RAIL_LENGTH_LIMIT_MESSAGE}
         onConfirm={(v) => {
           if (dialog?.kind === "length") {
-            setPicked((p) => ({ ...p, [lenKey(dialog.lengthM)]: v }));
+            setPicked((p) => ({ ...p, [pickKey(dialog.lengthM, dialog.sort)]: v }));
           }
           setDialog(null);
         }}

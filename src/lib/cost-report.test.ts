@@ -46,6 +46,7 @@ const employees: Employee[] = [
 
 const detail = (over: Partial<Detail> & Pick<Detail, "id" | "lengthM" | "sort">): Detail => ({
   name: over.id,
+  detailNumber: 1,
   detailType: "POLKA",
   prisadkaTorcevaya: false,
   prisadkaPloskost: false,
@@ -166,7 +167,7 @@ describe("buildCostProductRows", () => {
       salePrice: 100,
       packagingId: "n-pack",
       status: "ACTIVE",
-      details: [{ detailId: "dA", detailNumber: 1, quantity: 2 }],
+      details: [{ detailId: "dA", quantity: 2 }],
       fastenerIds: [{ nomenclatureId: "n-screw", quantity: 4 }],
       extraIds: [],
     },

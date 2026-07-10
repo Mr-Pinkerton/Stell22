@@ -120,6 +120,7 @@ async function main() {
     data: details.map((d) => ({
       id: d.id,
       name: d.name,
+      detailNumber: d.detailNumber,
       lengthM: d.lengthM,
       detailType: d.detailType,
       sort: d.sort,
@@ -181,7 +182,6 @@ async function main() {
         details: {
           create: p.details.map((d) => ({
             detailId: d.detailId,
-            detailNumber: d.detailNumber,
             quantity: d.quantity,
           })),
         },

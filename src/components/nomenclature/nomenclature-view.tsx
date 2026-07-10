@@ -219,7 +219,7 @@ export function NomenclatureView({
     (p) => p.status === "ARCHIVED",
   );
   const detailRows = partitionActiveArchived(
-    details.filter((d) => visible(d.status) && matchesSearch(d.name)),
+    details.filter((d) => visible(d.status) && matchesSearch(`${d.detailNumber} ${d.name}`)),
     (d) => d.status === "ARCHIVED",
   );
   const itemsByType = (type: NomenclatureType) =>
@@ -263,6 +263,7 @@ export function NomenclatureView({
         name: "Детали",
         columns: [
           { header: "Название", key: "name", width: 28 },
+          { header: "Номер", key: "number", numFmt: XLSX_FMT.int },
           { header: "Длина", key: "length", numFmt: XLSX_FMT.length },
           { header: "Тип", key: "type", width: 14 },
           { header: "Присадка", key: "prisadka", width: 24 },
@@ -271,6 +272,7 @@ export function NomenclatureView({
         ],
         rows: detailRows.map((d) => ({
           name: d.name,
+          number: d.detailNumber,
           length: d.lengthM,
           type: RAIL_TYPE_LABEL[d.detailType],
           prisadka: formatPrisadka(d),
@@ -435,6 +437,16 @@ export function NomenclatureView({
       key: "name",
       header: "Название",
       render: (row) => <span className="font-medium">{row.name}</span>,
+    },
+    {
+      key: "detailNumber",
+      header: "Номер",
+      className: "w-16",
+      render: (row) => (
+        <span className="bg-muted inline-flex size-7 items-center justify-center rounded-md text-sm font-semibold tabular-nums">
+          {row.detailNumber}
+        </span>
+      ),
     },
     {
       key: "lengthM",

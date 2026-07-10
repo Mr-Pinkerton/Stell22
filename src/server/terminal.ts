@@ -97,6 +97,7 @@ function serDetail(d: PrismaDetail): Detail {
   return {
     id: d.id,
     name: d.name,
+    detailNumber: d.detailNumber,
     lengthM: num(d.lengthM) ?? 0,
     detailType: d.detailType,
     sort: d.sort,
@@ -133,7 +134,6 @@ function serProduct(p: ProductWithRel): Product {
     status: p.status,
     details: p.details.map((d) => ({
       detailId: d.detailId,
-      detailNumber: d.detailNumber,
       quantity: d.quantity,
     })),
     fastenerIds: p.fasteners.map((f) => ({ nomenclatureId: f.nomenclatureId, quantity: f.quantity })),
@@ -195,8 +195,12 @@ export interface TorcovkaInput {
   batchId: string;
   railLotId: string;
   railsTaken: number;
-  /** Нарезанные заготовки по длине (тип и сорт берутся из пакета реек). */
-  picks: { lengthM: number; quantity: number }[];
+  /**
+   * Нарезанные заготовки по длине и ФАКТИЧЕСКОМУ сорту. Тип берётся из пакета,
+   * но сорт назначает работник: из пакета любого сорта могут выйти заготовки
+   * и 1, и 2 сорта (см. МОДЕЛЬ СЕБЕСТОИМОСТИ — факт vs заявленное).
+   */
+  picks: { lengthM: number; sort: Sort; quantity: number }[];
 }
 
 export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
@@ -207,7 +211,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
   if (picks.length === 0) throw new Error("Не выбраны длины заготовок");
 
   await prisma.$transaction(async (tx) => {
-    // Тип и сорт заготовок определяются пакетом реек (партией-источником).
+    // Тип заготовок определяется пакетом реек; фактический сорт — из pick.
     const lot = await tx.railLot.findUnique({ where: { id: railLotId } });
     if (!lot || lot.batchId !== batchId) throw new Error("Пакет реек не найден");
 
@@ -231,27 +235,27 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
             quantity: p.quantity,
             blankLengthM: p.lengthM,
             blankType: lot.railType,
-            blankSort: lot.sort,
+            blankSort: p.sort,
           })),
         },
       },
     });
 
     // Произведённые заготовки приходуются на склад заготовок (конкретная деталь
-    // определится на присадке).
+    // определится на присадке). Сорт — фактический, назначенный работником.
     for (const p of picks) {
       await tx.blankStock.upsert({
         where: {
           lengthM_detailType_sort: {
             lengthM: p.lengthM,
             detailType: lot.railType,
-            sort: lot.sort,
+            sort: p.sort,
           },
         },
         create: {
           lengthM: p.lengthM,
           detailType: lot.railType,
-          sort: lot.sort,
+          sort: p.sort,
           quantity: p.quantity,
         },
         update: { quantity: { increment: p.quantity } },
@@ -533,8 +537,8 @@ async function applyUpakovkaPick(
   });
   if (!product) throw new Error("Изделие не найдено");
 
-  // Суммарная потребность по каждой детали (у детали в изделии может быть
-  // несколько номеров-строк — для расхода склада важна общая потребность).
+  // Суммарная потребность по каждой детали изделия (одна деталь = одна строка
+  // состава; агрегируем на случай будущих дублей — важна общая потребность).
   const neededByDetail = new Map<string, number>();
   for (const pd of product.details) {
     if (pd.quantity <= 0) continue;

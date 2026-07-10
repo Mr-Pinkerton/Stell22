@@ -12,6 +12,7 @@ function detail(over: Partial<Detail>): Detail {
   return {
     id: "d",
     name: "Деталь",
+    detailNumber: 1,
     lengthM: 0.6,
     detailType: "POLKA",
     sort: "SORT1",

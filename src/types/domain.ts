@@ -70,6 +70,8 @@ export interface NomenclatureItem {
 export interface Detail {
   id: string;
   name: string;
+  /** Уникальный номер детали (длина + присадки). Используется при упаковке. */
+  detailNumber: number;
   lengthM: number;
   detailType: RailType;
   sort: Sort;
@@ -80,8 +82,6 @@ export interface Detail {
 
 export interface ProductDetail {
   detailId: string;
-  /** Номер детали для упаковки. У одной детали в изделии может быть несколько. */
-  detailNumber: number;
   quantity: number;
 }
 

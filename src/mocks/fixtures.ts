@@ -475,6 +475,7 @@ function buildDetails(): Detail[] {
     {
       id: "det-1",
       name: "Полка 600",
+      detailNumber: 1,
       lengthM: 0.6,
       detailType: "POLKA",
       sort: "SORT1",
@@ -485,6 +486,7 @@ function buildDetails(): Detail[] {
     {
       id: "det-3",
       name: "Полка 800",
+      detailNumber: 3,
       lengthM: 0.8,
       detailType: "POLKA",
       sort: "SORT2",
@@ -495,6 +497,7 @@ function buildDetails(): Detail[] {
     {
       id: "det-4",
       name: "Канавка 600",
+      detailNumber: 4,
       lengthM: 0.6,
       detailType: "KANAVKA",
       sort: "SORT1",
@@ -505,6 +508,7 @@ function buildDetails(): Detail[] {
     {
       id: "det-2",
       name: "Канавка 720",
+      detailNumber: 2,
       lengthM: 0.72,
       detailType: "KANAVKA",
       sort: "SORT2",
@@ -527,9 +531,11 @@ function buildDetails(): Detail[] {
       while (group.length < 20) {
         const n = group.length + 1;
         const lengthMm = 400 + n * 20;
+        const num = seq++;
         group.push({
-          id: `det-${seq++}`,
+          id: `det-${num}`,
           name: `${DETAIL_TYPE_LABEL[detailType]} ${lengthMm}`,
+          detailNumber: num,
           lengthM: lengthMm / 1000,
           detailType,
           sort,
@@ -557,7 +563,7 @@ export const products: Product[] = [
     salePrice: 1200,
     packagingId: "nom-2",
     status: "ACTIVE",
-    details: [{ detailId: "det-1", detailNumber: 1, quantity: 2 }],
+    details: [{ detailId: "det-1", quantity: 2 }],
     fastenerIds: [{ nomenclatureId: "nom-1", quantity: 8 }],
     extraIds: [],
   },
@@ -571,8 +577,8 @@ export const products: Product[] = [
     packagingId: "nom-2",
     status: "ACTIVE",
     details: [
-      { detailId: "det-3", detailNumber: 1, quantity: 2 },
-      { detailId: "det-2", detailNumber: 2, quantity: 1 },
+      { detailId: "det-3", quantity: 2 },
+      { detailId: "det-2", quantity: 1 },
     ],
     fastenerIds: [{ nomenclatureId: "nom-1", quantity: 12 }],
     extraIds: [],

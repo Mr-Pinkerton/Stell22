@@ -58,6 +58,7 @@ function serDetail(d: PrismaDetail): Detail {
   return {
     id: d.id,
     name: d.name,
+    detailNumber: d.detailNumber,
     lengthM: num(d.lengthM),
     detailType: d.detailType,
     sort: d.sort,
@@ -109,7 +110,6 @@ function serProduct(p: ProductWithRelations): Product {
     status: p.status,
     details: p.details.map((d) => ({
       detailId: d.detailId,
-      detailNumber: d.detailNumber,
       quantity: d.quantity,
     })),
     fastenerIds: p.fasteners.map((f) => ({ nomenclatureId: f.nomenclatureId, quantity: f.quantity })),

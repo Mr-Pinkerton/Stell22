@@ -30,6 +30,7 @@ function serializeDetail(d: PrismaDetail): Detail {
   return {
     id: d.id,
     name: d.name,
+    detailNumber: d.detailNumber,
     lengthM: toNum(d.lengthM) ?? 0,
     detailType: d.detailType,
     sort: d.sort,
@@ -66,7 +67,6 @@ function serializeProduct(p: ProductWithRelations): Product {
     status: p.status,
     details: p.details.map((d) => ({
       detailId: d.detailId,
-      detailNumber: d.detailNumber,
       quantity: d.quantity,
     })),
     fastenerIds: p.fasteners.map((f) => ({ nomenclatureId: f.nomenclatureId, quantity: f.quantity })),
@@ -101,6 +101,7 @@ export async function getNomenclatureData(): Promise<NomenclatureData> {
 
 export interface DetailFormValues {
   name: string;
+  detailNumber: number | null;
   lengthM: number | null;
   detailType: RailType;
   sort: Sort;
@@ -111,6 +112,7 @@ export interface DetailFormValues {
 function detailData(v: DetailFormValues) {
   return {
     name: v.name.trim(),
+    detailNumber: v.detailNumber ?? 0,
     lengthM: v.lengthM ?? 0,
     detailType: v.detailType,
     sort: v.sort,
@@ -119,9 +121,41 @@ function detailData(v: DetailFormValues) {
   };
 }
 
+/**
+ * Проверяет номер детали. Номер задаёт деталь по (длина + присадки); сорт в номер
+ * НЕ входит — одна деталь в 1 и 2 сорте имеет общий номер. Поэтому:
+ *  - пара (номер, сорт) уникальна (нельзя два разных номера этого сорта);
+ *  - все записи с одним номером обязаны иметь одинаковые длину и присадки.
+ */
+async function assertDetailNumberFree(values: DetailFormValues, exceptId?: string): Promise<void> {
+  const detailNumber = values.detailNumber;
+  if (!detailNumber || detailNumber <= 0) throw new Error("Укажите номер детали");
+
+  const clashSort = await prisma.detail.findFirst({
+    where: { detailNumber, sort: values.sort, id: exceptId ? { not: exceptId } : undefined },
+    select: { id: true },
+  });
+  if (clashSort) throw new Error(`Номер ${detailNumber} уже занят другой деталью этого сорта`);
+
+  const sibling = await prisma.detail.findFirst({
+    where: { detailNumber, id: exceptId ? { not: exceptId } : undefined },
+    select: { lengthM: true, prisadkaTorcevaya: true, prisadkaPloskost: true },
+  });
+  if (sibling) {
+    const sameLength = Number(sibling.lengthM) === (values.lengthM ?? 0);
+    const samePrisadka =
+      sibling.prisadkaTorcevaya === values.prisadkaTorcevaya &&
+      sibling.prisadkaPloskost === values.prisadkaPloskost;
+    if (!sameLength || !samePrisadka) {
+      throw new Error(`Номер ${detailNumber} уже закреплён за деталью другой длины/присадки`);
+    }
+  }
+}
+
 export async function createDetail(values: DetailFormValues): Promise<Detail> {
   if (!values.name.trim()) throw new Error("Название детали обязательно");
   if (!values.lengthM || values.lengthM <= 0) throw new Error("Укажите длину детали");
+  await assertDetailNumberFree(values);
 
   const created = await prisma.detail.create({ data: detailData(values) });
   await writeChangeLog({ entity: "Detail", entityId: created.id, newValues: serializeDetail(created) });
@@ -132,6 +166,7 @@ export async function createDetail(values: DetailFormValues): Promise<Detail> {
 export async function updateDetail(id: string, values: DetailFormValues): Promise<Detail> {
   if (!values.name.trim()) throw new Error("Название детали обязательно");
   if (!values.lengthM || values.lengthM <= 0) throw new Error("Укажите длину детали");
+  await assertDetailNumberFree(values, id);
 
   const before = await prisma.detail.findUnique({ where: { id } });
   if (!before) throw new Error("Деталь не найдена");
@@ -290,7 +325,7 @@ export interface ProductFormValues {
   sort: Sort;
   salePrice: number | null;
   packagingId: string | null;
-  details: { detailId: string; detailNumber: number; quantity: number }[];
+  details: { detailId: string; quantity: number }[];
   fasteners: { nomenclatureId: string; quantity: number }[];
   extraIds: string[];
 }
@@ -299,12 +334,11 @@ function validateProduct(v: ProductFormValues) {
   if (!v.name.trim()) throw new Error("Название изделия обязательно");
   if (!v.skuOzon.trim()) throw new Error("Артикул Ozon обязателен");
   if (!v.skuWb.trim()) throw new Error("Артикул WB обязателен");
-  // У одной детали в изделии номера должны различаться (мультистроки-номера).
+  // Одна деталь входит в изделие одной строкой (номер — часть самой детали).
   const seen = new Set<string>();
   for (const d of v.details) {
-    const key = `${d.detailId}::${d.detailNumber}`;
-    if (seen.has(key)) throw new Error("Повторяющийся номер детали в составе изделия");
-    seen.add(key);
+    if (seen.has(d.detailId)) throw new Error("Повторяющаяся деталь в составе изделия");
+    seen.add(d.detailId);
   }
 }
 
@@ -322,7 +356,6 @@ export async function createProduct(values: ProductFormValues): Promise<Product>
       details: {
         create: values.details.map((d) => ({
           detailId: d.detailId,
-          detailNumber: d.detailNumber,
           quantity: d.quantity,
         })),
       },
@@ -368,7 +401,6 @@ export async function updateProduct(id: string, values: ProductFormValues): Prom
         details: {
           create: values.details.map((d) => ({
             detailId: d.detailId,
-            detailNumber: d.detailNumber,
             quantity: d.quantity,
           })),
         },

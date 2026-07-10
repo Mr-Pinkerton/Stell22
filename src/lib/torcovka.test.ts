@@ -2,18 +2,20 @@ import { describe, expect, it } from "vitest";
 import { isOverRailLength, maxDetailQuantity, sumDetailLengthM } from "./torcovka";
 
 describe("sumDetailLengthM", () => {
-  it("суммирует длины по количеству", () => {
+  it("суммирует длины по количеству (по всем сортам)", () => {
     expect(
       sumDetailLengthM([
-        { quantity: 2, lengthM: 0.6 },
-        { quantity: 1, lengthM: 0.72 },
+        { quantity: 2, lengthM: 0.6, sort: "SORT1" },
+        { quantity: 1, lengthM: 0.72, sort: "SORT2" },
       ]),
     ).toBe(1.92);
   });
 });
 
 describe("maxDetailQuantity", () => {
-  const picks = [{ quantity: 2, lengthM: 0.6 }]; // 1.2 м занято
+  const picks: { quantity: number; lengthM: number; sort: "SORT1" | "SORT2" }[] = [
+    { quantity: 2, lengthM: 0.6, sort: "SORT1" }, // 1.2 м занято
+  ];
 
   it("возвращает floor от оставшейся длины", () => {
     expect(
@@ -21,18 +23,31 @@ describe("maxDetailQuantity", () => {
         takenLengthM: 2.4,
         picks,
         lengthM: 0.72,
+        sort: "SORT1",
       }),
     ).toBe(1); // (2.4 - 1.2) / 0.72 = 1
   });
 
-  it("не учитывает текущую длину в занятой длине", () => {
+  it("не учитывает текущую комбинацию длина+сорт в занятой длине", () => {
     expect(
       maxDetailQuantity({
         takenLengthM: 2.4,
-        picks: [...picks, { quantity: 1, lengthM: 0.72 }],
+        picks: [...picks, { quantity: 1, lengthM: 0.72, sort: "SORT1" }],
         lengthM: 0.72,
+        sort: "SORT1",
       }),
-    ).toBe(1); // qty той же длины не вычитается: (2.4 - 1.2) / 0.72 = 1
+    ).toBe(1); // qty той же длины+сорта не вычитается: (2.4 - 1.2) / 0.72 = 1
+  });
+
+  it("другой сорт той же длины вычитается из общего материала", () => {
+    expect(
+      maxDetailQuantity({
+        takenLengthM: 2.4,
+        picks: [...picks, { quantity: 1, lengthM: 0.72, sort: "SORT2" }],
+        lengthM: 0.72,
+        sort: "SORT1",
+      }),
+    ).toBe(0); // занято 1.2 + 0.72 = 1.92; остаток 0.48 < 0.72 → 0
   });
 
   it("0 при нулевой взятой длине", () => {
@@ -41,6 +56,7 @@ describe("maxDetailQuantity", () => {
         takenLengthM: 0,
         picks: [],
         lengthM: 0.6,
+        sort: "SORT1",
       }),
     ).toBe(0);
   });

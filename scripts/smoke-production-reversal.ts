@@ -215,7 +215,7 @@ async function testTorcovkaDeleteDoesNotReturnRails() {
       batchId: lot.batchId,
       railLotId: lot.id,
       railsTaken: 5,
-      picks: [{ lengthM: Number(detail.lengthM), quantity: 20 }],
+      picks: [{ lengthM: Number(detail.lengthM), sort: detail.sort, quantity: 20 }],
     }),
   );
 

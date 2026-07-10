@@ -73,6 +73,9 @@ function DetailFormBody({
 }) {
   const isEdit = Boolean(detail);
   const [name, setName] = useState(detail?.name ?? "");
+  const [number, setNumber] = useState(() =>
+    detail?.detailNumber != null ? String(detail.detailNumber) : "",
+  );
   const [length, setLength] = useState(() =>
     detail?.lengthM != null ? String(detail.lengthM).replace(".", ",") : "",
   );
@@ -83,13 +86,20 @@ function DetailFormBody({
   const [showErrors, setShowErrors] = useState(false);
 
   const lengthNum = length ? Number(length.replace(",", ".")) : null;
+  const numberNum = number ? parseInt(number, 10) : null;
   const canSubmit =
-    name.trim().length > 0 && lengthNum != null && lengthNum > 0 && !pending;
+    name.trim().length > 0 &&
+    numberNum != null &&
+    numberNum > 0 &&
+    lengthNum != null &&
+    lengthNum > 0 &&
+    !pending;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
     await onSubmit?.({
       name,
+      detailNumber: numberNum,
       lengthM: lengthNum,
       detailType,
       sort,
@@ -136,6 +146,22 @@ function DetailFormBody({
                   />
                 </Field>
                 <div className="grid gap-4 sm:grid-cols-2">
+                  <Field
+                    id="det-number"
+                    label="Номер"
+                    required
+                    invalid={showErrors && !(numberNum != null && numberNum > 0)}
+                  >
+                    <Input
+                      id="det-number"
+                      type="text"
+                      inputMode="numeric"
+                      className={cn(narrowFieldClass, "tabular-nums")}
+                      placeholder="12"
+                      value={number}
+                      onChange={(e) => setNumber(e.target.value.replace(/[^\d]/g, ""))}
+                    />
+                  </Field>
                   <Field
                     id="det-length"
                     label="Длина детали"
