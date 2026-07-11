@@ -14,6 +14,9 @@ import type {
   RailType,
 } from "@/types/domain";
 
+/** Дефолтный материал моков — «Хвоя» (совпадает с backfill-миграцией). */
+export const MATERIAL_HVOYA_ID = "mat_default_hvoya";
+
 export const employees: Employee[] = [
   {
     id: "emp-1",
@@ -58,7 +61,7 @@ export const employees: Employee[] = [
   },
 ];
 
-export const batches: Batch[] = [
+export const batches: Batch[] = ([
   {
     id: "batch-1",
     name: "Волочек 2419",
@@ -143,7 +146,7 @@ export const batches: Batch[] = [
     status: "ARCHIVED",
     purchaseDate: "2025-11-20",
   },
-];
+] as Omit<Batch, "materialId">[]).map((b) => ({ ...b, materialId: MATERIAL_HVOYA_ID }));
 
 export const railLots: RailLot[] = [
   {
@@ -471,7 +474,7 @@ const DETAIL_TYPE_LABEL: Record<RailType, string> = {
 
 /** По 20 деталей на каждый сорт и тип рейки (для терминала торцовки). */
 function buildDetails(): Detail[] {
-  const seeds: Detail[] = [
+  const seeds: Omit<Detail, "materialId">[] = [
     {
       id: "det-1",
       name: "Полка 600",
@@ -519,12 +522,12 @@ function buildDetails(): Detail[] {
   ];
 
   const seedsByKey = new Map(seeds.map((d) => [`${d.detailType}-${d.sort}`, d]));
-  const result: Detail[] = [];
+  const result: Omit<Detail, "materialId">[] = [];
   let seq = 5;
 
   for (const detailType of ["POLKA", "KANAVKA"] as RailType[]) {
     for (const sort of ["SORT1", "SORT2"] as Sort[]) {
-      const group: Detail[] = [];
+      const group: Omit<Detail, "materialId">[] = [];
       const seed = seedsByKey.get(`${detailType}-${sort}`);
       if (seed) group.push(seed);
 
@@ -548,12 +551,12 @@ function buildDetails(): Detail[] {
     }
   }
 
-  return result;
+  return result.map((d) => ({ ...d, materialId: MATERIAL_HVOYA_ID }));
 }
 
 export const details: Detail[] = buildDetails();
 
-export const products: Product[] = [
+export const products: Product[] = ([
   {
     id: "prod-1",
     name: "Полка настенная",
@@ -581,7 +584,7 @@ export const products: Product[] = [
     fastenerIds: [{ nomenclatureId: "nom-1", quantity: 12 }],
     extraIds: [],
   },
-];
+] as Omit<Product, "materialId">[]).map((p) => ({ ...p, materialId: MATERIAL_HVOYA_ID }));
 
 /**
  * Журнал внесений терминала (моки). Генерируем ~5 недель относительно «сегодня»,

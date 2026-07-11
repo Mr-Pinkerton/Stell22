@@ -38,7 +38,7 @@ export interface WarehouseStock {
 }
 
 export async function getWarehouseStock(): Promise<WarehouseStock> {
-  const [products, productStock, details, detailStock, blankStock, items, nomStock] =
+  const [products, productStock, details, detailStock, blankStock, items, nomStock, materials] =
     await Promise.all([
       prisma.product.findMany({ where: { status: "ACTIVE" } }),
       prisma.productStock.findMany(),
@@ -47,14 +47,17 @@ export async function getWarehouseStock(): Promise<WarehouseStock> {
       prisma.blankStock.findMany(),
       prisma.nomenclatureItem.findMany({ where: { status: "ACTIVE" } }),
       prisma.nomenclatureStock.findMany(),
+      prisma.material.findMany(),
     ]);
 
   const productQty = new Map(productStock.map((s) => [s.productId, s.quantity]));
   const nomQty = new Map(nomStock.map((s) => [s.nomenclatureId, s.quantity]));
+  const materialName = new Map(materials.map((m) => [m.id, m.name]));
 
   const domainDetails: Detail[] = details.map((d) => ({
     id: d.id,
     name: d.name,
+    materialId: d.materialId,
     detailNumber: d.detailNumber,
     lengthM: num(d.lengthM),
     detailType: d.detailType,
@@ -70,6 +73,7 @@ export async function getWarehouseStock(): Promise<WarehouseStock> {
     quantity: r.quantity,
   }));
   const blankRows: RawBlankRow[] = blankStock.map((b) => ({
+    materialId: b.materialId,
     lengthM: num(b.lengthM),
     detailType: b.detailType,
     sort: b.sort,
@@ -93,9 +97,10 @@ export async function getWarehouseStock(): Promise<WarehouseStock> {
       const len = num(b.lengthM);
       const typeLabel = b.detailType === "POLKA" ? "полка" : "канавка";
       const sortLabel = b.sort === "SORT1" ? "1 сорт" : "2 сорт";
+      const matLabel = materialName.get(b.materialId) ?? "—";
       return {
-        id: blankKey(len, b.detailType, b.sort),
-        name: `${len} м · ${typeLabel} · ${sortLabel}`,
+        id: blankKey(b.materialId, len, b.detailType, b.sort),
+        name: `${matLabel} · ${len} м · ${typeLabel} · ${sortLabel}`,
         quantity: b.quantity,
       };
     })
@@ -313,13 +318,15 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
           // Деталь без присадок — годна из заготовки, правим склад заготовок.
           await tx.blankStock.upsert({
             where: {
-              lengthM_detailType_sort: {
+              materialId_lengthM_detailType_sort: {
+                materialId: detail.materialId,
                 lengthM: detail.lengthM,
                 detailType: detail.detailType,
                 sort: detail.sort,
               },
             },
             create: {
+              materialId: detail.materialId,
               lengthM: detail.lengthM,
               detailType: detail.detailType,
               sort: detail.sort,

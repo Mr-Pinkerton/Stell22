@@ -11,6 +11,7 @@ export default async function NomenclaturePage() {
       initialDetails={data.details}
       initialProducts={data.products}
       initialItems={data.items}
+      initialMaterials={data.materials}
     />
   );
 }

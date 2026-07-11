@@ -32,6 +32,7 @@ function serBatch(b: PrismaBatch): Batch {
   return {
     id: b.id,
     name: b.name,
+    materialId: b.materialId,
     sectionWidthMm: num(b.sectionWidthMm),
     sectionHeightMm: num(b.sectionHeightMm),
     purchaseCost: num(b.purchaseCost),

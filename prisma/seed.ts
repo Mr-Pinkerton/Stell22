@@ -20,6 +20,7 @@ import {
   financeCounterparties,
   financeDeals,
 } from "../src/mocks/finance-fixtures";
+import { MATERIAL_HVOYA_ID } from "../src/mocks/fixtures";
 import { batchExtraShare, batchTotalCost, dealDeliveryExtra } from "../src/lib/deal-cost";
 import { hashPassword } from "../src/lib/password";
 
@@ -70,6 +71,7 @@ async function main() {
     prisma.railLot.deleteMany(),
     prisma.batch.deleteMany(),
     prisma.detail.deleteMany(),
+    prisma.material.deleteMany(),
     prisma.nomenclatureItem.deleteMany(),
     prisma.employee.deleteMany(),
     prisma.changeLog.deleteMany(),
@@ -87,6 +89,11 @@ async function main() {
       name: "Администратор",
       role: "ADMIN",
     },
+  });
+
+  // Материал по умолчанию — «Хвоя» (все прототипные данные одной породы).
+  await prisma.material.create({
+    data: { id: MATERIAL_HVOYA_ID, name: "Хвоя", status: "ACTIVE", sortOrder: 0 },
   });
 
   await prisma.employee.createMany({
@@ -120,6 +127,7 @@ async function main() {
     data: details.map((d) => ({
       id: d.id,
       name: d.name,
+      materialId: d.materialId,
       detailNumber: d.detailNumber,
       lengthM: d.lengthM,
       detailType: d.detailType,
@@ -134,6 +142,7 @@ async function main() {
     data: batches.map((b) => ({
       id: b.id,
       name: b.name,
+      materialId: b.materialId,
       sectionWidthMm: b.sectionWidthMm,
       sectionHeightMm: b.sectionHeightMm,
       purchaseCost: b.purchaseCost,
@@ -173,6 +182,7 @@ async function main() {
       data: {
         id: p.id,
         name: p.name,
+        materialId: p.materialId,
         skuOzon: p.skuOzon,
         skuWb: p.skuWb,
         sort: p.sort,
@@ -206,10 +216,16 @@ async function main() {
 
   const detailById = new Map(details.map((d) => [d.id, d]));
 
-  const addBlankStock = (lengthM: number, detailType: RailType, sort: Sort, qty: number) =>
+  const addBlankStock = (
+    materialId: string,
+    lengthM: number,
+    detailType: RailType,
+    sort: Sort,
+    qty: number,
+  ) =>
     prisma.blankStock.upsert({
-      where: { lengthM_detailType_sort: { lengthM, detailType, sort } },
-      create: { lengthM, detailType, sort, quantity: qty },
+      where: { materialId_lengthM_detailType_sort: { materialId, lengthM, detailType, sort } },
+      create: { materialId, lengthM, detailType, sort, quantity: qty },
       update: { quantity: { increment: qty } },
     });
 
@@ -222,7 +238,12 @@ async function main() {
     const d = detailById.get(detailId)!;
     await prisma.blankStock.update({
       where: {
-        lengthM_detailType_sort: { lengthM: d.lengthM, detailType: d.detailType, sort: d.sort },
+        materialId_lengthM_detailType_sort: {
+          materialId: d.materialId,
+          lengthM: d.lengthM,
+          detailType: d.detailType,
+          sort: d.sort,
+        },
       },
       data: { quantity: { decrement: qty } },
     });
@@ -285,6 +306,7 @@ async function main() {
         blankLengthM: d.lengthM,
         blankType: d.detailType,
         blankSort: d.sort,
+        blankMaterialId: d.materialId,
       };
     });
     await prisma.productionOperation.create({
@@ -299,7 +321,7 @@ async function main() {
       },
     });
     for (const l of blankLines) {
-      await addBlankStock(l.blankLengthM, l.blankType, l.blankSort, l.quantity);
+      await addBlankStock(l.blankMaterialId, l.blankLengthM, l.blankType, l.blankSort, l.quantity);
     }
   };
 
@@ -340,7 +362,12 @@ async function main() {
               sourceTorcevayaDone: o.from.t,
               sourcePloskostDone: o.from.p,
               ...(fromBlank
-                ? { blankLengthM: d.lengthM, blankType: d.detailType, blankSort: d.sort }
+                ? {
+                    blankLengthM: d.lengthM,
+                    blankType: d.detailType,
+                    blankSort: d.sort,
+                    blankMaterialId: d.materialId,
+                  }
                 : {}),
             },
           ],

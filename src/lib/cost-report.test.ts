@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   averageRates,
   blendedCostPerMeter,
+  blendedCostPerMeterByMaterial,
   buildBatchSnapshots,
   buildCostDetailRows,
   buildCostProductRows,
@@ -46,6 +47,7 @@ const employees: Employee[] = [
 
 const detail = (over: Partial<Detail> & Pick<Detail, "id" | "lengthM" | "sort">): Detail => ({
   name: over.id,
+  materialId: "mat-1",
   detailNumber: 1,
   detailType: "POLKA",
   prisadkaTorcevaya: false,
@@ -62,6 +64,7 @@ const details = [dA, dB, dC];
 const batch: Batch = {
   id: "bX",
   name: "Тест",
+  materialId: "mat-1",
   sectionWidthMm: 50,
   sectionHeightMm: 50,
   purchaseCost: 1000,
@@ -156,11 +159,35 @@ describe("buildCostDetailRows", () => {
   });
 });
 
+describe("blendedCostPerMeterByMaterial", () => {
+  it("считает ₽/м раздельно по материалам, не смешивая породы", () => {
+    // Две партии разных материалов, обе только 1 сорт: 1000₽ / 100м = 10 против
+    // 2000₽ / 100м = 20. Общий блендинг дал бы 15 для обеих — это неверно.
+    const b1: Batch = { ...batch, id: "bH", materialId: "mat-hvoya", totalCost: 1000, priceSort1: 1, priceSort2: 0 };
+    const b2: Batch = { ...batch, id: "bB", materialId: "mat-bereza", totalCost: 2000, priceSort1: 1, priceSort2: 0 };
+    const lines: ProducedLine[] = [
+      { batchId: "bH", lengthM: 1, sort: "SORT1", quantity: 100 },
+      { batchId: "bB", lengthM: 1, sort: "SORT1", quantity: 100 },
+    ];
+    const snapshots = buildBatchSnapshots({ batches: [b1, b2], lines });
+    const byMat = blendedCostPerMeterByMaterial(
+      snapshots,
+      new Map([
+        ["bH", "mat-hvoya"],
+        ["bB", "mat-bereza"],
+      ]),
+    );
+    expect(byMat.get("mat-hvoya")!.sort1.toNumber()).toBe(10);
+    expect(byMat.get("mat-bereza")!.sort1.toNumber()).toBe(20);
+  });
+});
+
 describe("buildCostProductRows", () => {
   const products: Product[] = [
     {
       id: "p1",
       name: "Изделие 1",
+      materialId: "mat-1",
       skuOzon: "OZ-1",
       skuWb: "WB-1",
       sort: "SORT1",

@@ -15,7 +15,7 @@ import {
 } from "@/server/purchases";
 import { printPackageLabels } from "@/lib/print-labels";
 import { type PurchaseBatchRow } from "@/lib/batch-stats";
-import type { NomenclatureItem } from "@/types/domain";
+import type { Material, NomenclatureItem } from "@/types/domain";
 import { formatIsoDate, formatLength, formatMoney, formatVolume } from "@/lib/format";
 import { exportXlsx } from "@/lib/export-xlsx";
 import {
@@ -41,9 +41,10 @@ const tableActionDestructiveClass =
 interface PurchasesViewProps {
   initialRows: PurchaseBatchRow[];
   items: NomenclatureItem[];
+  materials: Material[];
 }
 
-export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
+export function PurchasesView({ initialRows, items, materials }: PurchasesViewProps) {
   const [search, setSearch] = useState("");
   const [showArchive, setShowArchive] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -388,6 +389,7 @@ export function PurchasesView({ initialRows, items }: PurchasesViewProps) {
         open={dialogOpen}
         batch={editing}
         items={items}
+        materials={materials}
         onOpenChange={setDialogOpen}
         onSubmitBatch={handleBatchSubmit}
         onSubmitSimple={handleSimpleSubmit}

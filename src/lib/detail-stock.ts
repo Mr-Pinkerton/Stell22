@@ -15,6 +15,7 @@ export interface DetailStockRow {
 }
 
 export interface BlankStockRow {
+  materialId: string;
   lengthM: number;
   detailType: RailType;
   sort: Sort;
@@ -23,14 +24,16 @@ export interface BlankStockRow {
 
 type PrisadkaFlags = Pick<Detail, "prisadkaTorcevaya" | "prisadkaPloskost">;
 
-/** Ключ заготовки: длина (4 знака) | тип | сорт. */
-export function blankKey(lengthM: number, detailType: RailType, sort: Sort): string {
-  return `${lengthM.toFixed(4)}|${detailType}|${sort}`;
+/** Ключ заготовки: материал | длина (4 знака) | тип | сорт. */
+export function blankKey(materialId: string, lengthM: number, detailType: RailType, sort: Sort): string {
+  return `${materialId}|${lengthM.toFixed(4)}|${detailType}|${sort}`;
 }
 
-/** Ключ заготовки, соответствующей спецификации детали. */
-export function blankKeyForDetail(detail: Pick<Detail, "lengthM" | "detailType" | "sort">): string {
-  return blankKey(detail.lengthM, detail.detailType, detail.sort);
+/** Ключ заготовки, соответствующей спецификации детали (её материал). */
+export function blankKeyForDetail(
+  detail: Pick<Detail, "materialId" | "lengthM" | "detailType" | "sort">,
+): string {
+  return blankKey(detail.materialId, detail.lengthM, detail.detailType, detail.sort);
 }
 
 /** Требуемые детали типы присадки. */
@@ -84,7 +87,7 @@ export function buildStockSnapshot(
   const blanks: Record<string, number> = {};
   for (const b of blankRows) {
     if (b.quantity <= 0) continue;
-    const key = blankKey(b.lengthM, b.detailType, b.sort);
+    const key = blankKey(b.materialId, b.lengthM, b.detailType, b.sort);
     blanks[key] = (blanks[key] ?? 0) + b.quantity;
   }
 

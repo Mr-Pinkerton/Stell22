@@ -12,6 +12,7 @@ function detail(over: Partial<Detail>): Detail {
   return {
     id: "d",
     name: "Деталь",
+    materialId: "mat-1",
     detailNumber: 1,
     lengthM: 0.6,
     detailType: "POLKA",
@@ -64,11 +65,11 @@ describe("buildStockSnapshot", () => {
   it("заготовки складываются по ключу; деталь без присадок годна из заготовки", () => {
     const d = detail({ id: "d1", lengthM: 0.6, detailType: "POLKA", sort: "SORT1" });
     const blanks: BlankStockRow[] = [
-      { lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 10 },
-      { lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 5 },
+      { materialId: "mat-1", lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 10 },
+      { materialId: "mat-1", lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 5 },
     ];
     const snap = buildStockSnapshot([d], [], blanks);
-    expect(snap.blanks["0.6000|POLKA|SORT1"]).toBe(15);
+    expect(snap.blanks["mat-1|0.6000|POLKA|SORT1"]).toBe(15);
     expect(snap.detailsReady.d1).toBe(15);
     expect(snap.prisadkaPending.d1).toBeUndefined();
   });
@@ -76,7 +77,7 @@ describe("buildStockSnapshot", () => {
   it("деталь с обеими присадками: заготовка спецификации ждёт оба типа", () => {
     const d = detail({ id: "d2", prisadkaTorcevaya: true, prisadkaPloskost: true });
     const blanks: BlankStockRow[] = [
-      { lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 8 },
+      { materialId: "mat-1", lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 8 },
     ];
     const snap = buildStockSnapshot([d], [], blanks);
     expect(snap.detailsReady.d2).toBeUndefined();
@@ -94,11 +95,27 @@ describe("buildStockSnapshot", () => {
     expect(snap.detailsReady.d3).toBe(3);
   });
 
+  it("заготовки одной спецификации, но разных материалов, не смешиваются", () => {
+    const hvoya = detail({ id: "dh", materialId: "mat-hvoya", lengthM: 0.6, detailType: "POLKA", sort: "SORT1" });
+    const bereza = detail({ id: "db", materialId: "mat-bereza", lengthM: 0.6, detailType: "POLKA", sort: "SORT1" });
+    const blanks: BlankStockRow[] = [
+      { materialId: "mat-hvoya", lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 10 },
+      { materialId: "mat-bereza", lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 3 },
+    ];
+    const snap = buildStockSnapshot([hvoya, bereza], [], blanks);
+    // Отдельные ключи и раздельные остатки по материалу.
+    expect(snap.blanks["mat-hvoya|0.6000|POLKA|SORT1"]).toBe(10);
+    expect(snap.blanks["mat-bereza|0.6000|POLKA|SORT1"]).toBe(3);
+    // Деталь без присадок берёт заготовки только своего материала.
+    expect(snap.detailsReady.dh).toBe(10);
+    expect(snap.detailsReady.db).toBe(3);
+  });
+
   it("игнорирует нулевые строки, пробрасывает склад номенклатуры", () => {
     const d = detail({ id: "d4" });
     const rows: DetailStockRow[] = [];
     const blanks: BlankStockRow[] = [
-      { lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 0 },
+      { materialId: "mat-1", lengthM: 0.6, detailType: "POLKA", sort: "SORT1", quantity: 0 },
     ];
     const snap = buildStockSnapshot([d], rows, blanks, { "nom-1": 100 });
     expect(snap.detailsReady.d4).toBeUndefined();

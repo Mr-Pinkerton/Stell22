@@ -8,7 +8,7 @@ import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { sectionAreaM2, type PurchaseBatchRow } from "@/lib/batch-stats";
 import { allocatePackageCode } from "@/lib/package-code";
 import { archiveBatchIfDepleted } from "@/server/cost";
-import type { NomenclatureItem, RailType, Sort } from "@/types/domain";
+import type { Material, NomenclatureItem, RailType, Sort } from "@/types/domain";
 
 const PATH = "/purchases";
 
@@ -52,6 +52,7 @@ function toRow(batch: PrismaBatch, lots: PrismaRailLot[]): PurchaseBatchRow {
   return {
     id: batch.id,
     name: batch.name,
+    materialId: batch.materialId,
     sectionWidthMm: wMm,
     sectionHeightMm: hMm,
     purchaseCost,
@@ -84,13 +85,15 @@ async function loadRow(batchId: string): Promise<PurchaseBatchRow> {
 export interface PurchasesData {
   rows: PurchaseBatchRow[];
   items: NomenclatureItem[];
+  materials: Material[];
 }
 
 export async function getPurchasesData(): Promise<PurchasesData> {
-  const [batches, lots, items] = await Promise.all([
+  const [batches, lots, items, materials] = await Promise.all([
     prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
     prisma.railLot.findMany(),
     prisma.nomenclatureItem.findMany({ where: { status: "ACTIVE" }, orderBy: { name: "asc" } }),
+    prisma.material.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }),
   ]);
   return {
     rows: batches.map((b) => toRow(b, lots)),
@@ -101,6 +104,12 @@ export async function getPurchasesData(): Promise<PurchasesData> {
       unitPrice: num(n.unitPrice),
       status: n.status,
       minStock: n.minStock,
+    })),
+    materials: materials.map((m) => ({
+      id: m.id,
+      name: m.name,
+      status: m.status,
+      sortOrder: m.sortOrder,
     })),
   };
 }
@@ -119,6 +128,7 @@ export interface BatchRailInput {
 
 export interface BatchFormValues {
   name: string;
+  materialId: string;
   /** ISO yyyy-mm-dd; null → текущая дата. */
   purchaseDate: string | null;
   sectionWidthMm: number | null;
@@ -163,6 +173,7 @@ export async function getBatchLabels(batchId: string): Promise<PackageLabelData[
 
 function validateBatch(v: BatchFormValues, options?: { requirePackages?: boolean }) {
   if (!v.name.trim()) throw new Error("Название партии обязательно");
+  if (!v.materialId) throw new Error("Укажите материал партии");
   if (!v.sectionWidthMm || !v.sectionHeightMm) throw new Error("Укажите сечение рейки");
   if (!v.purchaseCost || v.purchaseCost <= 0) throw new Error("Укажите стоимость партии");
   if (options?.requirePackages && !v.rails.some((r) => r.mode === "package")) {
@@ -199,6 +210,7 @@ export async function createBatch(values: BatchFormValues): Promise<PurchaseBatc
   const created = await prisma.batch.create({
     data: {
       name: values.name.trim(),
+      materialId: values.materialId,
       sectionWidthMm: values.sectionWidthMm ?? 0,
       sectionHeightMm: values.sectionHeightMm ?? 0,
       purchaseCost: values.purchaseCost ?? 0,
@@ -252,6 +264,7 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
     where: { id },
     data: {
       name: values.name.trim(),
+      materialId: values.materialId,
       sectionWidthMm: values.sectionWidthMm ?? 0,
       sectionHeightMm: values.sectionHeightMm ?? 0,
       purchaseCost: values.purchaseCost ?? 0,

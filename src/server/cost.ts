@@ -42,6 +42,7 @@ function serBatch(b: PrismaBatch): Batch {
   return {
     id: b.id,
     name: b.name,
+    materialId: b.materialId,
     sectionWidthMm: num(b.sectionWidthMm),
     sectionHeightMm: num(b.sectionHeightMm),
     purchaseCost: num(b.purchaseCost),
@@ -58,6 +59,7 @@ function serDetail(d: PrismaDetail): Detail {
   return {
     id: d.id,
     name: d.name,
+    materialId: d.materialId,
     detailNumber: d.detailNumber,
     lengthM: num(d.lengthM),
     detailType: d.detailType,
@@ -102,6 +104,7 @@ function serProduct(p: ProductWithRelations): Product {
   return {
     id: p.id,
     name: p.name,
+    materialId: p.materialId,
     skuOzon: p.skuOzon,
     skuWb: p.skuWb,
     sort: p.sort,

@@ -6,5 +6,5 @@ export const dynamic = "force-dynamic";
 
 export default async function PurchasesPage() {
   const data = await getPurchasesData();
-  return <PurchasesView initialRows={data.rows} items={data.items} />;
+  return <PurchasesView initialRows={data.rows} items={data.items} materials={data.materials} />;
 }

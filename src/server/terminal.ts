@@ -65,6 +65,7 @@ function serBatch(b: PrismaBatch): Batch {
   return {
     id: b.id,
     name: b.name,
+    materialId: b.materialId,
     sectionWidthMm: num(b.sectionWidthMm) ?? 0,
     sectionHeightMm: num(b.sectionHeightMm) ?? 0,
     purchaseCost: num(b.purchaseCost) ?? 0,
@@ -97,6 +98,7 @@ function serDetail(d: PrismaDetail): Detail {
   return {
     id: d.id,
     name: d.name,
+    materialId: d.materialId,
     detailNumber: d.detailNumber,
     lengthM: num(d.lengthM) ?? 0,
     detailType: d.detailType,
@@ -126,6 +128,7 @@ function serProduct(p: ProductWithRel): Product {
   return {
     id: p.id,
     name: p.name,
+    materialId: p.materialId,
     skuOzon: p.skuOzon,
     skuWb: p.skuWb,
     sort: p.sort,
@@ -170,6 +173,7 @@ export async function getTerminalData(): Promise<TerminalData> {
   }));
 
   const blanks: BlankStockRow[] = blankRows.map((b) => ({
+    materialId: b.materialId,
     lengthM: num(b.lengthM) ?? 0,
     detailType: b.detailType,
     sort: b.sort,
@@ -213,6 +217,9 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
     // Тип заготовок определяется пакетом реек; фактический сорт — из pick.
     const lot = await tx.railLot.findUnique({ where: { id: railLotId } });
     if (!lot || lot.batchId !== batchId) throw new Error("Пакет реек не найден");
+    // Материал заготовок наследуется от партии-источника.
+    const batch = await tx.batch.findUniqueOrThrow({ where: { id: batchId } });
+    const materialId = batch.materialId;
 
     // Атомарное списание: уйти в минус нельзя (cost-integrity).
     const dec = await tx.railLot.updateMany({
@@ -235,6 +242,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
             blankLengthM: p.lengthM,
             blankType: lot.railType,
             blankSort: p.sort,
+            blankMaterialId: materialId,
           })),
         },
       },
@@ -245,13 +253,15 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
     for (const p of picks) {
       await tx.blankStock.upsert({
         where: {
-          lengthM_detailType_sort: {
+          materialId_lengthM_detailType_sort: {
+            materialId,
             lengthM: p.lengthM,
             detailType: lot.railType,
             sort: p.sort,
           },
         },
         create: {
+          materialId,
           lengthM: p.lengthM,
           detailType: lot.railType,
           sort: p.sort,
@@ -357,10 +367,12 @@ async function applyPrisadkaPick(
     left -= take;
   }
 
-  // 2. Заготовки спецификации детали (первая присадка).
+  // 2. Заготовки спецификации детали (первая присадка). Материал заготовки =
+  // материал детали (заготовки разных пород разделены на складе).
   if (left > 0) {
     const dec = await tx.blankStock.updateMany({
       where: {
+        materialId: detail.materialId,
         lengthM: detail.lengthM,
         detailType: detail.detailType,
         sort: detail.sort,
@@ -389,6 +401,7 @@ async function applyPrisadkaPick(
         blankLengthM: detail.lengthM,
         blankType: detail.detailType,
         blankSort: detail.sort,
+        blankMaterialId: detail.materialId,
       },
     });
     left = 0;
@@ -413,6 +426,7 @@ export async function reversePrisadkaLine(
     blankLengthM: Prisma.Decimal | number | null;
     blankType: RailType | null;
     blankSort: Sort | null;
+    blankMaterialId: string | null;
   },
 ): Promise<void> {
   if (!line.detailId) throw new Error("Строка присадки без детали");
@@ -445,18 +459,25 @@ export async function reversePrisadkaLine(
 
   if (line.sourceIsBlank) {
     // Первая присадка: возвращаем заготовку на склад заготовок.
-    if (line.blankLengthM == null || line.blankType == null || line.blankSort == null) {
+    if (
+      line.blankLengthM == null ||
+      line.blankType == null ||
+      line.blankSort == null ||
+      line.blankMaterialId == null
+    ) {
       throw new Error("Нет спецификации заготовки для возврата");
     }
     await tx.blankStock.upsert({
       where: {
-        lengthM_detailType_sort: {
+        materialId_lengthM_detailType_sort: {
+          materialId: line.blankMaterialId,
           lengthM: line.blankLengthM,
           detailType: line.blankType,
           sort: line.blankSort,
         },
       },
       create: {
+        materialId: line.blankMaterialId,
         lengthM: line.blankLengthM,
         detailType: line.blankType,
         sort: line.blankSort,
@@ -554,6 +575,7 @@ async function applyUpakovkaPick(
     if (!req.torcev && !req.plosk) {
       const dec = await tx.blankStock.updateMany({
         where: {
+          materialId: detail.materialId,
           lengthM: detail.lengthM,
           detailType: detail.detailType,
           sort: detail.sort,
@@ -571,6 +593,7 @@ async function applyUpakovkaPick(
           blankLengthM: detail.lengthM,
           blankType: detail.detailType,
           blankSort: detail.sort,
+          blankMaterialId: detail.materialId,
         },
       });
       continue;
@@ -661,6 +684,7 @@ export async function reverseUpakovkaOperation(
     blankLengthM: Prisma.Decimal | number | null;
     blankType: RailType | null;
     blankSort: Sort | null;
+    blankMaterialId: string | null;
   }[],
   nomenclatureLines: { nomenclatureId: string; quantity: number }[],
 ): Promise<void> {
@@ -675,18 +699,25 @@ export async function reverseUpakovkaOperation(
   for (const l of detailLines) {
     if (l.sourceIsBlank) {
       // Беcприсадочная деталь — возврат на склад заготовок.
-      if (l.blankLengthM == null || l.blankType == null || l.blankSort == null) {
+      if (
+        l.blankLengthM == null ||
+        l.blankType == null ||
+        l.blankSort == null ||
+        l.blankMaterialId == null
+      ) {
         throw new Error("Нет спецификации заготовки для возврата");
       }
       await tx.blankStock.upsert({
         where: {
-          lengthM_detailType_sort: {
+          materialId_lengthM_detailType_sort: {
+            materialId: l.blankMaterialId,
             lengthM: l.blankLengthM,
             detailType: l.blankType,
             sort: l.blankSort,
           },
         },
         create: {
+          materialId: l.blankMaterialId,
           lengthM: l.blankLengthM,
           detailType: l.blankType,
           sort: l.blankSort,

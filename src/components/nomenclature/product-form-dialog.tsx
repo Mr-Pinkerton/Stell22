@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import type { Detail, NomenclatureItem, Product, Sort } from "@/types/domain";
+import type { Detail, Material, NomenclatureItem, Product, Sort } from "@/types/domain";
 import type { ProductFormValues } from "@/server/nomenclature";
 import {
   Field,
@@ -53,6 +53,8 @@ interface ProductFormDialogProps {
   details: Detail[];
   /** Позиции номенклатуры (крепёж/упаковка/разное) из БД. */
   items: NomenclatureItem[];
+  /** Материалы (порода) — изделие однородно по материалу. */
+  materials: Material[];
   onOpenChange: (open: boolean) => void;
   onSubmit?: (values: ProductFormValues) => void | Promise<void>;
   pending?: boolean;
@@ -77,6 +79,7 @@ function ProductFormBody({
   product,
   details: allDetails,
   items,
+  materials,
   onOpenChange,
   onSubmit,
   pending,
@@ -85,7 +88,12 @@ function ProductFormBody({
   const fasteners = useMemo(() => items.filter((n) => n.type === "FASTENER"), [items]);
   const packagingItems = useMemo(() => items.filter((n) => n.type === "PACKAGING"), [items]);
   const otherItems = useMemo(() => items.filter((n) => n.type === "OTHER"), [items]);
+  const activeMaterials = useMemo(
+    () => materials.filter((m) => m.status === "ACTIVE" || m.id === product?.materialId),
+    [materials, product?.materialId],
+  );
 
+  const [materialId, setMaterialId] = useState(product?.materialId ?? activeMaterials[0]?.id ?? "");
   const [name, setName] = useState(product?.name ?? "");
   const [skuOzon, setSkuOzon] = useState(product?.skuOzon ?? "");
   const [skuWb, setSkuWb] = useState(product?.skuWb ?? "");
@@ -114,9 +122,16 @@ function ProductFormBody({
   const [draftDetailQty, setDraftDetailQty] = useState("1");
   const [showErrors, setShowErrors] = useState(false);
 
+  // Состав изделия — только детали выбранного материала и сорта (номера
+  // повторяются между материалами, поэтому фильтруем строго по materialId).
   const sortDetails = useMemo(
-    () => (sort ? allDetails.filter((d) => d.sort === sort && d.status === "ACTIVE") : []),
-    [sort, allDetails],
+    () =>
+      sort && materialId
+        ? allDetails.filter(
+            (d) => d.sort === sort && d.materialId === materialId && d.status === "ACTIVE",
+          )
+        : [],
+    [sort, materialId, allDetails],
   );
 
   const detailById = useMemo(
@@ -157,6 +172,7 @@ function ProductFormBody({
 
   const canSubmit =
     name.trim().length > 0 &&
+    materialId.length > 0 &&
     skuOzon.trim().length > 0 &&
     skuWb.trim().length > 0 &&
     sort !== "" &&
@@ -167,6 +183,7 @@ function ProductFormBody({
     if (sort === "" || !canSubmit) return;
     await onSubmit?.({
       name,
+      materialId,
       skuOzon,
       skuWb,
       sort,
@@ -252,13 +269,42 @@ function ProductFormBody({
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field
+                    id="prod-material"
+                    label="Материал"
+                    required
+                    invalid={showErrors && !materialId}
+                  >
+                    <Select
+                      value={materialId}
+                      onValueChange={(v) => {
+                        setMaterialId(v ?? "");
+                        // Детали привязаны к материалу — сбрасываем состав.
+                        setDetailRows([]);
+                        setDraftDetailId("");
+                      }}
+                    >
+                      <SelectTrigger id="prod-material" className={selectTriggerClass}>
+                        <SelectValue placeholder="Выберите материал">
+                          {activeMaterials.find((m) => m.id === materialId)?.name}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent {...formSelectContentProps}>
+                        {activeMaterials.map((m) => (
+                          <SelectItem key={m.id} value={m.id} className="cursor-pointer rounded-lg">
+                            {m.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field
                     id="prod-sort"
                     label="Сорт"
                     required
                     invalid={showErrors && sort === ""}
                   >
                     <Select
-                      value={sort || undefined}
+                      value={sort}
                       onValueChange={(v) => setSort(v as Sort)}
                     >
                       <SelectTrigger id="prod-sort" className={selectTriggerClass}>

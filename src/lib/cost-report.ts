@@ -238,11 +238,15 @@ export function blankMaterialCost(snapshot: BatchCostSnapshot, lengthM: number, 
   return price.times(D(lengthM)).times(snapshot.areaM2);
 }
 
-/** Блендированная ₽/м по сорту детали (Σстоимость / Σдлина по всем партиям). */
-export function blendedCostPerMeter(snapshots: Map<string, BatchCostSnapshot>): {
+export interface CostPerMeter {
   sort1: Decimal;
   sort2: Decimal;
-} {
+}
+
+const ZERO_PER_METER: CostPerMeter = { sort1: ZERO, sort2: ZERO };
+
+/** Блендированная ₽/м по сорту детали (Σстоимость / Σдлина по всем партиям). */
+export function blendedCostPerMeter(snapshots: Map<string, BatchCostSnapshot>): CostPerMeter {
   let cost1 = ZERO;
   let len1 = ZERO;
   let cost2 = ZERO;
@@ -257,6 +261,36 @@ export function blendedCostPerMeter(snapshots: Map<string, BatchCostSnapshot>): 
     sort1: len1.isZero() ? ZERO : cost1.div(len1),
     sort2: len2.isZero() ? ZERO : cost2.div(len2),
   };
+}
+
+/**
+ * Блендированная ₽/м по сорту, раздельно по каждому материалу. Изделие однородно
+ * по материалу, поэтому его материальная себестоимость считается только по
+ * партиям своей породы (смешивать хвою и берёзу нельзя — цены за м³ разные).
+ */
+export function blendedCostPerMeterByMaterial(
+  snapshots: Map<string, BatchCostSnapshot>,
+  batchMaterial: Map<string, string>,
+): Map<string, CostPerMeter> {
+  const acc = new Map<string, { cost1: Decimal; len1: Decimal; cost2: Decimal; len2: Decimal }>();
+  for (const [batchId, s] of snapshots) {
+    const materialId = batchMaterial.get(batchId);
+    if (!materialId) continue;
+    const cur = acc.get(materialId) ?? { cost1: ZERO, len1: ZERO, cost2: ZERO, len2: ZERO };
+    cur.cost1 = cur.cost1.plus(s.costSort1);
+    cur.len1 = cur.len1.plus(s.lengthSort1);
+    cur.cost2 = cur.cost2.plus(s.costSort2);
+    cur.len2 = cur.len2.plus(s.lengthSort2);
+    acc.set(materialId, cur);
+  }
+  const result = new Map<string, CostPerMeter>();
+  for (const [materialId, v] of acc) {
+    result.set(materialId, {
+      sort1: v.len1.isZero() ? ZERO : v.cost1.div(v.len1),
+      sort2: v.len2.isZero() ? ZERO : v.cost2.div(v.len2),
+    });
+  }
+  return result;
 }
 
 // --------------------------- строки отчёта ----------------------------------
@@ -409,11 +443,19 @@ export function buildCostProductRows(params: {
   const nomenclatureById = new Map(params.nomenclature.map((n) => [n.id, n]));
   const rates = averageRates(params.employees);
   const snapshots = buildBatchSnapshots(params);
-  const perMeter = blendedCostPerMeter(snapshots);
+  // ₽/м считаем раздельно по материалам — изделие берёт per-meter своей породы.
+  const batchMaterial = new Map(params.batches.map((b) => [b.id, b.materialId]));
+  const perMeterByMaterial = blendedCostPerMeterByMaterial(snapshots, batchMaterial);
 
   const active = params.products.filter((p) => p.status === "ACTIVE");
   const directs = active.map((p) =>
-    computeProductDirect(p, detailsById, nomenclatureById, perMeter, rates),
+    computeProductDirect(
+      p,
+      detailsById,
+      nomenclatureById,
+      perMeterByMaterial.get(p.materialId) ?? ZERO_PER_METER,
+      rates,
+    ),
   );
 
   // Σ прямых затрат периода = Σ(прямая_ед × произведено_ед).

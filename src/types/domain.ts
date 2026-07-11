@@ -30,9 +30,17 @@ export interface Employee {
   rateUpakovka?: number | null;
 }
 
+export interface Material {
+  id: string;
+  name: string;
+  status: ProductStatus;
+  sortOrder: number;
+}
+
 export interface Batch {
   id: string;
   name: string;
+  materialId: string;
   sectionWidthMm: number;
   sectionHeightMm: number;
   purchaseCost: number; // истина "Стоимость партии"
@@ -70,7 +78,8 @@ export interface NomenclatureItem {
 export interface Detail {
   id: string;
   name: string;
-  /** Уникальный номер детали (длина + присадки). Используется при упаковке. */
+  materialId: string;
+  /** Номер детали в пределах материала (длина + присадки). Используется при упаковке. */
   detailNumber: number;
   lengthM: number;
   detailType: RailType;
@@ -88,6 +97,7 @@ export interface ProductDetail {
 export interface Product {
   id: string;
   name: string;
+  materialId: string;
   /** Артикул Ozon (offer_id). */
   skuOzon: string;
   /** Артикул Wildberries (supplierArticle). */

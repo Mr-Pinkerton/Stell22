@@ -48,3 +48,6 @@ next-env.d.ts
 # банковские выписки и реальные данные счётов (не коммитим)
 kl_to_1c_*.txt
 *044525104*.xlsx
+
+# graphify knowledge graph (генерируется локально)
+/graphify-out/

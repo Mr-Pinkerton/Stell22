@@ -28,7 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import type { NomenclatureItem, RailType, Sort } from "@/types/domain";
+import type { Material, NomenclatureItem, RailType, Sort } from "@/types/domain";
 import type { BatchFormValues, SimplePurchaseFormValues } from "@/server/purchases";
 
 const fieldClass =
@@ -104,6 +104,8 @@ interface BatchFormDialogProps {
   batch?: PurchaseBatchRow | null;
   /** Активная номенклатура (для простой закупки). */
   items: NomenclatureItem[];
+  /** Материалы (порода рейки) для партии. */
+  materials: Material[];
   onOpenChange: (open: boolean) => void;
   onSubmitBatch?: (values: BatchFormValues) => void | Promise<void>;
   onSubmitSimple?: (values: SimplePurchaseFormValues) => void | Promise<void>;
@@ -191,6 +193,7 @@ function SortSelect({
 function BatchFormBody({
   batch,
   items,
+  materials,
   onSubmitBatch,
   onSubmitSimple,
   pending,
@@ -198,6 +201,7 @@ function BatchFormBody({
 }: {
   batch?: PurchaseBatchRow | null;
   items: NomenclatureItem[];
+  materials: Material[];
   onSubmitBatch?: (values: BatchFormValues) => void | Promise<void>;
   onSubmitSimple?: (values: SimplePurchaseFormValues) => void | Promise<void>;
   pending?: boolean;
@@ -208,6 +212,8 @@ function BatchFormBody({
   const [addMode, setAddMode] = useState<RailAddMode>("package");
   const [entries, setEntries] = useState<DraftRailEntry[]>([]);
 
+  const activeMaterials = materials.filter((m) => m.status === "ACTIVE" || m.id === batch?.materialId);
+  const [materialId, setMaterialId] = useState(batch?.materialId ?? activeMaterials[0]?.id ?? "");
   const [name, setName] = useState(batch?.name ?? "");
   const [purchaseDate, setPurchaseDate] = useState(() =>
     isoToDisplayDate(batch?.purchaseDate ?? todayIso()),
@@ -321,6 +327,7 @@ function BatchFormBody({
 
   const canSubmitBatch =
     name.trim().length > 0 &&
+    materialId.length > 0 &&
     wMm > 0 &&
     hMm > 0 &&
     (purchaseCost ?? 0) > 0 &&
@@ -345,6 +352,7 @@ function BatchFormBody({
     if (!canSubmitBatch) return;
     await onSubmitBatch?.({
       name,
+      materialId,
       purchaseDate: displayDateToIso(purchaseDate),
       sectionWidthMm: wMm,
       sectionHeightMm: hMm,
@@ -497,7 +505,6 @@ function BatchFormBody({
                   label="Название партии"
                   required
                   invalid={showErrors && !name.trim()}
-                  className="sm:col-span-2"
                 >
                   <Input
                     id="batch-name"
@@ -508,7 +515,7 @@ function BatchFormBody({
                     onChange={(e) => setName(capitalizeFirst(e.target.value))}
                   />
                 </Field>
-                <Field id="batch-date" label="Дата закупки" className="sm:col-span-2">
+                <Field id="batch-date" label="Дата закупки">
                   <Input
                     id="batch-date"
                     className={cn(narrowFieldClass, "tabular-nums")}
@@ -518,6 +525,29 @@ function BatchFormBody({
                     value={purchaseDate}
                     onChange={(e) => setPurchaseDate(formatDateInput(e.target.value))}
                   />
+                </Field>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-3">
+                <Field
+                  id="batch-material"
+                  label="Материал"
+                  required
+                  invalid={showErrors && !materialId}
+                >
+                  <Select value={materialId} onValueChange={(v) => setMaterialId(v ?? "")}>
+                    <SelectTrigger id="batch-material" className={selectTriggerClass}>
+                      <SelectValue placeholder="Выберите материал">
+                        {activeMaterials.find((m) => m.id === materialId)?.name}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent {...formSelectContentProps}>
+                      {activeMaterials.map((m) => (
+                        <SelectItem key={m.id} value={m.id} className="cursor-pointer rounded-lg">
+                          {m.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </Field>
                 <Field
                   id="batch-sw"
@@ -858,6 +888,7 @@ export function BatchFormDialog({
   open,
   batch,
   items,
+  materials,
   onOpenChange,
   onSubmitBatch,
   onSubmitSimple,
@@ -871,6 +902,7 @@ export function BatchFormDialog({
             key={batch?.id ?? "new"}
             batch={batch}
             items={items}
+            materials={materials}
             onSubmitBatch={onSubmitBatch}
             onSubmitSimple={onSubmitSimple}
             pending={pending}

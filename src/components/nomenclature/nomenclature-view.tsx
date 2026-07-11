@@ -23,6 +23,14 @@ import {
   type NomenclatureItemFormValues,
   type ProductFormValues,
 } from "@/server/nomenclature";
+import {
+  archiveMaterial,
+  createMaterial,
+  deleteMaterial,
+  restoreMaterial,
+  updateMaterial,
+  type MaterialFormValues,
+} from "@/server/materials";
 import { formatLength, formatMoney } from "@/lib/format";
 import { exportXlsx } from "@/lib/export-xlsx";
 import {
@@ -39,6 +47,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DetailFormDialog } from "@/components/nomenclature/detail-form-dialog";
+import { MaterialFormDialog } from "@/components/nomenclature/material-form-dialog";
 import { NomenclatureItemFormDialog } from "@/components/nomenclature/nomenclature-item-form-dialog";
 import { ProductFormDialog } from "@/components/nomenclature/product-form-dialog";
 import { ProductsTable } from "@/components/nomenclature/products-table";
@@ -49,13 +58,14 @@ import {
   tableActionClass,
   tableActionDestructiveClass,
 } from "@/components/nomenclature/form-shared";
-import type { Detail, NomenclatureItem, NomenclatureType, Product } from "@/types/domain";
+import type { Detail, Material, NomenclatureItem, NomenclatureType, Product } from "@/types/domain";
 
-type TabKey = "products" | "details" | "fasteners" | "packaging" | "other";
+type TabKey = "products" | "details" | "materials" | "fasteners" | "packaging" | "other";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "products", label: "Изделия" },
   { key: "details", label: "Детали" },
+  { key: "materials", label: "Материалы" },
   { key: "fasteners", label: "Крепёж" },
   { key: "packaging", label: "Упаковка" },
   { key: "other", label: "Разное" },
@@ -64,6 +74,7 @@ const TABS: { key: TabKey; label: string }[] = [
 const ADD_LABELS: Record<TabKey, string> = {
   products: "Добавить изделие",
   details: "Добавить деталь",
+  materials: "Добавить материал",
   fasteners: "Добавить крепёж",
   packaging: "Добавить упаковку",
   other: "Добавить позицию",
@@ -183,12 +194,14 @@ interface NomenclatureViewProps {
   initialDetails: Detail[];
   initialProducts: Product[];
   initialItems: NomenclatureItem[];
+  initialMaterials: Material[];
 }
 
 export function NomenclatureView({
   initialDetails,
   initialProducts,
   initialItems,
+  initialMaterials,
 }: NomenclatureViewProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("products");
   const [search, setSearch] = useState("");
@@ -199,12 +212,18 @@ export function NomenclatureView({
   const [products, setProducts] = useState<Product[]>(initialProducts);
   const [details, setDetails] = useState<Detail[]>(initialDetails);
   const [items, setItems] = useState<NomenclatureItem[]>(initialItems);
+  const [materials, setMaterials] = useState<Material[]>(initialMaterials);
+
+  const materialName = new Map(materials.map((m) => [m.id, m.name]));
 
   const [productDialogOpen, setProductDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
   const [detailDialogOpen, setDetailDialogOpen] = useState(false);
   const [editingDetail, setEditingDetail] = useState<Detail | null>(null);
+
+  const [materialDialogOpen, setMaterialDialogOpen] = useState(false);
+  const [editingMaterial, setEditingMaterial] = useState<Material | null>(null);
 
   const [itemDialogOpen, setItemDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<NomenclatureItem | null>(null);
@@ -219,8 +238,16 @@ export function NomenclatureView({
     (p) => p.status === "ARCHIVED",
   );
   const detailRows = partitionActiveArchived(
-    details.filter((d) => visible(d.status) && matchesSearch(`${d.detailNumber} ${d.name}`)),
+    details.filter(
+      (d) =>
+        visible(d.status) &&
+        matchesSearch(`${d.detailNumber} ${d.name} ${materialName.get(d.materialId) ?? ""}`),
+    ),
     (d) => d.status === "ARCHIVED",
+  );
+  const materialRows = partitionActiveArchived(
+    materials.filter((m) => visible(m.status) && matchesSearch(m.name)),
+    (m) => m.status === "ARCHIVED",
   );
   const itemsByType = (type: NomenclatureType) =>
     partitionActiveArchived(
@@ -263,6 +290,7 @@ export function NomenclatureView({
         name: "Детали",
         columns: [
           { header: "Название", key: "name", width: 28 },
+          { header: "Материал", key: "material", width: 16 },
           { header: "Номер", key: "number", numFmt: XLSX_FMT.int },
           { header: "Длина", key: "length", numFmt: XLSX_FMT.length },
           { header: "Тип", key: "type", width: 14 },
@@ -272,12 +300,26 @@ export function NomenclatureView({
         ],
         rows: detailRows.map((d) => ({
           name: d.name,
+          material: materialName.get(d.materialId) ?? "—",
           number: d.detailNumber,
           length: d.lengthM,
           type: RAIL_TYPE_LABEL[d.detailType],
           prisadka: formatPrisadka(d),
           sort: SORT_SHORT[d.sort],
           status: statusText(d.status),
+        })),
+      };
+    }
+    if (activeTab === "materials") {
+      return {
+        name: "Материалы",
+        columns: [
+          { header: "Название", key: "name", width: 24 },
+          { header: "Статус", key: "status", width: 14 },
+        ],
+        rows: materialRows.map((m) => ({
+          name: m.name,
+          status: statusText(m.status),
         })),
       };
     }
@@ -338,6 +380,14 @@ export function NomenclatureView({
       next[i] = n;
       return next;
     });
+  const upsertMaterial = (m: Material) =>
+    setMaterials((prev) => {
+      const i = prev.findIndex((x) => x.id === m.id);
+      if (i === -1) return [...prev, m];
+      const next = [...prev];
+      next[i] = m;
+      return next;
+    });
 
   const runRow = (fn: () => Promise<unknown>, ok: string) =>
     startTransition(async () => {
@@ -393,6 +443,14 @@ export function NomenclatureView({
       () => setItemDialogOpen(false),
     );
 
+  const handleMaterialSubmit = (values: MaterialFormValues) =>
+    submitDialog(
+      () => (editingMaterial ? updateMaterial(editingMaterial.id, values) : createMaterial(values)),
+      upsertMaterial,
+      editingMaterial ? "Материал сохранён" : "Материал создан",
+      () => setMaterialDialogOpen(false),
+    );
+
   const openCreate = () => {
     switch (activeTab) {
       case "products":
@@ -402,6 +460,10 @@ export function NomenclatureView({
       case "details":
         setEditingDetail(null);
         setDetailDialogOpen(true);
+        break;
+      case "materials":
+        setEditingMaterial(null);
+        setMaterialDialogOpen(true);
         break;
       default: {
         const type = TAB_TO_NOM_TYPE[activeTab];
@@ -437,6 +499,11 @@ export function NomenclatureView({
       key: "name",
       header: "Название",
       render: (row) => <span className="font-medium">{row.name}</span>,
+    },
+    {
+      key: "material",
+      header: "Материал",
+      render: (row) => materialName.get(row.materialId) ?? "—",
     },
     {
       key: "detailNumber",
@@ -544,9 +611,45 @@ export function NomenclatureView({
     },
   ];
 
+  const materialColumns: Column<Material>[] = [
+    {
+      key: "name",
+      header: "Название",
+      render: (row) => <span className="font-medium">{row.name}</span>,
+    },
+    {
+      key: "status",
+      header: "Статус",
+      render: (row) => statusBadge(row.status),
+    },
+    {
+      key: "actions",
+      header: "",
+      className: "w-28",
+      render: (row) => (
+        <ActionsCell
+          onEdit={() => {
+            setEditingMaterial(row);
+            setMaterialDialogOpen(true);
+          }}
+          status={row.status}
+          onArchive={() => runRow(() => archiveMaterial(row.id).then(upsertMaterial), "Перенесено в архив")}
+          onRestore={() => runRow(() => restoreMaterial(row.id).then(upsertMaterial), "Восстановлено")}
+          onDelete={() =>
+            runRow(
+              () => deleteMaterial(row.id).then(() => setMaterials((p) => p.filter((x) => x.id !== row.id))),
+              "Материал удалён",
+            )
+          }
+        />
+      ),
+    },
+  ];
+
   const emptyByTab: Record<TabKey, string> = {
     products: "Изделия не найдены",
     details: "Детали не найдены",
+    materials: "Материалы не найдены",
     fasteners: "Крепёж не найден",
     packaging: "Упаковка не найдена",
     other: "Позиции не найдены",
@@ -555,6 +658,7 @@ export function NomenclatureView({
   const rowsByTab: Record<TabKey, unknown[]> = {
     products: productRows,
     details: detailRows,
+    materials: materialRows,
     fasteners: fastenerRows,
     packaging: packagingRows,
     other: otherRows,
@@ -630,6 +734,16 @@ export function NomenclatureView({
                 rowClassName={archivedRowClass}
               />
             )}
+            {activeTab === "materials" && (
+              <DataTable
+                columns={materialColumns}
+                rows={materialRows}
+                empty={emptyByTab.materials}
+                className="border-0"
+                padded
+                rowClassName={archivedRowClass}
+              />
+            )}
             {(activeTab === "fasteners" ||
               activeTab === "packaging" ||
               activeTab === "other") && (
@@ -651,6 +765,7 @@ export function NomenclatureView({
         product={editingProduct}
         details={details.filter((d) => d.status === "ACTIVE")}
         items={items}
+        materials={materials}
         onOpenChange={setProductDialogOpen}
         onSubmit={handleProductSubmit}
         pending={pending}
@@ -659,8 +774,17 @@ export function NomenclatureView({
       <DetailFormDialog
         open={detailDialogOpen}
         detail={editingDetail}
+        materials={materials}
         onOpenChange={setDetailDialogOpen}
         onSubmit={handleDetailSubmit}
+        pending={pending}
+      />
+
+      <MaterialFormDialog
+        open={materialDialogOpen}
+        material={editingMaterial}
+        onOpenChange={setMaterialDialogOpen}
+        onSubmit={handleMaterialSubmit}
         pending={pending}
       />
 

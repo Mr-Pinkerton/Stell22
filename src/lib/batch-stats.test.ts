@@ -5,6 +5,7 @@ import type { Batch, RailLot } from "@/types/domain";
 const batch: Batch = {
   id: "b1",
   name: "Test",
+  materialId: "mat-1",
   sectionWidthMm: 20,
   sectionHeightMm: 40,
   purchaseCost: 100000,

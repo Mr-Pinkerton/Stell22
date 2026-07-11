@@ -22,7 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import type { Detail, RailType, Sort } from "@/types/domain";
+import type { Detail, Material, RailType, Sort } from "@/types/domain";
 import type { DetailFormValues } from "@/server/nomenclature";
 import {
   Field,
@@ -38,18 +38,20 @@ import {
 interface DetailFormDialogProps {
   open: boolean;
   detail?: Detail | null;
+  materials: Material[];
   onOpenChange: (open: boolean) => void;
   onSubmit?: (values: DetailFormValues) => void | Promise<void>;
   pending?: boolean;
 }
 
-export function DetailFormDialog({ open, detail, onOpenChange, onSubmit, pending }: DetailFormDialogProps) {
+export function DetailFormDialog({ open, detail, materials, onOpenChange, onSubmit, pending }: DetailFormDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-lg" showCloseButton={false}>
         {open ? (
           <DetailFormBody
             detail={detail}
+            materials={materials}
             pending={pending}
             onOpenChange={onOpenChange}
             onSubmit={onSubmit}
@@ -62,16 +64,20 @@ export function DetailFormDialog({ open, detail, onOpenChange, onSubmit, pending
 
 function DetailFormBody({
   detail,
+  materials,
   pending,
   onOpenChange,
   onSubmit,
 }: {
   detail?: Detail | null;
+  materials: Material[];
   pending?: boolean;
   onOpenChange: (open: boolean) => void;
   onSubmit?: (values: DetailFormValues) => void | Promise<void>;
 }) {
   const isEdit = Boolean(detail);
+  const activeMaterials = materials.filter((m) => m.status === "ACTIVE" || m.id === detail?.materialId);
+  const [materialId, setMaterialId] = useState(detail?.materialId ?? activeMaterials[0]?.id ?? "");
   const [name, setName] = useState(detail?.name ?? "");
   const [number, setNumber] = useState(() =>
     detail?.detailNumber != null ? String(detail.detailNumber) : "",
@@ -89,6 +95,7 @@ function DetailFormBody({
   const numberNum = number ? parseInt(number, 10) : null;
   const canSubmit =
     name.trim().length > 0 &&
+    materialId.length > 0 &&
     numberNum != null &&
     numberNum > 0 &&
     lengthNum != null &&
@@ -99,6 +106,7 @@ function DetailFormBody({
     if (!canSubmit) return;
     await onSubmit?.({
       name,
+      materialId,
       detailNumber: numberNum,
       lengthM: lengthNum,
       detailType,
@@ -130,21 +138,44 @@ function DetailFormBody({
 
             <div className="scrollbar-thin-y max-h-[min(70vh,32rem)] space-y-5 overflow-y-auto px-6 py-6">
               <FormSection title="Основная информация">
-                <Field
-                  id="det-name"
-                  label="Название детали"
-                  required
-                  invalid={showErrors && !name.trim()}
-                >
-                  <Input
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field
                     id="det-name"
-                    className={fieldClass}
-                    autoCapitalize="sentences"
-                    placeholder="Полка 720"
-                    value={name}
-                    onChange={(e) => setName(capitalizeFirst(e.target.value))}
-                  />
-                </Field>
+                    label="Название детали"
+                    required
+                    invalid={showErrors && !name.trim()}
+                  >
+                    <Input
+                      id="det-name"
+                      className={fieldClass}
+                      autoCapitalize="sentences"
+                      placeholder="Полка 720"
+                      value={name}
+                      onChange={(e) => setName(capitalizeFirst(e.target.value))}
+                    />
+                  </Field>
+                  <Field
+                    id="det-material"
+                    label="Материал"
+                    required
+                    invalid={showErrors && !materialId}
+                  >
+                    <Select value={materialId} onValueChange={(v) => setMaterialId(v ?? "")}>
+                      <SelectTrigger id="det-material" className={selectTriggerClass}>
+                        <SelectValue placeholder="Выберите материал">
+                          {activeMaterials.find((m) => m.id === materialId)?.name}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent {...formSelectContentProps}>
+                        {activeMaterials.map((m) => (
+                          <SelectItem key={m.id} value={m.id} className="cursor-pointer rounded-lg">
+                            {m.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </div>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field
                     id="det-number"

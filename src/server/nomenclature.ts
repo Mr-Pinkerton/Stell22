@@ -10,6 +10,7 @@ import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import type {
   Detail,
+  Material,
   NomenclatureItem,
   NomenclatureType,
   Product,
@@ -30,6 +31,7 @@ function serializeDetail(d: PrismaDetail): Detail {
   return {
     id: d.id,
     name: d.name,
+    materialId: d.materialId,
     detailNumber: d.detailNumber,
     lengthM: toNum(d.lengthM) ?? 0,
     detailType: d.detailType,
@@ -59,6 +61,7 @@ function serializeProduct(p: ProductWithRelations): Product {
   return {
     id: p.id,
     name: p.name,
+    materialId: p.materialId,
     skuOzon: p.skuOzon,
     skuWb: p.skuWb,
     sort: p.sort,
@@ -81,18 +84,25 @@ export interface NomenclatureData {
   details: Detail[];
   products: Product[];
   items: NomenclatureItem[];
+  materials: Material[];
+}
+
+function serializeMaterial(m: { id: string; name: string; status: "ACTIVE" | "ARCHIVED"; sortOrder: number }): Material {
+  return { id: m.id, name: m.name, status: m.status, sortOrder: m.sortOrder };
 }
 
 export async function getNomenclatureData(): Promise<NomenclatureData> {
-  const [details, products, items] = await Promise.all([
+  const [details, products, items, materials] = await Promise.all([
     prisma.detail.findMany({ orderBy: { name: "asc" } }),
     prisma.product.findMany({ include: productInclude, orderBy: { name: "asc" } }),
     prisma.nomenclatureItem.findMany({ orderBy: { name: "asc" } }),
+    prisma.material.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }),
   ]);
   return {
     details: details.map(serializeDetail),
     products: products.map(serializeProduct),
     items: items.map(serializeItem),
+    materials: materials.map(serializeMaterial),
   };
 }
 
@@ -100,6 +110,7 @@ export async function getNomenclatureData(): Promise<NomenclatureData> {
 
 export interface DetailFormValues {
   name: string;
+  materialId: string;
   detailNumber: number | null;
   lengthM: number | null;
   detailType: RailType;
@@ -111,6 +122,7 @@ export interface DetailFormValues {
 function detailData(v: DetailFormValues) {
   return {
     name: v.name.trim(),
+    materialId: v.materialId,
     detailNumber: v.detailNumber ?? 0,
     lengthM: v.lengthM ?? 0,
     detailType: v.detailType,
@@ -121,23 +133,26 @@ function detailData(v: DetailFormValues) {
 }
 
 /**
- * Проверяет номер детали. Номер задаёт деталь по (длина + присадки); сорт в номер
- * НЕ входит — одна деталь в 1 и 2 сорте имеет общий номер. Поэтому:
- *  - пара (номер, сорт) уникальна (нельзя два разных номера этого сорта);
- *  - все записи с одним номером обязаны иметь одинаковые длину и присадки.
+ * Проверяет номер детали В ПРЕДЕЛАХ материала. Номер задаёт деталь по
+ * (длина + присадки); сорт в номер НЕ входит — одна деталь в 1 и 2 сорте имеет
+ * общий номер. Один и тот же номер на другом материале допускается. Поэтому:
+ *  - тройка (материал, номер, сорт) уникальна;
+ *  - все записи с одним номером и материалом обязаны иметь одинаковые длину и присадки.
  */
 async function assertDetailNumberFree(values: DetailFormValues, exceptId?: string): Promise<void> {
   const detailNumber = values.detailNumber;
   if (!detailNumber || detailNumber <= 0) throw new Error("Укажите номер детали");
+  if (!values.materialId) throw new Error("Укажите материал детали");
+  const materialId = values.materialId;
 
   const clashSort = await prisma.detail.findFirst({
-    where: { detailNumber, sort: values.sort, id: exceptId ? { not: exceptId } : undefined },
+    where: { materialId, detailNumber, sort: values.sort, id: exceptId ? { not: exceptId } : undefined },
     select: { id: true },
   });
-  if (clashSort) throw new Error(`Номер ${detailNumber} уже занят другой деталью этого сорта`);
+  if (clashSort) throw new Error(`Номер ${detailNumber} уже занят другой деталью этого сорта и материала`);
 
   const sibling = await prisma.detail.findFirst({
-    where: { detailNumber, id: exceptId ? { not: exceptId } : undefined },
+    where: { materialId, detailNumber, id: exceptId ? { not: exceptId } : undefined },
     select: { lengthM: true, prisadkaTorcevaya: true, prisadkaPloskost: true },
   });
   if (sibling) {
@@ -153,6 +168,7 @@ async function assertDetailNumberFree(values: DetailFormValues, exceptId?: strin
 
 export async function createDetail(values: DetailFormValues): Promise<Detail> {
   if (!values.name.trim()) throw new Error("Название детали обязательно");
+  if (!values.materialId) throw new Error("Укажите материал детали");
   if (!values.lengthM || values.lengthM <= 0) throw new Error("Укажите длину детали");
   await assertDetailNumberFree(values);
 
@@ -164,6 +180,7 @@ export async function createDetail(values: DetailFormValues): Promise<Detail> {
 
 export async function updateDetail(id: string, values: DetailFormValues): Promise<Detail> {
   if (!values.name.trim()) throw new Error("Название детали обязательно");
+  if (!values.materialId) throw new Error("Укажите материал детали");
   if (!values.lengthM || values.lengthM <= 0) throw new Error("Укажите длину детали");
   await assertDetailNumberFree(values, id);
 
@@ -319,6 +336,7 @@ export async function deleteNomenclatureItem(id: string): Promise<void> {
 
 export interface ProductFormValues {
   name: string;
+  materialId: string;
   skuOzon: string;
   skuWb: string;
   sort: Sort;
@@ -328,8 +346,25 @@ export interface ProductFormValues {
   extraIds: string[];
 }
 
+/**
+ * Изделие однородно по материалу: все детали состава обязаны быть того же
+ * материала, что и изделие (иначе упаковка не смогла бы однозначно выбрать
+ * деталь по номеру — номера повторяются между материалами).
+ */
+async function assertProductDetailsMaterial(v: ProductFormValues): Promise<void> {
+  const detailIds = v.details.map((d) => d.detailId);
+  if (detailIds.length === 0) return;
+  const details = await prisma.detail.findMany({
+    where: { id: { in: detailIds } },
+    select: { materialId: true },
+  });
+  const wrong = details.some((d) => d.materialId !== v.materialId);
+  if (wrong) throw new Error("Все детали изделия должны быть выбранного материала");
+}
+
 function validateProduct(v: ProductFormValues) {
   if (!v.name.trim()) throw new Error("Название изделия обязательно");
+  if (!v.materialId) throw new Error("Укажите материал изделия");
   if (!v.skuOzon.trim()) throw new Error("Артикул Ozon обязателен");
   if (!v.skuWb.trim()) throw new Error("Артикул WB обязателен");
   // Одна деталь входит в изделие одной строкой (номер — часть самой детали).
@@ -342,10 +377,12 @@ function validateProduct(v: ProductFormValues) {
 
 export async function createProduct(values: ProductFormValues): Promise<Product> {
   validateProduct(values);
+  await assertProductDetailsMaterial(values);
 
   const created = await prisma.product.create({
     data: {
       name: values.name.trim(),
+      materialId: values.materialId,
       skuOzon: values.skuOzon.trim(),
       skuWb: values.skuWb.trim(),
       sort: values.sort,
@@ -377,6 +414,7 @@ export async function createProduct(values: ProductFormValues): Promise<Product>
 
 export async function updateProduct(id: string, values: ProductFormValues): Promise<Product> {
   validateProduct(values);
+  await assertProductDetailsMaterial(values);
 
   const before = await prisma.product.findUnique({ where: { id }, include: productInclude });
   if (!before) throw new Error("Изделие не найдено");
@@ -390,6 +428,7 @@ export async function updateProduct(id: string, values: ProductFormValues): Prom
       where: { id },
       data: {
         name: values.name.trim(),
+        materialId: values.materialId,
         skuOzon: values.skuOzon.trim(),
         skuWb: values.skuWb.trim(),
         sort: values.sort,

@@ -290,8 +290,8 @@ export async function updateProductionLineQuantity(
 
   const line = op.lines[lineIndex];
   if (!line) throw new Error("Строка не найдена");
-  const { blankLengthM, blankType, blankSort } = line;
-  if (blankLengthM == null || blankType == null || blankSort == null) {
+  const { blankLengthM, blankType, blankSort, blankMaterialId } = line;
+  if (blankLengthM == null || blankType == null || blankSort == null || blankMaterialId == null) {
     throw new Error("Строка торцовки без спецификации заготовки");
   }
   const lineId = line.id;
@@ -303,14 +303,33 @@ export async function updateProductionLineQuantity(
     if (delta < 0) {
       // Уменьшаем — снимаем разницу со склада заготовок (нельзя в минус).
       const dec = await tx.blankStock.updateMany({
-        where: { lengthM: blankLengthM, detailType: blankType, sort: blankSort, quantity: { gte: -delta } },
+        where: {
+          materialId: blankMaterialId,
+          lengthM: blankLengthM,
+          detailType: blankType,
+          sort: blankSort,
+          quantity: { gte: -delta },
+        },
         data: { quantity: { decrement: -delta } },
       });
       if (dec.count === 0) throw new Error("Нельзя уменьшить: заготовки уже прошли присадку/упаковку");
     } else {
       await tx.blankStock.upsert({
-        where: { lengthM_detailType_sort: { lengthM: blankLengthM, detailType: blankType, sort: blankSort } },
-        create: { lengthM: blankLengthM, detailType: blankType, sort: blankSort, quantity: delta },
+        where: {
+          materialId_lengthM_detailType_sort: {
+            materialId: blankMaterialId,
+            lengthM: blankLengthM,
+            detailType: blankType,
+            sort: blankSort,
+          },
+        },
+        create: {
+          materialId: blankMaterialId,
+          lengthM: blankLengthM,
+          detailType: blankType,
+          sort: blankSort,
+          quantity: delta,
+        },
         update: { quantity: { increment: delta } },
       });
     }
@@ -361,11 +380,17 @@ export async function deleteProductionOperation(id: string): Promise<void> {
     if (op.type === "TORCOVKA") {
       // Снимаем произведённые заготовки со склада заготовок (нельзя в минус).
       for (const l of op.lines) {
-        if (l.blankLengthM == null || l.blankType == null || l.blankSort == null) {
+        if (
+          l.blankLengthM == null ||
+          l.blankType == null ||
+          l.blankSort == null ||
+          l.blankMaterialId == null
+        ) {
           throw new Error("Строка торцовки без спецификации заготовки");
         }
         const dec = await tx.blankStock.updateMany({
           where: {
+            materialId: l.blankMaterialId,
             lengthM: l.blankLengthM,
             detailType: l.blankType,
             sort: l.blankSort,
