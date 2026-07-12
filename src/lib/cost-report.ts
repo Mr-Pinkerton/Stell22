@@ -353,10 +353,17 @@ export function buildCostDetailRows(params: {
   frozen?: Map<string, FrozenBatchCost>;
   /** Факт. средние расценки по производству (A6). Без них — карточная средняя. */
   rates?: AvgRates;
+  /**
+   * Готовые снапшоты партий (оценка). Передаются извне, когда строки отчёта
+   * ограничены периодом (`lines` — заготовки периода), а цена ₽/м³ должна
+   * считаться по ПОЛНОМУ производству партии (иначе отход исказит цену). Без них
+   * снапшоты строятся из `lines` (A11).
+   */
+  snapshots?: Map<string, BatchCostSnapshot>;
 }): CostDetailRow[] {
   const batchesById = new Map(params.batches.map((b) => [b.id, b]));
   const rates = params.rates ?? averageRates(params.employees);
-  const snapshots = buildBatchSnapshots(params);
+  const snapshots = params.snapshots ?? buildBatchSnapshots(params);
 
   const rows: CostDetailRow[] = [];
   for (const line of params.lines) {
@@ -483,11 +490,17 @@ export function buildCostProductRows(params: {
   frozen?: Map<string, FrozenBatchCost>;
   /** Факт. средние расценки по производству (A6). Без них — карточная средняя. */
   rates?: AvgRates;
+  /**
+   * Готовые снапшоты партий (оценка по ПОЛНОМУ производству). Передаются извне
+   * в периодном отчёте, чтобы ₽/м³ не искажалась охватом периода (A11). Без них
+   * снапшоты строятся из `lines`.
+   */
+  snapshots?: Map<string, BatchCostSnapshot>;
 }): CostProductRow[] {
   const detailsById = new Map(params.details.map((d) => [d.id, d]));
   const nomenclatureById = new Map(params.nomenclature.map((n) => [n.id, n]));
   const rates = params.rates ?? averageRates(params.employees);
-  const snapshots = buildBatchSnapshots(params);
+  const snapshots = params.snapshots ?? buildBatchSnapshots(params);
   // ₽/м считаем раздельно по материалам — изделие берёт per-meter своей породы.
   const batchMaterial = new Map(params.batches.map((b) => [b.id, b.materialId]));
   const perMeterByMaterial = blendedCostPerMeterByMaterial(snapshots, batchMaterial);

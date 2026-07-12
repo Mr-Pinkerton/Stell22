@@ -89,3 +89,21 @@ export function getCurrentMonth(): Date {
   const now = new Date();
   return startOfMonth(now);
 }
+
+/** Диапазон дат для фильтрации отчётов. Границы включительны. */
+export interface Period {
+  start: Date;
+  end: Date;
+}
+
+/** Конец дня (23:59:59.999 локально) — правая граница периода включительно. */
+export function endOfDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+}
+
+/** Период календарного месяца: [1-е 00:00 … последний день 23:59:59.999]. */
+export function getMonthPeriod(month: Date = getCurrentMonth()): Period {
+  const start = startOfMonth(month);
+  const lastDay = createLocalDate(month.getFullYear(), month.getMonth() + 1, 0);
+  return { start, end: endOfDay(lastDay) };
+}

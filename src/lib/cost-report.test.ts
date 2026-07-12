@@ -202,6 +202,28 @@ describe("buildCostDetailRows", () => {
   });
 });
 
+describe("buildCostDetailRows — оценка по полному производству, охват по периоду (A11)", () => {
+  // Снапшоты по ПОЛНОМУ производству партии фиксируют ₽/м³ (отход зашит в цену).
+  const snapshots = buildBatchSnapshots({ batches: [batch], lines });
+  const periodLines: ProducedLine[] = [
+    { batchId: "bX", lengthM: 0.6, sort: "SORT1", quantity: 100 },
+  ];
+
+  it("строки только по заготовкам периода, но материал по полной ₽/м³", () => {
+    const rows = buildCostDetailRows({ batches: [batch], employees, lines: periodLines, snapshots });
+    expect(rows).toHaveLength(1); // охват периода — одна заготовка
+    const full = buildCostDetailRows({ batches: [batch], employees, lines });
+    const same = full.find((r) => r.id === "bX-0.6-SORT1")!;
+    expect(rows[0]!.materialCost).toBeCloseTo(same.materialCost, 6);
+  });
+
+  it("контраст: без snapshots узкий период завысил бы ₽/м³ (вся C на 60 м)", () => {
+    const periodOnly = buildCostDetailRows({ batches: [batch], employees, lines: periodLines });
+    const withFull = buildCostDetailRows({ batches: [batch], employees, lines: periodLines, snapshots });
+    expect(periodOnly[0]!.materialCost).toBeGreaterThan(withFull[0]!.materialCost);
+  });
+});
+
 describe("blendedCostPerMeterByMaterial", () => {
   it("считает ₽/м раздельно по материалам, не смешивая породы", () => {
     // Две партии разных материалов, обе только 1 сорт: 1000₽ / 100м = 10 против

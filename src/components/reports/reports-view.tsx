@@ -1,9 +1,12 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
+import { dateFilterFromParams, paramsFromDateFilter } from "@/lib/report-period";
+import type { DateFilterValue } from "@/components/date-filter";
 import { SegmentTabs } from "@/components/reports/report-shared";
 import { ReportPurchasesTab } from "@/components/reports/report-purchases-tab";
 import { ReportCostTab } from "@/components/reports/report-cost-tab";
@@ -51,6 +54,20 @@ export function ReportsView({
 }) {
   const [activeTab, setActiveTab] = useState<ReportTab>("purchases");
   const [exporting, startExport] = useTransition();
+
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // Фильтр даты инициализируется из URL, чтобы отражать текущий охват отчёта.
+  const [dateFilter, setDateFilter] = useState<DateFilterValue>(() =>
+    dateFilterFromParams(new URLSearchParams(searchParams.toString())),
+  );
+
+  // «Показать»/«Применить» → период в URL. Страница (server) перечитает
+  // searchParams и пересоберёт себестоимость за выбранный период (A11/A12).
+  const applyPeriod = () => {
+    const qs = paramsFromDateFilter(dateFilter).toString();
+    router.push(qs ? `/reports?${qs}` : "/reports");
+  };
 
   const filters = TAB_FILTERS[activeTab];
 
@@ -197,6 +214,9 @@ export function ReportsView({
           date={filters.date}
           dateAllTime={filters.date}
           weeks={filters.weeks}
+          dateFilterValue={dateFilter}
+          onDateFilterChange={setDateFilter}
+          onApply={applyPeriod}
           actionLabel={activeTab === "purchases" ? "Применить" : "Показать"}
         />
 

@@ -34,9 +34,9 @@
 
 ## Приоритет 3 — Накладные / ЗП / финансы
 
-- [ ] **A11** — фильтр накладных по периоду отчёта (`src/server/cost.ts:150-157`)
+- [x] **A11** — периодный отчёт себестоимости: `getPeriodOverhead(period)` + `getCostReport(period)`, охват по периоду, оценка ₽/м³ по полному производству (`src/server/cost.ts`, `src/lib/report-period.ts`, `src/lib/dates.ts`)
   - _Накладные (аренда, свет) раскидываются на продукцию за всё время, без фильтра дат. На единицу продукции падает то слишком много, то слишком мало._
-- [ ] **A12** — прокинуть зарплатную неделю пт–чт и FiltersBar в данные + scope выплаты (`src/lib/pay-weeks.ts`, `reports-view.tsx:196-212`)
+- [~] **A12** — дата-часть: FiltersBar пишет период в URL, страница читает `searchParams`, дефолт = календарный месяц (`reports-view.tsx`, `reports/page.tsx`, `filters-bar.tsx`). ОСТАЁТСЯ: зарплатная неделя пт–чт + scope выплаты «за неделю» (`src/lib/pay-weeks.ts`)
   - _Зарплатная неделя (пт–чт) и фильтры по датам нарисованы, но не подключены. «Выплатить за неделю» гасит вообще все невыплаченные начисления, фильтр дат — картинка._
 - [ ] **A13** — единое правило `confirmed` для cost/deal (карантин) (`finance.ts:1117-1127`)
   - _Суммы с неподтверждённого счёта (карантин) не должны влиять на расчёты, но стоимость партии может измениться от денег, которых ещё нет в движении._
@@ -74,6 +74,8 @@
 - [ ] Unit: `P1=P2=0`; `P1=0 P2>0`
 - [ ] Unit: `costStatus` vs `frozenAt`
 - [ ] Unit: нет blend при одной партии vs двух
+- [x] Unit: период — `getMonthPeriod`/`endOfDay`, `periodFromParams`/round-trip фильтра
+- [x] Unit: оценка ₽/м³ по полному производству vs охват периода (A11)
 - [ ] Unit: inventory partial buckets
 - [ ] Integration: `submitTorcovka` length over budget
 - [ ] Integration: `updateProductionLineQuantity` вверх

@@ -13,6 +13,7 @@ import { writeChangeLog } from "@/server/change-log";
 import { notifyEvent } from "@/server/notifications";
 import { D, distributeBatchCost, sectionAreaM2 } from "@/lib/cost";
 import {
+  buildBatchSnapshots,
   buildCostDetailRows,
   buildCostProductRows,
   producedLinesFromOperations,
@@ -26,6 +27,7 @@ import {
 } from "@/lib/cost-report";
 import { actualProductionRates, type ProductionRateOp } from "@/lib/payroll";
 import { dayKey } from "@/lib/entries";
+import { getMonthPeriod, type Period } from "@/lib/dates";
 import type { Batch, Detail, Employee, NomenclatureItem, Product } from "@/types/domain";
 
 // Любой клиент Prisma — обычный или транзакционный (для атомарной заморозки).
@@ -152,11 +154,18 @@ export interface CostReport {
  * чья категория помечена «Производственные (накладные)» (isOverhead).
  * ЗП производства в накладные НЕ входит — она в сдельных операциях, не в ДДС
  * по накладным статьям (cost-integrity: без двойного счёта).
- * Период пока не фильтруется — берём всё накопленное (предварительно).
+ * `period` ограничивает выборку по дате ДДС; без периода — всё накопленное (A11).
  */
-export async function getPeriodOverhead(db: Db = prisma): Promise<Decimal> {
+export async function getPeriodOverhead(
+  period?: Period | null,
+  db: Db = prisma,
+): Promise<Decimal> {
   const flows = await db.cashFlow.findMany({
-    where: { flowType: "EXPENSE", article: { category: { isOverhead: true } } },
+    where: {
+      flowType: "EXPENSE",
+      article: { category: { isOverhead: true } },
+      ...(period ? { date: { gte: period.start, lte: period.end } } : {}),
+    },
     select: { amount: true },
   });
   return flows.reduce((sum, f) => sum.plus(dec(f.amount)), D(0));
@@ -167,8 +176,16 @@ export async function getPeriodOverhead(db: Db = prisma): Promise<Decimal> {
  * Произведённые детали — из операций ТОРЦОВКИ, изделия — из УПАКОВКИ.
  * Накладные распределяются пропорционально прямой себестоимости периода
  * (см. «МОДЕЛЬ СЕБЕСТОИМОСТИ» в v2). Полная = прямая + накладные.
+ *
+ * Периодность (A11/A12): дата производства = дата упаковки/операции (`workDate`).
+ * ОХВАТ отчёта (какие строки, произведённые изделия, работа, накладные) —
+ * ограничен `period`. Но ОЦЕНКА ₽/м³ каждой партии считается по ПОЛНОМУ её
+ * производству (снапшоты на `fullLines`), иначе отход исказит цену заготовки.
+ * `period = null` → отчёт за всё время; по умолчанию — текущий календарный месяц.
  */
-export async function getCostReport(): Promise<CostReport> {
+export async function getCostReport(
+  period: Period | null = getMonthPeriod(),
+): Promise<CostReport> {
   const [batches, details, employees, items, products, ops, periodOverhead, finalCosts] =
     await Promise.all([
       prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
@@ -179,17 +196,24 @@ export async function getCostReport(): Promise<CostReport> {
       // Все типы операций — торцовка/упаковка дают произведённое, а HOURS и
       // присадка нужны для факт. средних расценок работы (A6).
       prisma.productionOperation.findMany({ include: { lines: true } }),
-      getPeriodOverhead(),
+      getPeriodOverhead(period),
       prisma.batchCost.findMany({ where: { status: "FINAL" } }),
     ]);
 
-  const opsForCost = ops.map(toOperationForCost);
-  const lines = producedLinesFromOperations(opsForCost);
-  const producedProductQty = producedProductQtyFromOperations(opsForCost);
+  const inPeriod = (d: Date): boolean =>
+    !period || (d >= period.start && d <= period.end);
+  const periodOps = ops.filter((op) => inPeriod(op.workDate));
+
+  // ОЦЕНКА: ₽/м³ партии — по полному её производству (весь отход зашит в цену).
+  const fullLines = producedLinesFromOperations(ops.map(toOperationForCost));
+  // ОХВАТ: строки деталей и произведённые изделия — только за период.
+  const periodOpsForCost = periodOps.map(toOperationForCost);
+  const periodLines = producedLinesFromOperations(periodOpsForCost);
+  const producedProductQty = producedProductQtyFromOperations(periodOpsForCost);
 
   // Работа в себестоимости — фактическая средняя по производству (A6, v2 §2):
   // сдельная ставка исполнителя + доля почасовой оплаты его смены, а не
-  // среднее по карточкам всех активных.
+  // среднее по карточкам всех активных. Считаем по операциям периода.
   const ZERO_RATES = {
     hourly: 0,
     torcovkaSort1: 0,
@@ -212,7 +236,7 @@ export async function getCostReport(): Promise<CostReport> {
     ]),
   );
   const detailSort = new Map(details.map((d) => [d.id, d.sort]));
-  const rateOps: ProductionRateOp[] = ops.map((op) => ({
+  const rateOps: ProductionRateOp[] = periodOps.map((op) => ({
     type: op.type,
     employeeId: op.employeeId,
     dayKey: dayKey(op.workDate),
@@ -255,13 +279,17 @@ export async function getCostReport(): Promise<CostReport> {
   const domainDetails = details.map(serDetail);
   const domainEmployees = employees.map(serEmployee);
 
+  // Снапшоты — по ПОЛНОМУ производству (оценка ₽/м³), общие для деталей и изделий.
+  const snapshots = buildBatchSnapshots({ batches: domainBatches, lines: fullLines, frozen });
+
   return {
     details: buildCostDetailRows({
       batches: domainBatches,
       employees: domainEmployees,
-      lines,
+      lines: periodLines, // охват периода
       frozen,
       rates: actualRates,
+      snapshots, // оценка по полному производству
     }),
     products: buildCostProductRows({
       products: products.map(serProduct),
@@ -269,11 +297,12 @@ export async function getCostReport(): Promise<CostReport> {
       details: domainDetails,
       employees: domainEmployees,
       nomenclature: items.map(serItem),
-      lines,
-      producedProductQty,
-      periodOverhead,
+      lines: fullLines,
+      producedProductQty, // охват периода
+      periodOverhead, // накладные периода
       frozen,
       rates: actualRates,
+      snapshots,
     }),
   };
 }
