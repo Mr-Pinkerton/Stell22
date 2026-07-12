@@ -148,14 +148,24 @@ describe("buildCostDetailRows", () => {
     expect(a.costStatus).toBe("PRELIMINARY");
   });
 
-  it("архивная партия → FINAL", () => {
-    const archived = { ...batch, status: "ARCHIVED" as const };
+  it("замороженная партия (frozenAt) → FINAL", () => {
+    const frozen = { ...batch, frozenAt: "2026-06-10T00:00:00.000Z" };
+    const rows = buildCostDetailRows({
+      batches: [frozen],
+      employees,
+      lines,
+    });
+    expect(rows[0]!.costStatus).toBe("FINAL");
+  });
+
+  it("архив без заморозки (frozenAt=null) остаётся PRELIMINARY", () => {
+    const archived = { ...batch, status: "ARCHIVED" as const, frozenAt: null };
     const rows = buildCostDetailRows({
       batches: [archived],
       employees,
       lines,
     });
-    expect(rows[0]!.costStatus).toBe("FINAL");
+    expect(rows[0]!.costStatus).toBe("PRELIMINARY");
   });
 });
 

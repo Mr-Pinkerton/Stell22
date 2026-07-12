@@ -333,7 +333,9 @@ export function buildCostDetailRows(params: {
       materialCost: blankMaterialCost(snapshot, line.lengthM, line.sort)
         .toDecimalPlaces(2)
         .toNumber(),
-      costStatus: batch.status === "ARCHIVED" ? "FINAL" : "PRELIMINARY",
+      // FINAL только по факту заморозки (frozenAt). Архив/выработка сами по
+      // себе снапшот не замораживают — до выплаты он остаётся PRELIMINARY.
+      costStatus: batch.frozenAt ? "FINAL" : "PRELIMINARY",
     });
   }
   return rows;

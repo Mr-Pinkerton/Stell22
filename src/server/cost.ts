@@ -52,6 +52,7 @@ function serBatch(b: PrismaBatch): Batch {
     status: b.status,
     purchaseDate: b.purchaseDate.toISOString().slice(0, 10),
     note: b.note,
+    frozenAt: b.frozenAt ? b.frozenAt.toISOString() : null,
   };
 }
 

@@ -50,6 +50,9 @@ export interface Batch {
   status: BatchStatus;
   purchaseDate: string;
   note?: string | null;
+  // Момент заморозки себестоимости (FINAL). null/undefined — снапшот
+  // предварительный и пересчитывается. Истинный маркер FINAL, не status.
+  frozenAt?: string | null;
 }
 
 export interface RailLot {
