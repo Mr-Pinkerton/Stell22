@@ -21,6 +21,7 @@ import {
   type BlankStockRow,
   type DetailStockRow,
 } from "@/lib/detail-stock";
+import { isOverRailLength, sumDetailLengthM } from "@/lib/torcovka";
 import type {
   Batch,
   Detail,
@@ -220,6 +221,14 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
     // Материал заготовок наследуется от партии-источника.
     const batch = await tx.batch.findUniqueOrThrow({ where: { id: batchId } });
     const materialId = batch.materialId;
+
+    // Суммарная длина нарезанных заготовок не может превышать длину взятых
+    // реек (A7). UI это ограничивает, но серверный вызов обязан проверять сам —
+    // иначе заготовки «из воздуха» искажают отход и цену за м³.
+    const takenLengthM = railsTaken * (num(lot.lengthM) ?? 0);
+    if (isOverRailLength(takenLengthM, sumDetailLengthM(picks))) {
+      throw new Error("Суммарная длина заготовок превышает длину взятых реек");
+    }
 
     // Атомарное списание: уйти в минус нельзя (cost-integrity).
     const dec = await tx.railLot.updateMany({

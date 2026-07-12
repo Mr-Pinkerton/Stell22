@@ -12,6 +12,7 @@ import {
   reverseUpakovkaOperation,
 } from "@/server/terminal";
 import { operationEarning } from "@/lib/payroll";
+import { isOverRailLength } from "@/lib/torcovka";
 import { dayKey } from "@/lib/entries";
 import type {
   ProductionChangeLogEntry,
@@ -314,6 +315,19 @@ export async function updateProductionLineQuantity(
       });
       if (dec.count === 0) throw new Error("Нельзя уменьшить: заготовки уже прошли присадку/упаковку");
     } else {
+      // Увеличение не должно вывести суммарную длину заготовок за длину взятых
+      // реек (A8): иначе — заготовки «из воздуха», искажение отхода и цены м³.
+      if (op.railLotId && op.railsTaken) {
+        const lot = await tx.railLot.findUnique({ where: { id: op.railLotId } });
+        const takenLengthM = op.railsTaken * (lot ? num(lot.lengthM) : 0);
+        const usedLengthM = op.lines.reduce(
+          (sum, l) => sum + num(l.blankLengthM) * (l.id === lineId ? newQty : l.quantity),
+          0,
+        );
+        if (isOverRailLength(takenLengthM, usedLengthM)) {
+          throw new Error("Суммарная длина заготовок превышает длину взятых реек");
+        }
+      }
       await tx.blankStock.upsert({
         where: {
           materialId_lengthM_detailType_sort: {
