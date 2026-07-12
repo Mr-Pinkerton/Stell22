@@ -137,6 +137,39 @@ describe("blendedCostPerMeter", () => {
   });
 });
 
+describe("buildBatchSnapshots — заморозка (A3)", () => {
+  it("для замороженной партии берёт FINAL из frozen, а не live-пересчёт", () => {
+    // Live дал бы costSort1≈714.28. Замороженные значения намеренно другие.
+    const area = 0.0025; // 50×50 мм
+    const frozen = new Map([
+      [
+        "bX",
+        {
+          volumeSort1: 100 * area, // 0.25 → длина 100 м
+          volumeSort2: 40 * area, // 0.10 → длина 40 м
+          costSort1: 600,
+          costSort2: 400,
+          pricePerM3Sort1: 2400,
+          pricePerM3Sort2: 4000,
+        },
+      ],
+    ]);
+    const snapshots = buildBatchSnapshots({ batches: [batch], lines, frozen });
+    const s = snapshots.get("bX")!;
+    expect(s.costSort1.toNumber()).toBe(600);
+    expect(s.costSort2.toNumber()).toBe(400);
+    expect(s.pricePerM3Sort1.toNumber()).toBe(2400);
+    expect(s.lengthSort1.toNumber()).toBeCloseTo(100, 6);
+    expect(s.lengthSort2.toNumber()).toBeCloseTo(40, 6);
+  });
+
+  it("незамороженные партии считаются live как раньше", () => {
+    const snapshots = buildBatchSnapshots({ batches: [batch], lines, frozen: new Map() });
+    const s = snapshots.get("bX")!;
+    expect(s.costSort1.toNumber()).toBeCloseTo(714.2857, 3);
+  });
+});
+
 describe("buildCostDetailRows", () => {
   it("строка на каждую произведённую заготовку (партия×длина×сорт)", () => {
     const rows = buildCostDetailRows({ batches: [batch], employees, lines });

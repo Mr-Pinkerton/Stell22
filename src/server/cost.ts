@@ -19,6 +19,7 @@ import {
   producedProductQtyFromOperations,
   type CostDetailRow,
   type CostProductRow,
+  type FrozenBatchCost,
   type OperationForCost,
   type ProducedLine,
 } from "@/lib/cost-report";
@@ -165,22 +166,40 @@ export async function getPeriodOverhead(db: Db = prisma): Promise<Decimal> {
  * (см. «МОДЕЛЬ СЕБЕСТОИМОСТИ» в v2). Полная = прямая + накладные.
  */
 export async function getCostReport(): Promise<CostReport> {
-  const [batches, details, employees, items, products, ops, periodOverhead] = await Promise.all([
-    prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
-    prisma.detail.findMany(),
-    prisma.employee.findMany(),
-    prisma.nomenclatureItem.findMany(),
-    prisma.product.findMany({ include: { details: true, fasteners: true, extras: true } }),
-    prisma.productionOperation.findMany({
-      where: { type: { in: ["TORCOVKA", "UPAKOVKA"] } },
-      include: { lines: true },
-    }),
-    getPeriodOverhead(),
-  ]);
+  const [batches, details, employees, items, products, ops, periodOverhead, finalCosts] =
+    await Promise.all([
+      prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
+      prisma.detail.findMany(),
+      prisma.employee.findMany(),
+      prisma.nomenclatureItem.findMany(),
+      prisma.product.findMany({ include: { details: true, fasteners: true, extras: true } }),
+      prisma.productionOperation.findMany({
+        where: { type: { in: ["TORCOVKA", "UPAKOVKA"] } },
+        include: { lines: true },
+      }),
+      getPeriodOverhead(),
+      prisma.batchCost.findMany({ where: { status: "FINAL" } }),
+    ]);
 
   const opsForCost = ops.map(toOperationForCost);
   const lines = producedLinesFromOperations(opsForCost);
   const producedProductQty = producedProductQtyFromOperations(opsForCost);
+
+  // Замороженные партии: берём сохранённый FINAL-снапшот, а не live-пересчёт
+  // (A3, cost-integrity — заморозку править нельзя).
+  const frozen = new Map<string, FrozenBatchCost>(
+    finalCosts.map((c) => [
+      c.batchId,
+      {
+        volumeSort1: num(c.volumeSort1),
+        volumeSort2: num(c.volumeSort2),
+        costSort1: num(c.costSort1),
+        costSort2: num(c.costSort2),
+        pricePerM3Sort1: num(c.pricePerM3Sort1),
+        pricePerM3Sort2: num(c.pricePerM3Sort2),
+      },
+    ]),
+  );
 
   const domainBatches = batches.map(serBatch);
   const domainDetails = details.map(serDetail);
@@ -191,6 +210,7 @@ export async function getCostReport(): Promise<CostReport> {
       batches: domainBatches,
       employees: domainEmployees,
       lines,
+      frozen,
     }),
     products: buildCostProductRows({
       products: products.map(serProduct),
@@ -201,6 +221,7 @@ export async function getCostReport(): Promise<CostReport> {
       lines,
       producedProductQty,
       periodOverhead,
+      frozen,
     }),
   };
 }

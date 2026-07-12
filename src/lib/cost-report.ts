@@ -149,10 +149,29 @@ function lengthsBySort(lines: ProducedLine[]): { sort1: Decimal; sort2: Decimal 
   return { sort1, sort2 };
 }
 
-/** Снапшоты распределения стоимости по каждой партии с производством. */
+/**
+ * Замороженный снапшот партии (FINAL) из БД (`BatchCost`). Значения уже
+ * рассчитаны и заморожены — их нельзя пересчитывать live (A3, cost-integrity).
+ */
+export interface FrozenBatchCost {
+  volumeSort1: Num;
+  volumeSort2: Num;
+  costSort1: Num;
+  costSort2: Num;
+  pricePerM3Sort1: Num;
+  pricePerM3Sort2: Num;
+}
+
+/**
+ * Снапшоты распределения стоимости по каждой партии с производством.
+ * Для замороженных партий (передан `frozen[batchId]`) берём сохранённый FINAL,
+ * а не live-пересчёт: после заморозки распределение править нельзя (A3). Длины
+ * по сортам восстанавливаем из объёма (V = длина × сечение).
+ */
 export function buildBatchSnapshots(params: {
   batches: Batch[];
   lines: ProducedLine[];
+  frozen?: Map<string, FrozenBatchCost>;
 }): Map<string, BatchCostSnapshot> {
   const byBatch = new Map<string, ProducedLine[]>();
   for (const line of params.lines) {
@@ -163,10 +182,28 @@ export function buildBatchSnapshots(params: {
 
   const result = new Map<string, BatchCostSnapshot>();
   for (const batch of params.batches) {
+    const area = sectionAreaM2(batch.sectionWidthMm, batch.sectionHeightMm);
+
+    const frozen = params.frozen?.get(batch.id);
+    if (frozen) {
+      const v1 = D(frozen.volumeSort1);
+      const v2 = D(frozen.volumeSort2);
+      result.set(batch.id, {
+        batchId: batch.id,
+        areaM2: area,
+        pricePerM3Sort1: D(frozen.pricePerM3Sort1),
+        pricePerM3Sort2: D(frozen.pricePerM3Sort2),
+        costSort1: D(frozen.costSort1),
+        costSort2: D(frozen.costSort2),
+        lengthSort1: area.isZero() ? ZERO : v1.div(area),
+        lengthSort2: area.isZero() ? ZERO : v2.div(area),
+      });
+      continue;
+    }
+
     const lines = byBatch.get(batch.id);
     if (!lines || lines.length === 0) continue;
 
-    const area = sectionAreaM2(batch.sectionWidthMm, batch.sectionHeightMm);
     const { sort1, sort2 } = lengthsBySort(lines);
 
     const dist = distributeBatchCost({
@@ -313,6 +350,7 @@ export function buildCostDetailRows(params: {
   batches: Batch[];
   employees: Employee[];
   lines: ProducedLine[];
+  frozen?: Map<string, FrozenBatchCost>;
 }): CostDetailRow[] {
   const batchesById = new Map(params.batches.map((b) => [b.id, b]));
   const rates = averageRates(params.employees);
@@ -440,6 +478,7 @@ export function buildCostProductRows(params: {
   lines: ProducedLine[];
   producedProductQty: Record<string, number>;
   periodOverhead: Num;
+  frozen?: Map<string, FrozenBatchCost>;
 }): CostProductRow[] {
   const detailsById = new Map(params.details.map((d) => [d.id, d]));
   const nomenclatureById = new Map(params.nomenclature.map((n) => [n.id, n]));
