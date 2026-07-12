@@ -85,6 +85,42 @@ describe("distributeBatchCost", () => {
     expect(r.costSort2.toNumber()).toBe(0);
     expect(r.pricePerM3Sort1.toNumber()).toBe(0);
   });
+
+  // A2: цены сортов не заданы (0), но детали произведены — C НЕ должна теряться.
+  // Пропорция по деньгам не определена → fallback по объёму (равные цены).
+  it("нулевые цены обоих сортов: C распределяется по объёму, сумма сходится к C", () => {
+    const r = distributeBatchCost({
+      totalCost: 60_000,
+      priceSort1: 0,
+      priceSort2: 0,
+      sectionAreaM2: area,
+      producedLengthSort1: 1000, // V1 = 0.8
+      producedLengthSort2: 500, // V2 = 0.4  → доля 2/3 и 1/3
+    });
+    expect(r.share1.toNumber()).toBeCloseTo(2 / 3, 10);
+    expect(r.share2.toNumber()).toBeCloseTo(1 / 3, 10);
+    expect(r.costSort1.toNumber()).toBe(40_000);
+    expect(r.costSort2.toNumber()).toBe(20_000);
+    expect(r.costSort1.plus(r.costSort2).equals(D(60_000))).toBe(true);
+    expect(r.pricePerM3Sort1.toNumber()).toBe(50_000);
+    expect(r.pricePerM3Sort2.toNumber()).toBe(50_000);
+  });
+
+  // A2 (граница): один сорт бесплатен по прайсу — пропорция по деньгам валидна,
+  // вся C ложится на платный сорт, ничего не теряется.
+  it("P1=0, P2>0: вся C уходит на сорт 2, сумма сходится к C", () => {
+    const r = distributeBatchCost({
+      totalCost: 50_000,
+      priceSort1: 0,
+      priceSort2: 20_000,
+      sectionAreaM2: area,
+      producedLengthSort1: 1000,
+      producedLengthSort2: 500,
+    });
+    expect(r.costSort1.toNumber()).toBe(0);
+    expect(r.costSort2.toNumber()).toBe(50_000);
+    expect(r.costSort1.plus(r.costSort2).equals(D(50_000))).toBe(true);
+  });
 });
 
 describe("materialPerDetail", () => {

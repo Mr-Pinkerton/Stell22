@@ -74,7 +74,11 @@ export interface BatchCostResult {
  *
  * Вся уплаченная C ложится на произведённые детали → отход зашит в
  * себестоимость, сумма costSort1 + costSort2 === C (без потери точности).
- * Граничные случаи (нет производства / один сорт) — деления на ноль нет.
+ * Граничные случаи без деления на ноль:
+ *   - нет производства (V1ф=V2ф=0) → нули (C не на что положить);
+ *   - цены сортов не заданы (P1=P2=0) при наличии производства → C
+ *     распределяется по объёму (fallback), чтобы C не терялась;
+ *   - один сорт → вся C на него.
  */
 export function distributeBatchCost(input: BatchCostInput): BatchCostResult {
   const area = D(input.sectionAreaM2);
@@ -88,9 +92,10 @@ export function distributeBatchCost(input: BatchCostInput): BatchCostResult {
   const weighted1 = p1.times(v1);
   const weighted2 = p2.times(v2);
   const denom = weighted1.plus(weighted2);
+  const totalVolume = v1.plus(v2);
 
-  // Нет произведённых деталей (или нулевые цены) — распределять нечего.
-  if (denom.isZero()) {
+  // Нет произведённых деталей — распределять нечего (C не на что положить).
+  if (totalVolume.isZero()) {
     return {
       volumeSort1: v1,
       volumeSort2: v2,
@@ -103,7 +108,12 @@ export function distributeBatchCost(input: BatchCostInput): BatchCostResult {
     };
   }
 
-  const share1 = weighted1.div(denom);
+  // Доля 1 сорта. Обычно — по деньгам (P·V). Если цены обоих сортов не заданы
+  // (P1=P2=0), пропорция по деньгам не определена, но вся уплаченная C всё
+  // равно обязана лечь на произведённые детали (инвариант cost-integrity:
+  // costSort1 + costSort2 === C). Fallback — распределение по объёму, что
+  // эквивалентно равным ценам за м³.
+  const share1 = denom.isZero() ? v1.div(totalVolume) : weighted1.div(denom);
   // share2 = остаток, чтобы share1 + share2 === 1 и costSort1 + costSort2 === C.
   const share2 = D(1).minus(share1);
 
