@@ -17,12 +17,15 @@ import {
   buildCostProductRows,
   producedLinesFromOperations,
   producedProductQtyFromOperations,
+  type AvgRates,
   type CostDetailRow,
   type CostProductRow,
   type FrozenBatchCost,
   type OperationForCost,
   type ProducedLine,
 } from "@/lib/cost-report";
+import { actualProductionRates, type ProductionRateOp } from "@/lib/payroll";
+import { dayKey } from "@/lib/entries";
 import type { Batch, Detail, Employee, NomenclatureItem, Product } from "@/types/domain";
 
 // Любой клиент Prisma — обычный или транзакционный (для атомарной заморозки).
@@ -173,10 +176,9 @@ export async function getCostReport(): Promise<CostReport> {
       prisma.employee.findMany(),
       prisma.nomenclatureItem.findMany(),
       prisma.product.findMany({ include: { details: true, fasteners: true, extras: true } }),
-      prisma.productionOperation.findMany({
-        where: { type: { in: ["TORCOVKA", "UPAKOVKA"] } },
-        include: { lines: true },
-      }),
+      // Все типы операций — торцовка/упаковка дают произведённое, а HOURS и
+      // присадка нужны для факт. средних расценок работы (A6).
+      prisma.productionOperation.findMany({ include: { lines: true } }),
       getPeriodOverhead(),
       prisma.batchCost.findMany({ where: { status: "FINAL" } }),
     ]);
@@ -184,6 +186,54 @@ export async function getCostReport(): Promise<CostReport> {
   const opsForCost = ops.map(toOperationForCost);
   const lines = producedLinesFromOperations(opsForCost);
   const producedProductQty = producedProductQtyFromOperations(opsForCost);
+
+  // Работа в себестоимости — фактическая средняя по производству (A6, v2 §2):
+  // сдельная ставка исполнителя + доля почасовой оплаты его смены, а не
+  // среднее по карточкам всех активных.
+  const ZERO_RATES = {
+    hourly: 0,
+    torcovkaSort1: 0,
+    torcovkaSort2: 0,
+    prisadkaTorcev: 0,
+    prisadkaPlosk: 0,
+    upakovka: 0,
+  };
+  const ratesByEmp = new Map(
+    employees.map((e) => [
+      e.id,
+      {
+        hourly: num(e.hourlyRate),
+        torcovkaSort1: num(e.rateTorcovkaSort1),
+        torcovkaSort2: num(e.rateTorcovkaSort2),
+        prisadkaTorcev: num(e.ratePrisadkaTorcev),
+        prisadkaPlosk: num(e.ratePrisadkaPloskt),
+        upakovka: num(e.rateUpakovka),
+      },
+    ]),
+  );
+  const detailSort = new Map(details.map((d) => [d.id, d.sort]));
+  const rateOps: ProductionRateOp[] = ops.map((op) => ({
+    type: op.type,
+    employeeId: op.employeeId,
+    dayKey: dayKey(op.workDate),
+    rates: ratesByEmp.get(op.employeeId) ?? ZERO_RATES,
+    hours: num(op.hours),
+    productQty: op.productQty,
+    lines: op.lines.map((l) => ({
+      quantity: l.quantity,
+      sort: l.blankSort ?? (l.detailId ? detailSort.get(l.detailId) : undefined),
+      prisadkaTorcevaya: l.prisadkaTorcevaya,
+      prisadkaPloskost: l.prisadkaPloskost,
+    })),
+  }));
+  const unit = actualProductionRates(rateOps);
+  const actualRates: AvgRates = {
+    torcovkaSort1: D(unit.torcovkaSort1),
+    torcovkaSort2: D(unit.torcovkaSort2),
+    prisadkaTorcev: D(unit.prisadkaTorcev),
+    prisadkaPlosk: D(unit.prisadkaPlosk),
+    upakovka: D(unit.upakovka),
+  };
 
   // Замороженные партии: берём сохранённый FINAL-снапшот, а не live-пересчёт
   // (A3, cost-integrity — заморозку править нельзя).
@@ -211,6 +261,7 @@ export async function getCostReport(): Promise<CostReport> {
       employees: domainEmployees,
       lines,
       frozen,
+      rates: actualRates,
     }),
     products: buildCostProductRows({
       products: products.map(serProduct),
@@ -222,6 +273,7 @@ export async function getCostReport(): Promise<CostReport> {
       producedProductQty,
       periodOverhead,
       frozen,
+      rates: actualRates,
     }),
   };
 }

@@ -170,3 +170,114 @@ export function operationEarning(op: OperationEarningInput): {
 
   return { quantity, amount: round2(amount) };
 }
+
+// -----------------------------------------------------------------------------
+// Фактическая средняя расценка по производству (A6, v2 §2 РАБОТА).
+// Для строки «Себестоимость по артикулу» работа берётся не из карточек, а как
+// фактическая средняя по реально выполненным операциям (смесь сдельных и
+// окладных). Труд каждой произведённой единицы = сдельная ставка исполнителя +
+// доля почасовой оплаты его смены (день): оклад_дня / произведено_единиц_за_день.
+// Так окладник (например упаковщик без сдельной расценки) корректно попадает в
+// себестоимость операции, а сдельщик — по своей факт. расценке.
+// -----------------------------------------------------------------------------
+
+/** Операция для расчёта факт. средних: тип, исполнитель, день, его ставки. */
+export interface ProductionRateOp {
+  type: OperationKind;
+  employeeId: string;
+  /** Ключ дня (смены) — все HOURS/производство одного работника за день. */
+  dayKey: string;
+  rates: OperationRates;
+  hours?: number | null;
+  productQty?: number | null;
+  lines?: OperationLineInput[];
+}
+
+/** Факт. средняя расценка за единицу по каждому типу работы (₽/ед.). */
+export interface ProductionUnitRates {
+  torcovkaSort1: number;
+  torcovkaSort2: number;
+  prisadkaTorcev: number;
+  prisadkaPlosk: number;
+  upakovka: number;
+}
+
+interface Bucket {
+  amount: number;
+  quantity: number;
+}
+
+/**
+ * Факт. средние расценки за единицу по производству. Пустой бакет (по типу
+ * работы фактов нет) → 0 (чистый факт, без карточной оценки). Работник, у кого
+ * за день только часы и 0 произведённых единиц, свою почасовую оплату в
+ * себестоимость единицы не переносит (доля не на что делить).
+ */
+export function actualProductionRates(ops: ProductionRateOp[]): ProductionUnitRates {
+  const dayKeyOf = (o: ProductionRateOp) => `${o.employeeId}::${o.dayKey}`;
+
+  // 1. За каждый день работника: почасовая оплата и произведённые единицы.
+  const dailyPay = new Map<string, number>();
+  const dailyUnits = new Map<string, number>();
+  for (const o of ops) {
+    const { amount, quantity } = operationEarning({
+      type: o.type,
+      rates: o.rates,
+      hours: o.hours ?? 0,
+      productQty: o.productQty ?? 0,
+      lines: o.lines ?? [],
+    });
+    const k = dayKeyOf(o);
+    if (o.type === "HOURS") dailyPay.set(k, (dailyPay.get(k) ?? 0) + amount);
+    else dailyUnits.set(k, (dailyUnits.get(k) ?? 0) + quantity);
+  }
+
+  // 2. Копим сумму (сделка + доля оклада) и кол-во по бакетам.
+  const buckets: Record<keyof ProductionUnitRates, Bucket> = {
+    torcovkaSort1: { amount: 0, quantity: 0 },
+    torcovkaSort2: { amount: 0, quantity: 0 },
+    prisadkaTorcev: { amount: 0, quantity: 0 },
+    prisadkaPlosk: { amount: 0, quantity: 0 },
+    upakovka: { amount: 0, quantity: 0 },
+  };
+
+  for (const o of ops) {
+    if (o.type === "HOURS") continue;
+    const k = dayKeyOf(o);
+    const units = dailyUnits.get(k) ?? 0;
+    const share = units > 0 ? (dailyPay.get(k) ?? 0) / units : 0;
+    const r = o.rates;
+
+    if (o.type === "TORCOVKA") {
+      for (const l of o.lines ?? []) {
+        const b = l.sort === "SORT2" ? buckets.torcovkaSort2 : buckets.torcovkaSort1;
+        const piece = l.sort === "SORT2" ? r.torcovkaSort2 : r.torcovkaSort1;
+        b.amount += (piece + share) * l.quantity;
+        b.quantity += l.quantity;
+      }
+    } else if (o.type === "PRISADKA") {
+      for (const l of o.lines ?? []) {
+        if (l.prisadkaTorcevaya) {
+          buckets.prisadkaTorcev.amount += (r.prisadkaTorcev + share) * l.quantity;
+          buckets.prisadkaTorcev.quantity += l.quantity;
+        } else if (l.prisadkaPloskost) {
+          buckets.prisadkaPlosk.amount += (r.prisadkaPlosk + share) * l.quantity;
+          buckets.prisadkaPlosk.quantity += l.quantity;
+        }
+      }
+    } else if (o.type === "UPAKOVKA") {
+      const q = o.productQty ?? 0;
+      buckets.upakovka.amount += (r.upakovka + share) * q;
+      buckets.upakovka.quantity += q;
+    }
+  }
+
+  const avg = (b: Bucket) => (b.quantity > 0 ? b.amount / b.quantity : 0);
+  return {
+    torcovkaSort1: avg(buckets.torcovkaSort1),
+    torcovkaSort2: avg(buckets.torcovkaSort2),
+    prisadkaTorcev: avg(buckets.prisadkaTorcev),
+    prisadkaPlosk: avg(buckets.prisadkaPlosk),
+    upakovka: avg(buckets.upakovka),
+  };
+}

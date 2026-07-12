@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  actualProductionRates,
   avgPerUnit,
   hasPieceRates,
   hourlyEarning,
@@ -10,6 +11,7 @@ import {
   type OperationCounts,
   type OperationRates,
   type PieceRates,
+  type ProductionRateOp,
 } from "./payroll";
 
 const opRates: OperationRates = {
@@ -145,5 +147,50 @@ describe("operationEarning", () => {
     // 333.333 × 3 = 999.999 → 1000.00
     const res = operationEarning({ type: "HOURS", rates: { ...opRates, hourly: 333.333 }, hours: 3 });
     expect(res.amount).toBe(1000);
+  });
+});
+
+describe("actualProductionRates (A6)", () => {
+  const rA: OperationRates = { hourly: 0, torcovkaSort1: 5, torcovkaSort2: 0, prisadkaTorcev: 0, prisadkaPlosk: 0, upakovka: 0 };
+  const rB: OperationRates = { hourly: 0, torcovkaSort1: 4, torcovkaSort2: 0, prisadkaTorcev: 0, prisadkaPlosk: 0, upakovka: 0 };
+
+  it("сдельная средняя взвешена по факт. количеству, а не по карточкам", () => {
+    const ops: ProductionRateOp[] = [
+      { type: "TORCOVKA", employeeId: "A", dayKey: "2026-07-01", rates: rA, lines: [{ quantity: 100, sort: "SORT1" }] },
+      { type: "TORCOVKA", employeeId: "B", dayKey: "2026-07-01", rates: rB, lines: [{ quantity: 900, sort: "SORT1" }] },
+    ];
+    // (5*100 + 4*900) / 1000 = 4.1  (карточная средняя дала бы 4.5)
+    expect(actualProductionRates(ops).torcovkaSort1).toBeCloseTo(4.1, 6);
+  });
+
+  it("окладник: почасовая оплата дня раскидывается на произведённые единицы (оклад/ops)", () => {
+    const packer: OperationRates = { hourly: 200, torcovkaSort1: 0, torcovkaSort2: 0, prisadkaTorcev: 0, prisadkaPlosk: 0, upakovka: 0 };
+    const ops: ProductionRateOp[] = [
+      { type: "HOURS", employeeId: "P", dayKey: "2026-07-01", rates: packer, hours: 8 }, // 1600 ₽ за день
+      { type: "UPAKOVKA", employeeId: "P", dayKey: "2026-07-01", rates: packer, productQty: 40 },
+    ];
+    // сдельной расценки упаковки нет (0) + доля 1600/40 = 40 → упаковка 40 ₽/изд.
+    expect(actualProductionRates(ops).upakovka).toBeCloseTo(40, 6);
+  });
+
+  it("гибрид: сделка + доля часов того же дня", () => {
+    const emp: OperationRates = { hourly: 100, torcovkaSort1: 5, torcovkaSort2: 0, prisadkaTorcev: 0, prisadkaPlosk: 0, upakovka: 0 };
+    const ops: ProductionRateOp[] = [
+      { type: "HOURS", employeeId: "H", dayKey: "2026-07-02", rates: emp, hours: 2 }, // 200 ₽
+      { type: "TORCOVKA", employeeId: "H", dayKey: "2026-07-02", rates: emp, lines: [{ quantity: 10, sort: "SORT1" }] },
+    ];
+    // доля = 200/10 = 20; ставка 5 → 25 ₽/заготовку
+    expect(actualProductionRates(ops).torcovkaSort1).toBeCloseTo(25, 6);
+  });
+
+  it("пустой бакет (нет фактов) → 0", () => {
+    const ops: ProductionRateOp[] = [
+      { type: "TORCOVKA", employeeId: "A", dayKey: "2026-07-01", rates: rA, lines: [{ quantity: 10, sort: "SORT1" }] },
+    ];
+    const res = actualProductionRates(ops);
+    expect(res.prisadkaTorcev).toBe(0);
+    expect(res.prisadkaPlosk).toBe(0);
+    expect(res.upakovka).toBe(0);
+    expect(res.torcovkaSort2).toBe(0);
   });
 });

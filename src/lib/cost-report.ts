@@ -351,9 +351,11 @@ export function buildCostDetailRows(params: {
   employees: Employee[];
   lines: ProducedLine[];
   frozen?: Map<string, FrozenBatchCost>;
+  /** Факт. средние расценки по производству (A6). Без них — карточная средняя. */
+  rates?: AvgRates;
 }): CostDetailRow[] {
   const batchesById = new Map(params.batches.map((b) => [b.id, b]));
-  const rates = averageRates(params.employees);
+  const rates = params.rates ?? averageRates(params.employees);
   const snapshots = buildBatchSnapshots(params);
 
   const rows: CostDetailRow[] = [];
@@ -479,10 +481,12 @@ export function buildCostProductRows(params: {
   producedProductQty: Record<string, number>;
   periodOverhead: Num;
   frozen?: Map<string, FrozenBatchCost>;
+  /** Факт. средние расценки по производству (A6). Без них — карточная средняя. */
+  rates?: AvgRates;
 }): CostProductRow[] {
   const detailsById = new Map(params.details.map((d) => [d.id, d]));
   const nomenclatureById = new Map(params.nomenclature.map((n) => [n.id, n]));
-  const rates = averageRates(params.employees);
+  const rates = params.rates ?? averageRates(params.employees);
   const snapshots = buildBatchSnapshots(params);
   // ₽/м считаем раздельно по материалам — изделие берёт per-meter своей породы.
   const batchMaterial = new Map(params.batches.map((b) => [b.id, b.materialId]));
