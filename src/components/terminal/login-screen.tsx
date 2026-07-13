@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "@/components/terminal/toast";
+import { terminalLogin } from "@/server/terminal";
 import { User, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { OperationTile, OperationTileRow } from "@/components/terminal/operation-tile";
@@ -23,15 +24,19 @@ export function LoginScreen({ employees, onSuccess }: LoginScreenProps) {
   const submit = (next: string) => {
     setPin(next);
     if (next.length === 4 && selected) {
-      if (next === selected.pin) {
-        const parts = selected.fullName.split(" ");
-        const firstName = parts[1] ?? parts[0];
-        toast.success(`Здравствуйте, ${firstName}!`);
-        onSuccess(selected);
-      } else {
-        toast.error("Неверный PIN");
-        setPin("");
-      }
+      // Проверка PIN на сервере (A14): ставит терминальную сессию-cookie.
+      void (async () => {
+        try {
+          const employee = await terminalLogin(selected.id, next);
+          const parts = employee.fullName.split(" ");
+          const firstName = parts[1] ?? parts[0];
+          toast.success(`Здравствуйте, ${firstName}!`);
+          onSuccess(employee);
+        } catch {
+          toast.error("Неверный PIN");
+          setPin("");
+        }
+      })();
     }
   };
 

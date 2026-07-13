@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
 import type {
   Batch as PrismaBatch,
   Detail as PrismaDetail,
@@ -22,6 +23,13 @@ import {
   type DetailStockRow,
 } from "@/lib/detail-stock";
 import { isOverRailLength, sumDetailLengthM } from "@/lib/torcovka";
+import { verifyEmployeePin } from "@/lib/terminal-auth";
+import {
+  TERMINAL_COOKIE,
+  encryptTerminalSession,
+  terminalCookieOptions,
+} from "@/lib/session";
+import { requireTerminalEmployee } from "@/server/session";
 import type {
   Batch,
   Detail,
@@ -51,7 +59,8 @@ function serEmployee(e: PrismaEmployee): Employee {
     id: e.id,
     fullName: e.fullName,
     birthDate: e.birthDate ? e.birthDate.toISOString().slice(0, 10) : null,
-    pin: e.pin,
+    // PIN на клиент не отдаём — проверка входа только на сервере (A14).
+    pin: "",
     status: e.status,
     hourlyRate: num(e.hourlyRate),
     rateTorcovkaSort1: num(e.rateTorcovkaSort1),
@@ -192,6 +201,28 @@ export async function getTerminalData(): Promise<TerminalData> {
   };
 }
 
+// ============================ АВТОРИЗАЦИЯ (A14) =============================
+
+/**
+ * Вход в терминал по PIN: проверка на СЕРВЕРЕ (PIN не покидает БД, клиенту не
+ * отдаётся). При успехе ставит подписанную терминальную cookie-сессию, которую
+ * проверяют все операции. Возвращает сотрудника без PIN.
+ */
+export async function terminalLogin(employeeId: string, pin: string): Promise<Employee> {
+  const employee = await prisma.employee.findUnique({ where: { id: employeeId } });
+  if (!verifyEmployeePin(employee, pin)) {
+    throw new Error("Неверный PIN");
+  }
+  const token = await encryptTerminalSession({ employeeId: employee!.id });
+  (await cookies()).set(TERMINAL_COOKIE, token, terminalCookieOptions);
+  return serEmployee(employee!);
+}
+
+/** Выход из терминала: снимает сессию (клиентский автовыход по бездействию). */
+export async function terminalLogout(): Promise<void> {
+  (await cookies()).delete(TERMINAL_COOKIE);
+}
+
 // ============================ ТОРЦОВКА =====================================
 
 export interface TorcovkaInput {
@@ -211,6 +242,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
   const { employeeId, batchId, railLotId, railsTaken } = input;
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
+  await requireTerminalEmployee(employeeId); // A14: подтверждаем сессию терминала
   if (railsTaken <= 0) throw new Error("Укажите количество взятых реек");
   if (picks.length === 0) throw new Error("Не выбраны длины заготовок");
 
@@ -519,6 +551,7 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
   const { employeeId } = input;
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
+  await requireTerminalEmployee(employeeId); // A14: подтверждаем сессию терминала
   if (picks.length === 0) throw new Error("Не выбраны детали");
 
   await prisma.$transaction(async (tx) => {
@@ -768,6 +801,7 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
   const { employeeId } = input;
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
+  await requireTerminalEmployee(employeeId); // A14: подтверждаем сессию терминала
   if (picks.length === 0) throw new Error("Не выбраны изделия");
 
   await prisma.$transaction(async (tx) => {
@@ -803,6 +837,7 @@ export { applyPrisadkaPick, applyUpakovkaPick };
 
 export async function submitHours(employeeId: string, hours: number): Promise<void> {
   if (!employeeId) throw new Error("Не выбран работник");
+  await requireTerminalEmployee(employeeId); // A14: подтверждаем сессию терминала
   if (!(hours > 0)) throw new Error("Укажите количество часов");
 
   const op = await prisma.productionOperation.create({
@@ -861,6 +896,7 @@ function entryFromOperation(op: OpWithLines, emp: PrismaEmployee): TerminalEntry
 }
 
 export async function getEmployeeEntries(employeeId: string): Promise<TerminalEntry[]> {
+  await requireTerminalEmployee(employeeId); // A14: только свой журнал по своей сессии
   const [emp, ops] = await Promise.all([
     prisma.employee.findUnique({ where: { id: employeeId } }),
     prisma.productionOperation.findMany({

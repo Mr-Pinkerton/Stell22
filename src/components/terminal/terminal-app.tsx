@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getTerminalData } from "@/server/terminal";
+import { getTerminalData, terminalLogout } from "@/server/terminal";
 import type { Employee } from "@/types/domain";
 import type { TerminalData, TerminalScreen } from "@/components/terminal/types";
 import { TerminalHeader } from "@/components/terminal/terminal-header";
@@ -43,6 +43,7 @@ export function TerminalApp({ initialData }: { initialData: TerminalData }) {
     setEmployee(null);
     setScreen("home");
     setLoginOpen(false);
+    void terminalLogout(); // A14: снять серверную сессию терминала
   }, []);
 
   // Автовыход по бездействию: сбрасываем таймер на любую активность.

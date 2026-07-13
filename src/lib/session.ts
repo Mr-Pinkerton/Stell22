@@ -43,3 +43,45 @@ export const sessionCookieOptions = {
   path: "/",
   maxAge: SESSION_MAX_AGE_SEC,
 };
+
+// --------------------------- Терминал (киоск) ------------------------------
+// Отдельная сессия для терминала производства: вход по PIN сотрудника ставит
+// подписанную cookie, а серверные операции (submit*/reverse*) проверяют её
+// (A14). Живёт короче — одна смена, автовыход по бездействию на клиенте.
+export const TERMINAL_COOKIE = "stell22_terminal";
+export const TERMINAL_MAX_AGE_SEC = 60 * 60 * 12; // 12 часов (смена)
+
+export interface TerminalSessionPayload {
+  employeeId: string;
+}
+
+export async function encryptTerminalSession(
+  payload: TerminalSessionPayload,
+): Promise<string> {
+  return new SignJWT({ employeeId: payload.employeeId, kind: "terminal" })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime(`${TERMINAL_MAX_AGE_SEC}s`)
+    .sign(encodedKey());
+}
+
+export async function decryptTerminalSession(
+  token: string | undefined,
+): Promise<TerminalSessionPayload | null> {
+  if (!token) return null;
+  try {
+    const { payload } = await jwtVerify(token, encodedKey(), { algorithms: ["HS256"] });
+    if (payload.kind !== "terminal" || typeof payload.employeeId !== "string") return null;
+    return { employeeId: payload.employeeId };
+  } catch {
+    return null;
+  }
+}
+
+export const terminalCookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  path: "/",
+  maxAge: TERMINAL_MAX_AGE_SEC,
+};

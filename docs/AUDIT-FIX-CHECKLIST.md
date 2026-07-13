@@ -44,8 +44,8 @@
 
 ## Приоритет 4 — Безопасность / API / UI
 
-- [ ] **A14** — серверная проверка employee+PIN/session для terminal actions (`src/proxy.ts`, `terminal.ts:209`)
-  - _PIN работника проверяется только в браузере. Сервер операции не проверяет — любой с доступом к сети может провести операцию мимо PIN._
+- [x] **A14** — серверная авторизация терминала: PIN проверяется на сервере (`terminalLogin`, PIN больше не отдаётся клиенту), терминальная cookie-сессия (`lib/session.ts`), гейт `requireTerminalEmployee(employeeId)` во всех мутациях (`submitTorcovka/Prisadka/Upakovka/Hours`, `getEmployeeEntries`), сверка arg↔сессия. Пуре `verifyEmployeePin`+тесты (`src/server/terminal.ts`, `src/server/session.ts`, `src/lib/terminal-auth.ts`)
+  - _Раньше `/terminal` был публичным, PIN сверялся на клиенте, а `getTerminalData` отдавал все PIN-ы; любой из сети мог дёрнуть `submit*` с чужим employeeId. Теперь операции требуют валидную сессию входа по PIN._
 - [ ] **A20** — параметры/min stock из БД вместо моков **или** явная пометка prototype (`settings-view.tsx`)
   - _Настройки (порог отхода, минимальные остатки) живут на заглушках. Поменял → после перезагрузки вернулось. Не пишутся в базу._
 - [ ] **A22** — DAL/`requireAdmin` в server actions (`session`)

@@ -2,7 +2,12 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/server/db";
-import { SESSION_COOKIE, decryptSession } from "@/lib/session";
+import {
+  SESSION_COOKIE,
+  TERMINAL_COOKIE,
+  decryptSession,
+  decryptTerminalSession,
+} from "@/lib/session";
 
 export interface CurrentUser {
   id: string;
@@ -37,4 +42,35 @@ export async function requireAdmin(): Promise<CurrentUser> {
     redirect("/login");
   }
   return user;
+}
+
+export interface TerminalEmployee {
+  id: string;
+  fullName: string;
+}
+
+/**
+ * Гейт для операций терминала (A14): требует валидную терминальную cookie-сессию
+ * и ACTIVE-сотрудника. Если передан `expectedEmployeeId`, он обязан совпасть с
+ * сессией (клиент не может действовать «за другого»). Бросает — не редиректит,
+ * т.к. вызывается из мутаций (server actions), не из рендера страниц.
+ */
+export async function requireTerminalEmployee(
+  expectedEmployeeId?: string,
+): Promise<TerminalEmployee> {
+  const token = (await cookies()).get(TERMINAL_COOKIE)?.value;
+  const session = await decryptTerminalSession(token);
+  if (!session) throw new Error("Нет активной сессии терминала. Войдите по PIN.");
+
+  const employee = await prisma.employee.findUnique({
+    where: { id: session.employeeId },
+    select: { id: true, fullName: true, status: true },
+  });
+  if (!employee || employee.status !== "ACTIVE") {
+    throw new Error("Сессия терминала недействительна. Войдите заново.");
+  }
+  if (expectedEmployeeId && expectedEmployeeId !== employee.id) {
+    throw new Error("Несовпадение сотрудника сессии.");
+  }
+  return { id: employee.id, fullName: employee.fullName };
 }
