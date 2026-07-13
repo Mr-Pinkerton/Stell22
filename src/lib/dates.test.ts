@@ -1,40 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { createLocalDate, endOfDay, getMonthPeriod } from "./dates";
+import { createLocalDate, endOfDay, getMonthPeriod, startOfBusinessDay } from "./dates";
 
-describe("endOfDay", () => {
-  it("возвращает конец дня 23:59:59.999 того же дня", () => {
-    const d = endOfDay(createLocalDate(2026, 6, 12)); // 12 июля 2026
-    expect(d.getFullYear()).toBe(2026);
-    expect(d.getMonth()).toBe(6);
-    expect(d.getDate()).toBe(12);
-    expect(d.getHours()).toBe(23);
-    expect(d.getMinutes()).toBe(59);
-    expect(d.getSeconds()).toBe(59);
-    expect(d.getMilliseconds()).toBe(999);
+// Инстанты в UTC — не зависят от локали хоста (важно для CI не в МСК).
+describe("границы периода фиксированы в UTC+3", () => {
+  it("startOfBusinessDay = 00:00 МСК = 21:00Z предыдущего дня", () => {
+    expect(startOfBusinessDay(createLocalDate(2026, 6, 1)).toISOString()).toBe(
+      "2026-06-30T21:00:00.000Z",
+    );
+  });
+  it("endOfDay = 23:59:59.999 МСК = 20:59:59.999Z того же дня", () => {
+    expect(endOfDay(createLocalDate(2026, 6, 12)).toISOString()).toBe(
+      "2026-07-12T20:59:59.999Z",
+    );
+  });
+  it("getMonthPeriod июль 2026 → [30.06 21:00Z … 31.07 20:59:59.999Z]", () => {
+    const p = getMonthPeriod(createLocalDate(2026, 6, 15));
+    expect(p.start.toISOString()).toBe("2026-06-30T21:00:00.000Z");
+    expect(p.end.toISOString()).toBe("2026-07-31T20:59:59.999Z");
   });
 });
 
 describe("getMonthPeriod", () => {
-  it("границы месяца: 1-е 00:00 … последний день 23:59:59.999", () => {
-    const p = getMonthPeriod(createLocalDate(2026, 6, 15)); // июль 2026 (31 день)
-    expect(p.start).toEqual(createLocalDate(2026, 6, 1));
-    expect(p.start.getHours()).toBe(0);
-    expect(p.end.getDate()).toBe(31);
-    expect(p.end.getMonth()).toBe(6);
-    expect(p.end.getHours()).toBe(23);
-    expect(p.end.getMilliseconds()).toBe(999);
-  });
-
-  it("февраль невисокосного года заканчивается 28-м", () => {
+  it("февраль невисокосного года заканчивается 28-м (UTC+3)", () => {
     const p = getMonthPeriod(createLocalDate(2026, 1, 10)); // февраль 2026
-    expect(p.end.getDate()).toBe(28);
-    expect(p.end.getMonth()).toBe(1);
+    expect(p.end.toISOString()).toBe("2026-02-28T20:59:59.999Z");
   });
 
   it("включает последний день целиком (граница > любого момента дня)", () => {
     const p = getMonthPeriod(createLocalDate(2026, 6, 1));
-    const lastDayEvening = new Date(2026, 6, 31, 20, 0, 0);
-    expect(lastDayEvening <= p.end).toBe(true);
-    expect(lastDayEvening >= p.start).toBe(true);
+    // 31.07 23:00 МСК = 20:00Z — внутри периода; 01.08 00:00 МСК = 31.07 21:00Z — вне.
+    expect(new Date("2026-07-31T20:00:00.000Z") <= p.end).toBe(true);
+    expect(new Date("2026-07-31T21:00:00.000Z") <= p.end).toBe(false);
+    expect(new Date("2026-06-30T21:00:00.000Z") >= p.start).toBe(true);
+    expect(new Date("2026-06-30T20:59:59.999Z") >= p.start).toBe(false);
   });
 });

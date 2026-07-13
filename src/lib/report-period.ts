@@ -7,8 +7,10 @@
 import {
   createLocalDate,
   endOfDay,
+  getCurrentMonth,
   getMonthPeriod,
   normalizeRange,
+  startOfBusinessDay,
   startOfMonth,
   type Period,
 } from "@/lib/dates";
@@ -57,7 +59,7 @@ export function weekRangeFromParams(params: Record<string, ParamValue>): Period 
   const friday = parseDay(first(params.week));
   if (!friday) return null;
   const thursday = createLocalDate(friday.getFullYear(), friday.getMonth(), friday.getDate() + 6);
-  return { start: friday, end: endOfDay(thursday) };
+  return { start: startOfBusinessDay(friday), end: endOfDay(thursday) };
 }
 
 /**
@@ -72,7 +74,7 @@ export function periodFromParams(params: Record<string, ParamValue>): Period | n
   const to = parseDay(first(params.to));
   if (from && to) {
     const { start, end } = normalizeRange(from, to);
-    return { start, end: endOfDay(end) };
+    return { start: startOfBusinessDay(start), end: endOfDay(end) };
   }
 
   const month = parseMonth(first(params.month));
@@ -98,7 +100,8 @@ export function paramsFromDateFilter(v: DateFilterValue): URLSearchParams {
 
 /** query string → DateFilterValue (инициализация фильтра из URL). */
 export function dateFilterFromParams(params: URLSearchParams): DateFilterValue {
-  const base = getMonthPeriod().start;
+  // База для UI-календаря — локальный месяц (отображение), не UTC+3-инстант.
+  const base = getCurrentMonth();
   if (params.get("all") === "1") {
     return { month: base, rangeStart: null, rangeEnd: null, allTime: true };
   }

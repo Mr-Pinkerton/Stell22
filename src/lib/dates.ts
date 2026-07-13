@@ -90,20 +90,45 @@ export function getCurrentMonth(): Date {
   return startOfMonth(now);
 }
 
-/** Диапазон дат для фильтрации отчётов. Границы включительны. */
+/** Диапазон дат для фильтрации отчётов. Границы включительны (UTC-инстанты). */
 export interface Period {
   start: Date;
   end: Date;
 }
 
-/** Конец дня (23:59:59.999 локально) — правая граница периода включительно. */
-export function endOfDay(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+/**
+ * Бизнес-зона проекта — UTC+3 (v2). Границы периодов считаем в ней, а не в
+ * локали хоста: иначе на UTC-сервере край дня уедет на 3 часа и операции у
+ * полуночи попадут не в тот период. Y-M-D берём из переданной даты (её собирают
+ * через createLocalDate — локаль хоста), а сам инстант фиксируем в UTC+3.
+ */
+export const BUSINESS_UTC_OFFSET_HOURS = 3;
+
+/** 00:00:00.000 бизнес-зоны (UTC+3) для календарной даты Y-M-D. */
+export function startOfBusinessDay(date: Date): Date {
+  return new Date(
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), -BUSINESS_UTC_OFFSET_HOURS, 0, 0, 0),
+  );
 }
 
-/** Период календарного месяца: [1-е 00:00 … последний день 23:59:59.999]. */
+/** 23:59:59.999 бизнес-зоны (UTC+3) — правая граница периода включительно. */
+export function endOfDay(date: Date): Date {
+  return new Date(
+    Date.UTC(
+      date.getFullYear(),
+      date.getMonth(),
+      date.getDate(),
+      23 - BUSINESS_UTC_OFFSET_HOURS,
+      59,
+      59,
+      999,
+    ),
+  );
+}
+
+/** Период календарного месяца: [1-е 00:00 … последний день 23:59:59.999] в UTC+3. */
 export function getMonthPeriod(month: Date = getCurrentMonth()): Period {
-  const start = startOfMonth(month);
+  const start = startOfBusinessDay(createLocalDate(month.getFullYear(), month.getMonth(), 1));
   const lastDay = createLocalDate(month.getFullYear(), month.getMonth() + 1, 0);
   return { start, end: endOfDay(lastDay) };
 }

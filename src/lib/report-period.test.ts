@@ -13,52 +13,51 @@ describe("periodFromParams", () => {
     expect(periodFromParams({ all: "1" })).toBeNull();
   });
 
-  it("month=YYYY-MM → календарный месяц", () => {
+  // Инстанты сверяем в UTC (toISOString) — не зависит от локали хоста.
+  it("month=YYYY-MM → календарный месяц (UTC+3)", () => {
     const p = periodFromParams({ month: "2026-02" });
     expect(p).not.toBeNull();
-    expect(p!.start).toEqual(createLocalDate(2026, 1, 1));
-    expect(p!.end.getDate()).toBe(28); // февраль 2026
+    expect(p!.start.toISOString()).toBe("2026-01-31T21:00:00.000Z");
+    expect(p!.end.toISOString()).toBe("2026-02-28T20:59:59.999Z");
   });
 
-  it("from+to → диапазон, конец = конец дня, нормализован", () => {
+  it("from+to → диапазон, конец = конец дня, нормализован (UTC+3)", () => {
     const p = periodFromParams({ from: "2026-07-10", to: "2026-07-05" });
-    expect(p!.start).toEqual(createLocalDate(2026, 6, 5));
-    expect(p!.end.getDate()).toBe(10);
-    expect(p!.end.getHours()).toBe(23);
+    expect(p!.start.toISOString()).toBe("2026-07-04T21:00:00.000Z");
+    expect(p!.end.toISOString()).toBe("2026-07-10T20:59:59.999Z");
   });
 
   it("пусто → текущий месяц", () => {
     const p = periodFromParams({});
     const cur = getMonthPeriod();
-    expect(p!.start).toEqual(cur.start);
+    expect(p!.start.getTime()).toBe(cur.start.getTime());
   });
 
   it("массив в параметре → берётся первый", () => {
     const p = periodFromParams({ month: ["2026-03", "2026-09"] });
-    expect(p!.start).toEqual(createLocalDate(2026, 2, 1));
+    expect(p!.start.toISOString()).toBe("2026-02-28T21:00:00.000Z"); // 01.03 00:00 МСК
   });
 });
 
 describe("inPeriod", () => {
-  const p = getMonthPeriod(createLocalDate(2026, 6, 1)); // июль 2026
+  const p = getMonthPeriod(createLocalDate(2026, 6, 1)); // июль 2026 (UTC+3)
   it("null период → всегда true", () => {
     expect(inPeriod(createLocalDate(2020, 0, 1), null)).toBe(true);
   });
-  it("границы включительно", () => {
-    expect(inPeriod(createLocalDate(2026, 6, 1), p)).toBe(true);
-    expect(inPeriod(new Date(2026, 6, 31, 23, 0), p)).toBe(true);
-    expect(inPeriod(createLocalDate(2026, 5, 30), p)).toBe(false);
-    expect(inPeriod(createLocalDate(2026, 7, 1), p)).toBe(false);
+  it("границы включительно (инстанты в UTC)", () => {
+    expect(inPeriod(new Date("2026-06-30T21:00:00.000Z"), p)).toBe(true); // 01.07 00:00 МСК
+    expect(inPeriod(new Date("2026-07-31T20:59:59.999Z"), p)).toBe(true); // 31.07 23:59:59.999 МСК
+    expect(inPeriod(new Date("2026-06-30T20:59:59.999Z"), p)).toBe(false); // до начала
+    expect(inPeriod(new Date("2026-07-31T21:00:00.000Z"), p)).toBe(false); // 01.08 00:00 МСК
   });
 });
 
 describe("weekRangeFromParams", () => {
-  it("пятница → диапазон пт–чт (7 дней), конец дня четверга", () => {
+  it("пятница → диапазон пт–чт (7 дней), конец дня четверга (UTC+3)", () => {
     const r = weekRangeFromParams({ week: "2026-07-03" }); // пт 3 июля
     expect(r).not.toBeNull();
-    expect(r!.start).toEqual(createLocalDate(2026, 6, 3));
-    expect(r!.end.getDate()).toBe(9); // чт 9 июля
-    expect(r!.end.getHours()).toBe(23);
+    expect(r!.start.toISOString()).toBe("2026-07-02T21:00:00.000Z"); // 03.07 00:00 МСК
+    expect(r!.end.toISOString()).toBe("2026-07-09T20:59:59.999Z"); // чт 09.07 23:59:59.999 МСК
   });
   it("нет параметра → null", () => {
     expect(weekRangeFromParams({})).toBeNull();
