@@ -44,6 +44,22 @@ function parseMonth(s: string | undefined): Date | null {
   return m ? createLocalDate(+m[1], +m[2] - 1, 1) : null;
 }
 
+/** Дата попадает в период (границы включительно). `null` период = всё время. */
+export function inPeriod(date: Date, period: Period | null): boolean {
+  return !period || (date >= period.start && date <= period.end);
+}
+
+/**
+ * `week=YYYY-MM-DD` (пятница недели пт–чт) → диапазон [пт 00:00 … чт 23:59:59.999].
+ * Вспомогательный фильтр ЗП (v2 §недели). Нет/невалиден → null.
+ */
+export function weekRangeFromParams(params: Record<string, ParamValue>): Period | null {
+  const friday = parseDay(first(params.week));
+  if (!friday) return null;
+  const thursday = createLocalDate(friday.getFullYear(), friday.getMonth(), friday.getDate() + 6);
+  return { start: friday, end: endOfDay(thursday) };
+}
+
 /**
  * searchParams → охват отчёта. `all=1` → всё время (null). `from`+`to` →
  * произвольный диапазон (границы включительно, конец = конец дня). `month=YYYY-MM`

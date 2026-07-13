@@ -26,6 +26,9 @@ export interface FiltersBarProps extends SectionFilters {
   onArchiveChange?: (checked: boolean) => void;
   dateFilterValue?: DateFilterValue;
   onDateFilterChange?: (value: DateFilterValue) => void;
+  /** Выбранная неделя пт–чт (id = дата пятницы), контролируемо. */
+  weekValue?: string;
+  onWeekChange?: (value: string) => void;
   /** Подпись основной кнопки применения фильтров (по умолчанию «Показать»). */
   actionLabel?: string;
   /** Клик по кнопке применения (например, записать период в URL). */
@@ -44,6 +47,8 @@ export function FiltersBar({
   onArchiveChange,
   dateFilterValue,
   onDateFilterChange,
+  weekValue,
+  onWeekChange,
   actionLabel = "Показать",
   onApply,
 }: FiltersBarProps) {
@@ -57,16 +62,22 @@ export function FiltersBar({
     if (onDateFilterChange) onDateFilterChange(value);
     else setInternalDateFilter(value);
   };
-  const [weekFilter, setWeekFilter] = useState(getDefaultWeekFilterValue);
+  const [internalWeek, setInternalWeek] = useState(getDefaultWeekFilterValue);
+  const weekFilter = weekValue ?? internalWeek;
+  const setWeekFilter = (value: string) => {
+    if (onWeekChange) onWeekChange(value);
+    else setInternalWeek(value);
+  };
   const [internalSearch, setInternalSearch] = useState("");
   const [internalArchive, setInternalArchive] = useState(false);
 
-  // Сброс недели при смене месяца фильтра.
+  // Сброс недели при смене месяца фильтра (для uncontrolled — контролируемую
+  // неделю сбрасывает родитель).
   const monthTime = dateFilter.month.getTime();
   const [prevMonthTime, setPrevMonthTime] = useState(monthTime);
   if (monthTime !== prevMonthTime) {
     setPrevMonthTime(monthTime);
-    setWeekFilter(getDefaultWeekFilterValue());
+    if (weekValue === undefined) setInternalWeek(getDefaultWeekFilterValue());
   }
 
   const query = searchValue ?? internalSearch;

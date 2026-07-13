@@ -14,7 +14,9 @@ import {
   sortSharesToPercents,
   type OperationForCost,
 } from "@/lib/cost-report";
-import { batchWaste, employeeWaste } from "@/lib/waste";
+import { batchWaste, employeeWaste, wasteLengthM, wastePercent } from "@/lib/waste";
+import { inPeriod } from "@/lib/report-period";
+import type { Period } from "@/lib/dates";
 import type { Batch, RailLot } from "@/types/domain";
 import type {
   PurchasePackageLine,
@@ -85,9 +87,14 @@ function toOperationForCost(op: TorcovkaOp): OperationForCost {
  * деталей (операции ТОРЦОВКИ). Без производства факт = заявленному.
  * Работник пакета — последний торцевавший из этого пакета (по дате операции).
  */
-export async function getPurchaseReport(): Promise<PurchaseReportRow[]> {
+export async function getPurchaseReport(
+  period?: Period | null,
+): Promise<PurchaseReportRow[]> {
   const [batches, lots, ops, employees] = await Promise.all([
-    prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
+    prisma.batch.findMany({
+      where: period ? { purchaseDate: { gte: period.start, lte: period.end } } : undefined,
+      orderBy: { purchaseDate: "desc" },
+    }),
     prisma.railLot.findMany(),
     prisma.productionOperation.findMany({
       where: { type: "TORCOVKA" },
@@ -165,7 +172,7 @@ export interface WasteReport {
  * (когда часть пакета списана в отход без производства). Проценты — движок
  * lib/waste, чтобы числа были внутренне согласованы (cost-integrity).
  */
-export async function getWasteReport(): Promise<WasteReport> {
+export async function getWasteReport(period?: Period | null): Promise<WasteReport> {
   const [batches, lots, ops, employees] = await Promise.all([
     prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
     prisma.railLot.findMany(),
@@ -183,36 +190,59 @@ export async function getWasteReport(): Promise<WasteReport> {
     op.lines.reduce((s, l) => s + num(l.blankLengthM) * l.quantity, 0);
   const takenM = (op: TorcovkaOp) =>
     (op.railLotId ? lotLength.get(op.railLotId) ?? 0 : 0) * (op.railsTaken ?? 0);
+  const opInPeriod = (op: TorcovkaOp) => inPeriod(op.workDate, period ?? null);
 
   // --- по партиям ---
-  const batchRows: WasteBatchRow[] = batches.map((b) => {
-    const own = lots.filter((l) => l.batchId === b.id);
-    const purchasedM = own.reduce((s, l) => s + l.quantity * num(l.lengthM), 0);
-    const remainingM = own.reduce((s, l) => s + l.remainingQuantity * num(l.lengthM), 0);
-    const batchOps = ops.filter((o) => o.batchId === b.id);
-    const taken = batchOps.reduce((s, o) => s + takenM(o), 0);
-    const produced = batchOps.reduce((s, o) => s + producedM(o), 0);
-    // Списано = (закуплено − остаток) − взято торцовкой (если пакет ушёл в отход).
-    const writtenOffM = Math.max(0, purchasedM - remainingM - taken);
+  // Склад (закуплено/остаток/списано) — текущий, по всем операциям (стоковый
+  // смысл). Поток (взято/произведено/отход торцовки) — по операциям периода.
+  const batchRows: WasteBatchRow[] = batches
+    .map((b) => {
+      const own = lots.filter((l) => l.batchId === b.id);
+      const purchasedM = own.reduce((s, l) => s + l.quantity * num(l.lengthM), 0);
+      const remainingM = own.reduce((s, l) => s + l.remainingQuantity * num(l.lengthM), 0);
+      const batchOps = ops.filter((o) => o.batchId === b.id);
+      const allTaken = batchOps.reduce((s, o) => s + takenM(o), 0);
+      const allProduced = batchOps.reduce((s, o) => s + producedM(o), 0);
+      // Списано = (закуплено − остаток) − взято торцовкой (стоковый, all-time).
+      const writtenOffM = Math.max(0, purchasedM - remainingM - allTaken);
+      const w = batchWaste({
+        purchasedM,
+        takenM: allTaken,
+        producedM: allProduced,
+        writtenOffM,
+      });
 
-    const w = batchWaste({ purchasedM, takenM: taken, producedM: produced, writtenOffM });
-    return {
-      id: b.id,
-      batchName: b.name,
-      purchasedM: Math.round(purchasedM),
-      takenM: Math.round(taken),
-      remainingM: Math.round(w.remainingM.toNumber()),
-      wasteTorcovkaM: Math.round(w.wasteTorcovkaM.toNumber()),
-      writtenOffM: Math.round(w.writtenOffM.toNumber()),
-      wastePct: Math.round(w.wastePct.toNumber()),
-      status: b.status,
-    };
-  });
+      // Поток периода (== all-time, если период не задан).
+      const periodOps = period ? batchOps.filter(opInPeriod) : batchOps;
+      const taken = periodOps.reduce((s, o) => s + takenM(o), 0);
+      const produced = periodOps.reduce((s, o) => s + producedM(o), 0);
+      const wasteTorc = period ? wasteLengthM(taken, produced) : w.wasteTorcovkaM;
+      // База %: без периода — как раньше (весь отход/израсходовано), с периодом —
+      // отход торцовки к взятому за период.
+      const wastePctVal = period ? wastePercent(wasteTorc, taken) : w.wastePct;
 
-  // --- по работникам (только те, кто торцевал) ---
+      const row: WasteBatchRow = {
+        id: b.id,
+        batchName: b.name,
+        purchasedM: Math.round(purchasedM),
+        takenM: Math.round(taken),
+        remainingM: Math.round(w.remainingM.toNumber()),
+        wasteTorcovkaM: Math.round(wasteTorc.toNumber()),
+        writtenOffM: Math.round(w.writtenOffM.toNumber()),
+        wastePct: Math.round(wastePctVal.toNumber()),
+        status: b.status,
+      };
+      return { row, hasPeriodFlow: taken > 0 };
+    })
+    // В периодном отчёте показываем только партии с торцовкой за период.
+    .filter((x) => !period || x.hasPeriodFlow)
+    .map((x) => x.row);
+
+  // --- по работникам (только те, кто торцевал в периоде) ---
   const empName = new Map(employees.map((e) => [e.id, e.fullName]));
   const byEmp = new Map<string, { taken: number; produced: number }>();
   for (const op of ops) {
+    if (!opInPeriod(op)) continue;
     const acc = byEmp.get(op.employeeId) ?? { taken: 0, produced: 0 };
     acc.taken += takenM(op);
     acc.produced += producedM(op);

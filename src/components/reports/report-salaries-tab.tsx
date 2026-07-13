@@ -257,7 +257,7 @@ function SalaryRowGroup({
               disabled={pending}
               onClick={onPaid}
             >
-              Выплачено
+              Выплатить
             </Button>
           )}
           {paid && row.paidAt && (

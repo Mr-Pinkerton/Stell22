@@ -9,6 +9,7 @@ import { notifyEvent } from "@/server/notifications";
 import { formatMoney } from "@/lib/format";
 import { operationEarning } from "@/lib/payroll";
 import { dayKey } from "@/lib/entries";
+import type { Period } from "@/lib/dates";
 import type { SalaryDayLine, SalaryReportRow } from "@/mocks/report-fixtures";
 
 const PATH = "/reports";
@@ -109,8 +110,12 @@ function aggregate(items: ComputedOp[]): { produced: number; total: number; days
  * Отчёт ЗП: невыплаченные строки по работникам (агрегат неоплаченных
  * операций) + выплаченные строки по факту выплаты (`Payment`). Невыплаченные
  * сверху по сумме ↓, выплаченные ниже по дате выплаты ↓.
+ *
+ * `scope` (период/неделя) ограничивает ТОЛЬКО историю выплаченного (по `paidAt`).
+ * Невыплаченные строки всегда полные — выплата идёт за весь неоплаченный период
+ * (с прошлой выплаты/с начала), поэтому купюры и суммы к выплате не фильтруются.
  */
-export async function getSalaryReport(): Promise<SalaryReportRow[]> {
+export async function getSalaryReport(scope?: Period | null): Promise<SalaryReportRow[]> {
   const maps = await buildRefMaps();
   const ops = await prisma.productionOperation.findMany({ include: { lines: true } });
   const computed = new Map(ops.map((op) => [op.id, computeOp(op, maps)]));
@@ -141,8 +146,9 @@ export async function getSalaryReport(): Promise<SalaryReportRow[]> {
   }
   unpaidRows.sort((a, b) => b.total - a.total);
 
-  // Выплаченные — по фактам выплат.
+  // Выплаченные — по фактам выплат, ограничены периодом/неделей по дате выплаты.
   const payments = await prisma.payment.findMany({
+    where: scope ? { paidAt: { gte: scope.start, lte: scope.end } } : undefined,
     include: { items: true },
     orderBy: { paidAt: "desc" },
   });

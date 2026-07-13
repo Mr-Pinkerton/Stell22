@@ -57,15 +57,24 @@ export function ReportsView({
 
   const router = useRouter();
   const searchParams = useSearchParams();
-  // Фильтр даты инициализируется из URL, чтобы отражать текущий охват отчёта.
+  // Фильтр даты/недели инициализируется из URL, чтобы отражать текущий охват.
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(() =>
     dateFilterFromParams(new URLSearchParams(searchParams.toString())),
   );
+  const [week, setWeek] = useState<string>(() => searchParams.get("week") ?? "");
 
-  // «Показать»/«Применить» → период в URL. Страница (server) перечитает
-  // searchParams и пересоберёт себестоимость за выбранный период (A11/A12).
+  // Смена месяца делает выбранную неделю невалидной — сбрасываем.
+  const handleDateFilterChange = (value: DateFilterValue) => {
+    if (value.month.getTime() !== dateFilter.month.getTime()) setWeek("");
+    setDateFilter(value);
+  };
+
+  // «Показать»/«Применить» → период (и неделя для ЗП) в URL. Страница (server)
+  // перечитает searchParams и пересоберёт отчёты за выбранный охват (A11/A12).
   const applyPeriod = () => {
-    const qs = paramsFromDateFilter(dateFilter).toString();
+    const params = paramsFromDateFilter(dateFilter);
+    if (week) params.set("week", week);
+    const qs = params.toString();
     router.push(qs ? `/reports?${qs}` : "/reports");
   };
 
@@ -215,7 +224,9 @@ export function ReportsView({
           dateAllTime={filters.date}
           weeks={filters.weeks}
           dateFilterValue={dateFilter}
-          onDateFilterChange={setDateFilter}
+          onDateFilterChange={handleDateFilterChange}
+          weekValue={week}
+          onWeekChange={setWeek}
           onApply={applyPeriod}
           actionLabel={activeTab === "purchases" ? "Применить" : "Показать"}
         />
@@ -229,7 +240,11 @@ export function ReportsView({
 
         {activeTab === "purchases" && <ReportPurchasesTab initialRows={purchases} />}
         {activeTab === "cost" && <ReportCostTab details={cost.details} products={cost.products} />}
-        {activeTab === "salaries" && <ReportSalariesTab initialRows={salary} />}
+        {activeTab === "salaries" && (
+          // key от URL: при смене периода/недели таб пересобирает локальный
+          // стейт из свежих серверных данных (иначе useState «залипает»).
+          <ReportSalariesTab key={searchParams.toString()} initialRows={salary} />
+        )}
         {activeTab === "waste" && (
           <ReportWasteTab batches={waste.batches} employees={waste.employees} />
         )}

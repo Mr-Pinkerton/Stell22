@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import { createLocalDate, getMonthPeriod } from "./dates";
 import {
   dateFilterFromParams,
+  inPeriod,
   paramsFromDateFilter,
   periodFromParams,
+  weekRangeFromParams,
 } from "./report-period";
 
 describe("periodFromParams", () => {
@@ -34,6 +36,32 @@ describe("periodFromParams", () => {
   it("массив в параметре → берётся первый", () => {
     const p = periodFromParams({ month: ["2026-03", "2026-09"] });
     expect(p!.start).toEqual(createLocalDate(2026, 2, 1));
+  });
+});
+
+describe("inPeriod", () => {
+  const p = getMonthPeriod(createLocalDate(2026, 6, 1)); // июль 2026
+  it("null период → всегда true", () => {
+    expect(inPeriod(createLocalDate(2020, 0, 1), null)).toBe(true);
+  });
+  it("границы включительно", () => {
+    expect(inPeriod(createLocalDate(2026, 6, 1), p)).toBe(true);
+    expect(inPeriod(new Date(2026, 6, 31, 23, 0), p)).toBe(true);
+    expect(inPeriod(createLocalDate(2026, 5, 30), p)).toBe(false);
+    expect(inPeriod(createLocalDate(2026, 7, 1), p)).toBe(false);
+  });
+});
+
+describe("weekRangeFromParams", () => {
+  it("пятница → диапазон пт–чт (7 дней), конец дня четверга", () => {
+    const r = weekRangeFromParams({ week: "2026-07-03" }); // пт 3 июля
+    expect(r).not.toBeNull();
+    expect(r!.start).toEqual(createLocalDate(2026, 6, 3));
+    expect(r!.end.getDate()).toBe(9); // чт 9 июля
+    expect(r!.end.getHours()).toBe(23);
+  });
+  it("нет параметра → null", () => {
+    expect(weekRangeFromParams({})).toBeNull();
   });
 });
 
