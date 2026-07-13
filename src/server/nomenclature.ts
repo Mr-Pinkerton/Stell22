@@ -133,44 +133,20 @@ function detailData(v: DetailFormValues) {
 }
 
 /**
- * Проверяет номер детали В ПРЕДЕЛАХ материала. Номер задаёт деталь по
- * (длина + присадки); сорт в номер НЕ входит — одна деталь в 1 и 2 сорте имеет
- * общий номер. Один и тот же номер на другом материале допускается. Поэтому:
- *  - тройка (материал, номер, сорт) уникальна;
- *  - все записи с одним номером и материалом обязаны иметь одинаковые длину и присадки.
+ * Валидирует номер детали. Номер — свободная человекочитаемая метка (бейдж/
+ * поиск/экспорт); он НЕ уникален и не участвует в сопоставлении (весь поток идёт
+ * по detailId). Поэтому проверяем только, что номер указан — любой детали можно
+ * присвоить любой номер, в т.ч. совпадающий с другой.
  */
-async function assertDetailNumberFree(values: DetailFormValues, exceptId?: string): Promise<void> {
-  const detailNumber = values.detailNumber;
-  if (!detailNumber || detailNumber <= 0) throw new Error("Укажите номер детали");
-  if (!values.materialId) throw new Error("Укажите материал детали");
-  const materialId = values.materialId;
-
-  const clashSort = await prisma.detail.findFirst({
-    where: { materialId, detailNumber, sort: values.sort, id: exceptId ? { not: exceptId } : undefined },
-    select: { id: true },
-  });
-  if (clashSort) throw new Error(`Номер ${detailNumber} уже занят другой деталью этого сорта и материала`);
-
-  const sibling = await prisma.detail.findFirst({
-    where: { materialId, detailNumber, id: exceptId ? { not: exceptId } : undefined },
-    select: { lengthM: true, prisadkaTorcevaya: true, prisadkaPloskost: true },
-  });
-  if (sibling) {
-    const sameLength = Number(sibling.lengthM) === (values.lengthM ?? 0);
-    const samePrisadka =
-      sibling.prisadkaTorcevaya === values.prisadkaTorcevaya &&
-      sibling.prisadkaPloskost === values.prisadkaPloskost;
-    if (!sameLength || !samePrisadka) {
-      throw new Error(`Номер ${detailNumber} уже закреплён за деталью другой длины/присадки`);
-    }
-  }
+function assertDetailNumberValid(values: DetailFormValues): void {
+  if (!values.detailNumber || values.detailNumber <= 0) throw new Error("Укажите номер детали");
 }
 
 export async function createDetail(values: DetailFormValues): Promise<Detail> {
   if (!values.name.trim()) throw new Error("Название детали обязательно");
   if (!values.materialId) throw new Error("Укажите материал детали");
   if (!values.lengthM || values.lengthM <= 0) throw new Error("Укажите длину детали");
-  await assertDetailNumberFree(values);
+  assertDetailNumberValid(values);
 
   const created = await prisma.detail.create({ data: detailData(values) });
   await writeChangeLog({ entity: "Detail", entityId: created.id, newValues: serializeDetail(created) });
@@ -182,7 +158,7 @@ export async function updateDetail(id: string, values: DetailFormValues): Promis
   if (!values.name.trim()) throw new Error("Название детали обязательно");
   if (!values.materialId) throw new Error("Укажите материал детали");
   if (!values.lengthM || values.lengthM <= 0) throw new Error("Укажите длину детали");
-  await assertDetailNumberFree(values, id);
+  assertDetailNumberValid(values);
 
   const before = await prisma.detail.findUnique({ where: { id } });
   if (!before) throw new Error("Деталь не найдена");
@@ -348,8 +324,9 @@ export interface ProductFormValues {
 
 /**
  * Изделие однородно по материалу: все детали состава обязаны быть того же
- * материала, что и изделие (иначе упаковка не смогла бы однозначно выбрать
- * деталь по номеру — номера повторяются между материалами).
+ * материала, что и изделие. Нужно для себестоимости (блендированная ₽/м считается
+ * по породе) и консистентности справочника — на упаковку не влияет (она берёт
+ * детали по detailId).
  */
 async function assertProductDetailsMaterial(v: ProductFormValues): Promise<void> {
   const detailIds = v.details.map((d) => d.detailId);

@@ -82,7 +82,8 @@ export interface Detail {
   id: string;
   name: string;
   materialId: string;
-  /** Номер детали в пределах материала (длина + присадки). Используется при упаковке. */
+  /** Свободная метка-номер детали (бейдж/поиск/экспорт). НЕ уникальна и не участвует
+   * в сопоставлении — весь поток работает по detailId. */
   detailNumber: number;
   lengthM: number;
   detailType: RailType;

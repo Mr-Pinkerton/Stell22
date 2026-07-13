@@ -238,10 +238,11 @@ model Detail {
   name              String
   materialId        String
   material          Material      @relation(fields: [materialId], references: [id])
-  // Номер задаёт деталь по (длина + присадки) В ПРЕДЕЛАХ материала; сорт в номер
-  // НЕ входит — одна и та же деталь в 1 и 2 сорте имеет один номер (две записи,
-  // общий номер). Уникальность — по тройке (материал, номер, сорт). Один и тот же
-  // номер на другом материале допускается. Используется при упаковке.
+  // Номер — свободная человекочитаемая метка детали (бейдж/поиск/экспорт).
+  // НЕ уникален и НЕ используется для сопоставления: весь поток (торцовка →
+  // присадка → упаковка → склад → себестоимость) работает строго по detailId,
+  // состав изделия хранит ProductDetail.detailId. Любой детали можно присвоить
+  // любой номер, в т.ч. совпадающий с другой деталью.
   detailNumber      Int
   lengthM           Decimal       @db.Decimal(12, 4)
   detailType        RailType
@@ -254,7 +255,8 @@ model Detail {
   productDetails ProductDetail[]
   stocks         DetailStock[]
 
-  @@unique([materialId, detailNumber, sort])
+  // Индекс для поиска/сортировки по номеру (НЕ уникальный).
+  @@index([materialId, detailNumber])
 }
 
 model Product {
