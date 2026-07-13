@@ -6,7 +6,13 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { D } from "@/lib/cost";
-import { batchExtraShare, batchTotalCost, dealDeliveryExtra } from "@/lib/deal-cost";
+import {
+  batchExtraShare,
+  batchTotalCost,
+  dealDeliveryExtra,
+  sumConfirmedExpense,
+  type DealCashFlowLite,
+} from "@/lib/deal-cost";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { is1CStatement, parse1CStatement } from "@/lib/bank-statement-1c";
 import {
@@ -1077,10 +1083,26 @@ export async function unlinkTransfer(
 
 // ============================ СДЕЛКИ → СЕБЕСТОИМОСТЬ =======================
 
+// Операции сделки → lite-вид с флагом подтверждения счёта (для A13).
+type CashFlowWithAccountConfirmed = {
+  flowType: FlowType;
+  amount: Prisma.Decimal;
+  account: { confirmed: boolean };
+};
+function toCfLite(flows: CashFlowWithAccountConfirmed[]): DealCashFlowLite[] {
+  return flows.map((c) => ({
+    flowType: c.flowType,
+    amount: num(c.amount),
+    accountConfirmed: c.account.confirmed,
+  }));
+}
+const CF_WITH_CONFIRMED = { include: { account: { select: { confirmed: true } } } } as const;
+
 /**
  * «Стоимость общая» партии = закупочная + доставка/доп. расходы из её сделок.
  * Доставка сделки = расходные операции ДДС сверх суммы закупочных стоимостей
  * привязанных партий, распределённая по партиям пропорционально закупке.
+ * Учитываются только операции по подтверждённым счетам (A13, карантин импорта).
  * Замороженные партии не трогаем (cost-integrity).
  */
 async function syncBatchTotalCost(batchId: string): Promise<void> {
@@ -1089,14 +1111,14 @@ async function syncBatchTotalCost(batchId: string): Promise<void> {
 
   const items = await prisma.dealItem.findMany({
     where: { batchId },
-    include: { deal: { include: { items: { include: { batch: true } }, cashFlows: true } } },
+    include: {
+      deal: { include: { items: { include: { batch: true } }, cashFlows: CF_WITH_CONFIRMED } },
+    },
   });
 
   let extra = D(0);
   for (const { deal } of items) {
-    const expense = deal.cashFlows
-      .filter((c) => c.flowType === "EXPENSE")
-      .reduce((s, c) => s.plus(D(num(c.amount))), D(0));
+    const expense = sumConfirmedExpense(toCfLite(deal.cashFlows));
     const purchaseTotal = deal.items.reduce(
       (s, i) => s.plus(D(num(i.batch?.purchaseCost ?? null))),
       D(0),
@@ -1116,13 +1138,11 @@ async function syncBatchTotalCost(batchId: string): Promise<void> {
 async function syncDeal(dealId: string): Promise<void> {
   const deal = await prisma.deal.findUnique({
     where: { id: dealId },
-    include: { items: { include: { batch: true } }, cashFlows: true },
+    include: { items: { include: { batch: true } }, cashFlows: CF_WITH_CONFIRMED },
   });
   if (!deal) return;
 
-  const expense = deal.cashFlows
-    .filter((c) => c.flowType === "EXPENSE")
-    .reduce((s, c) => s + num(c.amount), 0);
+  const expense = sumConfirmedExpense(toCfLite(deal.cashFlows)).toNumber();
   const purchaseTotal = deal.items.reduce((s, i) => s + num(i.batch?.purchaseCost ?? null), 0);
   const total = purchaseTotal + Math.max(0, expense - purchaseTotal);
 
@@ -1138,11 +1158,9 @@ async function syncDeal(dealId: string): Promise<void> {
 async function loadDeal(id: string): Promise<FinanceDeal> {
   const d = await prisma.deal.findUniqueOrThrow({
     where: { id },
-    include: { items: { include: { batch: true } }, cashFlows: true },
+    include: { items: { include: { batch: true } }, cashFlows: CF_WITH_CONFIRMED },
   });
-  const expense = d.cashFlows
-    .filter((c) => c.flowType === "EXPENSE")
-    .reduce((s, c) => s + num(c.amount), 0);
+  const expense = sumConfirmedExpense(toCfLite(d.cashFlows)).toNumber();
   return serDeal(d, new Map([[id, expense]]));
 }
 

@@ -1,6 +1,37 @@
 import { describe, expect, it } from "vitest";
 import { Decimal } from "decimal.js";
-import { batchExtraShare, batchTotalCost, dealDeliveryExtra } from "./deal-cost";
+import {
+  batchExtraShare,
+  batchTotalCost,
+  dealDeliveryExtra,
+  sumConfirmedExpense,
+} from "./deal-cost";
+
+describe("sumConfirmedExpense (A13 карантин)", () => {
+  it("считает расходы только по подтверждённым счетам", () => {
+    const sum = sumConfirmedExpense([
+      { flowType: "EXPENSE", amount: 100_000, accountConfirmed: true },
+      { flowType: "EXPENSE", amount: 50_000, accountConfirmed: false }, // карантин
+      { flowType: "INCOME", amount: 999, accountConfirmed: true }, // не расход
+    ]);
+    expect(sum.toNumber()).toBe(100_000);
+  });
+
+  it("неподтверждённый счёт не меняет себестоимость (все в карантине → 0)", () => {
+    const sum = sumConfirmedExpense([
+      { flowType: "EXPENSE", amount: 10_500, accountConfirmed: false },
+    ]);
+    expect(sum.toNumber()).toBe(0);
+  });
+
+  it("сохраняет точность Decimal", () => {
+    const sum = sumConfirmedExpense([
+      { flowType: "EXPENSE", amount: "0.1", accountConfirmed: true },
+      { flowType: "EXPENSE", amount: "0.2", accountConfirmed: true },
+    ]);
+    expect(sum.toNumber()).toBe(0.3);
+  });
+});
 
 describe("dealDeliveryExtra", () => {
   it("доставка = расходы сверх закупки", () => {

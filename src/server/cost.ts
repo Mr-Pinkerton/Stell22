@@ -156,6 +156,7 @@ export interface CostReport {
  * чья категория помечена «Производственные (накладные)» (isOverhead).
  * ЗП производства в накладные НЕ входит — она в сдельных операциях, не в ДДС
  * по накладным статьям (cost-integrity: без двойного счёта).
+ * Только подтверждённые счета (A13): операции из карантина импорта не считаем.
  * `period` ограничивает выборку по дате ДДС; без периода — всё накопленное (A11).
  */
 export async function getPeriodOverhead(
@@ -166,6 +167,9 @@ export async function getPeriodOverhead(
     where: {
       flowType: "EXPENSE",
       article: { category: { isOverhead: true } },
+      // Карантин (A13): накладные с неподтверждённого счёта импорта не считаем —
+      // как и в ДДС/KPI/себестоимости сделок.
+      account: { confirmed: true },
       ...(period ? { date: { gte: period.start, lte: period.end } } : {}),
     },
     select: { amount: true },
