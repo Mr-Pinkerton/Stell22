@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "@/components/terminal/toast";
+import { newRequestId } from "@/lib/request-id";
 import { Boxes, Layers } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { OperationTile, OperationTileGrid, OperationTileRow } from "@/components/terminal/operation-tile";
@@ -39,6 +40,8 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
   const [activeSort, setActiveSort] = useState<Sort>("SORT1");
   const [dialog, setDialog] = useState<Dialog>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Ключ идемпотентности одной попытки внесения (A21): один на двойной тап/реплей.
+  const requestId = useRef(newRequestId());
 
   const batches = data.batches.filter((b) => b.status === "IN_WORK");
   const lots = useMemo(
@@ -100,12 +103,14 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
     try {
       await submitTorcovka({
         employeeId: employee.id,
+        clientRequestId: requestId.current,
         batchId,
         railLotId: lot.id,
         railsTaken,
         picks: torcovkaPicks.map((p) => ({ lengthM: p.lengthM, sort: p.sort, quantity: p.quantity })),
       });
       toast.success(`Торцовка внесена: ${pickedCount} заг., отход ${formatLength(wasteM)}`);
+      requestId.current = newRequestId(); // следующая операция — новый ключ
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");

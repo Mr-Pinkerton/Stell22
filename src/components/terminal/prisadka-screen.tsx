@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { newRequestId } from "@/lib/request-id";
 import { toast } from "@/components/terminal/toast";
 import { Drill } from "lucide-react";
 import { OperationTile, OperationTileGrid } from "@/components/terminal/operation-tile";
@@ -69,6 +70,7 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
   const [picked, setPicked] = useState<Record<string, number>>({});
   const [dialogTile, setDialogTile] = useState<Tile | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const requestId = useRef(newRequestId()); // ключ идемпотентности (A21)
 
   const pickedCount = Object.values(picked).reduce((a, b) => a + b, 0);
   const pickedLines = Object.keys(picked).filter((k) => (picked[k] ?? 0) > 0).length;
@@ -80,8 +82,9 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
       .filter((p) => p.quantity > 0);
     setSubmitting(true);
     try {
-      await submitPrisadka({ employeeId: employee.id, picks });
+      await submitPrisadka({ employeeId: employee.id, clientRequestId: requestId.current, picks });
       toast.success(`Присадка внесена: ${pickedCount} шт`);
+      requestId.current = newRequestId();
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");

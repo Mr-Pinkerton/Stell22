@@ -322,6 +322,11 @@ model ProductionOperation {
   workDate   DateTime // день операции (для статистики/ЗП)
   createdAt  DateTime @default(now()) // время внесения с терминала
 
+  // Идемпотентность терминала (A21): уникальный ключ попытки с клиента. Дубль
+  // (двойной тап/реплей/две вкладки) ловится unique-констрейнтом → операция не
+  // задваивается. NULL — для старых записей и не-терминальных источников.
+  clientRequestId String? @unique
+
   // Торцовка
   batchId      String?
   batch        Batch?   @relation(fields: [batchId], references: [id])

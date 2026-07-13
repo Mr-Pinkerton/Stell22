@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { newRequestId } from "@/lib/request-id";
 import { toast } from "@/components/terminal/toast";
 import { Package } from "lucide-react";
 import { OperationTile, OperationTileGrid } from "@/components/terminal/operation-tile";
@@ -42,6 +43,7 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
   const [picked, setPicked] = useState<Record<string, number>>({});
   const [dialogProduct, setDialogProduct] = useState<Product | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const requestId = useRef(newRequestId()); // ключ идемпотентности (A21)
 
   const dialogMax = dialogProduct ? canAssemble(dialogProduct, data) : 0;
   const pickedCount = Object.values(picked).reduce((a, b) => a + b, 0);
@@ -54,8 +56,9 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
       .map(([productId, quantity]) => ({ productId, quantity }));
     setSubmitting(true);
     try {
-      await submitUpakovka({ employeeId: employee.id, picks });
+      await submitUpakovka({ employeeId: employee.id, clientRequestId: requestId.current, picks });
       toast.success(`Упаковано: ${pickedCount} шт`);
+      requestId.current = newRequestId();
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");

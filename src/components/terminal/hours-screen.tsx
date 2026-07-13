@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { newRequestId } from "@/lib/request-id";
 import { toast } from "@/components/terminal/toast";
 import { Button } from "@/components/ui/button";
 import { KeypadDisplay, KEYPAD_PANEL } from "@/components/terminal/keypad-panel";
@@ -17,6 +18,7 @@ interface HoursScreenProps {
 export function HoursScreen({ employee, onDone }: HoursScreenProps) {
   const [value, setValue] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const requestId = useRef(newRequestId()); // ключ идемпотентности (A21)
   const hours = Number(value || 0);
   const rate = employee.hourlyRate ?? 0;
 
@@ -24,8 +26,9 @@ export function HoursScreen({ employee, onDone }: HoursScreenProps) {
     if (hours <= 0 || submitting) return;
     setSubmitting(true);
     try {
-      await submitHours(employee.id, hours);
+      await submitHours(employee.id, hours, requestId.current);
       toast.success(`Внесено ${hours} ч`);
+      requestId.current = newRequestId();
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");

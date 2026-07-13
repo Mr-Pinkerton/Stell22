@@ -52,6 +52,21 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * Дубль по ключу идемпотентности терминала (A21): unique-конфликт P2002 на
+ * `clientRequestId`. Такой повтор (двойной тап/реплей/две вкладки) считаем
+ * успешно обработанным — операция уже создана первым запросом.
+ */
+function isDuplicateClientRequest(e: unknown): boolean {
+  if (typeof e !== "object" || e === null) return false;
+  const err = e as { code?: string; meta?: { target?: unknown } };
+  if (err.code !== "P2002") return false;
+  const target = err.meta?.target;
+  return Array.isArray(target)
+    ? target.includes("clientRequestId")
+    : String(target ?? "").includes("clientRequestId");
+}
+
 // ============================ СЕРИАЛИЗАЦИЯ =================================
 
 function serEmployee(e: PrismaEmployee): Employee {
@@ -227,6 +242,8 @@ export async function terminalLogout(): Promise<void> {
 
 export interface TorcovkaInput {
   employeeId: string;
+  /** Ключ идемпотентности с клиента (A21): один на попытку операции. */
+  clientRequestId?: string;
   batchId: string;
   railLotId: string;
   railsTaken: number;
@@ -273,6 +290,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
       data: {
         type: "TORCOVKA",
         employeeId,
+        clientRequestId: input.clientRequestId,
         batchId,
         railLotId,
         railsTaken,
@@ -324,6 +342,9 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
     // Остаток дошёл до нуля → партия выработана: архивируем (заморозка — после
     // выплаты всех операций).
     await archiveBatchIfDepleted(tx, batchId);
+  }).catch((e) => {
+    if (isDuplicateClientRequest(e)) return; // A21: повтор уже обработан
+    throw e;
   });
 
   // Произведённые детали меняют распределение стоимости партии по сортам
@@ -341,6 +362,8 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
 
 export interface PrisadkaInput {
   employeeId: string;
+  /** Ключ идемпотентности с клиента (A21). */
+  clientRequestId?: string;
   picks: { detailId: string; kind: "torcev" | "plosk"; quantity: number }[];
 }
 
@@ -554,20 +577,30 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
   await requireTerminalEmployee(employeeId); // A14: подтверждаем сессию терминала
   if (picks.length === 0) throw new Error("Не выбраны детали");
 
-  await prisma.$transaction(async (tx) => {
-    const op = await tx.productionOperation.create({
-      data: { type: "PRISADKA", employeeId, workDate: new Date() },
+  await prisma
+    .$transaction(async (tx) => {
+      const op = await tx.productionOperation.create({
+        data: {
+          type: "PRISADKA",
+          employeeId,
+          clientRequestId: input.clientRequestId,
+          workDate: new Date(),
+        },
+      });
+
+      for (const pick of picks) {
+        await applyPrisadkaPick(tx, op.id, pick.detailId, pick.kind, pick.quantity);
+      }
+
+      await writeChangeLog(
+        { entity: "ProductionOperation", entityId: op.id, newValues: { type: "PRISADKA", picks } },
+        tx,
+      );
+    })
+    .catch((e) => {
+      if (isDuplicateClientRequest(e)) return; // A21: повтор уже обработан
+      throw e;
     });
-
-    for (const pick of picks) {
-      await applyPrisadkaPick(tx, op.id, pick.detailId, pick.kind, pick.quantity);
-    }
-
-    await writeChangeLog(
-      { entity: "ProductionOperation", entityId: op.id, newValues: { type: "PRISADKA", picks } },
-      tx,
-    );
-  });
 
   revalidatePath("/production");
   revalidatePath("/terminal");
@@ -577,6 +610,8 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
 
 export interface UpakovkaInput {
   employeeId: string;
+  /** Ключ идемпотентности с клиента (A21). */
+  clientRequestId?: string;
   picks: { productId: string; quantity: number }[];
 }
 
@@ -804,28 +839,37 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
   await requireTerminalEmployee(employeeId); // A14: подтверждаем сессию терминала
   if (picks.length === 0) throw new Error("Не выбраны изделия");
 
-  await prisma.$transaction(async (tx) => {
-    for (const pick of picks) {
-      const op = await tx.productionOperation.create({
-        data: {
-          type: "UPAKOVKA",
-          employeeId,
-          workDate: new Date(),
-          productId: pick.productId,
-          productQty: pick.quantity,
-        },
-      });
-      await applyUpakovkaPick(tx, op.id, pick.productId, pick.quantity);
-      await writeChangeLog(
-        {
-          entity: "ProductionOperation",
-          entityId: op.id,
-          newValues: { type: "UPAKOVKA", productId: pick.productId, quantity: pick.quantity },
-        },
-        tx,
-      );
-    }
-  });
+  await prisma
+    .$transaction(async (tx) => {
+      for (const pick of picks) {
+        const op = await tx.productionOperation.create({
+          data: {
+            type: "UPAKOVKA",
+            employeeId,
+            // Одна операция на изделие → ключ на попытку уточняем изделием (A21).
+            clientRequestId: input.clientRequestId
+              ? `${input.clientRequestId}:${pick.productId}`
+              : undefined,
+            workDate: new Date(),
+            productId: pick.productId,
+            productQty: pick.quantity,
+          },
+        });
+        await applyUpakovkaPick(tx, op.id, pick.productId, pick.quantity);
+        await writeChangeLog(
+          {
+            entity: "ProductionOperation",
+            entityId: op.id,
+            newValues: { type: "UPAKOVKA", productId: pick.productId, quantity: pick.quantity },
+          },
+          tx,
+        );
+      }
+    })
+    .catch((e) => {
+      if (isDuplicateClientRequest(e)) return; // A21: повтор уже обработан
+      throw e;
+    });
 
   revalidatePath("/production");
   revalidatePath("/terminal");
@@ -835,14 +879,24 @@ export { applyPrisadkaPick, applyUpakovkaPick };
 
 // ============================ РАБОЧИЕ ЧАСЫ =================================
 
-export async function submitHours(employeeId: string, hours: number): Promise<void> {
+export async function submitHours(
+  employeeId: string,
+  hours: number,
+  clientRequestId?: string,
+): Promise<void> {
   if (!employeeId) throw new Error("Не выбран работник");
   await requireTerminalEmployee(employeeId); // A14: подтверждаем сессию терминала
   if (!(hours > 0)) throw new Error("Укажите количество часов");
 
-  const op = await prisma.productionOperation.create({
-    data: { type: "HOURS", employeeId, hours, workDate: new Date() },
-  });
+  let op: { id: string } | null = null;
+  try {
+    op = await prisma.productionOperation.create({
+      data: { type: "HOURS", employeeId, clientRequestId, hours, workDate: new Date() },
+    });
+  } catch (e) {
+    if (isDuplicateClientRequest(e)) return; // A21: повтор уже обработан
+    throw e;
+  }
   await writeChangeLog({
     entity: "ProductionOperation",
     entityId: op.id,
