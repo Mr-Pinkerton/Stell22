@@ -12,6 +12,7 @@ import {
   type DetailStockRow as RawStockRow,
 } from "@/lib/detail-stock";
 import { formatProductSku } from "@/lib/format";
+import { getUnitCostSnapshot, type UnitCostSnapshot } from "@/server/cost";
 import type { Detail } from "@/types/domain";
 import type { ProductionStockRow, DetailStockRow } from "@/lib/warehouse-stock";
 import type {
@@ -154,13 +155,26 @@ export async function getWarehouseStock(): Promise<WarehouseStock> {
 
 type InventoryWithLines = Prisma.InventoryGetPayload<{ include: { lines: true } }>;
 
-async function serializeDoc(doc: InventoryWithLines): Promise<InventoryDocRow> {
-  // Имена и условная себестоимость единицы (для крепежа/упаковки — цена;
-  // для деталей/изделий точная себестоимость появится с движком, Этап 9).
+/** Себестоимость единицы позиции инвентаризации из снапшота оценки (A10). */
+function unitCostFromSnapshot(
+  valuation: UnitCostSnapshot,
+  refType: string,
+  refId: string,
+): number {
+  if (refType === "PRODUCT") return valuation.productFull.get(refId) ?? 0;
+  if (refType === "NOMENCLATURE") return valuation.nomenclatureUnit.get(refId) ?? 0;
+  return valuation.detailUnit.get(refId) ?? 0; // DETAIL: материал + работа
+}
+
+async function serializeDoc(
+  doc: InventoryWithLines,
+  valuation: UnitCostSnapshot,
+): Promise<InventoryDocRow> {
+  // Себестоимость единицы — из движка (A10): изделие=полная, деталь=материал+работа,
+  // крепёж/упаковка=цена номенклатуры. UI считает сумму отклонения = откл × unitCost.
   const lines: InventoryLineRow[] = await Promise.all(
     doc.lines.map(async (l) => {
       let name = l.refId;
-      let unitCost = 0;
       if (l.refType === "PRODUCT") {
         const p = await prisma.product.findUnique({ where: { id: l.refId } });
         name = p?.name ?? l.refId;
@@ -170,7 +184,6 @@ async function serializeDoc(doc: InventoryWithLines): Promise<InventoryDocRow> {
       } else {
         const n = await prisma.nomenclatureItem.findUnique({ where: { id: l.refId } });
         name = n?.name ?? l.refId;
-        unitCost = num(n?.unitPrice ?? 0);
       }
       return {
         id: l.id,
@@ -179,7 +192,7 @@ async function serializeDoc(doc: InventoryWithLines): Promise<InventoryDocRow> {
         name,
         accountedQty: l.accountedQty,
         actualQty: l.actualQty,
-        unitCost,
+        unitCost: unitCostFromSnapshot(valuation, l.refType, l.refId),
       };
     }),
   );
@@ -193,11 +206,11 @@ async function serializeDoc(doc: InventoryWithLines): Promise<InventoryDocRow> {
 }
 
 export async function getInventoryDocs(): Promise<InventoryDocRow[]> {
-  const docs = await prisma.inventory.findMany({
-    include: { lines: true },
-    orderBy: { date: "desc" },
-  });
-  return Promise.all(docs.map(serializeDoc));
+  const [docs, valuation] = await Promise.all([
+    prisma.inventory.findMany({ include: { lines: true }, orderBy: { date: "desc" } }),
+    getUnitCostSnapshot(),
+  ]);
+  return Promise.all(docs.map((d) => serializeDoc(d, valuation)));
 }
 
 /**
@@ -261,7 +274,7 @@ export async function createInventoryDraft(includeAllActive = false): Promise<In
     newValues: { status: "DRAFT", lines: lines.length },
   });
   revalidatePath(PATH);
-  return serializeDoc(doc);
+  return serializeDoc(doc, await getUnitCostSnapshot());
 }
 
 export async function updateInventoryLineActual(
@@ -296,9 +309,17 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
   if (!doc) throw new Error("Инвентаризация не найдена");
   if (doc.status !== "DRAFT") throw new Error("Инвентаризация уже проведена");
 
+  // Оценка отклонения по себестоимости на момент проведения (A10, «Потеря ГП»).
+  // Недостача (deviation<0) → отрицательный deviationSum = убыток; в отход партий
+  // НЕ попадает (сырьё здесь не участвует). Излишек — положит. справочно.
+  const valuation = await getUnitCostSnapshot();
+
   const updated = await prisma.$transaction(async (tx) => {
     for (const line of doc.lines) {
       const deviation = line.actualQty - line.accountedQty;
+      const deviationSum =
+        Math.round(deviation * unitCostFromSnapshot(valuation, line.refType, line.refId) * 100) /
+        100;
 
       if (line.refType === "PRODUCT") {
         await tx.productStock.upsert({
@@ -367,7 +388,7 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
 
       await tx.inventoryLine.update({
         where: { id: line.id },
-        data: { deviation },
+        data: { deviation, deviationSum },
       });
     }
 
@@ -390,5 +411,5 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
   });
 
   revalidatePath(PATH);
-  return serializeDoc(updated);
+  return serializeDoc(updated, valuation);
 }

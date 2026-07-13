@@ -13,9 +13,11 @@ import { writeChangeLog } from "@/server/change-log";
 import { notifyEvent } from "@/server/notifications";
 import { D, distributeBatchCost, sectionAreaM2 } from "@/lib/cost";
 import {
+  blendedCostPerMeterByMaterial,
   buildBatchSnapshots,
   buildCostDetailRows,
   buildCostProductRows,
+  detailWorkCost,
   producedLinesFromOperations,
   producedProductQtyFromOperations,
   type AvgRates,
@@ -183,9 +185,26 @@ export async function getPeriodOverhead(
  * производству (снапшоты на `fullLines`), иначе отход исказит цену заготовки.
  * `period = null` → отчёт за всё время; по умолчанию — текущий календарный месяц.
  */
-export async function getCostReport(
-  period: Period | null = getMonthPeriod(),
-): Promise<CostReport> {
+/**
+ * Единый контекст расчёта себестоимости (общий для отчёта и оценки склада) —
+ * один путь загрузки/снапшотов/ставок, чтобы формулы не расходились (A15).
+ */
+interface CostContext {
+  domainBatches: Batch[];
+  domainDetails: Detail[];
+  domainEmployees: Employee[];
+  products: Product[];
+  nomenclature: NomenclatureItem[];
+  snapshots: ReturnType<typeof buildBatchSnapshots>;
+  frozen: Map<string, FrozenBatchCost>;
+  actualRates: AvgRates;
+  periodLines: ProducedLine[];
+  fullLines: ProducedLine[];
+  producedProductQty: Record<string, number>;
+  periodOverhead: Decimal;
+}
+
+async function loadCostContext(period: Period | null): Promise<CostContext> {
   const [batches, details, employees, items, products, ops, periodOverhead, finalCosts] =
     await Promise.all([
       prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
@@ -283,28 +302,89 @@ export async function getCostReport(
   const snapshots = buildBatchSnapshots({ batches: domainBatches, lines: fullLines, frozen });
 
   return {
-    details: buildCostDetailRows({
-      batches: domainBatches,
-      employees: domainEmployees,
-      lines: periodLines, // охват периода
-      frozen,
-      rates: actualRates,
-      snapshots, // оценка по полному производству
-    }),
-    products: buildCostProductRows({
-      products: products.map(serProduct),
-      batches: domainBatches,
-      details: domainDetails,
-      employees: domainEmployees,
-      nomenclature: items.map(serItem),
-      lines: fullLines,
-      producedProductQty, // охват периода
-      periodOverhead, // накладные периода
-      frozen,
-      rates: actualRates,
-      snapshots,
-    }),
+    domainBatches,
+    domainDetails,
+    domainEmployees,
+    products: products.map(serProduct),
+    nomenclature: items.map(serItem),
+    snapshots,
+    frozen,
+    actualRates,
+    periodLines,
+    fullLines,
+    producedProductQty,
+    periodOverhead,
   };
+}
+
+/** Строки таба «Изделия» из контекста (общий вызов для отчёта и оценки). */
+function productRowsFromContext(ctx: CostContext): CostProductRow[] {
+  return buildCostProductRows({
+    products: ctx.products,
+    batches: ctx.domainBatches,
+    details: ctx.domainDetails,
+    employees: ctx.domainEmployees,
+    nomenclature: ctx.nomenclature,
+    lines: ctx.fullLines,
+    producedProductQty: ctx.producedProductQty,
+    periodOverhead: ctx.periodOverhead,
+    frozen: ctx.frozen,
+    rates: ctx.actualRates,
+    snapshots: ctx.snapshots,
+  });
+}
+
+export async function getCostReport(
+  period: Period | null = getMonthPeriod(),
+): Promise<CostReport> {
+  const ctx = await loadCostContext(period);
+  return {
+    details: buildCostDetailRows({
+      batches: ctx.domainBatches,
+      employees: ctx.domainEmployees,
+      lines: ctx.periodLines, // охват периода
+      frozen: ctx.frozen,
+      rates: ctx.actualRates,
+      snapshots: ctx.snapshots, // оценка по полному производству
+    }),
+    products: productRowsFromContext(ctx),
+  };
+}
+
+/**
+ * Себестоимость единицы для оценки склада/инвентаризации (A10, «Потеря ГП»).
+ *  - product: полная себестоимость (материал+работа+доп+накладные);
+ *  - detail: материал (WAC ₽/м по породе×сорту × длина) + работа (факт. ставки);
+ *  - nomenclature: цена номенклатуры.
+ * Значения — снапшот на момент вызова (себестоимость не заморожена, PRELIMINARY).
+ */
+export interface UnitCostSnapshot {
+  productFull: Map<string, number>;
+  detailUnit: Map<string, number>;
+  nomenclatureUnit: Map<string, number>;
+}
+
+export async function getUnitCostSnapshot(
+  period: Period | null = getMonthPeriod(),
+): Promise<UnitCostSnapshot> {
+  const ctx = await loadCostContext(period);
+
+  const productFull = new Map(productRowsFromContext(ctx).map((r) => [r.id, r.full]));
+
+  const batchMaterial = new Map(ctx.domainBatches.map((b) => [b.id, b.materialId]));
+  const perMeterByMaterial = blendedCostPerMeterByMaterial(ctx.snapshots, batchMaterial);
+  const detailUnit = new Map<string, number>();
+  for (const d of ctx.domainDetails) {
+    const pm = perMeterByMaterial.get(d.materialId);
+    const perM = pm ? (d.sort === "SORT1" ? pm.sort1 : pm.sort2) : D(0);
+    const material = perM.times(D(d.lengthM));
+    const work = detailWorkCost(d, ctx.actualRates);
+    detailUnit.set(d.id, material.plus(work).toDecimalPlaces(2).toNumber());
+  }
+
+  const nomenclatureUnit = new Map(ctx.nomenclature.map((n) => [n.id, n.unitPrice]));
+
+  return { productFull, detailUnit, nomenclatureUnit };
 }
 
 // ============================ СНАПШОТЫ ПАРТИЙ ===============================
