@@ -117,6 +117,7 @@ export function DashboardView({ source }: { source: DashboardSource }) {
         revenue={revenueChart}
         expense={expenseChart}
         waste={wasteChart}
+        wasteThreshold={source.wasteThresholdPct}
       />
 
       <DashboardGoalsBlock goals={goals} />

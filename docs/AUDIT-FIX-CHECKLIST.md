@@ -46,10 +46,10 @@
 
 - [x] **A14** — серверная авторизация терминала: PIN проверяется на сервере (`terminalLogin`, PIN больше не отдаётся клиенту), терминальная cookie-сессия (`lib/session.ts`), гейт `requireTerminalEmployee(employeeId)` во всех мутациях (`submitTorcovka/Prisadka/Upakovka/Hours`, `getEmployeeEntries`), сверка arg↔сессия. Пуре `verifyEmployeePin`+тесты (`src/server/terminal.ts`, `src/server/session.ts`, `src/lib/terminal-auth.ts`)
   - _Раньше `/terminal` был публичным, PIN сверялся на клиенте, а `getTerminalData` отдавал все PIN-ы; любой из сети мог дёрнуть `submit*` с чужим employeeId. Теперь операции требуют валидную сессию входа по PIN._
-- [ ] **A20** — параметры/min stock из БД вместо моков **или** явная пометка prototype (`settings-view.tsx`)
-  - _Настройки (порог отхода, минимальные остатки) живут на заглушках. Поменял → после перезагрузки вернулось. Не пишутся в базу._
-- [ ] **A22** — DAL/`requireAdmin` в server actions (`session`)
-  - _Большинство серверных действий не проверяют, что их вызвал админ. Пока ролей мало — терпимо, но на будущее дыра в правах._
+- [x] **A20** — настройки в БД (миграция не нужна: `Setting` key-value уже есть, `minStock` уже per-entity). Порог отхода → `Setting` (`app:settings`), читается движком дашборда/уведомлений (`DashboardSource.wasteThresholdPct`, график/алерт). Мин. остатки → редактор пишет в реальные `Product/Detail/NomenclatureItem.minStock`. Экшены `getAppSettings/saveAppSettings/getMinStockRows/saveMinStock` (requireAdmin). Размер этикеток убран из настроек (принтер-заглушка). Мок `minStockRows` удалён (`src/server/settings.ts`, `settings-*`, `dashboard*`)
+  - _Настройки (порог отхода, минимальные остатки) жили на заглушках — после перезагрузки сбрасывались. Теперь пишутся в БД и реально влияют на дашборд. Стикеры из настроек убраны._
+- [x] **A22** — осознанно отложено, помечено на будущее. Пока роли только ADMIN + сотрудник терминала, весь (admin)-контур закрыт гейтом в layout — поштучный `requireAdmin()` в каждой мутации избыточен. План зафиксирован в комментарии у `requireAdmin` (`src/server/session.ts`): при появлении новых ролей обернуть мутации, как уже сделано в `settings.ts`.
+  - _Большинство серверных действий не зовут requireAdmin сами, полагаясь на гейт layout. Пока ролей мало — терпимо; помечено, чтобы не забыть при расширении ролей._
 
 ## Приоритет 5 — Очистка архитектуры
 

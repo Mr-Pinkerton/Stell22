@@ -2,8 +2,6 @@
 
 import { useState } from "react";
 import {
-  defaultAppSettings,
-  minStockRows as mockMinStockRows,
   type AppSettings,
   type MinStockRow,
   type SystemLogRow,
@@ -26,13 +24,17 @@ const TABS: { key: SettingsTab; label: string }[] = [
 export function SettingsView({
   logs,
   apiCredentials,
+  appSettings,
+  minStock: initialMinStock,
 }: {
   logs: SystemLogRow[];
   apiCredentials: ApiCredentialValues;
+  appSettings: AppSettings;
+  minStock: MinStockRow[];
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("params");
-  const [settings, setSettings] = useState<AppSettings>(defaultAppSettings);
-  const [minStock, setMinStock] = useState<MinStockRow[]>(mockMinStockRows);
+  const [settings, setSettings] = useState<AppSettings>(appSettings);
+  const [minStock, setMinStock] = useState<MinStockRow[]>(initialMinStock);
 
   return (
     <>

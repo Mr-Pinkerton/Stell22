@@ -1,7 +1,5 @@
 export interface AppSettings {
   wasteThresholdPct: number;
-  labelWidthMm: number;
-  labelHeightMm: number;
 }
 
 export type LogLevel = "INFO" | "WARN" | "ERROR";
@@ -28,8 +26,6 @@ export interface MinStockRow {
 
 export const defaultAppSettings: AppSettings = {
   wasteThresholdPct: 30,
-  labelWidthMm: 58,
-  labelHeightMm: 40,
 };
 
 export const systemLogRows: SystemLogRow[] = [
@@ -73,15 +69,6 @@ export const systemLogRows: SystemLogRow[] = [
     message: "Инвентаризация inv-1 проведена",
     kind: "audit",
   },
-];
-
-export const minStockRows: MinStockRow[] = [
-  { id: "ms-prod-1", kind: "PRODUCT", name: "Полка настенная", minStock: 10 },
-  { id: "ms-prod-2", kind: "PRODUCT", name: "Полка угловая", minStock: 8 },
-  { id: "ms-det-1", kind: "DETAIL", name: "Полка 600", minStock: 50 },
-  { id: "ms-nom-1", kind: "NOMENCLATURE", name: "Саморез 4x40", minStock: 500 },
-  { id: "ms-nom-2", kind: "NOMENCLATURE", name: "Коробка стандарт", minStock: 50 },
-  { id: "ms-nom-5", kind: "NOMENCLATURE", name: "Шуруп 3×25", minStock: 300 },
 ];
 
 export const MIN_STOCK_KIND_LABEL: Record<MinStockKind, string> = {

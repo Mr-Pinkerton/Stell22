@@ -6,6 +6,7 @@ import { getSalaryReport } from "@/server/payroll";
 import { getWasteReport, type WasteReport } from "@/server/reports";
 import { getGoalsData } from "@/server/goals";
 import { getPurchasesData } from "@/server/purchases";
+import { getAppSettings } from "@/server/settings";
 import type {
   FinanceAccount,
   FinanceArticle,
@@ -37,6 +38,8 @@ export interface DashboardSource {
   goals: GoalRow[];
   batchCostMismatchIds: string[];
   lowStockName: string | null;
+  /** Порог отхода из настроек (A20) — для алерта и графика. */
+  wasteThresholdPct: number;
 }
 
 function num(value: { toNumber: () => number } | number | null): number {
@@ -45,7 +48,7 @@ function num(value: { toNumber: () => number } | number | null): number {
 }
 
 export async function getDashboardData(): Promise<DashboardSource> {
-  const [finance, salary, waste, goalsData, purchases, ops, lots, nomStock, nomItems] =
+  const [finance, salary, waste, goalsData, purchases, ops, lots, nomStock, nomItems, appSettings] =
     await Promise.all([
       getFinanceData(),
       getSalaryReport(),
@@ -59,6 +62,7 @@ export async function getDashboardData(): Promise<DashboardSource> {
       prisma.railLot.findMany({ select: { id: true, lengthM: true } }),
       prisma.nomenclatureStock.findMany(),
       prisma.nomenclatureItem.findMany({ where: { minStock: { not: null } } }),
+      getAppSettings(),
     ]);
 
   const lotLength = new Map(lots.map((l) => [l.id, num(l.lengthM)]));
@@ -97,5 +101,6 @@ export async function getDashboardData(): Promise<DashboardSource> {
     goals: goalsData.goals,
     batchCostMismatchIds: purchases.rows.filter((r) => r.costMismatch).map((r) => r.id),
     lowStockName: low?.name ?? null,
+    wasteThresholdPct: appSettings.wasteThresholdPct,
   };
 }

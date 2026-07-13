@@ -1,14 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import {
-  defaultAppSettings,
-  minStockRows as mockMinStockRows,
   MIN_STOCK_KIND_LABEL,
   type AppSettings,
   type MinStockRow,
 } from "@/mocks/settings-fixtures";
+import { saveAppSettings, saveMinStock } from "@/server/settings";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,58 +18,57 @@ const fieldClass =
   "border-border bg-card hover:border-[#98a2b3] focus-visible:border-ring focus-visible:bg-card h-10 rounded-xl border px-4";
 
 interface SettingsParamsTabProps {
-  settings?: AppSettings;
-  onSettingsChange?: (settings: AppSettings) => void;
-  minStock?: MinStockRow[];
-  onMinStockChange?: (rows: MinStockRow[]) => void;
+  settings: AppSettings;
+  onSettingsChange: (settings: AppSettings) => void;
+  minStock: MinStockRow[];
+  onMinStockChange: (rows: MinStockRow[]) => void;
 }
 
 export function SettingsParamsTab({
-  settings: settingsProp,
+  settings,
   onSettingsChange,
-  minStock: minStockProp,
+  minStock,
   onMinStockChange,
 }: SettingsParamsTabProps) {
-  const [internalSettings, setInternalSettings] = useState(defaultAppSettings);
-  const [internalMinStock, setInternalMinStock] = useState(mockMinStockRows);
-
-  const settings = settingsProp ?? internalSettings;
-  const setSettings = onSettingsChange ?? setInternalSettings;
-  const minStock = minStockProp ?? internalMinStock;
-  const setMinStock = onMinStockChange ?? setInternalMinStock;
-
   const [wasteRaw, setWasteRaw] = useState(String(settings.wasteThresholdPct));
-  const [labelW, setLabelW] = useState(String(settings.labelWidthMm));
-  const [labelH, setLabelH] = useState(String(settings.labelHeightMm));
+  const [savingGeneral, startSaveGeneral] = useTransition();
+  const [savingStock, startSaveStock] = useTransition();
 
-  // Синхронизируем поля ввода при внешней смене настроек (без set-state-in-effect).
-  const settingsKey = `${settings.wasteThresholdPct}|${settings.labelWidthMm}|${settings.labelHeightMm}`;
-  const [prevSettingsKey, setPrevSettingsKey] = useState(settingsKey);
-  if (settingsKey !== prevSettingsKey) {
-    setPrevSettingsKey(settingsKey);
+  // Синхронизируем поле ввода при внешней смене настроек (без set-state-in-effect).
+  const [prevWaste, setPrevWaste] = useState(settings.wasteThresholdPct);
+  if (settings.wasteThresholdPct !== prevWaste) {
+    setPrevWaste(settings.wasteThresholdPct);
     setWasteRaw(String(settings.wasteThresholdPct));
-    setLabelW(String(settings.labelWidthMm));
-    setLabelH(String(settings.labelHeightMm));
   }
 
   const saveGeneral = () => {
     const waste = Number(wasteRaw);
-    const width = Number(labelW);
-    const height = Number(labelH);
     if (!Number.isFinite(waste) || waste <= 0) {
       toast.error("Укажите корректный порог отхода");
       return;
     }
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-      toast.error("Укажите корректный размер этикетки");
-      return;
-    }
-    setSettings({
-      wasteThresholdPct: waste,
-      labelWidthMm: width,
-      labelHeightMm: height,
+    startSaveGeneral(async () => {
+      try {
+        await saveAppSettings({ wasteThresholdPct: waste });
+        onSettingsChange({ wasteThresholdPct: waste });
+        toast.success("Параметры сохранены");
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Не удалось сохранить");
+      }
     });
-    toast.success("Параметры сохранены (прототип)");
+  };
+
+  const saveStock = () => {
+    startSaveStock(async () => {
+      try {
+        await saveMinStock(
+          minStock.map((r) => ({ kind: r.kind, id: r.id, minStock: r.minStock })),
+        );
+        toast.success("Минимальные остатки сохранены");
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Не удалось сохранить");
+      }
+    });
   };
 
   const minStockColumns: Column<MinStockRow>[] = [
@@ -97,7 +95,7 @@ export function SettingsParamsTab({
           onChange={(e) => {
             const v = Number(e.target.value);
             if (!Number.isFinite(v) || v < 0) return;
-            setMinStock(
+            onMinStockChange(
               minStock.map((r) => (r.id === row.id ? { ...r, minStock: v } : r)),
             );
           }}
@@ -124,31 +122,15 @@ export function SettingsParamsTab({
                 className={fieldClass}
               />
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="label-w">Этикетка, ширина (мм)</Label>
-              <Input
-                id="label-w"
-                type="number"
-                min={1}
-                value={labelW}
-                onChange={(e) => setLabelW(e.target.value)}
-                className={fieldClass}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="label-h">Этикетка, высота (мм)</Label>
-              <Input
-                id="label-h"
-                type="number"
-                min={1}
-                value={labelH}
-                onChange={(e) => setLabelH(e.target.value)}
-                className={fieldClass}
-              />
-            </div>
           </div>
           <div className="flex justify-end">
-            <Button type="button" variant="brand" className="h-10 rounded-xl px-5" onClick={saveGeneral}>
+            <Button
+              type="button"
+              variant="brand"
+              className="h-10 rounded-xl px-5"
+              onClick={saveGeneral}
+              disabled={savingGeneral}
+            >
               Сохранить
             </Button>
           </div>
@@ -156,7 +138,18 @@ export function SettingsParamsTab({
       </Card>
 
       <section className="space-y-3">
-        <h2 className="font-semibold">Минимальные остатки на складе</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold">Минимальные остатки на складе</h2>
+          <Button
+            type="button"
+            variant="brand"
+            className="h-10 rounded-xl px-5"
+            onClick={saveStock}
+            disabled={savingStock}
+          >
+            Сохранить
+          </Button>
+        </div>
         <Card className="surface-card ring-0">
           <CardContent className="p-0">
             <DataTable columns={minStockColumns} rows={minStock} padded className="border-0" />

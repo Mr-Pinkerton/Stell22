@@ -170,11 +170,13 @@ export function DashboardChartsRow({
   revenue,
   expense,
   waste,
+  wasteThreshold = defaultAppSettings.wasteThresholdPct,
 }: {
   production: DashboardWeekBar[];
   revenue: DashboardRevenueWeek[];
   expense: ExpenseChartSlice[];
   waste: DashboardWasteDay[];
+  wasteThreshold?: number;
 }) {
   return (
     <>
@@ -229,9 +231,9 @@ export function DashboardChartsRow({
             <CardTitle className="text-base">Процент отхода по дням</CardTitle>
           </CardHeader>
           <CardContent>
-            <WasteLineChart data={waste} />
+            <WasteLineChart data={waste} threshold={wasteThreshold} />
             <p className="text-muted-foreground mt-2 text-xs">
-              Порог {defaultAppSettings.wasteThresholdPct}% — пунктир
+              Порог {wasteThreshold}% — пунктир
             </p>
           </CardContent>
         </Card>

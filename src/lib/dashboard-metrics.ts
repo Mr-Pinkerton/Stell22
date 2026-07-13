@@ -14,7 +14,6 @@ import {
   type FinanceCashFlowRow,
 } from "@/mocks/finance-fixtures";
 import { isAccountConfirmed } from "@/lib/account-balance";
-import { defaultAppSettings } from "@/mocks/settings-fixtures";
 import { formatMoney } from "@/lib/format";
 import type { DashboardSource, ProductionEntry } from "@/server/dashboard";
 
@@ -168,7 +167,7 @@ export function buildDashboardAlerts(source: DashboardSource): DashboardAlert[] 
   }
 
   const highWaste = source.waste.batches.find(
-    (b) => b.wastePct > defaultAppSettings.wasteThresholdPct,
+    (b) => b.wastePct > source.wasteThresholdPct,
   );
   if (highWaste) {
     alerts.push({
