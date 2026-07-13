@@ -247,6 +247,33 @@ describe("blendedCostPerMeterByMaterial", () => {
   });
 });
 
+describe("детали строго по партии, без блендинга (A1)", () => {
+  // Две партии ОДНОГО материала, но разная ₽/м (1000₽ vs 2000₽ на те же 100 м).
+  // Блендинг дал бы 15 обеим; правильный расчёт деталей — по своей партии.
+  const bCheap: Batch = { ...batch, id: "bCheap", name: "Дешёвая", totalCost: 1000, priceSort1: 1, priceSort2: 0 };
+  const bPricey: Batch = { ...batch, id: "bPricey", name: "Дорогая", totalCost: 2000, priceSort1: 1, priceSort2: 0 };
+  const twoLines: ProducedLine[] = [
+    { batchId: "bCheap", lengthM: 1, sort: "SORT1", quantity: 100 },
+    { batchId: "bPricey", lengthM: 1, sort: "SORT1", quantity: 100 },
+  ];
+
+  it("у деталей материал = своя партия (10 vs 20), не средняя 15", () => {
+    const rows = buildCostDetailRows({ batches: [bCheap, bPricey], employees, lines: twoLines });
+    const cheap = rows.find((r) => r.id.startsWith("bCheap"))!;
+    const pricey = rows.find((r) => r.id.startsWith("bPricey"))!;
+    expect(cheap.materialCost).toBeCloseTo(10, 6);
+    expect(pricey.materialCost).toBeCloseTo(20, 6);
+    // блендинг схлопнул бы обе в 15 — убеждаемся, что этого нет
+    expect(cheap.materialCost).not.toBeCloseTo(pricey.materialCost, 6);
+  });
+
+  it("одна партия: деталь = её собственная ₽/м, без усреднения", () => {
+    const rows = buildCostDetailRows({ batches: [bCheap], employees, lines: [twoLines[0]!] });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.materialCost).toBeCloseTo(10, 6);
+  });
+});
+
 describe("buildCostProductRows", () => {
   const products: Product[] = [
     {

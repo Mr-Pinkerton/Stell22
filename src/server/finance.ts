@@ -15,6 +15,7 @@ import {
 } from "@/lib/deal-cost";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { is1CStatement, parse1CStatement } from "@/lib/bank-statement-1c";
+import { statementImportKey } from "@/lib/statement-import";
 import {
   computeAccountBalance,
   computeAccountBalances,
@@ -1282,23 +1283,6 @@ export interface ImportStatementResult {
 
 const last4 = (account: string) => account.slice(-4);
 
-/** Детерминированный ключ операции для защиты от повторного импорта. */
-function importKeyOf(doc: {
-  docNumber: string | null;
-  date: string;
-  amount: number;
-  payerAccount: string | null;
-  payeeAccount: string | null;
-}): string {
-  return [
-    doc.docNumber ?? "",
-    doc.date,
-    doc.amount.toFixed(2),
-    doc.payerAccount ?? "",
-    doc.payeeAccount ?? "",
-  ].join("|");
-}
-
 /** Найти или создать контрагента по ИНН (приоритет) либо по названию. */
 async function resolveCounterparty(
   tx: Prisma.TransactionClient,
@@ -1419,7 +1403,7 @@ export async function importStatement(
     ourNumbers.add(ourNumber);
 
     for (const doc of parsed.documents) {
-      const key = importKeyOf(doc);
+      const key = statementImportKey(doc);
       const exists = await tx.cashFlow.findFirst({
         where: { accountId: account.id, importKey: key },
         select: { id: true },

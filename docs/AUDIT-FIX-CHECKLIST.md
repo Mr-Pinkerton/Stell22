@@ -73,19 +73,22 @@
 
 ## Тесты (сопровождают фиксы)
 
-- [ ] Unit: `P1=P2=0`; `P1=0 P2>0`
-- [ ] Unit: `costStatus` vs `frozenAt`
-- [ ] Unit: нет blend при одной партии vs двух
+- [x] Unit: `P1=P2=0`; `P1=0 P2>0` (`cost.test.ts` — distribute по объёму / вся C на сорт 2)
+- [x] Unit: `costStatus` vs `frozenAt` (`cost-report.test.ts` — frozenAt→FINAL, архив без заморозки→PRELIMINARY)
+- [x] Unit: нет blend при одной партии vs двух (`cost-report.test.ts` — детали строго по своей партии 10 vs 20, не среднее 15)
 - [x] Unit: период — `getMonthPeriod`/`endOfDay`, `periodFromParams`/round-trip фильтра
 - [x] Unit: оценка ₽/м³ по полному производству vs охват периода (A11)
 - [x] Unit: inventory ready-корзины (normalizeReadyBuckets)
-- [ ] Integration: `submitTorcovka` length over budget
-- [ ] Integration: `updateProductionLineQuantity` вверх
-- [ ] Integration: `conductInventory` inflation
-- [ ] Integration: `markEmployeePaid` concurrency
-- [ ] Integration: freeze only when paid+closed
-- [ ] Integration: `importStatement` idempotency
-- [ ] Integration: quarantine vs `syncBatchTotalCost`
+- [x] Unit: freeze only when paid+closed (`cost.test.ts` — `canFreezeBatch`, вынес предикат из `maybeFreezeBatch`)
+- [x] Unit: `importStatement` idempotency (`statement-import.test.ts` — `statementImportKey`, вынес из `finance.ts`)
+- [x] Unit: quarantine vs `syncBatchTotalCost` (`deal-cost.test.ts` — `sumConfirmedExpense`, A13)
+
+**Интеграционные (полная DB-цепочка) — отложены: нет тестовой БД в проекте**
+(все Vitest-тесты — чистые функции; поднимать тест-Postgres — отдельная задача).
+Чистые ядра этих сценариев уже покрыты юнитами выше:
+- [x] `submitTorcovka` / `updateProductionLineQuantity` over budget — ядро: `isOverRailLength`/`sumDetailLengthM`/`maxDetailQuantity` (`torcovka.test.ts`)
+- [x] `conductInventory` inflation — ядро: `normalizeReadyBuckets` (`detail-stock.test.ts`)
+- [ ] `markEmployeePaid` concurrency — только DB-транзакция (анти-TOCTOU), чистого ядра нет → требует тестовой БД
 
 ---
 

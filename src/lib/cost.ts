@@ -292,3 +292,21 @@ export function fullProductCost(direct: Num, overhead: Num): Decimal {
 export function roundRubles(value: Num): Decimal {
   return D(value).toDecimalPlaces(0, Decimal.ROUND_HALF_UP);
 }
+
+// ===================== ЗАМОРОЗКА ПАРТИИ ====================================
+
+/**
+ * Можно ли заморозить себестоимость партии (cost-integrity, A5). Заморозка —
+ * только когда партия ВЫРАБОТАНА (closedAt) И все её операции торцовки выплачены
+ * (unpaidTorcovkaCount === 0). Уже замороженную (frozenAt != null) не трогаем.
+ * Чистая функция — решение вынесено из server-транзакции для юнит-теста.
+ */
+export function canFreezeBatch(input: {
+  frozenAt: Date | string | null;
+  closedAt: Date | string | null;
+  unpaidTorcovkaCount: number;
+}): boolean {
+  if (input.frozenAt) return false;
+  if (!input.closedAt) return false;
+  return input.unpaidTorcovkaCount === 0;
+}

@@ -11,7 +11,7 @@ import type {
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { notifyEvent } from "@/server/notifications";
-import { D } from "@/lib/cost";
+import { canFreezeBatch, D } from "@/lib/cost";
 import {
   blendedCostPerMeterByMaterial,
   buildBatchSnapshots,
@@ -512,14 +512,21 @@ export async function maybeFreezeBatch(
   batchId: string,
 ): Promise<boolean> {
   const batch = await tx.batch.findUnique({ where: { id: batchId } });
-  if (!batch || batch.frozenAt) return false;
-  // Замораживаем только выработанную (архивную) партию.
-  if (!batch.closedAt) return false;
+  if (!batch || batch.frozenAt || !batch.closedAt) return false;
 
-  const unpaid = await tx.productionOperation.count({
+  const unpaidTorcovkaCount = await tx.productionOperation.count({
     where: { batchId, type: "TORCOVKA", isPaid: false },
   });
-  if (unpaid > 0) return false;
+  // Решение — через чистый предикат (единый источник правила, юнит-тест в lib).
+  if (
+    !canFreezeBatch({
+      frozenAt: batch.frozenAt,
+      closedAt: batch.closedAt,
+      unpaidTorcovkaCount,
+    })
+  ) {
+    return false;
+  }
 
   await freezeBatch(tx, batch);
   return true;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canFreezeBatch,
   D,
   detailLaborCost,
   directProductCost,
@@ -258,5 +259,25 @@ describe("roundRubles", () => {
     expect(roundRubles(154.5).toNumber()).toBe(155);
     expect(roundRubles(154.4).toNumber()).toBe(154);
     expect(roundRubles(154.8).toNumber()).toBe(155);
+  });
+});
+
+describe("canFreezeBatch — заморозка только при closedAt + все выплаты (A5)", () => {
+  const closed = "2026-06-10T00:00:00.000Z";
+
+  it("выработана и всё выплачено → можно", () => {
+    expect(canFreezeBatch({ frozenAt: null, closedAt: closed, unpaidTorcovkaCount: 0 })).toBe(true);
+  });
+
+  it("есть невыплаченные операции → нельзя", () => {
+    expect(canFreezeBatch({ frozenAt: null, closedAt: closed, unpaidTorcovkaCount: 1 })).toBe(false);
+  });
+
+  it("не выработана (нет closedAt) → нельзя, даже если всё выплачено", () => {
+    expect(canFreezeBatch({ frozenAt: null, closedAt: null, unpaidTorcovkaCount: 0 })).toBe(false);
+  });
+
+  it("уже заморожена → нельзя повторно", () => {
+    expect(canFreezeBatch({ frozenAt: closed, closedAt: closed, unpaidTorcovkaCount: 0 })).toBe(false);
   });
 });
