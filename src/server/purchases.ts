@@ -6,6 +6,7 @@ import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { sectionAreaM2, type PurchaseBatchRow } from "@/lib/batch-stats";
+import { isBatchCostMismatch } from "@/lib/cost";
 import { allocatePackageCode } from "@/lib/package-code";
 import { archiveBatchIfDepleted } from "@/server/cost";
 import type { Material, NomenclatureItem, RailType, Sort } from "@/types/domain";
@@ -45,9 +46,21 @@ function toRow(batch: PrismaBatch, lots: PrismaRailLot[]): PurchaseBatchRow {
   const purchaseCost = num(batch.purchaseCost);
   const p1 = num(batch.priceSort1);
   const p2 = num(batch.priceSort2);
-  // Проверка из v2: сумма по ценам сортов должна сходиться со «Стоимостью партии».
-  const calc = p1 * vol1 + p2 * vol2;
-  const costMismatch = p1 > 0 && p2 > 0 && Math.abs(calc - purchaseCost) > 1;
+  // Проверка из v2 (стр.106): введённая стоимость партии не совпала с расчётной
+  // (P1·V1зак + P2·V2зак). База — ВВЕДЁННАЯ закупочная (purchaseCost), не
+  // totalCost: цены сортов — деньги поставщика за пиломатериал без доставки, а
+  // доставка добавляется в totalCost позже и не должна давать ложный сигнал.
+  // Считаем через общий Decimal-модуль (A18), чтобы не было float-дрейфа.
+  const costMismatch =
+    p1 > 0 &&
+    p2 > 0 &&
+    isBatchCostMismatch({
+      totalCost: purchaseCost,
+      priceSort1: p1,
+      priceSort2: p2,
+      volumeSort1: vol1,
+      volumeSort2: vol2,
+    });
 
   return {
     id: batch.id,
