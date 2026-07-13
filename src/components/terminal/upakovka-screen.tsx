@@ -32,6 +32,10 @@ function canAssemble(product: Product, data: TerminalData): number {
   if (product.packagingId) {
     limits.push(data.stock.nomenclature[product.packagingId] ?? 0);
   }
+  // Доп. комплектующие («Разное») — по 1 шт на изделие (A16): тоже ограничивают.
+  for (const nomenclatureId of product.extraIds) {
+    limits.push(data.stock.nomenclature[nomenclatureId] ?? 0);
+  }
   return limits.length ? Math.max(0, Math.min(...limits)) : 0;
 }
 

@@ -630,7 +630,7 @@ async function applyUpakovkaPick(
 ): Promise<void> {
   const product = await tx.product.findUnique({
     where: { id: productId },
-    include: { details: true, fasteners: true },
+    include: { details: true, fasteners: true, extras: true },
   });
   if (!product) throw new Error("Изделие не найдено");
 
@@ -732,6 +732,21 @@ async function applyUpakovkaPick(
     if (dec.count === 0) throw new Error("Недостаточно упаковки на складе");
     await tx.operationNomenclatureLine.create({
       data: { operationId, nomenclatureId: product.packagingId, quantity },
+    });
+  }
+
+  // Списываем доп. комплектующие («Разное») — по 1 шт каждой позиции на изделие
+  // (в себестоимости extra учтён как unitPrice×1, cost-report). A16: раньше
+  // входили в себестоимость, но со склада не списывались → «посчитали» ≠ «есть».
+  // Провенанс — та же OperationNomenclatureLine, поэтому reverse откатит их сам.
+  for (const ex of product.extras) {
+    const dec = await tx.nomenclatureStock.updateMany({
+      where: { nomenclatureId: ex.nomenclatureId, quantity: { gte: quantity } },
+      data: { quantity: { decrement: quantity } },
+    });
+    if (dec.count === 0) throw new Error("Недостаточно доп. комплектующих на складе");
+    await tx.operationNomenclatureLine.create({
+      data: { operationId, nomenclatureId: ex.nomenclatureId, quantity },
     });
   }
 
