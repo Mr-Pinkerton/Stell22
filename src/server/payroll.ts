@@ -201,15 +201,23 @@ export async function markEmployeePaid(employeeId: string): Promise<SalaryReport
   ];
 
   await prisma.$transaction(async (tx) => {
+    // Анти-TOCTOU (A19): сначала АТОМАРНО «клеймим» операции, помечая isPaid.
+    // Фильтр isPaid:false + сверка count гарантируют, что параллельный второй
+    // вызов (двойной клик/две вкладки) не создаст дубль-выплату — проиграв гонку,
+    // он увидит count!=ожидаемого и откатит транзакцию, не создав Payment.
+    const claimed = await tx.productionOperation.updateMany({
+      where: { id: { in: opIds }, isPaid: false },
+      data: { isPaid: true, paidAt },
+    });
+    if (claimed.count !== opIds.length) {
+      throw new Error("Операции уже выплачены — обновите отчёт");
+    }
+
     const payment = await tx.payment.create({
       data: { employeeId, amount: amount.toFixed(2), paidAt },
     });
     await tx.paymentBatchItem.createMany({
       data: opIds.map((operationId) => ({ paymentId: payment.id, operationId })),
-    });
-    await tx.productionOperation.updateMany({
-      where: { id: { in: opIds } },
-      data: { isPaid: true, paidAt },
     });
     await writeChangeLog(
       {
