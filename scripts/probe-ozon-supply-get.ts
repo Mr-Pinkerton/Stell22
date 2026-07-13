@@ -1,6 +1,6 @@
 import { prisma } from "../src/server/db";
 import { SETTING_PREFIX } from "../src/lib/api-credentials";
-import { ozonCredentialsFrom, mapOzonSupplyGetToRaw } from "../src/lib/ozon-api";
+import { ozonCredentialsFrom } from "../src/lib/ozon-api";
 import { fetchJson } from "../src/lib/marketplace-http";
 
 async function main() {

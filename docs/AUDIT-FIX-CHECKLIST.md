@@ -66,8 +66,8 @@
   - _Двойной быстрый клик «Выплачено» (или две вкладки) мог создать две выплаты одному человеку. Теперь второй вызов видит уже выплаченные операции и откатывается._
 - [x] **A21** — idempotency key на terminal submit: `ProductionOperation.clientRequestId @unique` (миграция); все 4 submit (torcovka/prisadka/upakovka/hours) пишут ключ, дубль (P2002) обрабатывается идемпотентно; клиент шлёт `newRequestId()` (useRef на попытку, с фолбэком для http). Упаковка: ключ уточняется productId (`src/server/terminal.ts`, `src/lib/request-id.ts`, экраны терминала, миграция `20260713161800`)
   - _Быстрый двойной тап/реплей/две вкладки могли задвоить операцию. Теперь unique-ключ запроса ловит повтор._
-- [ ] **A23** — убрать unused import в `scripts/probe-ozon-supply-get.ts`
-  - _Лишний неиспользуемый импорт в служебном скрипте. Просто шум в линтере, удалить._
+- [x] **A23** — убран unused import `mapOzonSupplyGetToRaw` в `scripts/probe-ozon-supply-get.ts`
+  - _Лишний неиспользуемый импорт в служебном скрипте. Удалён._
 
 ---
 
