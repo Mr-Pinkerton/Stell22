@@ -3,6 +3,7 @@ import {
   allocate,
   buildStockSnapshot,
   isReady,
+  normalizeReadyBuckets,
   type BlankStockRow,
   type DetailStockRow,
 } from "@/lib/detail-stock";
@@ -120,5 +121,61 @@ describe("buildStockSnapshot", () => {
     const snap = buildStockSnapshot([d], rows, blanks, { "nom-1": 100 });
     expect(snap.detailsReady.d4).toBeUndefined();
     expect(snap.nomenclature).toEqual({ "nom-1": 100 });
+  });
+});
+
+describe("normalizeReadyBuckets (A9)", () => {
+  it("только торцевая: канон (true,false)=факт, лишняя ready (true,true)→0, НЗП не трогаем", () => {
+    const d = detail({ prisadkaTorcevaya: true, prisadkaPloskost: false });
+    const existing = [
+      { torcevayaDone: true, ploskostDone: false }, // канон (ready)
+      { torcevayaDone: true, ploskostDone: true }, // тоже ready (плоскость не нужна)
+      { torcevayaDone: false, ploskostDone: true }, // НЗП (торцевая не сделана)
+    ];
+    const writes = normalizeReadyBuckets(d, existing, 6);
+    expect(writes).toEqual([
+      { torcevayaDone: true, ploskostDone: false, quantity: 6 },
+      { torcevayaDone: true, ploskostDone: true, quantity: 0 },
+    ]);
+  });
+
+  it("обе присадки: канон (true,true)=факт, промежуточные НЗП не трогаем", () => {
+    const d = detail({ prisadkaTorcevaya: true, prisadkaPloskost: true });
+    const existing = [
+      { torcevayaDone: true, ploskostDone: false }, // НЗП
+      { torcevayaDone: false, ploskostDone: true }, // НЗП
+      { torcevayaDone: true, ploskostDone: true }, // ready канон
+    ];
+    const writes = normalizeReadyBuckets(d, existing, 10);
+    expect(writes).toEqual([{ torcevayaDone: true, ploskostDone: true, quantity: 10 }]);
+  });
+
+  it("только плоскостная: лишняя ready (true,true)→0", () => {
+    const d = detail({ prisadkaTorcevaya: false, prisadkaPloskost: true });
+    const existing = [
+      { torcevayaDone: false, ploskostDone: true }, // канон
+      { torcevayaDone: true, ploskostDone: true }, // ready лишняя
+      { torcevayaDone: true, ploskostDone: false }, // НЗП
+    ];
+    const writes = normalizeReadyBuckets(d, existing, 3);
+    expect(writes).toEqual([
+      { torcevayaDone: false, ploskostDone: true, quantity: 3 },
+      { torcevayaDone: true, ploskostDone: true, quantity: 0 },
+    ]);
+  });
+
+  it("нет существующих корзин → только канон с фактом", () => {
+    const d = detail({ prisadkaTorcevaya: true, prisadkaPloskost: true });
+    expect(normalizeReadyBuckets(d, [], 5)).toEqual([
+      { torcevayaDone: true, ploskostDone: true, quantity: 5 },
+    ]);
+  });
+
+  it("дубликат канона среди existing не задваивается", () => {
+    const d = detail({ prisadkaTorcevaya: true, prisadkaPloskost: false });
+    const existing = [{ torcevayaDone: true, ploskostDone: false }];
+    expect(normalizeReadyBuckets(d, existing, 4)).toEqual([
+      { torcevayaDone: true, ploskostDone: false, quantity: 4 },
+    ]);
   });
 });

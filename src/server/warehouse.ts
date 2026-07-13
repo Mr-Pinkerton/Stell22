@@ -7,6 +7,7 @@ import { writeChangeLog } from "@/server/change-log";
 import {
   blankKey,
   buildStockSnapshot,
+  normalizeReadyBuckets,
   type BlankStockRow as RawBlankRow,
   type DetailStockRow as RawStockRow,
 } from "@/lib/detail-stock";
@@ -335,22 +336,32 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
             update: { quantity: line.actualQty },
           });
         } else {
-          await tx.detailStock.upsert({
-            where: {
-              detailId_torcevayaDone_ploskostDone: {
-                detailId: line.refId,
-                torcevayaDone: detail.prisadkaTorcevaya,
-                ploskostDone: detail.prisadkaPloskost,
-              },
-            },
-            create: {
-              detailId: line.refId,
-              torcevayaDone: detail.prisadkaTorcevaya,
-              ploskostDone: detail.prisadkaPloskost,
-              quantity: line.actualQty,
-            },
-            update: { quantity: line.actualQty },
+          // Деталь с присадками: «готово» может быть распределено по нескольким
+          // корзинам (когда нужна лишь одна присадка). Сводим ВСЕ ready-корзины
+          // к факту — канон = actualQty, прочие ready → 0 (A9). НЗП-корзины и
+          // общий пул заготовок не трогаем.
+          const existing = await tx.detailStock.findMany({
+            where: { detailId: line.refId },
+            select: { torcevayaDone: true, ploskostDone: true },
           });
+          for (const w of normalizeReadyBuckets(detail, existing, line.actualQty)) {
+            await tx.detailStock.upsert({
+              where: {
+                detailId_torcevayaDone_ploskostDone: {
+                  detailId: line.refId,
+                  torcevayaDone: w.torcevayaDone,
+                  ploskostDone: w.ploskostDone,
+                },
+              },
+              create: {
+                detailId: line.refId,
+                torcevayaDone: w.torcevayaDone,
+                ploskostDone: w.ploskostDone,
+                quantity: w.quantity,
+              },
+              update: { quantity: w.quantity },
+            });
+          }
         }
       }
 

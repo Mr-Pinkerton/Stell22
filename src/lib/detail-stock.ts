@@ -66,6 +66,46 @@ export function isReady(detail: PrisadkaFlags, torcevDone: boolean, ploskDone: b
   return (!req.torcev || torcevDone) && (!req.plosk || ploskDone);
 }
 
+export interface ReadyBucketWrite {
+  torcevayaDone: boolean;
+  ploskostDone: boolean;
+  quantity: number;
+}
+
+/**
+ * План приведения ГОТОВЫХ корзин детали к фактическому количеству при
+ * инвентаризации (A9). У детали, которой нужна лишь одна присадка, «готово»
+ * распределено по нескольким корзинам (напр. `(true,false)` и `(true,true)`).
+ * Правка только одной корзины оставляет остальные → двойной счёт готовых.
+ *
+ * Возвращает корзины к записи:
+ *  - каноническая `(prisadkaTorcevaya, prisadkaPloskost)` = `actualQty`;
+ *  - все прочие ГОТОВЫЕ корзины детали → 0.
+ * НЕзавершённые (НЗП) корзины сюда не попадают — их не трогаем (в учётный
+ * остаток «готово» они не входят). Пул заготовок (`BlankStock`) тоже не наш —
+ * он общий для деталей одной спецификации.
+ */
+export function normalizeReadyBuckets(
+  detail: PrisadkaFlags,
+  existing: Pick<DetailStockRow, "torcevayaDone" | "ploskostDone">[],
+  actualQty: number,
+): ReadyBucketWrite[] {
+  const canonT = detail.prisadkaTorcevaya;
+  const canonP = detail.prisadkaPloskost;
+  const writes: ReadyBucketWrite[] = [
+    { torcevayaDone: canonT, ploskostDone: canonP, quantity: actualQty },
+  ];
+  const seen = new Set([`${canonT}|${canonP}`]);
+  for (const row of existing) {
+    const key = `${row.torcevayaDone}|${row.ploskostDone}`;
+    if (seen.has(key)) continue;
+    if (!isReady(detail, row.torcevayaDone, row.ploskostDone)) continue; // НЗП — не трогаем
+    seen.add(key);
+    writes.push({ torcevayaDone: row.torcevayaDone, ploskostDone: row.ploskostDone, quantity: 0 });
+  }
+  return writes;
+}
+
 /**
  * Свод заготовок и деталей в снимок для терминала:
  *  - blanks — заготовки по ключу (длина|тип|сорт);

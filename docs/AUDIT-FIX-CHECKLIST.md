@@ -27,7 +27,7 @@
   - _Интерфейс не даёт нарезать заготовок больше, чем взято реек, но вызов сервера напрямую этой проверки не делает. Заготовки из воздуха → ломается отход и цена за м³._
 - [x] **A8** — та же проверка бюджета реек при правке TORCOVKA вверх (`src/server/production.ts:316-334`)
   - _Если админ правит количество торцовки вручную вверх — та же дыра: можно превысить реально взятые рейки._
-- [ ] **A9** — инвентаризация DETAIL: обнулять/перераспределять все buckets (partial присадка) (`src/server/warehouse.ts:315-354`)
+- [x] **A9** — инвентаризация DETAIL: все ready-корзины детали сводятся к факту (канон=actual, лишние ready→0), НЗП/заготовки не трогаем (`src/lib/detail-stock.ts normalizeReadyBuckets`, `src/server/warehouse.ts`)
   - _Частично готовые детали (часть отверстий просверлена) лежат в промежуточных корзинах. При инвентаризации они не обнуляются → на складе числится больше деталей, чем есть._
 - [ ] ⚠ **A10** — split недостачи: сырьё→отход / ГП→«Потеря ГП» по v2 (`src/server/warehouse.ts:288-291`)
   - _При нехватке надо различать: не хватило сырья = отход, не хватило готовой продукции = убыток «Потеря ГП». Сейчас всё в одну кучу, аналитика смазана._
@@ -76,7 +76,7 @@
 - [ ] Unit: нет blend при одной партии vs двух
 - [x] Unit: период — `getMonthPeriod`/`endOfDay`, `periodFromParams`/round-trip фильтра
 - [x] Unit: оценка ₽/м³ по полному производству vs охват периода (A11)
-- [ ] Unit: inventory partial buckets
+- [x] Unit: inventory ready-корзины (normalizeReadyBuckets)
 - [ ] Integration: `submitTorcovka` length over budget
 - [ ] Integration: `updateProductionLineQuantity` вверх
 - [ ] Integration: `conductInventory` inflation
