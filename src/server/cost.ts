@@ -11,7 +11,7 @@ import type {
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { notifyEvent } from "@/server/notifications";
-import { D, distributeBatchCost, sectionAreaM2 } from "@/lib/cost";
+import { D } from "@/lib/cost";
 import {
   blendedCostPerMeterByMaterial,
   buildBatchSnapshots,
@@ -402,39 +402,27 @@ interface BatchSnapshotData {
   pricePerM3Sort2: string;
 }
 
-/** Снапшот распределения стоимости партии по сортам, либо null без производства. */
+/**
+ * Снапшот распределения стоимости партии по сортам для записи в БД, либо null
+ * без производства. Единый путь расчёта (A15): делегирует канонической чистой
+ * функции `buildBatchSnapshots` — своей копии агрегации/`distributeBatchCost`
+ * здесь нет, чтобы формула не расходилась с отчётом. Объём = длина × сечение.
+ */
 function computeBatchSnapshot(
   batch: PrismaBatch,
   allLines: ProducedLine[],
 ): BatchSnapshotData | null {
-  const lines = allLines.filter((l) => l.batchId === batch.id);
-  if (lines.length === 0) return null;
-
-  let len1 = D(0);
-  let len2 = D(0);
-  for (const line of lines) {
-    const len = dec(line.lengthM).times(line.quantity);
-    if (line.sort === "SORT1") len1 = len1.plus(len);
-    else len2 = len2.plus(len);
-  }
-
-  const dist = distributeBatchCost({
-    totalCost: dec(batch.totalCost),
-    priceSort1: dec(batch.priceSort1),
-    priceSort2: dec(batch.priceSort2),
-    sectionAreaM2: sectionAreaM2(num(batch.sectionWidthMm), num(batch.sectionHeightMm)),
-    producedLengthSort1: len1,
-    producedLengthSort2: len2,
-  });
+  const s = buildBatchSnapshots({ batches: [serBatch(batch)], lines: allLines }).get(batch.id);
+  if (!s) return null;
 
   // Полную точность отдаём в Postgres строкой — он округлит до scale столбца.
   return {
-    volumeSort1: dist.volumeSort1.toString(),
-    volumeSort2: dist.volumeSort2.toString(),
-    costSort1: dist.costSort1.toString(),
-    costSort2: dist.costSort2.toString(),
-    pricePerM3Sort1: dist.pricePerM3Sort1.toString(),
-    pricePerM3Sort2: dist.pricePerM3Sort2.toString(),
+    volumeSort1: s.lengthSort1.times(s.areaM2).toString(),
+    volumeSort2: s.lengthSort2.times(s.areaM2).toString(),
+    costSort1: s.costSort1.toString(),
+    costSort2: s.costSort2.toString(),
+    pricePerM3Sort1: s.pricePerM3Sort1.toString(),
+    pricePerM3Sort2: s.pricePerM3Sort2.toString(),
   };
 }
 
