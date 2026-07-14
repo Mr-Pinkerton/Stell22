@@ -138,6 +138,7 @@ function NomenclatureItemFormBody({
                     id="nom-price"
                     className={narrowFieldClass}
                     suffix="₽"
+                    decimals={2}
                     value={price}
                     onValueChange={setPrice}
                   />

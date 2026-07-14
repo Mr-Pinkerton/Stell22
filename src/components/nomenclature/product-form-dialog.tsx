@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { Plus, Trash2, XIcon } from "lucide-react";
 import { capitalizeFirst, cn } from "@/lib/utils";
+import { formatMoneyDecimal } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { FormSubmitButton } from "@/components/form-dialog-shared";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -447,7 +448,7 @@ function ProductFormBody({
                           />
                           {item.name}
                           <span className="text-muted-foreground tabular-nums">
-                            ({item.unitPrice} ₽)
+                            ({formatMoneyDecimal(item.unitPrice)})
                           </span>
                         </label>
                       ))}

@@ -6,10 +6,14 @@ import {
   formatIsoDateTime,
   formatLength,
   formatMoney,
+  formatMoneyDecimal,
   formatProductSku,
   parseGroupedInteger,
+  parseGroupedMoney,
   roundCashTo100,
 } from "@/lib/format";
+
+const clean = (s: string) => s.replace(/[\s\u00a0\u202f]/g, " ");
 
 describe("formatProductSku", () => {
   it("показывает оба артикула, когда они различаются", () => {
@@ -99,5 +103,54 @@ describe("formatGroupedInteger / parseGroupedInteger", () => {
   it("round-trip для поля ввода", () => {
     const n = 9876543;
     expect(parseGroupedInteger(formatGroupedInteger(n))).toBe(n);
+  });
+});
+
+describe("formatMoneyDecimal (копейки, когда есть)", () => {
+  it("показывает копейки дешёвых позиций", () => {
+    expect(clean(formatMoneyDecimal(0.36))).toBe("0,36 ₽");
+  });
+  it("целые — без копеек", () => {
+    expect(clean(formatMoneyDecimal(35))).toBe("35 ₽");
+  });
+  it("тысячи с группировкой и одним знаком", () => {
+    expect(clean(formatMoneyDecimal(1234.5))).toBe("1 234,5 ₽");
+  });
+});
+
+describe("parseGroupedMoney (ввод с копейками)", () => {
+  it("decimals=0 — как целое поле", () => {
+    const r = parseGroupedMoney("1 234 ₽", 0);
+    expect(clean(r.text)).toBe("1 234");
+    expect(r.value).toBe(1234);
+    expect(parseGroupedMoney("", 0)).toEqual({ text: "", value: null });
+  });
+
+  it("принимает 0,36 (запятая)", () => {
+    const r = parseGroupedMoney("0,36", 2);
+    expect(r.value).toBe(0.36);
+    expect(r.text).toBe("0,36");
+  });
+
+  it("принимает точку как разделитель", () => {
+    expect(parseGroupedMoney("0.36", 2).value).toBe(0.36);
+  });
+
+  it("ограничивает копейки до decimals знаков", () => {
+    expect(parseGroupedMoney("0,369", 2).value).toBe(0.36);
+  });
+
+  it("сохраняет промежуточный ввод «0,»", () => {
+    expect(parseGroupedMoney("0,", 2)).toEqual({ text: "0,", value: 0 });
+  });
+
+  it("группирует целую часть, сохраняя дробную", () => {
+    const r = parseGroupedMoney("1234,5", 2);
+    expect(clean(r.text)).toBe("1 234,5");
+    expect(r.value).toBe(1234.5);
+  });
+
+  it("пусто → null", () => {
+    expect(parseGroupedMoney("", 2)).toEqual({ text: "", value: null });
   });
 });

@@ -26,6 +26,22 @@ export function formatMoney(value: number): string {
   return moneyFormatter.format(value);
 }
 
+const moneyDecimalFormatter = new Intl.NumberFormat("ru-RU", {
+  style: "currency",
+  currency: "RUB",
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+});
+
+/**
+ * Сумма в ₽ с копейками, когда они есть: "0,36 ₽", "35 ₽", "1 234,5 ₽".
+ * Для цен за единицу дешёвых позиций (крепёж/упаковка) — целые рубли обрезают
+ * копейки и «0,36 ₽» превратилось бы в «0 ₽». Агрегаты по-прежнему formatMoney.
+ */
+export function formatMoneyDecimal(value: number): string {
+  return moneyDecimalFormatter.format(value);
+}
+
 /**
  * Компактная подпись артикулов изделия для мест с одной колонкой/строкой.
  * Одинаковые артикулы Ozon/WB → показываем один; иначе «OZ … · WB …».
@@ -51,6 +67,52 @@ export function parseGroupedInteger(raw: string): number | null {
   const digits = raw.replace(/\D/g, "");
   if (!digits) return null;
   return Number(digits);
+}
+
+/**
+ * Отображаемое значение денежного поля с копейками (для controlled MoneyInput).
+ * 0/пусто → "", иначе целая часть с группировкой + до `decimals` знаков без
+ * хвостовых нулей: 0.36→"0,36", 35→"35", 1234.5→"1 234,5".
+ */
+export function formatGroupedDecimal(value: number, decimals: number): string {
+  return new Intl.NumberFormat("ru-RU", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: decimals,
+    useGrouping: true,
+  }).format(value);
+}
+
+/**
+ * Разбор ввода денег с копейками (до `decimals` знаков). Возвращает и текст для
+ * отображения (группировка целой части, сохранение введённого разделителя/нулей
+ * во время набора), и числовое значение. Разделитель — запятая или точка.
+ * Сохраняет промежуточные состояния набора: "0,", "1 234,5".
+ */
+export function parseGroupedMoney(
+  raw: string,
+  decimals: number,
+): { text: string; value: number | null } {
+  if (decimals <= 0) {
+    const v = parseGroupedInteger(raw);
+    return { text: v != null ? formatGroupedInteger(v) : "", value: v };
+  }
+
+  const cleaned = raw.replace(/[^\d.,]/g, "");
+  const sepIdx = cleaned.search(/[.,]/);
+  const hasSep = sepIdx !== -1;
+  const intRaw = (hasSep ? cleaned.slice(0, sepIdx) : cleaned).replace(/[.,]/g, "");
+  const fracRaw = hasSep
+    ? cleaned.slice(sepIdx + 1).replace(/[.,]/g, "").slice(0, decimals)
+    : "";
+
+  if (intRaw === "" && !hasSep) return { text: "", value: null };
+
+  const intDigits = intRaw.replace(/^0+(?=\d)/, ""); // убрать ведущие нули, оставив один
+  const intNum = intDigits === "" ? 0 : Number(intDigits);
+  const grouped = groupedIntegerFormatter.format(intNum);
+  const text = hasSep ? `${grouped},${fracRaw}` : grouped;
+  const value = Number(`${intDigits === "" ? "0" : intDigits}.${fracRaw || "0"}`);
+  return { text, value };
 }
 
 /** Длина в метрах, напр. "2,4 м". */

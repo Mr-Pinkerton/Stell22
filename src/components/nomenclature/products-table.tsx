@@ -3,7 +3,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatLength, formatMoney } from "@/lib/format";
+import { formatLength, formatMoneyDecimal } from "@/lib/format";
 import { expandableArchivedSummaryRowClass } from "@/lib/table-archive";
 import {
   ExpandableDetailRow,
@@ -193,7 +193,7 @@ export function ProductsTable({
                               {line.quantity} шт
                             </NestedTableCell>
                             <NestedTableCell className="text-center tabular-nums">
-                              {item ? formatMoney(item.unitPrice) : "—"}
+                              {item ? formatMoneyDecimal(item.unitPrice) : "—"}
                             </NestedTableCell>
                           </TableRow>
                         );
@@ -209,7 +209,7 @@ export function ProductsTable({
                         </span>
                         {itemById.get(row.packagingId) && (
                           <span className="text-muted-foreground ml-2 tabular-nums">
-                            {formatMoney(itemById.get(row.packagingId)!.unitPrice)}
+                            {formatMoneyDecimal(itemById.get(row.packagingId)!.unitPrice)}
                           </span>
                         )}
                       </p>
@@ -232,7 +232,7 @@ export function ProductsTable({
                               {item?.name ?? "—"}
                             </NestedTableCell>
                             <NestedTableCell className="text-center tabular-nums">
-                              {item ? formatMoney(item.unitPrice) : "—"}
+                              {item ? formatMoneyDecimal(item.unitPrice) : "—"}
                             </NestedTableCell>
                           </TableRow>
                         );

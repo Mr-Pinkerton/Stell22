@@ -3,7 +3,7 @@
 import * as React from "react";
 
 import { Input } from "@/components/ui/input";
-import { formatGroupedInteger, parseGroupedInteger } from "@/lib/format";
+import { formatGroupedDecimal, formatGroupedInteger, parseGroupedMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 function suffixPadding(suffix: string): string {
@@ -13,9 +13,9 @@ function suffixPadding(suffix: string): string {
   return "pr-20";
 }
 
-function formatMoneyFieldValue(value: number | null | undefined): string {
+function formatMoneyFieldValue(value: number | null | undefined, decimals: number): string {
   if (value == null || value === 0) return "";
-  return formatGroupedInteger(value);
+  return decimals > 0 ? formatGroupedDecimal(value, decimals) : formatGroupedInteger(value);
 }
 
 type MoneyInputProps = Omit<
@@ -27,6 +27,8 @@ type MoneyInputProps = Omit<
   onValueChange?: (value: number | null) => void;
   /** Суффикс справа: ₽, ₽/ч, ₽/м³ и т.п. */
   suffix?: string;
+  /** Знаков после запятой (копейки). 0 (по умолчанию) — целые рубли, как раньше. */
+  decimals?: number;
 };
 
 function MoneyInput({
@@ -34,6 +36,7 @@ function MoneyInput({
   value: valueProp,
   onValueChange,
   suffix = "₽",
+  decimals = 0,
   className,
   placeholder,
   ...props
@@ -43,7 +46,7 @@ function MoneyInput({
   const numeric = controlled ? (valueProp ?? null) : internal;
 
   const [text, setText] = React.useState(() =>
-    formatMoneyFieldValue(controlled ? (valueProp ?? null) : defaultValue),
+    formatMoneyFieldValue(controlled ? (valueProp ?? null) : defaultValue, decimals),
   );
 
   // Источник истины: для controlled — value, для uncontrolled — defaultValue.
@@ -52,13 +55,12 @@ function MoneyInput({
   const [prevExternal, setPrevExternal] = React.useState(externalValue);
   if (externalValue !== prevExternal) {
     setPrevExternal(externalValue);
-    setText(formatMoneyFieldValue(externalValue));
+    setText(formatMoneyFieldValue(externalValue, decimals));
     if (!controlled) setInternal(externalValue);
   }
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const parsed = parseGroupedInteger(e.target.value);
-    const display = parsed != null ? formatGroupedInteger(parsed) : "";
+    const { text: display, value: parsed } = parseGroupedMoney(e.target.value, decimals);
     setText(display);
     if (!controlled) setInternal(parsed);
     onValueChange?.(parsed);
@@ -69,7 +71,7 @@ function MoneyInput({
       <Input
         {...props}
         type="text"
-        inputMode="numeric"
+        inputMode={decimals > 0 ? "decimal" : "numeric"}
         className={cn(suffixPadding(suffix), className)}
         value={text}
         onChange={handleChange}

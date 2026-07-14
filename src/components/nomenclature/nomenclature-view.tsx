@@ -31,7 +31,7 @@ import {
   updateMaterial,
   type MaterialFormValues,
 } from "@/server/materials";
-import { formatLength, formatMoney } from "@/lib/format";
+import { formatLength, formatMoneyDecimal } from "@/lib/format";
 import { exportXlsx } from "@/lib/export-xlsx";
 import {
   dataTableArchivedRowClass,
@@ -575,7 +575,7 @@ export function NomenclatureView({
       key: "unitPrice",
       header: "Цена за ед.",
       className: "tabular-nums",
-      render: (row) => formatMoney(row.unitPrice),
+      render: (row) => formatMoneyDecimal(row.unitPrice),
     },
     {
       key: "status",

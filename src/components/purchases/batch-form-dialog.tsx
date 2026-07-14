@@ -474,6 +474,7 @@ function BatchFormBody({
                 <MoneyInput
                   id="simple-price"
                   className={narrowFieldClass}
+                  decimals={2}
                   value={simplePrice}
                   onValueChange={setSimplePrice}
                 />
