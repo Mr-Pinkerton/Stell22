@@ -39,6 +39,7 @@ import {
 } from "@/lib/table-archive";
 import { XLSX_FMT, type XlsxSheet } from "@/lib/xlsx-types";
 import { cn } from "@/lib/utils";
+import { materialLabel } from "@/lib/material";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
 import { DataTable, type Column } from "@/components/data-table";
@@ -214,7 +215,7 @@ export function NomenclatureView({
   const [items, setItems] = useState<NomenclatureItem[]>(initialItems);
   const [materials, setMaterials] = useState<Material[]>(initialMaterials);
 
-  const materialName = new Map(materials.map((m) => [m.id, m.name]));
+  const materialName = new Map(materials.map((m) => [m.id, materialLabel(m)]));
 
   const [productDialogOpen, setProductDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -246,7 +247,7 @@ export function NomenclatureView({
     (d) => d.status === "ARCHIVED",
   );
   const materialRows = partitionActiveArchived(
-    materials.filter((m) => visible(m.status) && matchesSearch(m.name)),
+    materials.filter((m) => visible(m.status) && matchesSearch(materialLabel(m))),
     (m) => m.status === "ARCHIVED",
   );
   const itemsByType = (type: NomenclatureType) =>
@@ -318,7 +319,7 @@ export function NomenclatureView({
           { header: "Статус", key: "status", width: 14 },
         ],
         rows: materialRows.map((m) => ({
-          name: m.name,
+          name: materialLabel(m),
           status: statusText(m.status),
         })),
       };
@@ -615,7 +616,7 @@ export function NomenclatureView({
     {
       key: "name",
       header: "Название",
-      render: (row) => <span className="font-medium">{row.name}</span>,
+      render: (row) => <span className="font-medium">{materialLabel(row)}</span>,
     },
     {
       key: "status",

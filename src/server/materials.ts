@@ -10,11 +10,28 @@ const PATH = "/nomenclature";
 
 export interface MaterialFormValues {
   name: string;
+  sectionWidthMm?: number | null;
+  sectionHeightMm?: number | null;
   sortOrder?: number | null;
 }
 
 function serialize(m: PrismaMaterial): Material {
-  return { id: m.id, name: m.name, status: m.status, sortOrder: m.sortOrder };
+  return {
+    id: m.id,
+    name: m.name,
+    sectionWidthMm: m.sectionWidthMm == null ? null : Number(m.sectionWidthMm),
+    sectionHeightMm: m.sectionHeightMm == null ? null : Number(m.sectionHeightMm),
+    status: m.status,
+    sortOrder: m.sortOrder,
+  };
+}
+
+/** Нормализует ввод сечения: положительные числа обязательны (часть идентичности). */
+function requireSection(v: MaterialFormValues): { w: number; h: number } {
+  const w = v.sectionWidthMm ?? 0;
+  const h = v.sectionHeightMm ?? 0;
+  if (!(w > 0) || !(h > 0)) throw new Error("Укажите сечение материала (ширина и высота, мм)");
+  return { w, h };
 }
 
 export async function getMaterials(): Promise<Material[]> {
@@ -27,12 +44,16 @@ export async function getMaterials(): Promise<Material[]> {
 export async function createMaterial(values: MaterialFormValues): Promise<Material> {
   const name = values.name.trim();
   if (!name) throw new Error("Название материала обязательно");
+  const { w, h } = requireSection(values);
 
-  const clash = await prisma.material.findUnique({ where: { name } });
-  if (clash) throw new Error(`Материал «${name}» уже существует`);
+  // Уникальность — по паре (название, сечение): одна порода в разных сечениях ок.
+  const clash = await prisma.material.findFirst({
+    where: { name, sectionWidthMm: w, sectionHeightMm: h },
+  });
+  if (clash) throw new Error(`Материал «${name} ${w}×${h}» уже существует`);
 
   const created = await prisma.material.create({
-    data: { name, sortOrder: values.sortOrder ?? 0 },
+    data: { name, sectionWidthMm: w, sectionHeightMm: h, sortOrder: values.sortOrder ?? 0 },
   });
   await writeChangeLog({ entity: "Material", entityId: created.id, newValues: serialize(created) });
   revalidatePath(PATH);
@@ -45,13 +66,21 @@ export async function updateMaterial(id: string, values: MaterialFormValues): Pr
 
   const before = await prisma.material.findUnique({ where: { id } });
   if (!before) throw new Error("Материал не найден");
+  const { w, h } = requireSection(values);
 
-  const clash = await prisma.material.findFirst({ where: { name, id: { not: id } } });
-  if (clash) throw new Error(`Материал «${name}» уже существует`);
+  const clash = await prisma.material.findFirst({
+    where: { name, sectionWidthMm: w, sectionHeightMm: h, id: { not: id } },
+  });
+  if (clash) throw new Error(`Материал «${name} ${w}×${h}» уже существует`);
 
   const updated = await prisma.material.update({
     where: { id },
-    data: { name, sortOrder: values.sortOrder ?? before.sortOrder },
+    data: {
+      name,
+      sectionWidthMm: w,
+      sectionHeightMm: h,
+      sortOrder: values.sortOrder ?? before.sortOrder,
+    },
   });
   await writeChangeLog({
     entity: "Material",

@@ -87,8 +87,22 @@ export interface NomenclatureData {
   materials: Material[];
 }
 
-function serializeMaterial(m: { id: string; name: string; status: "ACTIVE" | "ARCHIVED"; sortOrder: number }): Material {
-  return { id: m.id, name: m.name, status: m.status, sortOrder: m.sortOrder };
+function serializeMaterial(m: {
+  id: string;
+  name: string;
+  sectionWidthMm: unknown;
+  sectionHeightMm: unknown;
+  status: "ACTIVE" | "ARCHIVED";
+  sortOrder: number;
+}): Material {
+  return {
+    id: m.id,
+    name: m.name,
+    sectionWidthMm: m.sectionWidthMm == null ? null : Number(m.sectionWidthMm),
+    sectionHeightMm: m.sectionHeightMm == null ? null : Number(m.sectionHeightMm),
+    status: m.status,
+    sortOrder: m.sortOrder,
+  };
 }
 
 export async function getNomenclatureData(): Promise<NomenclatureData> {

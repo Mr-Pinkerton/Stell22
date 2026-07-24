@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { XIcon } from "lucide-react";
 import { capitalizeFirst, cn } from "@/lib/utils";
+import { materialLabel } from "@/lib/material";
 import { Button } from "@/components/ui/button";
 import { FormSubmitButton } from "@/components/form-dialog-shared";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -163,13 +164,16 @@ function DetailFormBody({
                     <Select value={materialId} onValueChange={(v) => setMaterialId(v ?? "")}>
                       <SelectTrigger id="det-material" className={selectTriggerClass}>
                         <SelectValue placeholder="Выберите материал">
-                          {activeMaterials.find((m) => m.id === materialId)?.name}
+                          {(() => {
+                            const m = activeMaterials.find((m) => m.id === materialId);
+                            return m ? materialLabel(m) : null;
+                          })()}
                         </SelectValue>
                       </SelectTrigger>
                       <SelectContent {...formSelectContentProps}>
                         {activeMaterials.map((m) => (
                           <SelectItem key={m.id} value={m.id} className="cursor-pointer rounded-lg">
-                            {m.name}
+                            {materialLabel(m)}
                           </SelectItem>
                         ))}
                       </SelectContent>

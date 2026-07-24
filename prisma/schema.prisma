@@ -137,17 +137,26 @@ model Employee {
 // Порода/материал сырья (хвоя, берёза, ...). Справочник: админ добавляет новые
 // материалы без миграции. Номера деталей уникальны В ПРЕДЕЛАХ материала —
 // одинаковый номер допускается на разных материалах.
+// Материал = порода + сечение рейки. Одна порода в разных сечениях — это РАЗНЫЕ
+// материалы (Хвоя 40×20 ≠ Хвоя 25×50), т.к. остатки заготовок/деталей и цена за
+// м³ несопоставимы между сечениями. Сечение партии выводится из материала.
+// section* nullable только на время миграции старых записей (конфликтные —
+// заполняются вручную/расщеплением, см. scripts/probe-material-sections.ts).
 model Material {
-  id        String        @id @default(cuid())
-  name      String        @unique
-  status    ProductStatus @default(ACTIVE)
-  sortOrder Int           @default(0) // порядок в списках
-  createdAt DateTime      @default(now())
+  id              String        @id @default(cuid())
+  name            String
+  sectionWidthMm  Decimal?      @db.Decimal(8, 2) // ширина сечения, мм
+  sectionHeightMm Decimal?      @db.Decimal(8, 2) // высота сечения, мм
+  status          ProductStatus @default(ACTIVE)
+  sortOrder       Int           @default(0) // порядок в списках
+  createdAt       DateTime      @default(now())
 
   batches    Batch[]
   details    Detail[]
   blanks     BlankStock[]
   products   Product[]
+
+  @@unique([name, sectionWidthMm, sectionHeightMm])
 }
 
 // Партия рейки.

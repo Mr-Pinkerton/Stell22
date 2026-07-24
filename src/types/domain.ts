@@ -33,6 +33,10 @@ export interface Employee {
 export interface Material {
   id: string;
   name: string;
+  // Сечение — часть идентичности материала (порода+сечение). null только у старых
+  // записей до заполнения (конфликтные партии/без партий после миграции).
+  sectionWidthMm: number | null;
+  sectionHeightMm: number | null;
   status: ProductStatus;
   sortOrder: number;
 }

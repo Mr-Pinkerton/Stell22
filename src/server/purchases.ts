@@ -121,6 +121,8 @@ export async function getPurchasesData(): Promise<PurchasesData> {
     materials: materials.map((m) => ({
       id: m.id,
       name: m.name,
+      sectionWidthMm: m.sectionWidthMm == null ? null : num(m.sectionWidthMm),
+      sectionHeightMm: m.sectionHeightMm == null ? null : num(m.sectionHeightMm),
       status: m.status,
       sortOrder: m.sortOrder,
     })),
@@ -187,11 +189,27 @@ export async function getBatchLabels(batchId: string): Promise<PackageLabelData[
 function validateBatch(v: BatchFormValues, options?: { requirePackages?: boolean }) {
   if (!v.name.trim()) throw new Error("Название партии обязательно");
   if (!v.materialId) throw new Error("Укажите материал партии");
-  if (!v.sectionWidthMm || !v.sectionHeightMm) throw new Error("Укажите сечение рейки");
   if (!v.purchaseCost || v.purchaseCost <= 0) throw new Error("Укажите стоимость партии");
   if (options?.requirePackages && !v.rails.some((r) => r.mode === "package")) {
     throw new Error("Добавьте хотя бы один пакет");
   }
+}
+
+/**
+ * Сечение партии — производное от материала (материал = порода+сечение), клиентские
+ * значения игнорируем. Материал без заданного сечения (старые/конфликтные записи)
+ * использовать нельзя, пока сечение не проставлено в карточке материала.
+ */
+async function resolveMaterialSection(materialId: string): Promise<{ w: number; h: number }> {
+  const m = await prisma.material.findUnique({
+    where: { id: materialId },
+    select: { name: true, sectionWidthMm: true, sectionHeightMm: true },
+  });
+  if (!m) throw new Error("Материал не найден");
+  if (m.sectionWidthMm == null || m.sectionHeightMm == null) {
+    throw new Error(`У материала «${m.name}» не задано сечение — укажите его в карточке материала`);
+  }
+  return { w: num(m.sectionWidthMm), h: num(m.sectionHeightMm) };
 }
 
 async function assertUniqueBatchName(name: string, excludeId?: string): Promise<void> {
@@ -216,6 +234,7 @@ async function loadUsedPackageCodes(): Promise<Set<string>> {
 export async function createBatch(values: BatchFormValues): Promise<PurchaseBatchRow> {
   validateBatch(values, { requirePackages: true });
   await assertUniqueBatchName(values.name);
+  const section = await resolveMaterialSection(values.materialId);
 
   const purchaseDate = parseDate(values.purchaseDate);
   const usedCodes = await loadUsedPackageCodes();
@@ -224,8 +243,8 @@ export async function createBatch(values: BatchFormValues): Promise<PurchaseBatc
     data: {
       name: values.name.trim(),
       materialId: values.materialId,
-      sectionWidthMm: values.sectionWidthMm ?? 0,
-      sectionHeightMm: values.sectionHeightMm ?? 0,
+      sectionWidthMm: section.w,
+      sectionHeightMm: section.h,
       purchaseCost: values.purchaseCost ?? 0,
       totalCost: values.purchaseCost ?? 0, // при создании = закупочной (доставка из Сделок позже)
       priceSort1: values.priceSort1 ?? 0,
@@ -269,6 +288,7 @@ export async function createBatch(values: BatchFormValues): Promise<PurchaseBatc
 export async function updateBatch(id: string, values: BatchFormValues): Promise<PurchaseBatchRow> {
   validateBatch(values);
   await assertUniqueBatchName(values.name, id);
+  const section = await resolveMaterialSection(values.materialId);
 
   const before = await prisma.batch.findUnique({ where: { id } });
   if (!before) throw new Error("Партия не найдена");
@@ -278,8 +298,8 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
     data: {
       name: values.name.trim(),
       materialId: values.materialId,
-      sectionWidthMm: values.sectionWidthMm ?? 0,
-      sectionHeightMm: values.sectionHeightMm ?? 0,
+      sectionWidthMm: section.w,
+      sectionHeightMm: section.h,
       purchaseCost: values.purchaseCost ?? 0,
       priceSort1: values.priceSort1 ?? 0,
       priceSort2: values.priceSort2 ?? 0,

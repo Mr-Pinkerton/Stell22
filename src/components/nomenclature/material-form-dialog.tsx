@@ -61,13 +61,17 @@ function MaterialFormBody({
 }) {
   const isEdit = Boolean(material);
   const [name, setName] = useState(material?.name ?? "");
+  const [sectionW, setSectionW] = useState(String(material?.sectionWidthMm ?? ""));
+  const [sectionH, setSectionH] = useState(String(material?.sectionHeightMm ?? ""));
   const [showErrors, setShowErrors] = useState(false);
 
-  const canSubmit = name.trim().length > 0 && !pending;
+  const wMm = Number(sectionW) || 0;
+  const hMm = Number(sectionH) || 0;
+  const canSubmit = name.trim().length > 0 && wMm > 0 && hMm > 0 && !pending;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
-    await onSubmit?.({ name });
+    await onSubmit?.({ name, sectionWidthMm: wMm, sectionHeightMm: hMm });
   };
 
   return (
@@ -102,6 +106,38 @@ function MaterialFormBody({
               onChange={(e) => setName(capitalizeFirst(e.target.value))}
             />
           </Field>
+          <div className="grid grid-cols-2 gap-4">
+            <Field
+              id="mat-sw"
+              label="Сечение — ширина, мм"
+              required
+              invalid={showErrors && !(wMm > 0)}
+            >
+              <Input
+                id="mat-sw"
+                className={fieldClass}
+                inputMode="decimal"
+                placeholder="40"
+                value={sectionW}
+                onChange={(e) => setSectionW(e.target.value)}
+              />
+            </Field>
+            <Field
+              id="mat-sh"
+              label="Сечение — высота, мм"
+              required
+              invalid={showErrors && !(hMm > 0)}
+            >
+              <Input
+                id="mat-sh"
+                className={fieldClass}
+                inputMode="decimal"
+                placeholder="20"
+                value={sectionH}
+                onChange={(e) => setSectionH(e.target.value)}
+              />
+            </Field>
+          </div>
         </FormSection>
       </div>
 

@@ -93,7 +93,14 @@ async function main() {
 
   // Материал по умолчанию — «Хвоя» (все прототипные данные одной породы).
   await prisma.material.create({
-    data: { id: MATERIAL_HVOYA_ID, name: "Хвоя", status: "ACTIVE", sortOrder: 0 },
+    data: {
+      id: MATERIAL_HVOYA_ID,
+      name: "Хвоя",
+      sectionWidthMm: 20,
+      sectionHeightMm: 40,
+      status: "ACTIVE",
+      sortOrder: 0,
+    },
   });
 
   await prisma.employee.createMany({

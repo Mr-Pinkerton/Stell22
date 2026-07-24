@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Plus, Trash2, XIcon } from "lucide-react";
 import { capitalizeFirst, cn } from "@/lib/utils";
 import { formatMoneyDecimal } from "@/lib/format";
+import { materialLabel } from "@/lib/material";
 import { Button } from "@/components/ui/button";
 import { FormSubmitButton } from "@/components/form-dialog-shared";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -286,13 +287,16 @@ function ProductFormBody({
                     >
                       <SelectTrigger id="prod-material" className={selectTriggerClass}>
                         <SelectValue placeholder="Выберите материал">
-                          {activeMaterials.find((m) => m.id === materialId)?.name}
+                          {(() => {
+                            const m = activeMaterials.find((m) => m.id === materialId);
+                            return m ? materialLabel(m) : null;
+                          })()}
                         </SelectValue>
                       </SelectTrigger>
                       <SelectContent {...formSelectContentProps}>
                         {activeMaterials.map((m) => (
                           <SelectItem key={m.id} value={m.id} className="cursor-pointer rounded-lg">
-                            {m.name}
+                            {materialLabel(m)}
                           </SelectItem>
                         ))}
                       </SelectContent>

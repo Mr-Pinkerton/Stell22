@@ -146,7 +146,14 @@ export const batches: Batch[] = ([
     status: "ARCHIVED",
     purchaseDate: "2025-11-20",
   },
-] as Omit<Batch, "materialId">[]).map((b) => ({ ...b, materialId: MATERIAL_HVOYA_ID }));
+] as Omit<Batch, "materialId">[]).map((b) => ({
+  // Материал = порода+сечение: у одного материала одно сечение. Прото-данные все
+  // под «Хвоя 20×40», поэтому и партии приводим к сечению материала.
+  ...b,
+  materialId: MATERIAL_HVOYA_ID,
+  sectionWidthMm: 20,
+  sectionHeightMm: 40,
+}));
 
 export const railLots: RailLot[] = [
   {

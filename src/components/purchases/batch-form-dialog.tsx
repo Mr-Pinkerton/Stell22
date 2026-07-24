@@ -7,6 +7,7 @@ import { FormSubmitButton } from "@/components/form-dialog-shared";
 import { fieldInvalidClass } from "@/components/nomenclature/form-shared";
 import { sectionAreaM2, resolveRailQuantity } from "@/lib/batch-stats";
 import { allocatePackageCode } from "@/lib/package-code";
+import { materialLabel } from "@/lib/material";
 import type { PurchaseBatchRow } from "@/lib/batch-stats";
 import { formatLength, formatMoney, formatVolume } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -218,8 +219,6 @@ function BatchFormBody({
   const [purchaseDate, setPurchaseDate] = useState(() =>
     isoToDisplayDate(batch?.purchaseDate ?? todayIso()),
   );
-  const [sectionW, setSectionW] = useState(String(batch?.sectionWidthMm ?? ""));
-  const [sectionH, setSectionH] = useState(String(batch?.sectionHeightMm ?? ""));
   const [purchaseCost, setPurchaseCost] = useState<number | null>(batch?.purchaseCost ?? null);
   const [priceSort1, setPriceSort1] = useState<number | null>(batch?.priceSort1 ?? null);
   const [priceSort2, setPriceSort2] = useState<number | null>(batch?.priceSort2 ?? null);
@@ -240,8 +239,10 @@ function BatchFormBody({
   const [showErrors, setShowErrors] = useState(false);
   const [railShowErrors, setRailShowErrors] = useState(false);
 
-  const wMm = Number(sectionW) || 0;
-  const hMm = Number(sectionH) || 0;
+  // Сечение — часть идентичности материала, берём из него (не вводим руками).
+  const selectedMaterial = activeMaterials.find((m) => m.id === materialId) ?? null;
+  const wMm = selectedMaterial?.sectionWidthMm ?? 0;
+  const hMm = selectedMaterial?.sectionHeightMm ?? 0;
   const area = wMm > 0 && hMm > 0 ? sectionAreaM2(wMm, hMm) : 0;
 
   const stats = useMemo(() => {
@@ -528,7 +529,7 @@ function BatchFormBody({
                   />
                 </Field>
               </div>
-              <div className="grid gap-4 sm:grid-cols-3">
+              <div className="grid gap-4 sm:grid-cols-2">
                 <Field
                   id="batch-material"
                   label="Материал"
@@ -538,45 +539,27 @@ function BatchFormBody({
                   <Select value={materialId} onValueChange={(v) => setMaterialId(v ?? "")}>
                     <SelectTrigger id="batch-material" className={selectTriggerClass}>
                       <SelectValue placeholder="Выберите материал">
-                        {activeMaterials.find((m) => m.id === materialId)?.name}
+                        {selectedMaterial ? materialLabel(selectedMaterial) : null}
                       </SelectValue>
                     </SelectTrigger>
                     <SelectContent {...formSelectContentProps}>
                       {activeMaterials.map((m) => (
                         <SelectItem key={m.id} value={m.id} className="cursor-pointer rounded-lg">
-                          {m.name}
+                          {materialLabel(m)}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field
-                  id="batch-sw"
-                  label="Сечение — ширина, мм"
-                  required
-                  invalid={showErrors && !(wMm > 0)}
-                >
-                  <Input
-                    id="batch-sw"
-                    className={narrowFieldClass}
-                    inputMode="decimal"
-                    value={sectionW}
-                    onChange={(e) => setSectionW(e.target.value)}
-                  />
-                </Field>
-                <Field
-                  id="batch-sh"
-                  label="Сечение — высота, мм"
-                  required
-                  invalid={showErrors && !(hMm > 0)}
-                >
-                  <Input
-                    id="batch-sh"
-                    className={narrowFieldClass}
-                    inputMode="decimal"
-                    value={sectionH}
-                    onChange={(e) => setSectionH(e.target.value)}
-                  />
+                <Field id="batch-section" label="Сечение рейки">
+                  <div
+                    id="batch-section"
+                    className={`${narrowFieldClass} flex items-center text-muted-foreground`}
+                  >
+                    {wMm > 0 && hMm > 0
+                      ? `${wMm}×${hMm} мм`
+                      : "задаётся в материале"}
+                  </div>
                 </Field>
               </div>
             </section>
