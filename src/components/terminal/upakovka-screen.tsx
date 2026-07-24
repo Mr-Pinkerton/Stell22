@@ -9,6 +9,7 @@ import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
 import { submitUpakovka } from "@/server/terminal";
 import { formatProductSku } from "@/lib/format";
+import { sectionLabel } from "@/lib/material";
 import type { Employee, Product } from "@/types/domain";
 import type { TerminalData } from "@/components/terminal/types";
 
@@ -43,6 +44,10 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
   const products = useMemo(
     () => data.products.filter((p) => p.status === "ACTIVE"),
     [data.products],
+  );
+  const materialById = useMemo(
+    () => new Map(data.materials.map((m) => [m.id, m])),
+    [data.materials],
   );
   const [picked, setPicked] = useState<Record<string, number>>({});
   const [dialogProduct, setDialogProduct] = useState<Product | null>(null);
@@ -81,6 +86,8 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
           const max = canAssemble(p, data);
           const disabled = max === 0;
           const qty = picked[p.id] ?? 0;
+          const material = materialById.get(p.materialId);
+          const sku = formatProductSku(p.skuOzon, p.skuWb);
           return (
             <OperationTile
               key={p.id}
@@ -89,7 +96,8 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
               active={qty > 0}
               icon={<Package />}
               title={p.name}
-              subtitle={formatProductSku(p.skuOzon, p.skuWb)}
+              sectionBadge={material ? sectionLabel(material) : undefined}
+              subtitle={material?.name ? (sku ? `${material.name} · ${sku}` : material.name) : sku}
               highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
               badge={qty === 0 && !disabled ? `${max} шт` : undefined}
               onClick={() => !disabled && setDialogProduct(p)}

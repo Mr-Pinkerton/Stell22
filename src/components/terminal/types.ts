@@ -2,6 +2,7 @@ import type {
   Batch,
   Detail,
   Employee,
+  Material,
   NomenclatureItem,
   Product,
   RailLot,
@@ -12,6 +13,7 @@ export type TerminalScreen = "home" | "torcovka" | "prisadka" | "upakovka" | "ho
 
 export interface TerminalData {
   employees: Employee[];
+  materials: Material[];
   batches: Batch[];
   railLots: RailLot[];
   details: Detail[];

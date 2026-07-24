@@ -43,6 +43,10 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
   // Ключ идемпотентности одной попытки внесения (A21): один на двойной тап/реплей.
   const requestId = useRef(newRequestId());
 
+  const materialById = useMemo(
+    () => new Map(data.materials.map((m) => [m.id, m])),
+    [data.materials],
+  );
   const batches = data.batches.filter((b) => b.status === "IN_WORK");
   const lots = useMemo(
     () => data.railLots.filter((l) => l.batchId === batchId && l.remainingQuantity > 0),
@@ -128,7 +132,8 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
               active={b.id === batchId}
               icon={<Boxes />}
               title={b.name}
-              subtitle={`${b.sectionWidthMm}×${b.sectionHeightMm} мм`}
+              subtitle={materialById.get(b.materialId)?.name}
+              sectionBadge={`${b.sectionWidthMm}×${b.sectionHeightMm}`}
               onClick={() => selectBatch(b)}
             />
           ))}

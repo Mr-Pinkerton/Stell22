@@ -8,6 +8,7 @@ import { OperationTile, OperationTileGrid } from "@/components/terminal/operatio
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
 import { submitPrisadka } from "@/server/terminal";
+import { sectionLabel } from "@/lib/material";
 import type { Detail, Employee } from "@/types/domain";
 import type { TerminalData } from "@/components/terminal/types";
 
@@ -67,6 +68,10 @@ function buildTiles(data: TerminalData): Tile[] {
 
 export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) {
   const tiles = useMemo(() => buildTiles(data), [data]);
+  const materialById = useMemo(
+    () => new Map(data.materials.map((m) => [m.id, m])),
+    [data.materials],
+  );
   const [picked, setPicked] = useState<Record<string, number>>({});
   const [dialogTile, setDialogTile] = useState<Tile | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -108,6 +113,7 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
             {tiles.map((t) => {
               const key = tileKey(t);
               const qty = picked[key] ?? 0;
+              const material = materialById.get(t.detail.materialId);
               return (
                 <OperationTile
                   key={key}
@@ -116,8 +122,9 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
                   icon={<Drill />}
                   title={t.detail.name}
                   numberBadge={t.detail.detailNumber}
+                  sectionBadge={material ? sectionLabel(material) : undefined}
                   titleNote={t.detail.sort === "SORT1" ? "1 сорт" : "2 сорт"}
-                  subtitle={`${KIND_LABEL[t.kind]} · ожидает ${t.pending} шт · ${t.done} из ${t.total}`}
+                  subtitle={`${material?.name ? `${material.name} · ` : ""}${KIND_LABEL[t.kind]} · ожидает ${t.pending} шт · ${t.done} из ${t.total}`}
                   highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
                   badge={qty === 0 ? `${t.pending} шт` : undefined}
                   onClick={() => setDialogTile(t)}

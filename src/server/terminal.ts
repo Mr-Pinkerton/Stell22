@@ -6,6 +6,7 @@ import type {
   Batch as PrismaBatch,
   Detail as PrismaDetail,
   Employee as PrismaEmployee,
+  Material as PrismaMaterial,
   NomenclatureItem as PrismaItem,
   Prisma,
   RailLot as PrismaRailLot,
@@ -34,6 +35,7 @@ import type {
   Batch,
   Detail,
   Employee,
+  Material,
   NomenclatureItem,
   Product,
   RailLot,
@@ -83,6 +85,17 @@ function serEmployee(e: PrismaEmployee): Employee {
     ratePrisadkaTorcev: num(e.ratePrisadkaTorcev),
     ratePrisadkaPloskt: num(e.ratePrisadkaPloskt),
     rateUpakovka: num(e.rateUpakovka),
+  };
+}
+
+function serMaterial(m: PrismaMaterial): Material {
+  return {
+    id: m.id,
+    name: m.name,
+    sectionWidthMm: num(m.sectionWidthMm),
+    sectionHeightMm: num(m.sectionHeightMm),
+    status: m.status,
+    sortOrder: m.sortOrder,
   };
 }
 
@@ -171,9 +184,10 @@ function serProduct(p: ProductWithRel): Product {
 // ============================ ЧТЕНИЕ =======================================
 
 export async function getTerminalData(): Promise<TerminalData> {
-  const [employees, batches, lots, details, products, items, stockRows, blankRows, nomStock] =
+  const [employees, materials, batches, lots, details, products, items, stockRows, blankRows, nomStock] =
     await Promise.all([
       prisma.employee.findMany({ where: { status: "ACTIVE" }, orderBy: { fullName: "asc" } }),
+      prisma.material.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }),
       prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
       prisma.railLot.findMany(),
       prisma.detail.findMany(),
@@ -207,6 +221,7 @@ export async function getTerminalData(): Promise<TerminalData> {
 
   return {
     employees: employees.map(serEmployee),
+    materials: materials.map(serMaterial),
     batches: batches.map(serBatch),
     railLots: lots.map(serLot),
     details: domainDetails,
