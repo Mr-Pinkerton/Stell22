@@ -122,9 +122,9 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
                   icon={<Drill />}
                   title={t.detail.name}
                   numberBadge={t.detail.detailNumber}
-                  sectionBadge={material ? sectionLabel(material) : undefined}
+                  material={material ? { name: material.name, section: sectionLabel(material) } : undefined}
                   titleNote={t.detail.sort === "SORT1" ? "1 сорт" : "2 сорт"}
-                  subtitle={`${material?.name ? `${material.name} · ` : ""}${KIND_LABEL[t.kind]} · ожидает ${t.pending} шт · ${t.done} из ${t.total}`}
+                  subtitle={`${KIND_LABEL[t.kind]} · ожидает ${t.pending} шт · ${t.done} из ${t.total}`}
                   highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
                   badge={qty === 0 ? `${t.pending} шт` : undefined}
                   onClick={() => setDialogTile(t)}

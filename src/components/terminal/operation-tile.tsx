@@ -103,8 +103,8 @@ interface OperationTileProps {
   badge?: string;
   /** Квадратный бейдж с номером детали (1–9) — после названия. */
   numberBadge?: number | null;
-  /** Небольшая пилюля у иконки — сечение материала, напр. «40×20». */
-  sectionBadge?: string;
+  /** Строка материала под названием: порода + пилюля-сечение (напр. «Хвоя» + «40×20»). */
+  material?: { name: string; section?: string | null };
   /** Бледная приписка после названия и бейджа (напр. сорт детали). */
   titleNote?: string;
   /** Крупная строка в шапке плитки, напр. «Взято 5 реек». */
@@ -130,7 +130,7 @@ export function OperationTile({
   subtitle,
   badge,
   numberBadge,
-  sectionBadge,
+  material,
   titleNote,
   highlight,
   onClick,
@@ -176,19 +176,9 @@ export function OperationTile({
               )}
               onClick={disabled ? undefined : onClick}
             >
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="bg-muted text-muted-foreground flex size-11 shrink-0 items-center justify-center rounded-2xl [&_svg]:size-5 [&_svg]:stroke-[1.75]">
-                  {icon}
-                </span>
-                {sectionBadge && (
-                  <Badge
-                    variant="outline"
-                    className="text-muted-foreground shrink-0 tabular-nums"
-                  >
-                    {sectionBadge}
-                  </Badge>
-                )}
-              </div>
+              <span className="bg-muted text-muted-foreground flex size-11 shrink-0 items-center justify-center rounded-2xl [&_svg]:size-5 [&_svg]:stroke-[1.75]">
+                {icon}
+              </span>
               {highlight != null ? (
                 <p className="text-brand min-w-0 truncate text-right text-2xl leading-none font-bold tabular-nums">
                   {formatHighlight(highlight)}
@@ -220,6 +210,21 @@ export function OperationTile({
                     <span className="text-muted-foreground/70 shrink-0 text-sm">{titleNote}</span>
                   )}
                 </span>
+                {material && (
+                  <span className="mt-1 flex items-center gap-1.5">
+                    <span className="text-muted-foreground min-w-0 truncate text-sm">
+                      {material.name}
+                    </span>
+                    {material.section && (
+                      <Badge
+                        variant="outline"
+                        className="text-muted-foreground shrink-0 tabular-nums"
+                      >
+                        {material.section}
+                      </Badge>
+                    )}
+                  </span>
+                )}
                 {subtitle && (
                   <span className="text-muted-foreground mt-1 block truncate text-base leading-snug">
                     {subtitle}

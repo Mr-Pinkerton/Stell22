@@ -96,8 +96,8 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
               active={qty > 0}
               icon={<Package />}
               title={p.name}
-              sectionBadge={material ? sectionLabel(material) : undefined}
-              subtitle={material?.name ? (sku ? `${material.name} · ${sku}` : material.name) : sku}
+              material={material ? { name: material.name, section: sectionLabel(material) } : undefined}
+              subtitle={sku}
               highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
               badge={qty === 0 && !disabled ? `${max} шт` : undefined}
               onClick={() => !disabled && setDialogProduct(p)}

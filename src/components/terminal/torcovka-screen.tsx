@@ -132,8 +132,10 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
               active={b.id === batchId}
               icon={<Boxes />}
               title={b.name}
-              subtitle={materialById.get(b.materialId)?.name}
-              sectionBadge={`${b.sectionWidthMm}×${b.sectionHeightMm}`}
+              material={{
+                name: materialById.get(b.materialId)?.name ?? "—",
+                section: `${b.sectionWidthMm}×${b.sectionHeightMm}`,
+              }}
               onClick={() => selectBatch(b)}
             />
           ))}
