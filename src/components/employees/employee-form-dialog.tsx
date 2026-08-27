@@ -242,6 +242,7 @@ function EmployeeFormBody({
                   id="emp-hourly"
                   className={narrowFieldClass}
                   suffix="₽/ч"
+                  decimals={2}
                   value={hourlyRate}
                   onValueChange={setHourlyRate}
                 />
@@ -257,6 +258,7 @@ function EmployeeFormBody({
                   id="emp-t1"
                   className={narrowFieldClass}
                   suffix="₽/деталь"
+                  decimals={2}
                   value={rateT1}
                   onValueChange={setRateT1}
                 />
@@ -266,6 +268,7 @@ function EmployeeFormBody({
                   id="emp-t2"
                   className={narrowFieldClass}
                   suffix="₽/деталь"
+                  decimals={2}
                   value={rateT2}
                   onValueChange={setRateT2}
                 />
@@ -275,6 +278,7 @@ function EmployeeFormBody({
                   id="emp-prisadka"
                   className={narrowFieldClass}
                   suffix="₽/присадка"
+                  decimals={2}
                   value={ratePrisadka}
                   onValueChange={setRatePrisadka}
                 />
@@ -284,6 +288,7 @@ function EmployeeFormBody({
                   id="emp-up"
                   className={narrowFieldClass}
                   suffix="₽/изделие"
+                  decimals={2}
                   value={rateUp}
                   onValueChange={setRateUp}
                 />

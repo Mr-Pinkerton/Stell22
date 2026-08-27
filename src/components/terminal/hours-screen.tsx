@@ -6,7 +6,7 @@ import { toast } from "@/components/terminal/toast";
 import { Button } from "@/components/ui/button";
 import { KeypadDisplay, KEYPAD_PANEL } from "@/components/terminal/keypad-panel";
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, formatMoneyDecimal } from "@/lib/format";
 import { submitHours } from "@/server/terminal";
 import type { Employee } from "@/types/domain";
 
@@ -42,7 +42,7 @@ export function HoursScreen({ employee, onDone }: HoursScreenProps) {
         <div className="space-y-1 text-center">
           <h1 className="text-xl font-semibold tracking-tight">Рабочие часы</h1>
           <p className="text-muted-foreground text-base">
-            {rate > 0 ? `Ставка ${formatMoney(rate)}/ч` : "Почасовая ставка не задана"}
+            {rate > 0 ? `Ставка ${formatMoneyDecimal(rate)}/ч` : "Почасовая ставка не задана"}
           </p>
         </div>
 
