@@ -5,7 +5,7 @@
 # на предыдущий SHA. Базу и Prisma-миграции назад не откатывает.
 #
 # Запуск на сервере:  cd /root/Stell22 && sh scripts/deploy.sh
-# Из CI:              DEPLOY_SHA=<полный SHA origin/main> sh scripts/deploy.sh
+# Из CI:              PREVIOUS_SHA=<старый SHA> DEPLOY_SHA=<новый SHA> sh scripts/deploy.sh
 set -e
 
 COMPOSE_FILE="docker-compose.prod.yml"
@@ -15,9 +15,19 @@ cd "$PROJECT_DIR"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3000/api/health}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-20}"
 
-# Коммит до обновления — точка отката приложения, если новый релиз окажется битым.
-PREV_COMMIT="$(git rev-parse --short HEAD)"
-PREV_COMMIT_FULL="$(git rev-parse HEAD)"
+# Точка отката приложения. Из CI передаётся PREVIOUS_SHA, снятый ДО checkout
+# на новый релиз. Ручной запуск без переменной — текущий HEAD.
+if [ -n "${PREVIOUS_SHA:-}" ]; then
+  if ! git cat-file -e "${PREVIOUS_SHA}^{commit}"; then
+    echo "!! PREVIOUS_SHA не является коммитом: $PREVIOUS_SHA" >&2
+    exit 1
+  fi
+  PREV_COMMIT_FULL="$(git rev-parse "$PREVIOUS_SHA")"
+else
+  PREV_COMMIT_FULL="$(git rev-parse HEAD)"
+fi
+PREV_COMMIT="$(git rev-parse --short "$PREV_COMMIT_FULL")"
+echo "    Rollback target: $PREV_COMMIT_FULL"
 LAST_BACKUP=""
 
 wait_for_health() {

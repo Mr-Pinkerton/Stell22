@@ -50,6 +50,11 @@ git show "${EXPECTED_SHA}:scripts/preflight-prod.sh" > "$TMP_DIR/preflight-prod.
 chmod +x "$TMP_DIR/preflight-prod.sh"
 bash "$TMP_DIR/preflight-prod.sh"
 
+# SHA, который реально работал до этого деплоя. Фиксируем ДО checkout:
+# иначе deploy.sh увидит HEAD = EXPECTED_SHA и «откатится» на новый релиз.
+PREVIOUS_SHA="$(git rev-parse HEAD)"
+echo "previous_sha=${PREVIOUS_SHA}"
+
 echo "===== STAGE: checkout ====="
 if git show-ref --verify --quiet refs/heads/main; then
   git checkout main
@@ -59,7 +64,9 @@ else
 fi
 
 echo "===== STAGE: deploy ====="
-DEPLOY_SHA="$EXPECTED_SHA" sh scripts/deploy.sh </dev/null
+PREVIOUS_SHA="$PREVIOUS_SHA" \
+  DEPLOY_SHA="$EXPECTED_SHA" \
+  sh scripts/deploy.sh </dev/null
 
 echo "===== STAGE: verify ====="
 actual="$(git rev-parse HEAD)"

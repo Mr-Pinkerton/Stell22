@@ -55,8 +55,11 @@ scripts/deploy.sh
 
 Перед SSH workflow материализует orchestrator из `EXPECTED_SHA` во временный
 файл и запускает его **без checkout**. Preflight тоже берётся из `EXPECTED_SHA`
-во временный файл; git tree не меняется, пока preflight не прошёл. Checkout —
-только после `PREFLIGHT OK`, затем `deploy.sh`, verify SHA и health.
+во временный файл; git tree не меняется, пока preflight не прошёл. До checkout
+фиксируется `PREVIOUS_SHA` (текущий HEAD). Checkout — только после `PREFLIGHT OK`,
+затем `deploy.sh` с `PREVIOUS_SHA` + `DEPLOY_SHA`, verify SHA и health.
+При сбое нового релиза `deploy.sh` откатывает приложение на `PREVIOUS_SHA`,
+не на уже переключённый `EXPECTED_SHA`.
 
 ## GitHub Secrets
 
@@ -121,7 +124,8 @@ bash scripts/preflight-prod.sh
    (миграции применяет `docker-entrypoint.sh`)
 4. Health: `GET /api/health` внутри контейнера `app`
 5. При сбое build / start / health — автоматический откат **приложения**
-   на SHA, который работал до этого деплоя, повторная сборка и health-check:
+   на `PREVIOUS_SHA` (из CI) или на HEAD до `git pull` (ручной запуск),
+   повторная сборка и health-check:
    `DEPLOY FAILED, ROLLBACK SUCCESSFUL` или `DEPLOY FAILED, ROLLBACK FAILED`
 
 CI/CD этот скрипт не дублирует. Rollback живёт только в `deploy.sh`
