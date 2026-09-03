@@ -4,6 +4,31 @@ export interface PackageLabel {
   subtitle: string;
 }
 
+// Этикетка 58×40мм, отступы 3мм с каждой стороны (см. .label ниже) → под код
+// доступно 58-2×3=52мм по ширине.
+const LABEL_CODE_MAX_PT = 22;
+const LABEL_CODE_MIN_PT = 9;
+const MM_TO_PT = 2.83465;
+// 10% запаса на неточность оценки ширины символов в конкретном браузере/шрифте.
+const LABEL_CODE_SAFE_WIDTH_PT = (58 - 2 * 3) * MM_TO_PT * 0.9;
+// Средняя ширина символа Arial Bold относительно кегля, с запасом под
+// кириллицу «ПАК» (шире цифр/дефисов) и letter-spacing кода.
+const CODE_CHAR_WIDTH_EM = 0.66;
+
+/**
+ * Размер шрифта кода этикетки (pt), подобранный под его длину, чтобы код
+ * НЕ вылезал за край наклейки. Базовый код — «ПАК-24-569-01» (13 симв.), но
+ * при коллизии кодов в партии добавляется суффикс («-2», «-3», …) и код
+ * становится длиннее — на фиксированном 22pt он обрезался `overflow:hidden`.
+ * Короткие коды остаются крупными (22pt), длинные — мельче, но не ниже
+ * минимума читаемости.
+ */
+export function codeFontSizePt(code: string): number {
+  const len = Math.max(1, code.length);
+  const fit = LABEL_CODE_SAFE_WIDTH_PT / (len * CODE_CHAR_WIDTH_EM);
+  return Math.max(LABEL_CODE_MIN_PT, Math.min(LABEL_CODE_MAX_PT, fit));
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -27,7 +52,7 @@ export function printPackageLabels(labels: PackageLabel[]): boolean {
       (l) => `
       <div class="label">
         <div class="title">${escapeHtml(l.title)}</div>
-        <div class="code">${escapeHtml(l.code)}</div>
+        <div class="code" style="font-size:${codeFontSizePt(l.code).toFixed(1)}pt">${escapeHtml(l.code)}</div>
         <div class="subtitle">${escapeHtml(l.subtitle)}</div>
       </div>`,
     )
@@ -49,10 +74,10 @@ export function printPackageLabels(labels: PackageLabel[]): boolean {
       }
       /* Разрыв только МЕЖДУ этикетками — без лишней пустой страницы в конце. */
       .label:not(:last-child) { page-break-after: always; }
+      .title, .code, .subtitle { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .title { font-size: 10pt; font-weight: 600; text-align: center; }
       .code {
-        font-size: 22pt; font-weight: 800; text-align: center; letter-spacing: 1px;
-        white-space: nowrap;
+        font-weight: 800; text-align: center; letter-spacing: 1px;
       }
       .subtitle { font-size: 9pt; text-align: center; color: #333; }
       @media print { .label { border: none; } }
