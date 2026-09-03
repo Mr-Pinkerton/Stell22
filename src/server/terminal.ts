@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import type {
   Batch as PrismaBatch,
   Detail as PrismaDetail,
@@ -24,7 +24,8 @@ import {
   type DetailStockRow,
 } from "@/lib/detail-stock";
 import { isOverRailLength, sumDetailLengthM } from "@/lib/torcovka";
-import { verifyEmployeePin } from "@/lib/terminal-auth";
+import { resolvePinLookup } from "@/lib/terminal-auth";
+import { RateLimiter, retryAfterSeconds } from "@/lib/rate-limit";
 import {
   TERMINAL_COOKIE,
   encryptTerminalSession,
@@ -233,19 +234,77 @@ export async function getTerminalData(): Promise<TerminalData> {
 
 // ============================ АВТОРИЗАЦИЯ (A14) =============================
 
+// Единый текст отказа: клиент не должен различать «такого PIN нет»,
+// «PIN неверный» и «в БД коллизия» — иначе терминал подсказывает подбирающему.
+const PIN_REJECTED = "Неверный PIN";
+
+// Защита от перебора 4-значного PIN. Лимиты мягче, чем у входа админа
+// (auth.ts: 5 попыток / блок 15 мин): терминал — общий киоск, и длинная
+// блокировка из-за чужих опечаток остановила бы работу смены. 10 попыток в
+// 5 минут с блоком на минуту ограничивают перебор ~10 попыток/мин (полный
+// перебор 10 000 кодов — больше 16 часов), почти не мешая живым людям.
+// In-memory: корректно при одном инстансе приложения (см. DEPLOY.md).
+const pinLimiter = new RateLimiter({
+  maxAttempts: 10,
+  windowMs: 5 * 60 * 1000,
+  lockoutMs: 60 * 1000,
+});
+
+/** IP клиента из заголовков обратного прокси (как в auth.ts, fallback — общий ключ). */
+async function clientKey(): Promise<string> {
+  const h = await headers();
+  const forwarded = h.get("x-forwarded-for");
+  const ip = forwarded?.split(",")[0]?.trim() || h.get("x-real-ip")?.trim();
+  return ip || "unknown";
+}
+
 /**
- * Вход в терминал по PIN: проверка на СЕРВЕРЕ (PIN не покидает БД, клиенту не
- * отдаётся). При успехе ставит подписанную терминальную cookie-сессию, которую
- * проверяют все операции. Возвращает сотрудника без PIN.
+ * Вход в терминал ТОЛЬКО по PIN: работник не выбирает себя из списка — сервер
+ * сам опознаёт его по коду. Проверка целиком на сервере (PIN не покидает БД,
+ * клиенту не отдаётся). При успехе ставит подписанную терминальную
+ * cookie-сессию, которую проверяют все операции. Возвращает сотрудника без PIN.
  */
-export async function terminalLogin(employeeId: string, pin: string): Promise<Employee> {
-  const employee = await prisma.employee.findUnique({ where: { id: employeeId } });
-  if (!verifyEmployeePin(employee, pin)) {
-    throw new Error("Неверный PIN");
+export async function terminalLoginByPin(pin: string): Promise<Employee> {
+  const key = await clientKey();
+  const gate = pinLimiter.check(key);
+  if (gate.blocked) {
+    const sec = retryAfterSeconds(gate.retryAfterMs);
+    throw new Error(`Слишком много попыток. Повторите через ${sec} с.`);
   }
-  const token = await encryptTerminalSession({ employeeId: employee!.id });
+
+  // take: 2 — одной записи достаточно для входа, вторая доказывает коллизию.
+  const candidates = await prisma.employee.findMany({
+    where: { pin, status: "ACTIVE" },
+    select: { id: true, pin: true, status: true },
+    take: 2,
+  });
+
+  const lookup = resolvePinLookup(pin, candidates);
+
+  if (lookup.kind === "collision") {
+    // Нарушен инвариант уникальности PIN среди активных (валидация в
+    // employees.ts не должна такое допускать). Не пускаем никого: угадать,
+    // кто именно пришёл, нельзя. PIN в лог не пишем.
+    console.error(
+      `[terminal] PIN-коллизия: один PIN у нескольких активных сотрудников (${lookup.employeeIds.join(", ")}). Вход запрещён, исправьте PIN в справочнике сотрудников.`,
+    );
+  }
+
+  if (lookup.kind !== "ok") {
+    pinLimiter.recordFailure(key);
+    throw new Error(PIN_REJECTED);
+  }
+
+  const employee = await prisma.employee.findUnique({ where: { id: lookup.employeeId } });
+  if (!employee) {
+    pinLimiter.recordFailure(key);
+    throw new Error(PIN_REJECTED);
+  }
+
+  pinLimiter.reset(key);
+  const token = await encryptTerminalSession({ employeeId: employee.id });
   (await cookies()).set(TERMINAL_COOKIE, token, terminalCookieOptions);
-  return serEmployee(employee!);
+  return serEmployee(employee);
 }
 
 /** Выход из терминала: снимает сессию (клиентский автовыход по бездействию). */

@@ -47,6 +47,37 @@ describe("RateLimiter", () => {
     expect(rl.check("ip").blocked).toBe(false);
   });
 
+  it("после истечения lockout старые failures не дают мгновенную повторную блокировку (паттерн терминала: check → recordFailure)", () => {
+    // Параметры PIN-терминала: 10 попыток / 5 мин / блок 1 мин.
+    const clock = fixedClock();
+    const rl = new RateLimiter({
+      maxAttempts: 10,
+      windowMs: 5 * 60 * 1000,
+      lockoutMs: 60 * 1000,
+      now: clock.now,
+    });
+
+    for (let i = 0; i < 10; i++) rl.recordFailure("terminal");
+    expect(rl.check("terminal").blocked).toBe(true);
+
+    // Блокировка истекла — следующая попытка входа сначала вызывает check().
+    clock.advance(60_001);
+    expect(rl.check("terminal").blocked).toBe(false);
+
+    // Одна неудача после разблокировки — счётчик с нуля, не мгновенный re-lock.
+    const afterUnlock = rl.recordFailure("terminal");
+    expect(afterUnlock.blocked).toBe(false);
+
+    // Ещё 8 неудач — всё ещё ниже порога 10.
+    for (let i = 0; i < 8; i++) {
+      expect(rl.recordFailure("terminal").blocked).toBe(false);
+    }
+    expect(rl.check("terminal").blocked).toBe(false);
+
+    // 10-я неудача после разблокировки снова блокирует на 1 мин.
+    expect(rl.recordFailure("terminal").blocked).toBe(true);
+  });
+
   it("сбрасывает счётчик, если окно истекло без блокировки", () => {
     const clock = fixedClock();
     const rl = new RateLimiter({ maxAttempts: 3, windowMs: 10_000, lockoutMs: 60_000, now: clock.now });

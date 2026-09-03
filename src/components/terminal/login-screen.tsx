@@ -1,98 +1,67 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "@/components/terminal/toast";
-import { terminalLogin } from "@/server/terminal";
-import { User, ArrowLeft } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { OperationTile, OperationTileRow } from "@/components/terminal/operation-tile";
+import { terminalLoginByPin } from "@/server/terminal";
 import { KEYPAD_PANEL } from "@/components/terminal/keypad-panel";
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
 import type { Employee } from "@/types/domain";
 
+const PIN_LENGTH = 4;
+
 interface LoginScreenProps {
-  employees: Employee[];
   onSuccess: (employee: Employee) => void;
 }
 
-export function LoginScreen({ employees, onSuccess }: LoginScreenProps) {
-  const [selected, setSelected] = useState<Employee | null>(null);
+/**
+ * Вход в терминал: сразу ввод PIN, без выбора ФИО — сотрудника определяет
+ * сервер по коду (`terminalLoginByPin`). Список работников для входа не нужен.
+ */
+export function LoginScreen({ onSuccess }: LoginScreenProps) {
   const [pin, setPin] = useState("");
-
-  const active = employees.filter((e) => e.status === "ACTIVE");
+  // Блокируем повторную отправку, пока идёт проверка (двойной тап по 4-й цифре).
+  const checking = useRef(false);
 
   const submit = (next: string) => {
     setPin(next);
-    if (next.length === 4 && selected) {
-      // Проверка PIN на сервере (A14): ставит терминальную сессию-cookie.
-      void (async () => {
-        try {
-          const employee = await terminalLogin(selected.id, next);
-          const parts = employee.fullName.split(" ");
-          const firstName = parts[1] ?? parts[0];
-          toast.success(`Здравствуйте, ${firstName}!`);
-          onSuccess(employee);
-        } catch {
-          toast.error("Неверный PIN");
-          setPin("");
-        }
-      })();
-    }
-  };
+    if (next.length !== PIN_LENGTH || checking.current) return;
 
-  if (!selected) {
-    return (
-      <main className="flex flex-1 flex-col items-center gap-6 p-6">
-        <h1 className="text-2xl font-semibold tracking-tight">Выберите сотрудника</h1>
-        <div className="w-full">
-          <OperationTileRow>
-            {active.map((e) => (
-              <OperationTile
-                key={e.id}
-                layout="person"
-                icon={<User />}
-                title={e.fullName}
-                onClick={() => setSelected(e)}
-              />
-            ))}
-          </OperationTileRow>
-        </div>
-      </main>
-    );
-  }
+    checking.current = true;
+    void (async () => {
+      try {
+        const employee = await terminalLoginByPin(next);
+        const parts = employee.fullName.split(" ");
+        const firstName = parts[1] ?? parts[0];
+        toast.success(`Здравствуйте, ${firstName}!`);
+        onSuccess(employee);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Неверный PIN");
+        setPin("");
+      } finally {
+        checking.current = false;
+      }
+    })();
+  };
 
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-6 p-6">
       <div className={KEYPAD_PANEL}>
         <div className="space-y-1 text-center">
-          <h1 className="text-xl font-semibold tracking-tight">{selected.fullName}</h1>
-          <p className="text-muted-foreground text-base">Введите PIN-код</p>
+          <h1 className="text-xl font-semibold tracking-tight">Введите PIN-код</h1>
+          <p className="text-muted-foreground text-base">Терминал узнает вас по коду</p>
         </div>
 
         <div className="flex justify-center gap-4">
-          {[0, 1, 2, 3].map((i) => (
+          {Array.from({ length: PIN_LENGTH }, (_, i) => (
             <span
               key={i}
-              className={
-                "size-5 rounded-full " + (i < pin.length ? "bg-brand" : "bg-muted")
-              }
+              className={"size-5 rounded-full " + (i < pin.length ? "bg-brand" : "bg-muted")}
             />
           ))}
         </div>
 
-        <NumericKeypad value={pin} onChange={submit} maxLength={4} />
-
-        <Button
-          variant="ghost"
-          className="w-full rounded-xl [&_svg]:stroke-[1.75]"
-          onClick={() => {
-            setSelected(null);
-            setPin("");
-          }}
-        >
-          <ArrowLeft />
-          Назад к списку
-        </Button>
+        {/* allowLeadingZeros: PIN «0123» — валидный код. */}
+        <NumericKeypad value={pin} onChange={submit} maxLength={PIN_LENGTH} allowLeadingZeros />
       </div>
     </main>
   );

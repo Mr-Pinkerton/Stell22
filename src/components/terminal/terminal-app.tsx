@@ -26,7 +26,6 @@ const TITLES: Record<TerminalScreen, string> = {
 export function TerminalApp({ initialData }: { initialData: TerminalData }) {
   const [data, setData] = useState<TerminalData>(initialData);
   const [employee, setEmployee] = useState<Employee | null>(null);
-  const [loginOpen, setLoginOpen] = useState(false);
   const [screen, setScreen] = useState<TerminalScreen>("home");
 
   // Перечитать данные после операции (изменились остатки/склад).
@@ -42,7 +41,6 @@ export function TerminalApp({ initialData }: { initialData: TerminalData }) {
   const logout = useCallback(() => {
     setEmployee(null);
     setScreen("home");
-    setLoginOpen(false);
     void terminalLogout(); // A14: снять серверную сессию терминала
   }, []);
 
@@ -69,29 +67,19 @@ export function TerminalApp({ initialData }: { initialData: TerminalData }) {
     <div className="bg-background flex min-h-screen flex-col touch-manipulation">
       <TerminalHeader
         employee={employee}
-        title={loginOpen && !employee ? "Вход в терминал" : TITLES[screen]}
+        title={!employee ? "Вход в терминал" : TITLES[screen]}
         onBack={inOperation ? () => setScreen("home") : null}
-        onLoginClick={() => setLoginOpen(true)}
         onLogout={logout}
       />
 
       {!employee ? (
-        loginOpen ? (
-          <LoginScreen
-            employees={data.employees}
-            onSuccess={(e) => {
-              setEmployee(e);
-              setLoginOpen(false);
-              setScreen("home");
-            }}
-          />
-        ) : (
-          <div className="flex flex-1 items-center justify-center p-6">
-            <p className="text-muted-foreground text-center text-sm">
-              Войдите, чтобы начать работу с терминалом
-            </p>
-          </div>
-        )
+        // Терминал сразу встречает вводом PIN — отдельного шага «Войти» нет.
+        <LoginScreen
+          onSuccess={(e) => {
+            setEmployee(e);
+            setScreen("home");
+          }}
+        />
       ) : screen === "home" ? (
         <HomeScreen employees={data.employees} employee={employee} onSelect={setScreen} />
       ) : screen === "torcovka" ? (

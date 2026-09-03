@@ -1,6 +1,6 @@
 "use client";
 
-import { LogIn, LogOut, ChevronLeft } from "lucide-react";
+import { LogOut, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Employee } from "@/types/domain";
 
@@ -9,7 +9,6 @@ interface TerminalHeaderProps {
   title: string;
   /** Кнопка «назад» внутри операции (null — скрыта). */
   onBack?: (() => void) | null;
-  onLoginClick: () => void;
   onLogout: () => void;
 }
 
@@ -20,7 +19,6 @@ export function TerminalHeader({
   employee,
   title,
   onBack,
-  onLoginClick,
   onLogout,
 }: TerminalHeaderProps) {
   return (
@@ -49,15 +47,10 @@ export function TerminalHeader({
             </Button>
           </>
         ) : (
-          <>
-            <span className="text-muted-foreground hidden text-base font-medium sm:inline">
-              Вход не выполнен
-            </span>
-            <Button className={actionBtn} onClick={onLoginClick}>
-              <LogIn />
-              Войти
-            </Button>
-          </>
+          // Кнопки «Войти» нет: без сессии терминал и так показывает ввод PIN.
+          <span className="text-muted-foreground hidden text-base font-medium sm:inline">
+            Вход не выполнен
+          </span>
         )}
       </div>
     </header>

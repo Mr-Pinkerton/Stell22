@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { Employee as PrismaEmployee } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { pinErrorMessage, validateActivePin } from "@/lib/employee-pin";
 import type { Employee } from "@/types/domain";
 
 // Значения формы сотрудника (приходят из клиентского диалога).
@@ -46,6 +47,41 @@ function serializeEmployee(e: PrismaEmployee): Employee {
   };
 }
 
+/**
+ * Данные сотрудника для журнала изменений — БЕЗ PIN. PIN — единственный
+ * идентификатор работника при входе в терминал, поэтому в аудите не хранится
+ * ни старое, ни новое значение (фиксируем только факт смены — `pinChanged`).
+ */
+function auditEmployee(e: PrismaEmployee) {
+  const s = serializeEmployee(e);
+  return {
+    id: s.id,
+    fullName: s.fullName,
+    birthDate: s.birthDate,
+    status: s.status,
+    hourlyRate: s.hourlyRate,
+    rateTorcovkaSort1: s.rateTorcovkaSort1,
+    rateTorcovkaSort2: s.rateTorcovkaSort2,
+    ratePrisadkaTorcev: s.ratePrisadkaTorcev,
+    ratePrisadkaPloskt: s.ratePrisadkaPloskt,
+    rateUpakovka: s.rateUpakovka,
+  };
+}
+
+/**
+ * PIN сотрудника, который станет/останется ACTIVE: обязателен, ровно 4 цифры,
+ * уникален среди активных. Источник истины — сервер (клиентская проверка
+ * только для UX). `selfId` исключает самого сотрудника из проверки дублей.
+ */
+async function assertActivePin(pin: string, selfId?: string | null): Promise<void> {
+  const activeEmployees = await prisma.employee.findMany({
+    where: { status: "ACTIVE" },
+    select: { id: true, pin: true },
+  });
+  const error = validateActivePin({ pin, selfId, activeEmployees });
+  if (error) throw new Error(pinErrorMessage(error));
+}
+
 export async function getEmployees(): Promise<Employee[]> {
   const rows = await prisma.employee.findMany({ orderBy: { createdAt: "asc" } });
   return rows.map(serializeEmployee);
@@ -67,6 +103,7 @@ function valuesToData(v: EmployeeFormValues) {
 
 export async function createEmployee(values: EmployeeFormValues): Promise<Employee> {
   if (!values.fullName.trim()) throw new Error("ФИО обязательно");
+  await assertActivePin(values.pin.trim()); // новый сотрудник всегда ACTIVE
 
   const created = await prisma.employee.create({
     data: { ...valuesToData(values), status: "ACTIVE" },
@@ -74,7 +111,7 @@ export async function createEmployee(values: EmployeeFormValues): Promise<Employ
   await writeChangeLog({
     entity: "Employee",
     entityId: created.id,
-    newValues: serializeEmployee(created),
+    newValues: auditEmployee(created),
   });
   revalidatePath(EMPLOYEES_PATH);
   return serializeEmployee(created);
@@ -88,6 +125,9 @@ export async function updateEmployee(
 
   const before = await prisma.employee.findUnique({ where: { id } });
   if (!before) throw new Error("Сотрудник не найден");
+  // Для архивного правила PIN не применяем — он не входит в терминал; проверка
+  // будет при возврате в ACTIVE (restoreEmployee).
+  if (before.status === "ACTIVE") await assertActivePin(values.pin.trim(), id);
 
   const updated = await prisma.employee.update({
     where: { id },
@@ -96,8 +136,8 @@ export async function updateEmployee(
   await writeChangeLog({
     entity: "Employee",
     entityId: id,
-    oldValues: serializeEmployee(before),
-    newValues: serializeEmployee(updated),
+    oldValues: auditEmployee(before),
+    newValues: { ...auditEmployee(updated), pinChanged: before.pin !== updated.pin },
   });
   revalidatePath(EMPLOYEES_PATH);
   return serializeEmployee(updated);
@@ -123,6 +163,16 @@ export async function archiveEmployee(id: string): Promise<Employee> {
 }
 
 export async function restoreEmployee(id: string): Promise<Employee> {
+  // Возврат в ACTIVE = сотрудник снова сможет войти в терминал по PIN, поэтому
+  // формат и уникальность проверяем заново: пока он был в архиве, его PIN мог
+  // достаться другому активному сотруднику.
+  const before = await prisma.employee.findUnique({
+    where: { id },
+    select: { pin: true },
+  });
+  if (!before) throw new Error("Сотрудник не найден");
+  await assertActivePin(before.pin.trim(), id);
+
   return setStatus(id, "ACTIVE");
 }
 

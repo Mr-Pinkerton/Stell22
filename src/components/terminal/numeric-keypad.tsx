@@ -8,18 +8,30 @@ interface NumericKeypadProps {
   onChange: (next: string) => void;
   /** Максимум цифр (напр. 4 для PIN). */
   maxLength?: number;
+  /**
+   * Разрешить ведущие нули. Нужно для PIN («0123» — валидный код). Для
+   * количества/часов оставлять false: там «0» — это незначащий ноль, который
+   * заменяется первой введённой цифрой.
+   */
+  allowLeadingZeros?: boolean;
   className?: string;
 }
 
 const KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "C", "0", "back"] as const;
 
 /** Цифровая клавиатура терминала: 123 / 456 / 789 / C 0 ⌫. */
-export function NumericKeypad({ value, onChange, maxLength, className }: NumericKeypadProps) {
+export function NumericKeypad({
+  value,
+  onChange,
+  maxLength,
+  allowLeadingZeros = false,
+  className,
+}: NumericKeypadProps) {
   const press = (key: (typeof KEYS)[number]) => {
     if (key === "C") return onChange("");
     if (key === "back") return onChange(value.slice(0, -1));
     if (maxLength && value.length >= maxLength) return;
-    if (value === "0") return onChange(key); // не копим ведущие нули
+    if (!allowLeadingZeros && value === "0") return onChange(key); // не копим ведущие нули
     onChange(value + key);
   };
 

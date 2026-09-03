@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { MoneyInput } from "@/components/ui/money-input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { isValidPin } from "@/lib/employee-pin";
 import type { Employee } from "@/types/domain";
 import type { EmployeeFormValues } from "@/server/employees";
 
@@ -145,7 +146,13 @@ function EmployeeFormBody({
   const [rateUp, setRateUp] = useState<number | null>(employee?.rateUpakovka ?? null);
   const [showErrors, setShowErrors] = useState(false);
 
-  const canSubmit = fullName.trim().length > 0 && !pending;
+  // PIN — единственный идентификатор при входе в терминал, поэтому у активного
+  // сотрудника он обязателен и строго 4 цифры. Для архивного не требуем: он не
+  // входит в терминал (проверка вернётся при восстановлении). Здесь только UX —
+  // источник истины и проверка уникальности на сервере.
+  const pinRequired = !employee || employee.status === "ACTIVE";
+  const pinValid = isValidPin(pin);
+  const canSubmit = fullName.trim().length > 0 && (!pinRequired || pinValid) && !pending;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -219,7 +226,12 @@ function EmployeeFormBody({
 
           <FormSection title="Доступ">
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field id="emp-pin" label="PIN-код">
+              <Field
+                id="emp-pin"
+                label="PIN-код"
+                required={pinRequired}
+                invalid={showErrors && pinRequired && !pinValid}
+              >
                 <Input
                   id="emp-pin"
                   className={narrowFieldClass}
@@ -231,6 +243,10 @@ function EmployeeFormBody({
                 />
               </Field>
             </div>
+            <p className="text-muted-foreground -mt-1 text-xs leading-relaxed">
+              По этому коду сотрудник входит в терминал — терминал узнаёт его без выбора
+              ФИО. Код должен быть уникальным среди активных сотрудников.
+            </p>
           </FormSection>
 
           <Separator />
