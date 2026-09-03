@@ -93,7 +93,6 @@ jobs:
           key: ${{ secrets.PROD_SSH_KEY }}
           port: ${{ secrets.PROD_PORT || 22 }}
           command_timeout: 25m
-          script_stop: true
           envs: EXPECTED_SHA,APP_DIR
           script: |
             set -euo pipefail
