@@ -1,8 +1,7 @@
 name: CI
 
-# Проверяем каждый PR и пуш в main: линтер, тесты, сборка.
-# Если что-то падает — код не должен попадать в main (включите branch
-# protection в настройках репозитория с обязательной проверкой "verify").
+# Проверяем каждый PR и пуш в main: типы, линтер, тесты, сборка.
+# Деплоя здесь нет — production выкатывается отдельным workflow_dispatch.
 
 on:
   push:
@@ -10,9 +9,13 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,9 +29,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Клиент Prisma нужен для типов при сборке и тестах.
+      # Клиент Prisma нужен для типов при typecheck, тестах и сборке.
       - name: Generate Prisma client
         run: npx prisma generate
+
+      - name: TypeScript
+        run: npm run typecheck
 
       - name: Lint
         run: npm run lint
@@ -36,7 +42,7 @@ jobs:
       - name: Test
         run: npm test
 
-      # Сборка идёт без подключения к БД (как в Dockerfile) — ловим ошибки
-      # типов и битые страницы до деплоя на прод.
+      # Сборка без подключения к БД (как в Dockerfile) — ловим ошибки
+      # типов и битые страницы до ручного деплоя на прод.
       - name: Build
         run: npm run build

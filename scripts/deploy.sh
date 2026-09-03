@@ -4,6 +4,7 @@
 # проверка здоровья. При сбое подсказывает, как откатиться.
 #
 # Запуск на сервере:  cd /root/Stell22 && sh scripts/deploy.sh
+# Из CI:              DEPLOY_SHA=<полный SHA origin/main> sh scripts/deploy.sh
 set -e
 
 COMPOSE_FILE="docker-compose.prod.yml"
@@ -21,9 +22,26 @@ sh scripts/backup-db.sh
 LAST_BACKUP="$(ls -1t backups/stell22_*.sql.gz 2>/dev/null | head -1 || true)"
 
 echo "==> [2/5] Забираю свежий код (был на $PREV_COMMIT)"
-git pull
+if [ -n "${DEPLOY_SHA:-}" ]; then
+  echo "    Целевой SHA: $DEPLOY_SHA"
+  git fetch origin
+  DEPLOY_SHA="$(git rev-parse "$DEPLOY_SHA")"
+  if git show-ref --verify --quiet refs/heads/main; then
+    git checkout main
+    git reset --hard "$DEPLOY_SHA"
+  else
+    git checkout -B main "$DEPLOY_SHA"
+  fi
+else
+  git pull
+fi
 
 NEW_COMMIT="$(git rev-parse --short HEAD)"
+NEW_COMMIT_FULL="$(git rev-parse HEAD)"
+if [ -n "${DEPLOY_SHA:-}" ] && [ "$NEW_COMMIT_FULL" != "$DEPLOY_SHA" ]; then
+  echo "!! HEAD $NEW_COMMIT_FULL != DEPLOY_SHA $DEPLOY_SHA" >&2
+  exit 1
+fi
 if [ "$PREV_COMMIT" = "$NEW_COMMIT" ]; then
   echo "    Изменений нет ($NEW_COMMIT). Пересобираю на всякий случай."
 else

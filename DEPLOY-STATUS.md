@@ -21,10 +21,14 @@
 
 ## Обновление до новой версии
 
-Безопасный путь (бэкап → pull → сборка → health-check → подсказка отката):
+Предпочтительный путь — ручной workflow **Production Deploy** в GitHub Actions
+(push в `main` сам по себе прод не выкатывает). См. `docs/deployment.md`.
+
+Запасной путь по SSH (бэкап → pull → сборка → health-check → подсказка отката):
 
 ```bash
 cd /root/Stell22
+bash scripts/preflight-prod.sh
 sh scripts/deploy.sh
 ```
 

@@ -1,0 +1,77 @@
+name: Production Deploy
+
+# Только вручную. Push в main этот workflow не запускает.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy origin/main
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - name: Checkout origin/main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Resolve origin/main SHA
+        id: meta
+        run: |
+          git fetch origin main
+          SHA="$(git rev-parse origin/main)"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "SHA: ${SHA}"
+          echo "Branch: main"
+          echo "Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: Check required secrets
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+        run: |
+          missing=0
+          for name in PROD_HOST PROD_USER PROD_SSH_KEY PROD_APP_DIR; do
+            if [ -z "${!name}" ]; then
+              echo "Missing required secret: ${name}" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Add secrets on the GitHub Environment \"production\". See docs/deployment.md" >&2
+            exit 1
+          fi
+
+      - name: Preflight, deploy, and health check
+        uses: appleboy/ssh-action@v1.2.4
+        env:
+          EXPECTED_SHA: ${{ steps.meta.outputs.sha }}
+          APP_DIR: ${{ secrets.PROD_APP_DIR }}
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT || 22 }}
+          command_timeout: 25m
+          script_stop: true
+          envs: EXPECTED_SHA,APP_DIR
+          script: |
+            set -euo pipefail
+            cd "$APP_DIR"
+            git fetch origin
+            if ! git cat-file -e "${EXPECTED_SHA}^{commit}"; then
+              echo "ERROR: ${EXPECTED_SHA} not found after git fetch origin" >&2
+              exit 1
+            fi
+            git show "${EXPECTED_SHA}:scripts/ci-prod-remote.sh" | EXPECTED_SHA="$EXPECTED_SHA" bash
