@@ -102,4 +102,5 @@ jobs:
               echo "ERROR: ${EXPECTED_SHA} not found after git fetch origin" >&2
               exit 1
             fi
-            git show "${EXPECTED_SHA}:scripts/ci-prod-remote.sh" | EXPECTED_SHA="$EXPECTED_SHA" bash
+            git checkout -B main "${EXPECTED_SHA}"
+            EXPECTED_SHA="$EXPECTED_SHA" bash scripts/ci-prod-remote.sh

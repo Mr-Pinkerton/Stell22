@@ -53,7 +53,8 @@ scripts/deploy.sh
 - Job `deploy` имеет `needs: [resolve-sha, ci]` и `environment: production`
   — SSH-секреты недоступны, пока CI не зелёный
 
-Перед SSH workflow печатает SHA, ветку (`main`) и время запуска.
+Перед SSH workflow checkout'ит `EXPECTED_SHA` и запускает
+`bash scripts/ci-prod-remote.sh` из файла (не через pipe).
 
 Если CI или preflight не прошли, `scripts/deploy.sh` не запускается.
 
