@@ -12,7 +12,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatLength } from "@/lib/format";
 import { maxDetailQuantity, sumDetailLengthM, type TorcovkaPick } from "@/lib/torcovka";
 import { submitTorcovka } from "@/server/terminal";
-import type { Batch, Employee, RailLot, Sort } from "@/types/domain";
+import type { Batch, Employee, RailLot, RailType, Sort } from "@/types/domain";
 import type { TerminalData } from "@/components/terminal/types";
 
 interface TorcovkaScreenProps {
@@ -24,6 +24,7 @@ interface TorcovkaScreenProps {
 type Dialog = { kind: "rails" } | { kind: "length"; lengthM: number; sort: Sort } | null;
 
 const SORT_LABEL: Record<Sort, string> = { SORT1: "1 сорт", SORT2: "2 сорт" };
+const RAIL_TYPE_LABEL: Record<RailType, string> = { POLKA: "Полка", KANAVKA: "Канавка" };
 const SORT_TABS: Sort[] = ["SORT1", "SORT2"];
 
 const RAIL_LENGTH_LIMIT_MESSAGE = "Длина заготовок превышает длину взятых реек";
@@ -151,7 +152,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
                 active={l.id === lotId}
                 icon={<Layers />}
                 title={l.isPackage ? `Пакет ${l.code}` : "Поштучно"}
-                subtitle={`${formatLength(l.lengthM)} · ${SORT_LABEL[l.sort]} · ост. ${l.remainingQuantity}`}
+                subtitle={`${formatLength(l.lengthM)} · ${SORT_LABEL[l.sort]} · ${RAIL_TYPE_LABEL[l.railType]} · ост. ${l.remainingQuantity}`}
                 highlight={
                   l.id === lotId
                     ? { prefix: "Взято", value: railsTaken, label: "реек" }
