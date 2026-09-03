@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 # Оркестратор production deploy для GitHub Actions.
-# Запускается на сервере (cwd = корень Stell22).
+# Запускается на сервере из файла (cwd = корень Stell22).
 #
 # Обязательно: EXPECTED_SHA — полный SHA origin/main на момент запуска workflow.
-# Запускать только из файла (не через pipe):
-#   EXPECTED_SHA=<sha> bash scripts/ci-prod-remote.sh
+#   EXPECTED_SHA=<sha> bash /path/to/ci-prod-remote.sh
 #
-# При `git show … | bash` stdin — это pipe со скриптом. deploy.sh/docker compose
-# наследуют fd 0 и могут прочитать оставшиеся строки orchestrator (verify/health).
+# Не запускать через `git show … | bash`: deploy/docker могут прочитать stdin pipe
+# и пропустить post-deploy verify.
 set -euo pipefail
 
 : "${EXPECTED_SHA:?EXPECTED_SHA is required}"
@@ -17,12 +16,10 @@ if [[ ! -f docker-compose.prod.yml ]]; then
   exit 1
 fi
 
-if [[ ! -f scripts/ci-prod-remote.sh ]]; then
-  echo "ERROR: run scripts/ci-prod-remote.sh from repo checkout, not from a pipe" >&2
-  exit 1
-fi
-
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3000/api/health}"
+TMP_DIR="$(mktemp -d)"
+cleanup() { rm -rf "$TMP_DIR"; }
+trap cleanup EXIT
 
 echo "===== STAGE: context ====="
 echo "expected_sha=${EXPECTED_SHA}"
@@ -48,6 +45,11 @@ if [[ "$origin_main" != "$EXPECTED_SHA" ]]; then
   fi
 fi
 
+echo "===== STAGE: preflight ====="
+git show "${EXPECTED_SHA}:scripts/preflight-prod.sh" > "$TMP_DIR/preflight-prod.sh"
+chmod +x "$TMP_DIR/preflight-prod.sh"
+bash "$TMP_DIR/preflight-prod.sh"
+
 echo "===== STAGE: checkout ====="
 if git show-ref --verify --quiet refs/heads/main; then
   git checkout main
@@ -56,11 +58,7 @@ else
   git checkout -B main "$EXPECTED_SHA"
 fi
 
-echo "===== STAGE: preflight ====="
-bash scripts/preflight-prod.sh
-
 echo "===== STAGE: deploy ====="
-# Закрываем stdin: deploy/docker не должны читать fd orchestrator.
 DEPLOY_SHA="$EXPECTED_SHA" sh scripts/deploy.sh </dev/null
 
 echo "===== STAGE: verify ====="

@@ -53,10 +53,10 @@ scripts/deploy.sh
 - Job `deploy` имеет `needs: [resolve-sha, ci]` и `environment: production`
   — SSH-секреты недоступны, пока CI не зелёный
 
-Перед SSH workflow checkout'ит `EXPECTED_SHA` и запускает
-`bash scripts/ci-prod-remote.sh` из файла (не через pipe).
-
-Если CI или preflight не прошли, `scripts/deploy.sh` не запускается.
+Перед SSH workflow материализует orchestrator из `EXPECTED_SHA` во временный
+файл и запускает его **без checkout**. Preflight тоже берётся из `EXPECTED_SHA`
+во временный файл; git tree не меняется, пока preflight не прошёл. Checkout —
+только после `PREFLIGHT OK`, затем `deploy.sh`, verify SHA и health.
 
 ## GitHub Secrets
 

@@ -4,8 +4,8 @@
 # Запуск из корня репозитория на проде:
 #   bash scripts/preflight-prod.sh
 #
-# Можно передать скрипт по pipe (cwd должен быть корнем репозитория):
-#   git show SHA:scripts/preflight-prod.sh | bash
+# Из CI (до checkout): orchestrator материализует этот файл из EXPECTED_SHA
+# во временный каталог и запускает из текущего cwd (working tree не меняется).
 set -euo pipefail
 
 COMPOSE_FILE="docker-compose.prod.yml"

@@ -102,5 +102,9 @@ jobs:
               echo "ERROR: ${EXPECTED_SHA} not found after git fetch origin" >&2
               exit 1
             fi
-            git checkout -B main "${EXPECTED_SHA}"
-            EXPECTED_SHA="$EXPECTED_SHA" bash scripts/ci-prod-remote.sh
+            TMP_DIR="$(mktemp -d)"
+            cleanup() { rm -rf "$TMP_DIR"; }
+            trap cleanup EXIT
+            git show "${EXPECTED_SHA}:scripts/ci-prod-remote.sh" > "$TMP_DIR/ci-prod-remote.sh"
+            chmod +x "$TMP_DIR/ci-prod-remote.sh"
+            EXPECTED_SHA="$EXPECTED_SHA" bash "$TMP_DIR/ci-prod-remote.sh"
