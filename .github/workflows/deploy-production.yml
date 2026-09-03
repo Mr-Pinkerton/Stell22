@@ -1,6 +1,7 @@
 name: Production Deploy
 
 # Только вручную. Push в main этот workflow не запускает.
+# Сначала тот же CI, что на push/PR; SSH и preflight — только после зелёного CI.
 on:
   workflow_dispatch:
 
@@ -12,11 +13,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    name: Deploy origin/main
+  resolve-sha:
+    name: Resolve origin/main SHA
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: production
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.meta.outputs.sha }}
     steps:
       - name: Checkout origin/main
         uses: actions/checkout@v4
@@ -33,6 +35,33 @@ jobs:
           echo "SHA: ${SHA}"
           echo "Branch: main"
           echo "Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  ci:
+    name: CI
+    needs: resolve-sha
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.resolve-sha.outputs.sha }}
+
+  deploy:
+    name: Deploy origin/main
+    needs: [resolve-sha, ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    steps:
+      - name: Confirm CI and deploy SHA match
+        run: |
+          expected="${{ needs.resolve-sha.outputs.sha }}"
+          ci_sha="${{ needs.ci.outputs.sha }}"
+          echo "SHA: ${expected}"
+          echo "CI SHA: ${ci_sha}"
+          echo "Branch: main"
+          echo "Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if [ -z "$expected" ] || [ "$ci_sha" != "$expected" ]; then
+            echo "ERROR: CI SHA (${ci_sha}) != deploy SHA (${expected})" >&2
+            exit 1
+          fi
 
       - name: Check required secrets
         env:
@@ -56,7 +85,7 @@ jobs:
       - name: Preflight, deploy, and health check
         uses: appleboy/ssh-action@v1.2.4
         env:
-          EXPECTED_SHA: ${{ steps.meta.outputs.sha }}
+          EXPECTED_SHA: ${{ needs.resolve-sha.outputs.sha }}
           APP_DIR: ${{ secrets.PROD_APP_DIR }}
         with:
           host: ${{ secrets.PROD_HOST }}

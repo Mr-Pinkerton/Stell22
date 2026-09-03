@@ -32,10 +32,12 @@ fi
 origin_main="$(git rev-parse origin/main)"
 echo "origin/main=${origin_main}"
 if [[ "$origin_main" != "$EXPECTED_SHA" ]]; then
-  echo "ERROR: origin/main is ${origin_main}, expected ${EXPECTED_SHA}" >&2
-  echo "Refusing to deploy: would not match origin/main captured at workflow start." >&2
-  echo "Re-run the workflow to deploy the current origin/main." >&2
-  exit 1
+  if git merge-base --is-ancestor "$EXPECTED_SHA" origin/main; then
+    echo "NOTE: origin/main moved ahead; deploying CI-tested SHA ${EXPECTED_SHA}"
+  else
+    echo "ERROR: ${EXPECTED_SHA} is not on origin/main history (origin/main=${origin_main})" >&2
+    exit 1
+  fi
 fi
 
 echo "===== STAGE: preflight ====="

@@ -1,13 +1,23 @@
 name: CI
 
 # Проверяем каждый PR и пуш в main: типы, линтер, тесты, сборка.
-# Деплоя здесь нет — production выкатывается отдельным workflow_dispatch.
+# Деплоя здесь нет — production вызывает этот же workflow через workflow_call.
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_call:
+    inputs:
+      ref:
+        description: Git SHA or ref to check out (must match the SHA that will be deployed)
+        type: string
+        required: true
+    outputs:
+      sha:
+        description: Commit SHA that CI actually checked out
+        value: ${{ jobs.verify.outputs.sha }}
 
 permissions:
   contents: read
@@ -16,9 +26,22 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    outputs:
+      sha: ${{ steps.show-sha.outputs.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_call' && inputs.ref || github.sha }}
+
+      - name: Show checked-out SHA
+        id: show-sha
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "checked_out=${SHA}"
+          echo "github_sha=${{ github.sha }}"
+          echo "input_ref=${{ inputs.ref }}"
 
       - name: Setup Node
         uses: actions/setup-node@v4

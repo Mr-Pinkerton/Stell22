@@ -1,7 +1,8 @@
 #!/bin/sh
 # Безопасное обновление Stell22 на проде (Beget VPS, Docker).
-# Порядок: бэкап БД → git pull → сборка (миграции применит entrypoint) →
-# проверка здоровья. При сбое подсказывает, как откатиться.
+# Порядок: бэкап БД → обновление кода → сборка (миграции применит entrypoint) →
+# проверка здоровья. При сбое build/start/health откатывает только приложение
+# на предыдущий SHA. Базу и Prisma-миграции назад не откатывает.
 #
 # Запуск на сервере:  cd /root/Stell22 && sh scripts/deploy.sh
 # Из CI:              DEPLOY_SHA=<полный SHA origin/main> sh scripts/deploy.sh
@@ -14,8 +15,58 @@ cd "$PROJECT_DIR"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3000/api/health}"
 HEALTH_RETRIES="${HEALTH_RETRIES:-20}"
 
-# Коммит до обновления — точка отката, если новый релиз окажется битым.
+# Коммит до обновления — точка отката приложения, если новый релиз окажется битым.
 PREV_COMMIT="$(git rev-parse --short HEAD)"
+PREV_COMMIT_FULL="$(git rev-parse HEAD)"
+LAST_BACKUP=""
+
+wait_for_health() {
+  i=1
+  while [ "$i" -le "$HEALTH_RETRIES" ]; do
+    if docker compose -f "$COMPOSE_FILE" exec -T app \
+        node -e "fetch('$HEALTH_URL').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then
+      return 0
+    fi
+    if [ "$i" -eq "$HEALTH_RETRIES" ]; then
+      return 1
+    fi
+    sleep 3
+    i=$((i + 1))
+  done
+  return 1
+}
+
+rollback_app() {
+  echo "" >&2
+  echo "!! Откатываю приложение на $PREV_COMMIT ($PREV_COMMIT_FULL)" >&2
+  echo "!! Откат только кода/контейнера. Схема БД и Prisma-миграции НЕ откатываются." >&2
+  if [ -n "$LAST_BACKUP" ]; then
+    echo "!! Бэкап БД (вручную, если миграция испортила данные): $LAST_BACKUP" >&2
+  fi
+
+  if ! git cat-file -e "${PREV_COMMIT_FULL}^{commit}"; then
+    echo "DEPLOY FAILED, ROLLBACK FAILED" >&2
+    echo "!! Предыдущий SHA $PREV_COMMIT_FULL недоступен" >&2
+    exit 1
+  fi
+
+  if git show-ref --verify --quiet refs/heads/main; then
+    git checkout main
+    git reset --hard "$PREV_COMMIT_FULL"
+  else
+    git checkout -B main "$PREV_COMMIT_FULL"
+  fi
+
+  if docker compose -f "$COMPOSE_FILE" up -d --build && wait_for_health; then
+    echo "DEPLOY FAILED, ROLLBACK SUCCESSFUL" >&2
+    echo "    Восстановлен релиз $PREV_COMMIT" >&2
+    exit 1
+  fi
+
+  echo "DEPLOY FAILED, ROLLBACK FAILED" >&2
+  echo "!! Логи: docker compose -f $COMPOSE_FILE logs --tail=50 app" >&2
+  exit 1
+}
 
 echo "==> [1/5] Бэкап базы перед деплоем"
 sh scripts/backup-db.sh
@@ -49,32 +100,21 @@ else
 fi
 
 echo "==> [3/5] Сборка и запуск (migrate deploy выполнит entrypoint контейнера)"
-docker compose -f "$COMPOSE_FILE" up -d --build
+if ! docker compose -f "$COMPOSE_FILE" up -d --build; then
+  echo "!! Сборка или запуск не удались." >&2
+  rollback_app
+fi
 
 echo "==> [4/5] Жду готовности приложения ($HEALTH_URL)"
-i=1
-while [ "$i" -le "$HEALTH_RETRIES" ]; do
-  if docker compose -f "$COMPOSE_FILE" exec -T app \
-      node -e "fetch('$HEALTH_URL').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then
-    echo "    OK: приложение отвечает."
-    break
-  fi
-  if [ "$i" -eq "$HEALTH_RETRIES" ]; then
-    echo "" >&2
-    echo "!! Приложение не поднялось за $HEALTH_RETRIES попыток." >&2
-    echo "!! Логи:   docker compose -f $COMPOSE_FILE logs --tail=50 app" >&2
-    echo "!! Откат кода:" >&2
-    echo "     git checkout $PREV_COMMIT && docker compose -f $COMPOSE_FILE up -d --build" >&2
-    if [ -n "$LAST_BACKUP" ]; then
-      echo "!! Откат БД (только если миграция испортила данные):" >&2
-      echo "     sh scripts/restore-db.sh $LAST_BACKUP" >&2
-    fi
-    exit 1
-  fi
-  sleep 3
-  i=$((i + 1))
-done
+if wait_for_health; then
+  echo "    OK: приложение отвечает."
+else
+  echo "" >&2
+  echo "!! Приложение не поднялось за $HEALTH_RETRIES попыток." >&2
+  echo "!! Логи:   docker compose -f $COMPOSE_FILE logs --tail=50 app" >&2
+  rollback_app
+fi
 
 echo "==> [5/5] Готово. Релиз $NEW_COMMIT в проде."
 echo "    Логи:    docker compose -f $COMPOSE_FILE logs -f app"
-echo "    Откат:   git checkout $PREV_COMMIT && docker compose -f $COMPOSE_FILE up -d --build"
+echo "    Откат приложения (код, не БД): git checkout $PREV_COMMIT && docker compose -f $COMPOSE_FILE up -d --build"

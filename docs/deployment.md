@@ -13,12 +13,17 @@ GitHub Actions: CI
         ↓
 вручную: Actions → Production Deploy → Run workflow
         ↓
-SSH на production
+resolve origin/main SHA
+        ↓
+тот же reusable CI (workflow_call) на этом SHA
+        ↓ only green
+production environment
         ↓
 preflight (read-only проверки БД, сейчас — PIN сотрудников)
         ↓
 scripts/deploy.sh
-  backup → checkout SHA origin/main → build → migrate → health
+  backup → checkout того же SHA → build → migrate → health
+  при сбое build/start/health — откат приложения на предыдущий SHA
         ↓
 повторный health-check и сверка задеплоенного SHA
 ```
@@ -27,9 +32,11 @@ scripts/deploy.sh
 
 Файл: `.github/workflows/ci.yml`
 
-- Триггеры: `push` и `pull_request` в `main`
+- Триггеры: `push` и `pull_request` в `main`, плюс `workflow_call`
 - Секретов production **нет**
 - Деплоя **нет**
+- Production Deploy вызывает этот же файл (`uses: ./.github/workflows/ci.yml`)
+  на том SHA, который затем уйдёт на сервер. Набор команд не дублируется.
 
 Если CI красный — в логе видно упавший шаг (`TypeScript`, `Lint`, `Test`, `Build`).
 
@@ -42,11 +49,13 @@ scripts/deploy.sh
   required reviewers в настройках Environment без правки YAML
 - Concurrency: группа `production-deploy`, второй запуск **ждёт** первый
   (`cancel-in-progress: false`)
-- Деплоится SHA `origin/main` на момент запуска, не локальная ветка сервера
+- Деплоится тот же SHA `origin/main`, который только что проверил reusable CI
+- Job `deploy` имеет `needs: [resolve-sha, ci]` и `environment: production`
+  — SSH-секреты недоступны, пока CI не зелёный
 
 Перед SSH workflow печатает SHA, ветку (`main`) и время запуска.
 
-Если preflight не прошёл, `scripts/deploy.sh` не запускается.
+Если CI или preflight не прошли, `scripts/deploy.sh` не запускается.
 
 ## GitHub Secrets
 
@@ -110,21 +119,19 @@ bash scripts/preflight-prod.sh
 3. `docker compose -f docker-compose.prod.yml up -d --build`
    (миграции применяет `docker-entrypoint.sh`)
 4. Health: `GET /api/health` внутри контейнера `app`
-5. При сбое health — **подсказка** отката, не автоматический rollback
+5. При сбое build / start / health — автоматический откат **приложения**
+   на SHA, который работал до этого деплоя, повторная сборка и health-check:
+   `DEPLOY FAILED, ROLLBACK SUCCESSFUL` или `DEPLOY FAILED, ROLLBACK FAILED`
 
-CI/CD этот скрипт не дублирует.
+CI/CD этот скрипт не дублирует. Rollback живёт только в `deploy.sh`
+(ручной запуск ведёт себя так же).
 
 ## Откат
 
-Автоматического rollback в workflow нет — он опирается на `deploy.sh`.
-
-Если релиз не поднялся, на сервере (как печатает сам скрипт):
-
-```bash
-cd "$PROD_APP_DIR"
-git checkout <предыдущий-short-sha>
-docker compose -f docker-compose.prod.yml up -d --build
-```
+Откатывается только приложение (git tree + контейнер). **Схема БД и
+Prisma-миграции автоматически назад не откатываются.** Если новая миграция
+уже применилась, предыдущий код может быть несовместим с новой схемой —
+это нужно разбирать вручную.
 
 Откат БД — только если миграция испортила данные:
 

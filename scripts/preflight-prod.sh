@@ -58,6 +58,7 @@ fi
 if [[ "$invalid_count" -gt 0 ]]; then
   failed=1
   echo "Invalid ACTIVE employee PIN format (must be exactly 4 digits): ${invalid_count}" >&2
+  echo "employee id / fullName (PIN not shown):" >&2
   psql_q "$(
     cat <<'SQL'
 SELECT id || ' / ' || "fullName"
@@ -92,6 +93,7 @@ fi
 if [[ "$duplicate_groups" -gt 0 ]]; then
   failed=1
   echo "Duplicate ACTIVE PINs (PIN masked): ${duplicate_groups} group(s)" >&2
+  echo "employee id / fullName (PIN not shown):" >&2
   psql_q "$(
     cat <<'SQL'
 SELECT e.id || ' / ' || e."fullName"
@@ -106,7 +108,7 @@ WHERE e.status = 'ACTIVE'
     GROUP BY pin
     HAVING count(*) > 1
   )
-ORDER BY e.pin, e."fullName", e.id;
+ORDER BY e."fullName", e.id;
 SQL
   )" >&2
 fi

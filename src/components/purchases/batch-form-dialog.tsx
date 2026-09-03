@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Plus, Trash2, XIcon } from "lucide-react";
 import { capitalizeFirst, cn } from "@/lib/utils";
 import { FormSubmitButton } from "@/components/form-dialog-shared";
@@ -245,7 +245,7 @@ function BatchFormBody({
   const hMm = selectedMaterial?.sectionHeightMm ?? 0;
   const area = wMm > 0 && hMm > 0 ? sectionAreaM2(wMm, hMm) : 0;
 
-  const stats = useMemo(() => {
+  const stats = (() => {
     let railCount = 0;
     let totalLengthM = 0;
     let volumeM3 = 0;
@@ -266,7 +266,7 @@ function BatchFormBody({
     const sort2Pct = totalVol > 0 ? 100 - sort1Pct : 0;
 
     return { railCount, totalLengthM, volumeM3, packageCount: entries.filter((e) => e.mode === "package").length, sort1Pct, sort2Pct };
-  }, [entries, area]);
+  })();
 
   const draftRowsNum = Number(draftRows) || 0;
   const draftLayersNum = Number(draftLayers) || 0;
