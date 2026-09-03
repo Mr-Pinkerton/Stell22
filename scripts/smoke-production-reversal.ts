@@ -5,6 +5,8 @@
 // npm run smoke:production
 // Использует dev-БД из .env; после прогона данные возвращаются к исходному
 // состоянию через `npm run db:seed`.
+import "./smoke-cookies-preload";
+import { setSmokeAdminUser, setSmokeTerminalEmployee } from "./smoke-cookies-preload";
 import { PrismaClient } from "@prisma/client";
 import {
   submitPrisadka,
@@ -17,11 +19,40 @@ import {
 } from "../src/server/production";
 
 const prisma = new PrismaClient();
+let smokeAdminUserId: string | null = null;
+
+if (process.argv.includes("--import-only") || process.env.CLI_IMPORT_SMOKE === "1") {
+  console.log("CLI import ok: scripts/smoke-production-reversal.ts");
+  process.exit(0);
+}
+
+async function getSmokeAdminUserId(): Promise<string> {
+  if (smokeAdminUserId) return smokeAdminUserId;
+  const admin = await prisma.user.findFirstOrThrow({
+    where: { role: "ADMIN" },
+    select: { id: true },
+  });
+  smokeAdminUserId = admin.id;
+  return admin.id;
+}
+
+async function withAdminSession<T>(fn: () => Promise<T>): Promise<T | undefined> {
+  await setSmokeAdminUser(await getSmokeAdminUserId());
+  return ignoringRevalidate(fn);
+}
 
 // Скрипт запускается вне Next.js request-контекста, поэтому `revalidatePath`
 // (вызывается ПОСЛЕ успешного commit транзакции во всех проверяемых функциях)
 // бросает "static generation store missing" — это ожидаемо здесь и не
 // означает, что мутация данных не прошла. Глушим только эту конкретную ошибку.
+async function withTerminalSession<T>(
+  employeeId: string,
+  fn: () => Promise<T>,
+): Promise<T | undefined> {
+  await setSmokeTerminalEmployee(employeeId);
+  return ignoringRevalidate(fn);
+}
+
 async function ignoringRevalidate<T>(fn: () => Promise<T>): Promise<T | undefined> {
   try {
     return await fn();
@@ -78,7 +109,7 @@ async function testPrisadkaRoundtrip() {
       where: { detailId: detail.id, torcevayaDone: false, ploskostDone: false },
     }))?.quantity ?? 0;
 
-  await ignoringRevalidate(() =>
+  await withTerminalSession(employee.id, () =>
     submitPrisadka({
       employeeId: employee.id,
       picks: [{ detailId: detail.id, kind: "torcev", quantity: 10 }],
@@ -99,7 +130,7 @@ async function testPrisadkaRoundtrip() {
   assertEqual(readyAfterSubmit - readyBefore, 10, "присажено +10 шт (torcev)");
 
   // Правка: увеличиваем с 10 до 15.
-  await ignoringRevalidate(() => updateProductionLineQuantity(op.id, 0, 15));
+  await withAdminSession(() => updateProductionLineQuantity(op.id, 0, 15));
   const afterEdit =
     (await prisma.detailStock.findFirst({
       where: { detailId: detail.id, torcevayaDone: true, ploskostDone: false },
@@ -109,7 +140,7 @@ async function testPrisadkaRoundtrip() {
   assertEqual(totalAfterEdit, totalBefore, "суммарный остаток детали не меняется после правки присадки");
 
   // Удаление — должно вернуть всё в исходное сырое состояние.
-  await ignoringRevalidate(() => deleteProductionOperation(op.id));
+  await withAdminSession(() => deleteProductionOperation(op.id));
   const totalAfterDelete = await snapshotDetailStock(detail.id);
   assertEqual(totalAfterDelete, totalBefore, "суммарный остаток детали не меняется после удаления присадки");
   const rawAfterDelete =
@@ -162,7 +193,7 @@ async function testUpakovkaRoundtrip() {
   if (product.packagingId) nomTotalsBefore.set(product.packagingId, await snapshotNomenclature(product.packagingId));
   const productStockBefore = await snapshotProductStock(product.id);
 
-  await ignoringRevalidate(() =>
+  await withTerminalSession(employee.id, () =>
     submitUpakovka({ employeeId: employee.id, picks: [{ productId: product.id, quantity: 5 }] }),
   );
   const productStockAfterSubmit = await snapshotProductStock(product.id);
@@ -174,12 +205,12 @@ async function testUpakovkaRoundtrip() {
   });
 
   // Правка: 5 -> 3 изделия (часть материала должна вернуться).
-  await ignoringRevalidate(() => updateProductionLineQuantity(op.id, 0, 3));
+  await withAdminSession(() => updateProductionLineQuantity(op.id, 0, 3));
   const productStockAfterEdit = await snapshotProductStock(product.id);
   assertEqual(productStockAfterEdit, productStockBefore + 3, "после правки на складе 3 изделия");
 
   // Удаление — всё возвращается в исходное состояние.
-  await ignoringRevalidate(() => deleteProductionOperation(op.id));
+  await withAdminSession(() => deleteProductionOperation(op.id));
   const productStockAfterDelete = await snapshotProductStock(product.id);
   assertEqual(productStockAfterDelete, productStockBefore, "остаток изделия вернулся к исходному после удаления");
 
@@ -209,7 +240,7 @@ async function testTorcovkaDeleteDoesNotReturnRails() {
     }))?.quantity ?? 0;
   const remainingBefore = lot.remainingQuantity;
 
-  await ignoringRevalidate(() =>
+  await withTerminalSession(employee.id, () =>
     submitTorcovka({
       employeeId: employee.id,
       batchId: lot.batchId,
@@ -230,7 +261,7 @@ async function testTorcovkaDeleteDoesNotReturnRails() {
 
   // Удаляем запись — рейки НЕ должны вернуться в пакет (они уже распилены),
   // а произведённые заготовки должны уйти со склада заготовок.
-  await ignoringRevalidate(() => deleteProductionOperation(op.id));
+  await withAdminSession(() => deleteProductionOperation(op.id));
 
   const remainingAfterDelete = (await prisma.railLot.findUniqueOrThrow({ where: { id: lot.id } }))
     .remainingQuantity;
@@ -269,7 +300,7 @@ async function testPrisadkaDeleteBlockedWhenConsumedFurther() {
     data: { detailId: detail.id, torcevayaDone: false, ploskostDone: false, quantity: 10 },
   });
 
-  await ignoringRevalidate(() =>
+  await withTerminalSession(employee.id, () =>
     submitPrisadka({ employeeId: employee.id, picks: [{ detailId: detail.id, kind: "torcev", quantity: 10 }] }),
   );
   const opTorcev = await prisma.productionOperation.findFirstOrThrow({
@@ -278,7 +309,7 @@ async function testPrisadkaDeleteBlockedWhenConsumedFurther() {
   });
 
   // Вторая присадка переводит эти же 10 шт (единственный источник — raw) в (true, true).
-  await ignoringRevalidate(() =>
+  await withTerminalSession(employee.id, () =>
     submitPrisadka({ employeeId: employee.id, picks: [{ detailId: detail.id, kind: "plosk", quantity: 10 }] }),
   );
 
@@ -289,7 +320,7 @@ async function testPrisadkaDeleteBlockedWhenConsumedFurther() {
 
   let caughtBusinessError = false;
   try {
-    await deleteProductionOperation(opTorcev.id);
+    await withAdminSession(() => deleteProductionOperation(opTorcev.id));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes(BUSINESS_ERROR_MARKER)) {

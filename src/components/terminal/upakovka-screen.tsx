@@ -10,17 +10,20 @@ import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
 import { submitUpakovka } from "@/server/terminal";
 import { formatProductSku } from "@/lib/format";
 import { sectionLabel } from "@/lib/material";
-import type { Employee, Product } from "@/types/domain";
-import type { TerminalData } from "@/components/terminal/types";
+import type {
+  TerminalData,
+  TerminalEmployee,
+  TerminalProduct,
+} from "@/components/terminal/types";
 
 interface UpakovkaScreenProps {
   data: TerminalData;
-  employee: Employee;
+  employee: TerminalEmployee;
   onDone: () => void;
 }
 
 /** Сколько изделий можно собрать = минимум по всем компонентам. */
-function canAssemble(product: Product, data: TerminalData): number {
+function canAssemble(product: TerminalProduct, data: TerminalData): number {
   const limits: number[] = [];
   for (const d of product.details) {
     const ready = data.stock.detailsReady[d.detailId] ?? 0;
@@ -50,7 +53,7 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
     [data.materials],
   );
   const [picked, setPicked] = useState<Record<string, number>>({});
-  const [dialogProduct, setDialogProduct] = useState<Product | null>(null);
+  const [dialogProduct, setDialogProduct] = useState<TerminalProduct | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const requestId = useRef(newRequestId()); // ключ идемпотентности (A21)
 

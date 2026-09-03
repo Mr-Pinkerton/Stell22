@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { requireAdmin } from "@/server/session";
 import {
   blankKey,
   buildStockSnapshot,
@@ -12,7 +13,8 @@ import {
   type DetailStockRow as RawStockRow,
 } from "@/lib/detail-stock";
 import { formatProductSku } from "@/lib/format";
-import { getUnitCostSnapshot, type UnitCostSnapshot } from "@/server/cost";
+import type { UnitCostSnapshot } from "@/server/cost";
+import { getUnitCostSnapshot } from "@/server/internal/cost";
 import type { Detail } from "@/types/domain";
 import type { ProductionStockRow, DetailStockRow } from "@/lib/warehouse-stock";
 import type {
@@ -40,6 +42,7 @@ export interface WarehouseStock {
 }
 
 export async function getWarehouseStock(): Promise<WarehouseStock> {
+  await requireAdmin();
   const [products, productStock, details, detailStock, blankStock, items, nomStock, materials] =
     await Promise.all([
       prisma.product.findMany({ where: { status: "ACTIVE" } }),
@@ -206,6 +209,7 @@ async function serializeDoc(
 }
 
 export async function getInventoryDocs(): Promise<InventoryDocRow[]> {
+  await requireAdmin();
   const [docs, valuation] = await Promise.all([
     prisma.inventory.findMany({ include: { lines: true }, orderBy: { date: "desc" } }),
     getUnitCostSnapshot(),
@@ -222,6 +226,7 @@ export async function getInventoryDocs(): Promise<InventoryDocRow[]> {
  * учёта. В обычном режиме (сверка) берутся только позиции с остатком > 0.
  */
 export async function createInventoryDraft(includeAllActive = false): Promise<InventoryDocRow> {
+  await requireAdmin();
   const existing = await prisma.inventory.findFirst({ where: { status: "DRAFT" } });
   if (existing) throw new Error("Черновик инвентаризации уже существует");
 
@@ -281,6 +286,7 @@ export async function updateInventoryLineActual(
   lineId: string,
   actualQty: number,
 ): Promise<void> {
+  await requireAdmin();
   if (!(actualQty >= 0)) throw new Error("Некорректное количество");
   const line = await prisma.inventoryLine.findUnique({
     where: { id: lineId },
@@ -305,6 +311,7 @@ export async function updateInventoryLineActual(
  * Этап 10). Сырьё (рейки) в этой инвентаризации не участвует.
  */
 export async function conductInventory(docId: string): Promise<InventoryDocRow> {
+  await requireAdmin();
   const doc = await prisma.inventory.findUnique({ where: { id: docId }, include: { lines: true } });
   if (!doc) throw new Error("Инвентаризация не найдена");
   if (doc.status !== "DRAFT") throw new Error("Инвентаризация уже проведена");

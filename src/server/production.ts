@@ -4,13 +4,14 @@ import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { requireAdmin } from "@/server/session";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import {
   applyPrisadkaPick,
   applyUpakovkaPick,
   reversePrisadkaLine,
   reverseUpakovkaOperation,
-} from "@/server/terminal";
+} from "@/server/internal/production-reversal";
 import { operationEarning } from "@/lib/payroll";
 import { isOverRailLength } from "@/lib/torcovka";
 import { dayKey } from "@/lib/entries";
@@ -170,6 +171,7 @@ async function buildMaps(ops: OpFull[]): Promise<RefMaps> {
 }
 
 export async function getProductionEntries(): Promise<ProductionEntryRow[]> {
+  await requireAdmin();
   const ops = await prisma.productionOperation.findMany({
     include: { lines: true },
     orderBy: { createdAt: "desc" },
@@ -202,6 +204,7 @@ export async function updateProductionLineQuantity(
   lineIndex: number,
   newQty: number,
 ): Promise<ProductionEntryRow> {
+  await requireAdmin();
   if (!(newQty > 0)) throw new Error("Количество должно быть положительным");
 
   const op = await prisma.productionOperation.findUnique({
@@ -383,6 +386,7 @@ export async function updateProductionLineQuantity(
  * в этом случае удаление невозможно без нарушения cost-integrity.
  */
 export async function deleteProductionOperation(id: string): Promise<void> {
+  await requireAdmin();
   const op = await prisma.productionOperation.findUnique({
     where: { id },
     include: { lines: true, nomenclatureLines: true },

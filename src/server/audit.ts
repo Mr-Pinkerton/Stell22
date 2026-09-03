@@ -1,6 +1,7 @@
 "use server";
 
 import { prisma } from "@/server/db";
+import { requireAdmin } from "@/server/session";
 import type { LogLevel, SystemLogRow } from "@/mocks/settings-fixtures";
 import type { SystemLogLevel } from "@/lib/system-log";
 
@@ -110,7 +111,7 @@ function mapSystemLog(l: {
 }
 
 /** Операционный журнал (ошибки API, синхронизации). */
-export async function getSystemLogs(limit = 100): Promise<SystemLogRow[]> {
+async function getSystemLogs(limit = 100): Promise<SystemLogRow[]> {
   const logs = await prisma.systemLog.findMany({
     orderBy: { createdAt: "desc" },
     take: limit,
@@ -119,7 +120,7 @@ export async function getSystemLogs(limit = 100): Promise<SystemLogRow[]> {
 }
 
 /** Журнал изменений (аудит бизнес-операций). */
-export async function getChangeLogs(limit = 100): Promise<SystemLogRow[]> {
+async function getChangeLogs(limit = 100): Promise<SystemLogRow[]> {
   const logs = await prisma.changeLog.findMany({
     orderBy: { changedAt: "desc" },
     take: limit,
@@ -132,6 +133,7 @@ export async function getChangeLogs(limit = 100): Promise<SystemLogRow[]> {
  * по убыванию времени.
  */
 export async function getSettingsLogs(limit = 150): Promise<SystemLogRow[]> {
+  await requireAdmin();
   const [system, audit] = await Promise.all([getSystemLogs(limit), getChangeLogs(limit)]);
   return [...system, ...audit]
     .sort((a, b) => b.at.localeCompare(a.at))

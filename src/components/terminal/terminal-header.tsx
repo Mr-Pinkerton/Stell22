@@ -2,10 +2,10 @@
 
 import { LogOut, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { Employee } from "@/types/domain";
+import type { TerminalEmployee } from "@/components/terminal/types";
 
 interface TerminalHeaderProps {
-  employee: Employee | null;
+  employee: TerminalEmployee | null;
   title: string;
   /** Кнопка «назад» внутри операции (null — скрыта). */
   onBack?: (() => void) | null;

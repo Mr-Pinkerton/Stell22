@@ -1,6 +1,7 @@
 "use server";
 
 import { prisma } from "@/server/db";
+import { requireAdmin } from "@/server/session";
 import { getFinanceData } from "@/server/finance";
 import { getSalaryReport } from "@/server/payroll";
 import { getWasteReport, type WasteReport } from "@/server/reports";
@@ -48,6 +49,7 @@ function num(value: { toNumber: () => number } | number | null): number {
 }
 
 export async function getDashboardData(): Promise<DashboardSource> {
+  await requireAdmin();
   const [finance, salary, waste, goalsData, purchases, ops, lots, nomStock, nomItems, appSettings] =
     await Promise.all([
       getFinanceData(),

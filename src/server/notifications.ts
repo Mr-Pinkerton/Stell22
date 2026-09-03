@@ -1,13 +1,10 @@
 "use server";
 
-import type { Prisma, PrismaClient } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/server/db";
+import { requireAdmin } from "@/server/session";
 import { getDashboardData } from "@/server/dashboard";
 import { buildDashboardAlerts, type DashboardAlert } from "@/lib/dashboard-metrics";
-
-// Транзакционный клиент Prisma (внутри $transaction) или обычный.
-type Db = PrismaClient | Prisma.TransactionClient;
 
 export type NotificationTone = "ERROR" | "SUCCESS" | "INFO";
 
@@ -27,39 +24,6 @@ const toneByAlertTone: Record<DashboardAlert["tone"], NotificationTone> = {
   violet: "INFO",
   blue: "INFO",
 };
-
-/**
- * Разовое событие (партия закрыта, ЗП выплачена и т.п.) — создаётся один раз
- * в момент действия. Дедупликация по `key`: повторный вызов с тем же key
- * ничего не делает (напр. если действие идемпотентно повторяется в рамках
- * одной транзакции).
- */
-export async function notifyEvent(
-  input: {
-    key: string;
-    title: string;
-    message: string;
-    tone: NotificationTone;
-    href?: string;
-    severity?: number;
-  },
-  db: Db = prisma,
-): Promise<void> {
-  await db.notification.upsert({
-    where: { key: input.key },
-    update: {},
-    create: {
-      key: input.key,
-      title: input.title,
-      message: input.message,
-      tone: input.tone,
-      href: input.href ?? null,
-      severity: input.severity ?? 0,
-      isSystem: false,
-      isRead: false,
-    },
-  });
-}
 
 // Пересчёт системных алертов тянет дашборд (финансы/ЗП/отход/цели/закупки) —
 // это дорого, поэтому при частом опросе троттлим (не чаще раза в интервал).
@@ -141,6 +105,7 @@ async function readNotifications(limit: number): Promise<NotificationRow[]> {
 
 /** Полная загрузка (с пересчётом системных алертов) — для рендера страницы. */
 export async function getNotifications(limit = 30): Promise<NotificationRow[]> {
+  await requireAdmin();
   await runSystemSync();
   return readNotifications(limit);
 }
@@ -151,6 +116,7 @@ export async function getNotifications(limit = 30): Promise<NotificationRow[]> {
  * не чаще раза в SYSTEM_SYNC_INTERVAL_MS, чтобы частый опрос не грузил БД.
  */
 export async function pollNotifications(limit = 30): Promise<NotificationRow[]> {
+  await requireAdmin();
   if (Date.now() - lastSystemSyncAt >= SYSTEM_SYNC_INTERVAL_MS) {
     await runSystemSync();
   }
@@ -158,11 +124,13 @@ export async function pollNotifications(limit = 30): Promise<NotificationRow[]> 
 }
 
 export async function markNotificationRead(id: string): Promise<void> {
+  await requireAdmin();
   await prisma.notification.update({ where: { id }, data: { isRead: true } });
   revalidatePath("/", "layout");
 }
 
 export async function markAllNotificationsRead(): Promise<void> {
+  await requireAdmin();
   await prisma.notification.updateMany({ where: { isRead: false }, data: { isRead: true } });
   revalidatePath("/", "layout");
 }

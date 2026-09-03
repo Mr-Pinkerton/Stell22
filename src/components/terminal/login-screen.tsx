@@ -5,12 +5,12 @@ import { toast } from "@/components/terminal/toast";
 import { terminalLoginByPin } from "@/server/terminal";
 import { KEYPAD_PANEL } from "@/components/terminal/keypad-panel";
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
-import type { Employee } from "@/types/domain";
+import type { TerminalIdentity } from "@/components/terminal/types";
 
 const PIN_LENGTH = 4;
 
 interface LoginScreenProps {
-  onSuccess: (employee: Employee) => void;
+  onSuccess: (employee: TerminalIdentity) => Promise<void>;
 }
 
 /**
@@ -30,10 +30,10 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
     void (async () => {
       try {
         const employee = await terminalLoginByPin(next);
+        await onSuccess(employee);
         const parts = employee.fullName.split(" ");
         const firstName = parts[1] ?? parts[0];
         toast.success(`Здравствуйте, ${firstName}!`);
-        onSuccess(employee);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Неверный PIN");
         setPin("");

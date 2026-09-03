@@ -14,7 +14,7 @@ import { simpleParser } from "mailparser";
 import { unzipSync } from "fflate";
 import { writeSystemLog } from "@/server/system-log";
 import { decodeStatementBytes, is1CStatement } from "@/lib/bank-statement-1c";
-import { importStatement } from "@/server/finance";
+import { importStatementInternal } from "@/server/internal/statement-import";
 
 const LOG_SOURCE = "Выписки (почта)";
 
@@ -205,7 +205,9 @@ export async function runMailIntake(config: MailIntakeConfig): Promise<MailIntak
             const { statements, skipped } = extractStatements(name, bytes);
             result.attachmentsSkipped += skipped;
             for (const st of statements) {
-              const res = await ignoringRevalidate(() => importStatement(st.content, st.fileName));
+              const res = await ignoringRevalidate(() =>
+                importStatementInternal(st.content, st.fileName),
+              );
               result.statementsImported += 1;
               if (res) result.operationsImported += res.importedCount;
             }
@@ -265,7 +267,10 @@ export async function runMailIntakeAndLog(): Promise<MailIntakeResult> {
 
   // Тишину не логируем: нет писем и ошибок — не засоряем журнал каждый час.
   const silent =
-    result.ok && result.messagesProcessed === 0 && result.messagesSkipped === 0 && result.errors.length === 0;
+    result.ok &&
+    result.messagesProcessed === 0 &&
+    result.messagesSkipped === 0 &&
+    result.errors.length === 0;
   if (!silent) {
     await writeSystemLog({
       level: result.ok ? "INFO" : "ERROR",

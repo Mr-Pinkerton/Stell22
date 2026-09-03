@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
-import { maybeFreezeBatch } from "@/server/cost";
-import { notifyEvent } from "@/server/notifications";
+import { requireAdmin } from "@/server/session";
+import { maybeFreezeBatch } from "@/server/internal/cost";
+import { notifyEvent } from "@/server/internal/notification-event";
 import { formatMoney } from "@/lib/format";
 import { operationEarning } from "@/lib/payroll";
 import { dayKey } from "@/lib/entries";
@@ -116,6 +117,7 @@ function aggregate(items: ComputedOp[]): { produced: number; total: number; days
  * (с прошлой выплаты/с начала), поэтому купюры и суммы к выплате не фильтруются.
  */
 export async function getSalaryReport(scope?: Period | null): Promise<SalaryReportRow[]> {
+  await requireAdmin();
   const maps = await buildRefMaps();
   const ops = await prisma.productionOperation.findMany({ include: { lines: true } });
   const computed = new Map(ops.map((op) => [op.id, computeOp(op, maps)]));
@@ -181,6 +183,7 @@ export async function getSalaryReport(scope?: Period | null): Promise<SalaryRepo
  * обновлённый отчёт.
  */
 export async function markEmployeePaid(employeeId: string): Promise<SalaryReportRow[]> {
+  await requireAdmin();
   const maps = await buildRefMaps();
   const ops = await prisma.productionOperation.findMany({
     where: { employeeId, isPaid: false },

@@ -36,12 +36,9 @@ export const getCurrentUser = cache(async (): Promise<CurrentUser | null> => {
  * Гейт для админских маршрутов: возвращает пользователя или редиректит на
  * /login. Вызывать в layout группы (admin) и, для надёжности, в мутациях.
  *
- * A22 (на будущее): сейчас большинство server actions полагаются только на гейт
- * в layout группы (admin) и НЕ вызывают requireAdmin() сами. Пока ролей всего две
- * (ADMIN / сотрудник терминала) и весь (admin)-контур доступен только админу —
- * это терпимо. Когда появятся дополнительные роли/ограниченный доступ, обернуть
- * мутации (finance/production/nomenclature/…) вызовом requireAdmin() поштучно,
- * как уже сделано в settings.ts. Не делаем сейчас, чтобы не плодить шум.
+ * Server Actions обязаны вызывать этот гейт сами: layout/proxy не являются
+ * авторизацией action POST. User в текущей архитектуре всегда ADMIN; работник
+ * терминала — отдельная Employee-сессия, не роль User.
  */
 export async function requireAdmin(): Promise<CurrentUser> {
   const user = await getCurrentUser();

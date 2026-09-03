@@ -1,4 +1,4 @@
-import { recalcBatchCosts } from "@/server/cost";
+import { recalcBatchCosts } from "@/server/internal/cost";
 
 // Внутрипроцессный коалесцинг пересчётов себестоимости (лёгкая замена очереди
 // до появления Redis/воркера). Цель — не запускать одинаковый тяжёлый пересчёт

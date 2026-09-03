@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import ExcelJS from "exceljs";
+
+vi.mock("@/server/session", () => ({
+  requireAdmin: vi.fn(async () => ({
+    id: "test-admin",
+    name: "Test Admin",
+    email: "admin@test.local",
+    role: "ADMIN",
+  })),
+}));
+
 import { buildXlsx } from "@/server/export";
 import { XLSX_FMT, type XlsxSheet } from "@/lib/xlsx-types";
 

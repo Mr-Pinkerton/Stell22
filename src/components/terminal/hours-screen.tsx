@@ -8,10 +8,10 @@ import { KeypadDisplay, KEYPAD_PANEL } from "@/components/terminal/keypad-panel"
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
 import { formatMoney, formatMoneyDecimal } from "@/lib/format";
 import { submitHours } from "@/server/terminal";
-import type { Employee } from "@/types/domain";
+import type { TerminalEmployee } from "@/components/terminal/types";
 
 interface HoursScreenProps {
-  employee: Employee;
+  employee: TerminalEmployee;
   onDone: () => void;
 }
 

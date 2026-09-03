@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/server/db";
 import { requireAdmin } from "@/server/session";
 import { writeChangeLog } from "@/server/change-log";
+import { loadStoredApiCredentialsInternal } from "@/server/internal/api-credentials";
 import { verifyPassword } from "@/lib/password";
 import {
   API_CREDENTIAL_KEYS,
@@ -20,9 +21,7 @@ import {
 // Общие параметры приложения хранятся одним JSON-значением в key-value Setting.
 const APP_SETTINGS_KEY = "app:settings";
 
-export type VerifyApiCredentialsPasswordResult =
-  | { ok: true }
-  | { ok: false; error: string };
+export type VerifyApiCredentialsPasswordResult = { ok: true } | { ok: false; error: string };
 
 /**
  * Повторная проверка пароля текущего администратора перед просмотром API-ключей.
@@ -48,28 +47,12 @@ export async function verifyApiCredentialsPassword(
 }
 
 /**
- * Значения API-ключей из БД без проверки сессии (для серверной синхронизации).
- */
-export async function loadStoredApiCredentials(): Promise<ApiCredentialValues> {
-  const rows = await prisma.setting.findMany({
-    where: { key: { startsWith: SETTING_PREFIX } },
-  });
-  const stored = new Map(rows.map((r) => [r.key.slice(SETTING_PREFIX.length), r.value]));
-  const out: ApiCredentialValues = {};
-  for (const key of API_CREDENTIAL_KEYS) {
-    const v = stored.get(key);
-    out[key] = typeof v === "string" ? v : "";
-  }
-  return out;
-}
-
-/**
  * Значения API-ключей из key-value модели Setting. Возвращает { key: value }
  * для всех известных полей (отсутствующие — пустая строка). Только для админа.
  */
 export async function getApiCredentials(): Promise<ApiCredentialValues> {
   await requireAdmin();
-  return loadStoredApiCredentials();
+  return loadStoredApiCredentialsInternal();
 }
 
 /**
@@ -112,6 +95,7 @@ export async function saveApiCredentials(values: ApiCredentialValues): Promise<{
  * Отсутствует/битое значение → дефолт.
  */
 export async function getAppSettings(): Promise<AppSettings> {
+  await requireAdmin();
   const row = await prisma.setting.findUnique({ where: { key: APP_SETTINGS_KEY } });
   const raw = row?.value;
   const wasteRaw =
@@ -175,9 +159,24 @@ export async function getMinStockRows(): Promise<MinStockRow[]> {
   ]);
 
   const rows: MinStockRow[] = [
-    ...products.map((p) => ({ id: p.id, kind: "PRODUCT" as MinStockKind, name: p.name, minStock: p.minStock ?? 0 })),
-    ...details.map((d) => ({ id: d.id, kind: "DETAIL" as MinStockKind, name: d.name, minStock: d.minStock ?? 0 })),
-    ...nomenclature.map((n) => ({ id: n.id, kind: "NOMENCLATURE" as MinStockKind, name: n.name, minStock: n.minStock ?? 0 })),
+    ...products.map((p) => ({
+      id: p.id,
+      kind: "PRODUCT" as MinStockKind,
+      name: p.name,
+      minStock: p.minStock ?? 0,
+    })),
+    ...details.map((d) => ({
+      id: d.id,
+      kind: "DETAIL" as MinStockKind,
+      name: d.name,
+      minStock: d.minStock ?? 0,
+    })),
+    ...nomenclature.map((n) => ({
+      id: n.id,
+      kind: "NOMENCLATURE" as MinStockKind,
+      name: n.name,
+      minStock: n.minStock ?? 0,
+    })),
   ];
   return rows;
 }

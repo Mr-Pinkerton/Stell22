@@ -7,19 +7,19 @@ import type {
   Detail as PrismaDetail,
   Employee as PrismaEmployee,
   Material as PrismaMaterial,
-  NomenclatureItem as PrismaItem,
   Prisma,
   RailLot as PrismaRailLot,
 } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
-import { archiveBatchIfDepleted } from "@/server/cost";
+import { archiveBatchIfDepleted } from "@/server/internal/cost";
 import {
-  allocate,
+  applyPrisadkaPick,
+  applyUpakovkaPick,
+} from "@/server/internal/production-reversal";
+import {
   buildStockSnapshot,
-  isReady,
-  requiredPrisadki,
   type BlankStockRow,
   type DetailStockRow,
 } from "@/lib/detail-stock";
@@ -33,18 +33,19 @@ import {
 } from "@/lib/session";
 import { requireTerminalEmployee } from "@/server/session";
 import type {
-  Batch,
   Detail,
-  Employee,
-  Material,
-  NomenclatureItem,
-  Product,
-  RailLot,
-  RailType,
   Sort,
   TerminalEntry,
 } from "@/types/domain";
-import type { TerminalData } from "@/components/terminal/types";
+import type {
+  TerminalBatch,
+  TerminalData,
+  TerminalDetail,
+  TerminalIdentity,
+  TerminalMaterial,
+  TerminalProduct,
+  TerminalRailLot,
+} from "@/components/terminal/types";
 
 function num(value: Prisma.Decimal | number | null): number | null {
   if (value == null) return null;
@@ -72,52 +73,27 @@ function isDuplicateClientRequest(e: unknown): boolean {
 
 // ============================ СЕРИАЛИЗАЦИЯ =================================
 
-function serEmployee(e: PrismaEmployee): Employee {
-  return {
-    id: e.id,
-    fullName: e.fullName,
-    birthDate: e.birthDate ? e.birthDate.toISOString().slice(0, 10) : null,
-    // PIN на клиент не отдаём — проверка входа только на сервере (A14).
-    pin: "",
-    status: e.status,
-    hourlyRate: num(e.hourlyRate),
-    rateTorcovkaSort1: num(e.rateTorcovkaSort1),
-    rateTorcovkaSort2: num(e.rateTorcovkaSort2),
-    ratePrisadkaTorcev: num(e.ratePrisadkaTorcev),
-    ratePrisadkaPloskt: num(e.ratePrisadkaPloskt),
-    rateUpakovka: num(e.rateUpakovka),
-  };
-}
-
-function serMaterial(m: PrismaMaterial): Material {
+function serMaterial(m: PrismaMaterial): TerminalMaterial {
   return {
     id: m.id,
     name: m.name,
     sectionWidthMm: num(m.sectionWidthMm),
     sectionHeightMm: num(m.sectionHeightMm),
-    status: m.status,
-    sortOrder: m.sortOrder,
   };
 }
 
-function serBatch(b: PrismaBatch): Batch {
+function serBatch(b: PrismaBatch): TerminalBatch {
   return {
     id: b.id,
     name: b.name,
     materialId: b.materialId,
     sectionWidthMm: num(b.sectionWidthMm) ?? 0,
     sectionHeightMm: num(b.sectionHeightMm) ?? 0,
-    purchaseCost: num(b.purchaseCost) ?? 0,
-    totalCost: num(b.totalCost) ?? 0,
-    priceSort1: num(b.priceSort1) ?? 0,
-    priceSort2: num(b.priceSort2) ?? 0,
     status: b.status,
-    purchaseDate: b.purchaseDate.toISOString().slice(0, 10),
-    note: b.note,
   };
 }
 
-function serLot(l: PrismaRailLot): RailLot {
+function serLot(l: PrismaRailLot): TerminalRailLot {
   return {
     id: l.id,
     batchId: l.batchId,
@@ -126,14 +102,11 @@ function serLot(l: PrismaRailLot): RailLot {
     sort: l.sort,
     isPackage: l.isPackage,
     code: l.code,
-    rows: l.rows,
-    layers: l.layers,
-    quantity: l.quantity,
     remainingQuantity: l.remainingQuantity,
   };
 }
 
-function serDetail(d: PrismaDetail): Detail {
+function serDetail(d: PrismaDetail): TerminalDetail {
   return {
     id: d.id,
     name: d.name,
@@ -148,29 +121,17 @@ function serDetail(d: PrismaDetail): Detail {
   };
 }
 
-function serItem(n: PrismaItem): NomenclatureItem {
-  return {
-    id: n.id,
-    name: n.name,
-    type: n.type,
-    unitPrice: num(n.unitPrice) ?? 0,
-    status: n.status,
-    minStock: n.minStock,
-  };
-}
-
 type ProductWithRel = Prisma.ProductGetPayload<{
   include: { details: true; fasteners: true; extras: true };
 }>;
 
-function serProduct(p: ProductWithRel): Product {
+function serProduct(p: ProductWithRel): TerminalProduct {
   return {
     id: p.id,
     name: p.name,
     materialId: p.materialId,
     skuOzon: p.skuOzon,
     skuWb: p.skuWb,
-    sort: p.sort,
     packagingId: p.packagingId,
     status: p.status,
     details: p.details.map((d) => ({
@@ -185,19 +146,40 @@ function serProduct(p: ProductWithRel): Product {
 // ============================ ЧТЕНИЕ =======================================
 
 export async function getTerminalData(): Promise<TerminalData> {
-  const [employees, materials, batches, lots, details, products, items, stockRows, blankRows, nomStock] =
-    await Promise.all([
-      prisma.employee.findMany({ where: { status: "ACTIVE" }, orderBy: { fullName: "asc" } }),
+  const sessionEmployee = await requireTerminalEmployee();
+  const [
+    currentEmployee,
+    employees,
+    materials,
+    batches,
+    lots,
+    details,
+    products,
+    stockRows,
+    nomStock,
+    blankStock,
+  ] = await Promise.all([
+      prisma.employee.findUnique({
+        where: { id: sessionEmployee.id },
+        select: { id: true, fullName: true, hourlyRate: true },
+      }),
+      prisma.employee.findMany({
+        where: { status: "ACTIVE", birthDate: { not: null } },
+        select: { id: true, fullName: true, birthDate: true },
+        orderBy: { fullName: "asc" },
+      }),
       prisma.material.findMany({ orderBy: [{ sortOrder: "asc" }, { name: "asc" }] }),
       prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
       prisma.railLot.findMany(),
       prisma.detail.findMany(),
       prisma.product.findMany({ include: { details: true, fasteners: true, extras: true } }),
-      prisma.nomenclatureItem.findMany(),
       prisma.detailStock.findMany(),
-      prisma.blankStock.findMany(),
       prisma.nomenclatureStock.findMany(),
+      prisma.blankStock.findMany(),
     ]);
+  if (!currentEmployee) {
+    throw new Error("Сессия терминала недействительна. Войдите заново.");
+  }
 
   const domainDetails = details.map(serDetail);
 
@@ -212,7 +194,7 @@ export async function getTerminalData(): Promise<TerminalData> {
     quantity: r.quantity,
   }));
 
-  const blanks: BlankStockRow[] = blankRows.map((b) => ({
+  const blankRows: BlankStockRow[] = blankStock.map((b) => ({
     materialId: b.materialId,
     lengthM: num(b.lengthM) ?? 0,
     detailType: b.detailType,
@@ -220,15 +202,40 @@ export async function getTerminalData(): Promise<TerminalData> {
     quantity: b.quantity,
   }));
 
+  const stock = buildStockSnapshot(
+    domainDetails as Detail[],
+    rows,
+    blankRows,
+    nomenclatureStock,
+  );
+  const today = new Date();
+  const birthdaysToday = employees
+    .filter((employee) => {
+      if (!employee.birthDate) return false;
+      return (
+        employee.birthDate.getMonth() === today.getMonth() &&
+        employee.birthDate.getDate() === today.getDate()
+      );
+    })
+    .map(({ id, fullName }) => ({ id, fullName }));
+
   return {
-    employees: employees.map(serEmployee),
+    currentEmployee: {
+      id: currentEmployee.id,
+      fullName: currentEmployee.fullName,
+      hourlyRate: num(currentEmployee.hourlyRate),
+    },
+    birthdaysToday,
     materials: materials.map(serMaterial),
     batches: batches.map(serBatch),
     railLots: lots.map(serLot),
     details: domainDetails,
     products: products.map(serProduct),
-    nomenclature: items.map(serItem),
-    stock: buildStockSnapshot(domainDetails, rows, blanks, nomenclatureStock),
+    stock: {
+      prisadkaPending: stock.prisadkaPending,
+      detailsReady: stock.detailsReady,
+      nomenclature: stock.nomenclature,
+    },
   };
 }
 
@@ -264,7 +271,7 @@ async function clientKey(): Promise<string> {
  * клиенту не отдаётся). При успехе ставит подписанную терминальную
  * cookie-сессию, которую проверяют все операции. Возвращает сотрудника без PIN.
  */
-export async function terminalLoginByPin(pin: string): Promise<Employee> {
+export async function terminalLoginByPin(pin: string): Promise<TerminalIdentity> {
   const key = await clientKey();
   const gate = pinLimiter.check(key);
   if (gate.blocked) {
@@ -295,7 +302,10 @@ export async function terminalLoginByPin(pin: string): Promise<Employee> {
     throw new Error(PIN_REJECTED);
   }
 
-  const employee = await prisma.employee.findUnique({ where: { id: lookup.employeeId } });
+  const employee = await prisma.employee.findUnique({
+    where: { id: lookup.employeeId },
+    select: { id: true, fullName: true },
+  });
   if (!employee) {
     pinLimiter.recordFailure(key);
     throw new Error(PIN_REJECTED);
@@ -304,7 +314,7 @@ export async function terminalLoginByPin(pin: string): Promise<Employee> {
   pinLimiter.reset(key);
   const token = await encryptTerminalSession({ employeeId: employee.id });
   (await cookies()).set(TERMINAL_COOKIE, token, terminalCookieOptions);
-  return serEmployee(employee);
+  return employee;
 }
 
 /** Выход из терминала: снимает сессию (клиентский автовыход по бездействию). */
@@ -330,10 +340,10 @@ export interface TorcovkaInput {
 }
 
 export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
+  await requireTerminalEmployee(input?.employeeId);
   const { employeeId, batchId, railLotId, railsTaken } = input;
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
-  await requireTerminalEmployee(employeeId); // A14: подтверждаем сессию терминала
   if (railsTaken <= 0) throw new Error("Укажите количество взятых реек");
   if (picks.length === 0) throw new Error("Не выбраны длины заготовок");
 
@@ -453,6 +463,7 @@ export interface PrisadkaInput {
  * На каждый источник — своя строка `OperationDetailLine` (для обратной разноски
  * при правке/удалении). Бросает при нехватке (нельзя в минус — cost-integrity).
  */
+/* Implementation moved to server/internal/production-reversal.ts.
 async function applyPrisadkaPick(
   tx: Prisma.TransactionClient,
   operationId: string,
@@ -545,6 +556,7 @@ async function applyPrisadkaPick(
     left = 0;
   }
 }
+*/
 
 /**
  * Обратная разноска одной строки ПРИСАДКИ: снимает результат (комбинация
@@ -552,7 +564,8 @@ async function applyPrisadkaPick(
  * (`sourceTorcevayaDone/PloskostDone`). Бросает, если деталь уже ушла дальше
  * (в другую присадку/упаковку) — правка/удаление в этом случае невозможны.
  */
-export async function reversePrisadkaLine(
+/* Implementation moved to server/internal/production-reversal.ts.
+async function movedReversePrisadkaLine(
   tx: Prisma.TransactionClient,
   line: {
     detailId: string | null;
@@ -643,12 +656,13 @@ export async function reversePrisadkaLine(
     update: { quantity: { increment: line.quantity } },
   });
 }
+*/
 
 export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
+  await requireTerminalEmployee(input?.employeeId);
   const { employeeId } = input;
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
-  await requireTerminalEmployee(employeeId); // A14: подтверждаем сессию терминала
   if (picks.length === 0) throw new Error("Не выбраны детали");
 
   await prisma
@@ -696,6 +710,7 @@ export interface UpakovkaInput {
  * может измениться позже, поэтому для обратной разноски нужен именно
  * фактически списанный набор, а не текущий состав.
  */
+/* Implementation moved to server/internal/production-reversal.ts.
 async function applyUpakovkaPick(
   tx: Prisma.TransactionClient,
   operationId: string,
@@ -831,13 +846,15 @@ async function applyUpakovkaPick(
     update: { quantity: { increment: quantity } },
   });
 }
+*/
 
 /**
  * Обратная разноска операции УПАКОВКИ: возвращает детали в исходные комбинации
  * DetailStock, крепёж/упаковку — в NomenclatureStock, снимает изделие с
  * ProductStock. Бросает, если изделие уже отгружено/продано (остаток < qty).
  */
-export async function reverseUpakovkaOperation(
+/* Implementation moved to server/internal/production-reversal.ts.
+async function movedReverseUpakovkaOperation(
   tx: Prisma.TransactionClient,
   productId: string,
   productQty: number,
@@ -920,12 +937,13 @@ export async function reverseUpakovkaOperation(
     });
   }
 }
+*/
 
 export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
+  await requireTerminalEmployee(input?.employeeId);
   const { employeeId } = input;
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
-  await requireTerminalEmployee(employeeId); // A14: подтверждаем сессию терминала
   if (picks.length === 0) throw new Error("Не выбраны изделия");
 
   await prisma
@@ -964,8 +982,6 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
   revalidatePath("/terminal");
 }
 
-export { applyPrisadkaPick, applyUpakovkaPick };
-
 // ============================ РАБОЧИЕ ЧАСЫ =================================
 
 export async function submitHours(
@@ -973,8 +989,8 @@ export async function submitHours(
   hours: number,
   clientRequestId?: string,
 ): Promise<void> {
+  await requireTerminalEmployee(employeeId || undefined);
   if (!employeeId) throw new Error("Не выбран работник");
-  await requireTerminalEmployee(employeeId); // A14: подтверждаем сессию терминала
   if (!(hours > 0)) throw new Error("Укажите количество часов");
 
   let op: { id: string } | null = null;

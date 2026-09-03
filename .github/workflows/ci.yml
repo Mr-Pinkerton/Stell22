@@ -1,6 +1,6 @@
 name: CI
 
-# Проверяем каждый PR и пуш в main: типы, линтер, тесты, сборка.
+# Проверяем каждый PR и пуш в main: типы, линтер, тесты, security policy, сборка.
 # Деплоя здесь нет — production вызывает этот же workflow через workflow_call.
 
 on:
@@ -65,7 +65,16 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Server Action source policy
+        run: npm run security:actions
+
+      - name: CLI import security
+        run: npm run security:cli-imports
+
       # Сборка без подключения к БД (как в Dockerfile) — ловим ошибки
       # типов и битые страницы до ручного деплоя на прод.
       - name: Build
         run: npm run build
+
+      - name: Server Action manifest policy
+        run: npm run security:manifest

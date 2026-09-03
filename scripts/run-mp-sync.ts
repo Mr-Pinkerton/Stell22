@@ -3,7 +3,12 @@
  * npx tsx scripts/run-mp-sync.ts
  */
 import { prisma } from "../src/server/db";
-import { syncMarketplacesAsUser } from "../src/server/marketplace";
+import { syncMarketplacesAsUserInternal } from "../src/server/internal/marketplace-sync";
+
+if (process.argv.includes("--import-only") || process.env.CLI_IMPORT_SMOKE === "1") {
+  console.log("CLI import ok: scripts/run-mp-sync.ts");
+  process.exit(0);
+}
 
 async function main() {
   const admin = await prisma.user.findFirst({
@@ -16,7 +21,7 @@ async function main() {
   }
 
   console.log(`Синхронизация от ${admin.email}…`);
-  const res = await syncMarketplacesAsUser(admin.id);
+  const res = await syncMarketplacesAsUserInternal(admin.id);
 
   console.log(JSON.stringify(res, null, 2));
 

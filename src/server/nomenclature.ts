@@ -8,6 +8,7 @@ import type {
 } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { requireAdmin } from "@/server/session";
 import type {
   Detail,
   Material,
@@ -106,6 +107,7 @@ function serializeMaterial(m: {
 }
 
 export async function getNomenclatureData(): Promise<NomenclatureData> {
+  await requireAdmin();
   const [details, products, items, materials] = await Promise.all([
     prisma.detail.findMany({ orderBy: { name: "asc" } }),
     prisma.product.findMany({ include: productInclude, orderBy: { name: "asc" } }),
@@ -157,6 +159,7 @@ function assertDetailNumberValid(values: DetailFormValues): void {
 }
 
 export async function createDetail(values: DetailFormValues): Promise<Detail> {
+  await requireAdmin();
   if (!values.name.trim()) throw new Error("Название детали обязательно");
   if (!values.materialId) throw new Error("Укажите материал детали");
   if (!values.lengthM || values.lengthM <= 0) throw new Error("Укажите длину детали");
@@ -169,6 +172,7 @@ export async function createDetail(values: DetailFormValues): Promise<Detail> {
 }
 
 export async function updateDetail(id: string, values: DetailFormValues): Promise<Detail> {
+  await requireAdmin();
   if (!values.name.trim()) throw new Error("Название детали обязательно");
   if (!values.materialId) throw new Error("Укажите материал детали");
   if (!values.lengthM || values.lengthM <= 0) throw new Error("Укажите длину детали");
@@ -203,14 +207,17 @@ async function setDetailStatus(id: string, status: "ACTIVE" | "ARCHIVED"): Promi
 }
 
 export async function archiveDetail(id: string): Promise<Detail> {
+  await requireAdmin();
   return setDetailStatus(id, "ARCHIVED");
 }
 
 export async function restoreDetail(id: string): Promise<Detail> {
+  await requireAdmin();
   return setDetailStatus(id, "ACTIVE");
 }
 
 export async function deleteDetail(id: string): Promise<void> {
+  await requireAdmin();
   const usedInProduct = await prisma.productDetail.count({ where: { detailId: id } });
   if (usedInProduct > 0) {
     throw new Error("Нельзя удалить: деталь входит в изделие. Используйте «В архив».");
@@ -241,6 +248,7 @@ export interface NomenclatureItemFormValues {
 export async function createNomenclatureItem(
   values: NomenclatureItemFormValues,
 ): Promise<NomenclatureItem> {
+  await requireAdmin();
   if (!values.name.trim()) throw new Error("Наименование обязательно");
 
   const created = await prisma.nomenclatureItem.create({
@@ -259,6 +267,7 @@ export async function updateNomenclatureItem(
   id: string,
   values: NomenclatureItemFormValues,
 ): Promise<NomenclatureItem> {
+  await requireAdmin();
   if (!values.name.trim()) throw new Error("Наименование обязательно");
 
   const before = await prisma.nomenclatureItem.findUnique({ where: { id } });
@@ -293,14 +302,17 @@ async function setItemStatus(id: string, status: "ACTIVE" | "ARCHIVED"): Promise
 }
 
 export async function archiveNomenclatureItem(id: string): Promise<NomenclatureItem> {
+  await requireAdmin();
   return setItemStatus(id, "ARCHIVED");
 }
 
 export async function restoreNomenclatureItem(id: string): Promise<NomenclatureItem> {
+  await requireAdmin();
   return setItemStatus(id, "ACTIVE");
 }
 
 export async function deleteNomenclatureItem(id: string): Promise<void> {
+  await requireAdmin();
   const [fast, extra, pack, purchases] = await Promise.all([
     prisma.productFastener.count({ where: { nomenclatureId: id } }),
     prisma.productExtra.count({ where: { nomenclatureId: id } }),
@@ -367,6 +379,7 @@ function validateProduct(v: ProductFormValues) {
 }
 
 export async function createProduct(values: ProductFormValues): Promise<Product> {
+  await requireAdmin();
   validateProduct(values);
   await assertProductDetailsMaterial(values);
 
@@ -404,6 +417,7 @@ export async function createProduct(values: ProductFormValues): Promise<Product>
 }
 
 export async function updateProduct(id: string, values: ProductFormValues): Promise<Product> {
+  await requireAdmin();
   validateProduct(values);
   await assertProductDetailsMaterial(values);
 
@@ -471,14 +485,17 @@ async function setProductStatus(id: string, status: "ACTIVE" | "ARCHIVED"): Prom
 }
 
 export async function archiveProduct(id: string): Promise<Product> {
+  await requireAdmin();
   return setProductStatus(id, "ARCHIVED");
 }
 
 export async function restoreProduct(id: string): Promise<Product> {
+  await requireAdmin();
   return setProductStatus(id, "ACTIVE");
 }
 
 export async function deleteProduct(id: string): Promise<void> {
+  await requireAdmin();
   const [goals, costs, stock] = await Promise.all([
     prisma.goal.count({ where: { productId: id } }),
     prisma.productCost.count({ where: { productId: id } }),

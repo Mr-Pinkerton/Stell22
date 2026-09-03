@@ -6,6 +6,7 @@ import type {
   RailLot as PrismaRailLot,
 } from "@prisma/client";
 import { prisma } from "@/server/db";
+import { requireAdmin } from "@/server/session";
 import { computeBatchStats } from "@/lib/batch-stats";
 import {
   declaredSortShares,
@@ -90,6 +91,7 @@ function toOperationForCost(op: TorcovkaOp): OperationForCost {
 export async function getPurchaseReport(
   period?: Period | null,
 ): Promise<PurchaseReportRow[]> {
+  await requireAdmin();
   const [batches, lots, ops, employees] = await Promise.all([
     prisma.batch.findMany({
       where: period ? { purchaseDate: { gte: period.start, lte: period.end } } : undefined,
@@ -173,6 +175,7 @@ export interface WasteReport {
  * lib/waste, чтобы числа были внутренне согласованы (cost-integrity).
  */
 export async function getWasteReport(period?: Period | null): Promise<WasteReport> {
+  await requireAdmin();
   const [batches, lots, ops, employees] = await Promise.all([
     prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
     prisma.railLot.findMany(),

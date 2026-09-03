@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { Employee as PrismaEmployee } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { requireAdmin } from "@/server/session";
 import { pinErrorMessage, validateActivePin } from "@/lib/employee-pin";
 import type { Employee } from "@/types/domain";
 
@@ -83,6 +84,7 @@ async function assertActivePin(pin: string, selfId?: string | null): Promise<voi
 }
 
 export async function getEmployees(): Promise<Employee[]> {
+  await requireAdmin();
   const rows = await prisma.employee.findMany({ orderBy: { createdAt: "asc" } });
   return rows.map(serializeEmployee);
 }
@@ -102,6 +104,7 @@ function valuesToData(v: EmployeeFormValues) {
 }
 
 export async function createEmployee(values: EmployeeFormValues): Promise<Employee> {
+  await requireAdmin();
   if (!values.fullName.trim()) throw new Error("ФИО обязательно");
   await assertActivePin(values.pin.trim()); // новый сотрудник всегда ACTIVE
 
@@ -121,6 +124,7 @@ export async function updateEmployee(
   id: string,
   values: EmployeeFormValues,
 ): Promise<Employee> {
+  await requireAdmin();
   if (!values.fullName.trim()) throw new Error("ФИО обязательно");
 
   const before = await prisma.employee.findUnique({ where: { id } });
@@ -159,10 +163,12 @@ async function setStatus(id: string, status: "ACTIVE" | "ARCHIVED"): Promise<Emp
 }
 
 export async function archiveEmployee(id: string): Promise<Employee> {
+  await requireAdmin();
   return setStatus(id, "ARCHIVED");
 }
 
 export async function restoreEmployee(id: string): Promise<Employee> {
+  await requireAdmin();
   // Возврат в ACTIVE = сотрудник снова сможет войти в терминал по PIN, поэтому
   // формат и уникальность проверяем заново: пока он был в архиве, его PIN мог
   // достаться другому активному сотруднику.
@@ -177,6 +183,7 @@ export async function restoreEmployee(id: string): Promise<Employee> {
 }
 
 export async function deleteEmployee(id: string): Promise<void> {
+  await requireAdmin();
   const before = await prisma.employee.findUnique({
     where: { id },
     include: { _count: { select: { operations: true } } },

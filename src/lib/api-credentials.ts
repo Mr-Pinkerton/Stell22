@@ -1,7 +1,7 @@
 // Описание полей API-ключей маркетплейсов/банка для раздела «Настройки → API».
 // Значения хранятся в key-value модели Setting под префиксом SETTING_PREFIX.
-// Реальные HTTP-клиенты читают ключи через loadStoredApiCredentials() в
-// src/server/settings.ts. См. docs/marketplace-api.md.
+// Реальные HTTP-клиенты читают ключи через loadStoredApiCredentialsInternal()
+// в src/server/internal/api-credentials.ts. См. docs/marketplace-api.md.
 
 export interface ApiCredentialField {
   /** Стабильный ключ, напр. "ozon.clientId". */
@@ -32,9 +32,7 @@ export const API_CREDENTIAL_GROUPS: ApiCredentialGroup[] = [
   {
     service: "Wildberries API",
     description: "Продажи, поставки (incomes), остатки. Токен категории Statistics/Analytics.",
-    fields: [
-      { key: "wb.token", label: "Токен", placeholder: "eyJhbGciOi…", secret: true },
-    ],
+    fields: [{ key: "wb.token", label: "Токен", placeholder: "eyJhbGciOi…", secret: true }],
   },
 ];
 

@@ -4,24 +4,16 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
+import { requireAdmin } from "@/server/session";
+import { importStatementInternal } from "@/server/internal/statement-import";
+import {
+  applyAutoRulesInternal,
+  syncBatchTotalCostInternal,
+  syncDealInternal,
+} from "@/server/internal/finance-operations";
 import { writeChangeLog } from "@/server/change-log";
-import { D } from "@/lib/cost";
-import {
-  batchExtraShare,
-  batchTotalCost,
-  dealDeliveryExtra,
-  sumConfirmedExpense,
-  type DealCashFlowLite,
-} from "@/lib/deal-cost";
-import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
-import { is1CStatement, parse1CStatement } from "@/lib/bank-statement-1c";
-import { statementImportKey } from "@/lib/statement-import";
-import {
-  computeAccountBalance,
-  computeAccountBalances,
-  shouldAdvanceAnchor,
-  type BalanceFlow,
-} from "@/lib/account-balance";
+import { sumConfirmedExpense, type DealCashFlowLite } from "@/lib/deal-cost";
+import { computeAccountBalances, type BalanceFlow } from "@/lib/account-balance";
 import type { FlowType } from "@/types/domain";
 import type {
   FinanceAccount,
@@ -68,7 +60,12 @@ function dayToDate(iso: string, plusDays = 0): Date {
 }
 
 type AccountRow = Prisma.AccountGetPayload<object>;
-type BalanceFlowRow = { accountId: string; date: Date; flowType: FlowType; amount: Prisma.Decimal | number };
+type BalanceFlowRow = {
+  accountId: string;
+  date: Date;
+  flowType: FlowType;
+  amount: Prisma.Decimal | number;
+};
 
 function serAccount(a: AccountRow, balance: number): FinanceAccount {
   return {
@@ -86,7 +83,10 @@ function serAccount(a: AccountRow, balance: number): FinanceAccount {
 }
 
 /** Сериализация счетов с вычислением текущего остатка (якорь + операции). */
-function serAccountsWithBalances(accounts: AccountRow[], flows: BalanceFlowRow[]): FinanceAccount[] {
+function serAccountsWithBalances(
+  accounts: AccountRow[],
+  flows: BalanceFlowRow[],
+): FinanceAccount[] {
   const balanceFlows: BalanceFlow[] = flows.map((f) => ({
     accountId: f.accountId,
     date: isoDay(f.date),
@@ -183,7 +183,7 @@ function serAutoRule(r: AutoRuleWithRefs, dealNameById: Map<string, string>): Fi
     logicOperator: r.logicOperator === "OR" ? "OR" : "AND",
     descriptionKeywords: r.descriptionKeywords,
     articleName: r.article?.name ?? null,
-    dealName: r.dealId ? dealNameById.get(r.dealId) ?? null : null,
+    dealName: r.dealId ? (dealNameById.get(r.dealId) ?? null) : null,
   };
 }
 
@@ -206,38 +206,52 @@ function serCashFlow(cf: CashFlowWithRefs): FinanceCashFlowRow {
 }
 
 export async function getFinanceData(): Promise<FinanceData> {
-  const [accounts, allFlows, articles, categories, counterparties, deals, autoRules, cashFlows, statements, batches] =
-    await Promise.all([
-      prisma.account.findMany({ orderBy: { name: "asc" } }),
-      // Остаток счёта считаем по ВСЕМ его операциям (даже в карантине) — на
-      // Финансах видно реальный банковский остаток независимо от подтверждения.
-      prisma.cashFlow.findMany({
-        select: { accountId: true, date: true, flowType: true, amount: true },
-      }),
-      prisma.article.findMany({ include: { category: true }, orderBy: { name: "asc" } }),
-      prisma.articleCategory.findMany({
-        include: { _count: { select: { articles: true } } },
-        orderBy: { name: "asc" },
-      }),
-      prisma.counterparty.findMany({ orderBy: { name: "asc" } }),
-      prisma.deal.findMany({ include: { items: { include: { batch: true } } }, orderBy: { name: "asc" } }),
-      prisma.autoRule.findMany({ include: { counterparty: true, article: true } }),
-      // Счета в карантине (авто-созданные импортом, не подтверждены) не
-      // попадают в ДДС/KPI/себестоимость сделок — только в Настройки на
-      // проверку. Просмотр операций конкретной выписки (getStatementDetail)
-      // и её счётчики (serStatement, отдельный запрос ниже) не фильтруются —
-      // это инструмент проверки ДО подтверждения.
-      prisma.cashFlow.findMany({
-        where: { account: { confirmed: true } },
-        include: { account: true, counterparty: true, article: true, deal: true },
-        orderBy: { date: "desc" },
-      }),
-      prisma.statement.findMany({
-        include: { account: true, cashFlows: true },
-        orderBy: { date: "desc" },
-      }),
-      prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
-    ]);
+  await requireAdmin();
+  const [
+    accounts,
+    allFlows,
+    articles,
+    categories,
+    counterparties,
+    deals,
+    autoRules,
+    cashFlows,
+    statements,
+    batches,
+  ] = await Promise.all([
+    prisma.account.findMany({ orderBy: { name: "asc" } }),
+    // Остаток счёта считаем по ВСЕМ его операциям (даже в карантине) — на
+    // Финансах видно реальный банковский остаток независимо от подтверждения.
+    prisma.cashFlow.findMany({
+      select: { accountId: true, date: true, flowType: true, amount: true },
+    }),
+    prisma.article.findMany({ include: { category: true }, orderBy: { name: "asc" } }),
+    prisma.articleCategory.findMany({
+      include: { _count: { select: { articles: true } } },
+      orderBy: { name: "asc" },
+    }),
+    prisma.counterparty.findMany({ orderBy: { name: "asc" } }),
+    prisma.deal.findMany({
+      include: { items: { include: { batch: true } } },
+      orderBy: { name: "asc" },
+    }),
+    prisma.autoRule.findMany({ include: { counterparty: true, article: true } }),
+    // Счета в карантине (авто-созданные импортом, не подтверждены) не
+    // попадают в ДДС/KPI/себестоимость сделок — только в Настройки на
+    // проверку. Просмотр операций конкретной выписки (getStatementDetail)
+    // и её счётчики (serStatement, отдельный запрос ниже) не фильтруются —
+    // это инструмент проверки ДО подтверждения.
+    prisma.cashFlow.findMany({
+      where: { account: { confirmed: true } },
+      include: { account: true, counterparty: true, article: true, deal: true },
+      orderBy: { date: "desc" },
+    }),
+    prisma.statement.findMany({
+      include: { account: true, cashFlows: true },
+      orderBy: { date: "desc" },
+    }),
+    prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
+  ]);
 
   const dealNameById = new Map(deals.map((d) => [d.id, d.name]));
 
@@ -286,7 +300,7 @@ async function loadAccount(id: string): Promise<FinanceAccount> {
 }
 
 /** Реальные счета из БД с текущим остатком (для Настроек и форм). */
-export async function getAccounts(): Promise<FinanceAccount[]> {
+async function getAccounts(): Promise<FinanceAccount[]> {
   const [accounts, flows] = await Promise.all([
     prisma.account.findMany({ orderBy: { name: "asc" } }),
     prisma.cashFlow.findMany({
@@ -297,6 +311,7 @@ export async function getAccounts(): Promise<FinanceAccount[]> {
 }
 
 export async function createAccount(values: AccountFormValues): Promise<FinanceAccount> {
+  await requireAdmin();
   const name = values.name.trim();
   if (!name) throw new Error("Укажите название счёта");
 
@@ -322,6 +337,7 @@ export async function updateAccount(
   id: string,
   values: AccountFormValues,
 ): Promise<FinanceAccount> {
+  await requireAdmin();
   const name = values.name.trim();
   if (!name) throw new Error("Укажите название счёта");
 
@@ -352,6 +368,7 @@ export async function updateAccount(
  * подтверждение обратно, если счёт завели по ошибке (не удаляя данные).
  */
 export async function setAccountConfirmed(id: string, confirmed: boolean): Promise<FinanceAccount> {
+  await requireAdmin();
   await prisma.account.update({ where: { id }, data: { confirmed } });
   await writeChangeLog({ entity: "Account", entityId: id, newValues: { confirmed } });
   revalidatePath(PATH);
@@ -365,6 +382,7 @@ export async function setAccountConfirmed(id: string, confirmed: boolean): Promi
  * не затрагивает.
  */
 export async function setAccountPrimary(id: string, isPrimary: boolean): Promise<FinanceAccount> {
+  await requireAdmin();
   await prisma.account.update({ where: { id }, data: { isPrimary } });
   await writeChangeLog({ entity: "Account", entityId: id, newValues: { isPrimary } });
   revalidatePath(PATH);
@@ -373,6 +391,7 @@ export async function setAccountPrimary(id: string, isPrimary: boolean): Promise
 }
 
 export async function deleteAccount(id: string): Promise<void> {
+  await requireAdmin();
   const opsCount = await prisma.cashFlow.count({ where: { accountId: id } });
   if (opsCount > 0) {
     throw new Error("Нельзя удалить счёт с операциями ДДС. Сначала удалите/перенесите операции.");
@@ -393,6 +412,7 @@ export async function createCounterparty(
   name: string,
   inn?: string | null,
 ): Promise<FinanceCounterparty> {
+  await requireAdmin();
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Укажите название контрагента");
   const innClean = inn?.trim() || null;
@@ -411,6 +431,7 @@ export async function updateCounterparty(
   name: string,
   inn?: string | null,
 ): Promise<FinanceCounterparty> {
+  await requireAdmin();
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Укажите название контрагента");
   const innClean = inn?.trim() || null;
@@ -428,6 +449,7 @@ export async function updateCounterparty(
 }
 
 export async function deleteCounterparty(id: string): Promise<void> {
+  await requireAdmin();
   const [flows, rules] = await Promise.all([
     prisma.cashFlow.count({ where: { counterpartyId: id } }),
     prisma.autoRule.count({ where: { counterpartyId: id } }),
@@ -458,19 +480,11 @@ async function loadCategory(id: string): Promise<FinanceCategory> {
   return serCategory(category);
 }
 
-/** Категории статей со счётчиком статей (для Справочника и форм). */
-export async function getArticleCategories(): Promise<FinanceCategory[]> {
-  const categories = await prisma.articleCategory.findMany({
-    include: { _count: { select: { articles: true } } },
-    orderBy: { name: "asc" },
-  });
-  return categories.map(serCategory);
-}
-
 export async function createArticleCategory(
   name: string,
   isOverhead: boolean,
 ): Promise<FinanceCategory> {
+  await requireAdmin();
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Укажите название категории");
   const existing = await prisma.articleCategory.findFirst({ where: { name: trimmed } });
@@ -493,6 +507,7 @@ export async function updateArticleCategory(
   name: string,
   isOverhead: boolean,
 ): Promise<FinanceCategory> {
+  await requireAdmin();
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Укажите название категории");
   const clash = await prisma.articleCategory.findFirst({
@@ -514,6 +529,7 @@ export async function updateArticleCategory(
 }
 
 export async function deleteArticleCategory(id: string): Promise<void> {
+  await requireAdmin();
   const count = await prisma.article.count({ where: { categoryId: id } });
   if (count > 0) {
     throw new Error("Нельзя удалить категорию со статьями. Сначала перенесите статьи.");
@@ -536,6 +552,7 @@ async function resolveCategoryId(tx: Prisma.TransactionClient, name: string): Pr
 }
 
 export async function createArticle(values: ArticleFormValues): Promise<FinanceArticle> {
+  await requireAdmin();
   const name = values.name.trim();
   if (!name) throw new Error("Укажите название статьи");
   if (!values.categoryName.trim()) throw new Error("Укажите категорию");
@@ -553,7 +570,11 @@ export async function createArticle(values: ArticleFormValues): Promise<FinanceA
       include: { category: true },
     });
     await writeChangeLog(
-      { entity: "Article", entityId: article.id, newValues: { name, category: values.categoryName } },
+      {
+        entity: "Article",
+        entityId: article.id,
+        newValues: { name, category: values.categoryName },
+      },
       tx,
     );
     return article;
@@ -567,6 +588,7 @@ export async function updateArticle(
   id: string,
   values: ArticleFormValues,
 ): Promise<FinanceArticle> {
+  await requireAdmin();
   const name = values.name.trim();
   if (!name) throw new Error("Укажите название статьи");
   if (!values.categoryName.trim()) throw new Error("Укажите категорию");
@@ -597,6 +619,7 @@ export async function updateArticle(
 }
 
 export async function deleteArticle(id: string): Promise<void> {
+  await requireAdmin();
   const [children, cashFlows, autoRules] = await Promise.all([
     prisma.article.count({ where: { parentId: id } }),
     prisma.cashFlow.count({ where: { articleId: id } }),
@@ -671,7 +694,7 @@ async function loadAutoRule(id: string): Promise<FinanceAutoRule> {
     include: { counterparty: true, article: true },
   });
   const dealName = rule.dealId
-    ? (await prisma.deal.findUnique({ where: { id: rule.dealId } }))?.name ?? null
+    ? ((await prisma.deal.findUnique({ where: { id: rule.dealId } }))?.name ?? null)
     : null;
   return {
     id: rule.id,
@@ -685,6 +708,7 @@ async function loadAutoRule(id: string): Promise<FinanceAutoRule> {
 }
 
 export async function createAutoRule(values: AutoRuleFormValues): Promise<FinanceAutoRule> {
+  await requireAdmin();
   const data = await resolveRuleRefs({
     flowType: values.flowType,
     counterpartyName: values.counterpartyName,
@@ -702,6 +726,7 @@ export async function createAutoRule(values: AutoRuleFormValues): Promise<Financ
 }
 
 export async function updateAutoRule(id: string, patch: AutoRulePatch): Promise<FinanceAutoRule> {
+  await requireAdmin();
   const data = await resolveRuleRefs(patch);
   await prisma.autoRule.update({ where: { id }, data });
   await writeChangeLog({ entity: "AutoRule", entityId: id, newValues: { ...patch } });
@@ -710,6 +735,7 @@ export async function updateAutoRule(id: string, patch: AutoRulePatch): Promise<
 }
 
 export async function deleteAutoRule(id: string): Promise<void> {
+  await requireAdmin();
   await prisma.autoRule.delete({ where: { id } });
   await writeChangeLog({ entity: "AutoRule", entityId: id, oldValues: { deleted: true } });
   revalidatePath(PATH);
@@ -721,30 +747,6 @@ export async function deleteAutoRule(id: string): Promise<void> {
  * Подбор статьи/сделки по автоправилам. Условия: тип совпадает И
  * (контрагент) [И/ИЛИ] (описание содержит ключевые слова). Первое совпадение.
  */
-async function applyAutoRules(cf: {
-  flowType: FinanceAutoRule["flowType"];
-  counterpartyId: string | null;
-  description: string;
-}): Promise<{ articleId: string | null; dealId: string | null } | null> {
-  const rules = await prisma.autoRule.findMany({ where: { flowType: cf.flowType } });
-  const desc = cf.description.toLowerCase();
-
-  for (const rule of rules) {
-    const conditions: boolean[] = [];
-    if (rule.counterpartyId) conditions.push(rule.counterpartyId === cf.counterpartyId);
-    const kw = rule.descriptionKeywords?.trim().toLowerCase();
-    if (kw) conditions.push(desc.includes(kw));
-    if (conditions.length === 0) continue;
-
-    const matched =
-      rule.logicOperator === "OR" ? conditions.some(Boolean) : conditions.every(Boolean);
-    if (matched && rule.articleId) {
-      return { articleId: rule.articleId, dealId: rule.dealId };
-    }
-  }
-  return null;
-}
-
 export interface ReapplyAutoRulesResult {
   ok: boolean;
   assigned: number;
@@ -758,12 +760,13 @@ export interface ReapplyAutoRulesResult {
  * выбранной статьёй не трогаются.
  */
 export async function reapplyAutoRules(): Promise<ReapplyAutoRulesResult> {
+  await requireAdmin();
   const pending = await prisma.cashFlow.findMany({ where: { articleId: null } });
   const updatedIds: string[] = [];
   const dealsToSync = new Set<string>();
 
   for (const cf of pending) {
-    const auto = await applyAutoRules({
+    const auto = await applyAutoRulesInternal({
       flowType: cf.flowType,
       counterpartyId: cf.counterpartyId,
       description: cf.description ?? "",
@@ -779,7 +782,7 @@ export async function reapplyAutoRules(): Promise<ReapplyAutoRulesResult> {
     updatedIds.push(cf.id);
   }
 
-  for (const d of dealsToSync) await syncDeal(d);
+  for (const d of dealsToSync) await syncDealInternal(d);
   if (updatedIds.length > 0) {
     await writeChangeLog({
       entity: "CashFlow",
@@ -807,6 +810,7 @@ async function loadCashFlow(id: string): Promise<FinanceCashFlowRow> {
 }
 
 export async function createCashFlow(values: CashflowFormValues): Promise<FinanceCashFlowRow> {
+  await requireAdmin();
   if (!(values.amount > 0)) throw new Error("Сумма должна быть положительной");
   if (!values.accountName) throw new Error("Выберите счёт");
 
@@ -815,7 +819,9 @@ export async function createCashFlow(values: CashflowFormValues): Promise<Financ
     values.counterpartyName
       ? prisma.counterparty.findFirst({ where: { name: values.counterpartyName } })
       : Promise.resolve(null),
-    values.articleName ? prisma.article.findFirst({ where: { name: values.articleName } }) : Promise.resolve(null),
+    values.articleName
+      ? prisma.article.findFirst({ where: { name: values.articleName } })
+      : Promise.resolve(null),
   ]);
   if (!account) throw new Error("Счёт не найден");
 
@@ -825,7 +831,7 @@ export async function createCashFlow(values: CashflowFormValues): Promise<Financ
 
   // Если статья не выбрана вручную — пробуем автоправила.
   if (!articleId) {
-    const auto = await applyAutoRules({
+    const auto = await applyAutoRulesInternal({
       flowType: values.flowType,
       counterpartyId: counterparty?.id ?? null,
       description: values.description,
@@ -855,7 +861,7 @@ export async function createCashFlow(values: CashflowFormValues): Promise<Financ
     entityId: created.id,
     newValues: { amount: values.amount, flowType: values.flowType, article: values.articleName },
   });
-  if (dealId) await syncDeal(dealId);
+  if (dealId) await syncDealInternal(dealId);
   revalidatePath(PATH);
   return loadCashFlow(created.id);
 }
@@ -867,9 +873,8 @@ export async function createCashFlow(values: CashflowFormValues): Promise<Financ
  * (иначе один перевод задвоил бы обороты). Возвращает обе ноги (списание,
  * затем зачисление).
  */
-export async function createTransfer(
-  values: TransferFormValues,
-): Promise<FinanceCashFlowRow[]> {
+export async function createTransfer(values: TransferFormValues): Promise<FinanceCashFlowRow[]> {
+  await requireAdmin();
   if (!(values.amount > 0)) throw new Error("Сумма должна быть положительной");
   if (!values.fromAccountId || !values.toAccountId) throw new Error("Выберите оба счёта");
   if (values.fromAccountId === values.toAccountId) {
@@ -937,6 +942,7 @@ export async function assignCashFlow(
   id: string,
   patch: CashFlowAssignPatch,
 ): Promise<FinanceCashFlowRow> {
+  await requireAdmin();
   const before = await prisma.cashFlow.findUnique({ where: { id } });
 
   const data: Prisma.CashFlowUncheckedUpdateInput = {};
@@ -954,7 +960,7 @@ export async function assignCashFlow(
   const affectedDeals = new Set<string>();
   if (before?.dealId) affectedDeals.add(before.dealId);
   if (patch.dealId) affectedDeals.add(patch.dealId);
-  for (const dealId of affectedDeals) await syncDeal(dealId);
+  for (const dealId of affectedDeals) await syncDealInternal(dealId);
 
   revalidatePath(PATH);
   return loadCashFlow(id);
@@ -966,6 +972,7 @@ export async function assignCashFlow(
  * половиной. Возвращает id всех удалённых строк (для обновления UI).
  */
 export async function deleteCashFlow(id: string): Promise<string[]> {
+  await requireAdmin();
   const before = await prisma.cashFlow.findUnique({ where: { id } });
 
   let removedIds = [id];
@@ -981,7 +988,7 @@ export async function deleteCashFlow(id: string): Promise<string[]> {
   }
 
   await writeChangeLog({ entity: "CashFlow", entityId: id, oldValues: { deleted: true } });
-  if (before?.dealId) await syncDeal(before.dealId);
+  if (before?.dealId) await syncDealInternal(before.dealId);
   revalidatePath(PATH);
   return removedIds;
 }
@@ -997,6 +1004,7 @@ export async function convertCashFlowToTransfer(
   id: string,
   otherAccountId: string,
 ): Promise<FinanceCashFlowRow[]> {
+  await requireAdmin();
   const source = await prisma.cashFlow.findUnique({ where: { id } });
   if (!source) throw new Error("Операция не найдена");
   if (source.isTransfer) throw new Error("Операция уже является переводом");
@@ -1030,8 +1038,7 @@ export async function convertCashFlowToTransfer(
         date: source.date,
         flowType: oppositeType,
         accountId: other.id,
-        description:
-          note || `Перевод ${source.flowType === "INCOME" ? "на" : "с"} «${other.name}»`,
+        description: note || `Перевод ${source.flowType === "INCOME" ? "на" : "с"} «${other.name}»`,
         isTransfer: true,
         isAutoAssigned: true,
         transferId,
@@ -1040,7 +1047,7 @@ export async function convertCashFlowToTransfer(
   ]);
 
   // Операция могла быть привязана к сделке (её доставка) — пересчитать.
-  if (source.dealId) await syncDeal(source.dealId);
+  if (source.dealId) await syncDealInternal(source.dealId);
 
   await writeChangeLog({
     entity: "CashFlow",
@@ -1062,6 +1069,7 @@ export async function convertCashFlowToTransfer(
 export async function unlinkTransfer(
   id: string,
 ): Promise<{ removedIds: string[]; updated: FinanceCashFlowRow }> {
+  await requireAdmin();
   const leg = await prisma.cashFlow.findUnique({ where: { id } });
   if (!leg || !leg.isTransfer || !leg.transferId) throw new Error("Это не перевод");
 
@@ -1077,7 +1085,11 @@ export async function unlinkTransfer(
     }),
   ]);
 
-  await writeChangeLog({ entity: "CashFlow", entityId: keep.id, newValues: { unlinkedTransfer: true } });
+  await writeChangeLog({
+    entity: "CashFlow",
+    entityId: keep.id,
+    newValues: { unlinkedTransfer: true },
+  });
   revalidatePath(PATH);
   return { removedIds: removed.map((l) => l.id), updated: await loadCashFlow(keep.id) };
 }
@@ -1090,71 +1102,18 @@ type CashFlowWithAccountConfirmed = {
   amount: Prisma.Decimal;
   account: { confirmed: boolean };
 };
+
 function toCfLite(flows: CashFlowWithAccountConfirmed[]): DealCashFlowLite[] {
-  return flows.map((c) => ({
-    flowType: c.flowType,
-    amount: num(c.amount),
-    accountConfirmed: c.account.confirmed,
+  return flows.map((cashFlow) => ({
+    flowType: cashFlow.flowType,
+    amount: num(cashFlow.amount),
+    accountConfirmed: cashFlow.account.confirmed,
   }));
 }
-const CF_WITH_CONFIRMED = { include: { account: { select: { confirmed: true } } } } as const;
 
-/**
- * «Стоимость общая» партии = закупочная + доставка/доп. расходы из её сделок.
- * Доставка сделки = расходные операции ДДС сверх суммы закупочных стоимостей
- * привязанных партий, распределённая по партиям пропорционально закупке.
- * Учитываются только операции по подтверждённым счетам (A13, карантин импорта).
- * Замороженные партии не трогаем (cost-integrity).
- */
-async function syncBatchTotalCost(batchId: string): Promise<void> {
-  const batch = await prisma.batch.findUnique({ where: { id: batchId } });
-  if (!batch || batch.frozenAt) return;
-
-  const items = await prisma.dealItem.findMany({
-    where: { batchId },
-    include: {
-      deal: { include: { items: { include: { batch: true } }, cashFlows: CF_WITH_CONFIRMED } },
-    },
-  });
-
-  let extra = D(0);
-  for (const { deal } of items) {
-    const expense = sumConfirmedExpense(toCfLite(deal.cashFlows));
-    const purchaseTotal = deal.items.reduce(
-      (s, i) => s.plus(D(num(i.batch?.purchaseCost ?? null))),
-      D(0),
-    );
-    const dealExtra = dealDeliveryExtra(expense, purchaseTotal);
-    extra = extra.plus(
-      batchExtraShare(dealExtra, num(batch.purchaseCost), purchaseTotal, deal.items.length),
-    );
-  }
-
-  const newTotal = batchTotalCost(num(batch.purchaseCost), extra);
-  await prisma.batch.update({ where: { id: batchId }, data: { totalCost: newTotal.toFixed(2) } });
-  await enqueueRecalcBatchCosts(batchId);
-}
-
-/** Пересчёт суммы сделки и «Стоимости общей» её партий. */
-async function syncDeal(dealId: string): Promise<void> {
-  const deal = await prisma.deal.findUnique({
-    where: { id: dealId },
-    include: { items: { include: { batch: true } }, cashFlows: CF_WITH_CONFIRMED },
-  });
-  if (!deal) return;
-
-  const expense = sumConfirmedExpense(toCfLite(deal.cashFlows)).toNumber();
-  const purchaseTotal = deal.items.reduce((s, i) => s + num(i.batch?.purchaseCost ?? null), 0);
-  const total = purchaseTotal + Math.max(0, expense - purchaseTotal);
-
-  await prisma.deal.update({ where: { id: dealId }, data: { total: total.toFixed(2) } });
-
-  for (const item of deal.items) {
-    if (item.batchId) await syncBatchTotalCost(item.batchId);
-  }
-  revalidatePath("/purchases");
-  revalidatePath("/reports");
-}
+const CF_WITH_CONFIRMED = {
+  include: { account: { select: { confirmed: true } } },
+} as const;
 
 async function loadDeal(id: string): Promise<FinanceDeal> {
   const d = await prisma.deal.findUniqueOrThrow({
@@ -1166,6 +1125,7 @@ async function loadDeal(id: string): Promise<FinanceDeal> {
 }
 
 export async function createDeal(values: DealFormValues): Promise<FinanceDeal> {
+  await requireAdmin();
   const name = values.name.trim();
   if (!name) throw new Error("Укажите название сделки");
   if (values.batchNames.length === 0) throw new Error("Выберите хотя бы одну закупку");
@@ -1184,12 +1144,13 @@ export async function createDeal(values: DealFormValues): Promise<FinanceDeal> {
     entityId: deal.id,
     newValues: { name, batches: values.batchNames },
   });
-  await syncDeal(deal.id);
+  await syncDealInternal(deal.id);
   revalidatePath(PATH);
   return loadDeal(deal.id);
 }
 
 export async function updateDeal(id: string, values: DealFormValues): Promise<FinanceDeal> {
+  await requireAdmin();
   const name = values.name.trim();
   if (!name) throw new Error("Укажите название сделки");
   if (values.batchNames.length === 0) throw new Error("Выберите хотя бы одну закупку");
@@ -1205,21 +1166,24 @@ export async function updateDeal(id: string, values: DealFormValues): Promise<Fi
       data: { name, items: { create: found.map((b) => ({ batchId: b.id })) } },
     });
   });
-  await writeChangeLog({ entity: "Deal", entityId: id, newValues: { name, batches: values.batchNames } });
+  await writeChangeLog({
+    entity: "Deal",
+    entityId: id,
+    newValues: { name, batches: values.batchNames },
+  });
 
-  await syncDeal(id);
+  await syncDealInternal(id);
   // Партии, отвязанные от сделки, тоже пересчитываем.
   for (const item of oldItems) {
-    if (item.batchId && !newBatchIds.has(item.batchId)) await syncBatchTotalCost(item.batchId);
+    if (item.batchId && !newBatchIds.has(item.batchId))
+      await syncBatchTotalCostInternal(item.batchId);
   }
   revalidatePath(PATH);
   return loadDeal(id);
 }
 
-export async function setDealStatus(
-  id: string,
-  status: "OPEN" | "ARCHIVED",
-): Promise<FinanceDeal> {
+export async function setDealStatus(id: string, status: "OPEN" | "ARCHIVED"): Promise<FinanceDeal> {
+  await requireAdmin();
   await prisma.deal.update({ where: { id }, data: { status } });
   await writeChangeLog({ entity: "Deal", entityId: id, newValues: { status } });
   revalidatePath(PATH);
@@ -1227,6 +1191,7 @@ export async function setDealStatus(
 }
 
 export async function deleteDeal(id: string): Promise<void> {
+  await requireAdmin();
   const items = await prisma.dealItem.findMany({ where: { dealId: id } });
   const batchIds = items.map((i) => i.batchId).filter((b): b is string => Boolean(b));
 
@@ -1237,13 +1202,14 @@ export async function deleteDeal(id: string): Promise<void> {
   });
   await writeChangeLog({ entity: "Deal", entityId: id, oldValues: { deleted: true } });
 
-  for (const batchId of batchIds) await syncBatchTotalCost(batchId);
+  for (const batchId of batchIds) await syncBatchTotalCostInternal(batchId);
   revalidatePath(PATH);
 }
 
 // ============================ ВЫПИСКИ ======================================
 
 export async function createStatement(values: StatementUploadValues): Promise<FinanceStatementRow> {
+  await requireAdmin();
   const iso = values.date;
   if (!iso) throw new Error("Укажите дату выписки");
   const account = values.accountName
@@ -1281,292 +1247,18 @@ export interface ImportStatementResult {
   warning: string | null;
 }
 
-const last4 = (account: string) => account.slice(-4);
-
-/** Найти или создать контрагента по ИНН (приоритет) либо по названию. */
-async function resolveCounterparty(
-  tx: Prisma.TransactionClient,
-  name: string | null,
-  inn: string | null,
-  created: { id: string; name: string }[],
-): Promise<string | null> {
-  const cleanName = name?.trim() || null;
-  const cleanInn = inn?.trim() || null;
-  if (!cleanName && !cleanInn) return null;
-
-  if (cleanInn) {
-    const byInn = await tx.counterparty.findFirst({ where: { inn: cleanInn } });
-    if (byInn) return byInn.id;
-  }
-  if (cleanName) {
-    const byName = await tx.counterparty.findFirst({ where: { name: cleanName } });
-    if (byName) return byName.id;
-  }
-
-  const cp = await tx.counterparty.create({
-    data: { name: cleanName ?? `ИНН ${cleanInn}`, inn: cleanInn },
-  });
-  created.push({ id: cp.id, name: cp.name });
-  return cp.id;
-}
-
-/**
- * Импорт банковской выписки формата 1CClientBankExchange. На вход — уже
- * декодированный текст. Создаёт/находит счёт по номеру, заводит выписку,
- * разносит каждую операцию (направление по нашему РасчСчёту), применяет
- * автоправила и обновляет остаток счёта по «КонечныйОстаток».
- */
 export async function importStatement(
   content: string,
   fileName: string,
   bindAccountId?: string | null,
 ): Promise<ImportStatementResult> {
-  if (!is1CStatement(content)) {
-    throw new Error("Файл не в формате 1CClientBankExchange");
-  }
-  const parsed = parse1CStatement(content);
-  if (!parsed.accountNumber) {
-    throw new Error("В выписке не найден номер счёта (РасчСчет)");
-  }
-
-  const ourNumber = parsed.accountNumber;
-  const statementDate = parsed.dateEnd ?? parsed.dateStart ?? new Date().toISOString().slice(0, 10);
-  const statementStart = parsed.dateStart ?? statementDate;
-
-  const newCounterparties: { id: string; name: string }[] = [];
-  const affectedDeals = new Set<string>();
-  let imported = 0;
-  let unassigned = 0;
-  let skipped = 0;
-  let warning: string | null = null;
-  let isNewAccount = false;
-  let accountConfirmed = true;
-
-  const statementId = await prisma.$transaction(async (tx) => {
-    // Счёт: по номеру → по явной привязке → создаём новый.
-    let account = await tx.account.findFirst({ where: { accountNumber: ourNumber } });
-    if (!account && bindAccountId) {
-      account = await tx.account.findUnique({ where: { id: bindAccountId } });
-    }
-
-    isNewAccount = !account;
-    if (!account) {
-      // Новый счёт: точка отсчёта = «начальный остаток» выписки на дату начала
-      // периода. Так расчёт (якорь + операции периода) сойдётся с «конечным».
-      // Карантин: авто-созданный счёт не подтверждён — его операции не попадут
-      // в ДДС/KPI, пока пользователь не подтвердит его в Настройках → Счета.
-      account = await tx.account.create({
-        data: {
-          name: `Счёт ••${last4(ourNumber)}`,
-          accountNumber: ourNumber,
-          bik: parsed.bik,
-          openingBalance: parsed.openingBalance != null ? parsed.openingBalance.toFixed(2) : 0,
-          balanceAsOf: dayToDate(statementStart),
-          balance: parsed.closingBalance != null ? parsed.closingBalance.toFixed(2) : 0,
-          confirmed: false,
-        },
-      });
-    } else {
-      // Привязываем номер/БИК к существующему счёту, если их ещё нет.
-      const patch: Prisma.AccountUncheckedUpdateInput = {};
-      if (!account.accountNumber) patch.accountNumber = ourNumber;
-      if (parsed.bik && !account.bik) patch.bik = parsed.bik;
-      if (Object.keys(patch).length > 0) {
-        account = await tx.account.update({ where: { id: account.id }, data: patch });
-      }
-    }
-
-    accountConfirmed = account.confirmed;
-
-    // Точка отсчёта ДО импорта — по ней сверяем расчётный остаток с выпиской.
-    const priorOpening = num(account.openingBalance);
-    const priorAsOf = account.balanceAsOf ? isoDay(account.balanceAsOf) : null;
-
-    const statement = await tx.statement.create({
-      data: {
-        date: new Date(statementDate),
-        accountId: account.id,
-        fileUrl: fileName || null,
-        uploadedAt: new Date(),
-        openingBalance: parsed.openingBalance != null ? parsed.openingBalance.toFixed(2) : null,
-        closingBalance: parsed.closingBalance != null ? parsed.closingBalance.toFixed(2) : null,
-      },
-    });
-
-    // Номера всех наших счетов — чтобы распознать перевод между своими
-    // счетами (контрагент по операции — тоже наш счёт).
-    const ourAccounts = await tx.account.findMany({
-      where: { accountNumber: { not: null } },
-      select: { accountNumber: true },
-    });
-    const ourNumbers = new Set(ourAccounts.map((a) => a.accountNumber as string));
-    ourNumbers.add(ourNumber);
-
-    for (const doc of parsed.documents) {
-      const key = statementImportKey(doc);
-      const exists = await tx.cashFlow.findFirst({
-        where: { accountId: account.id, importKey: key },
-        select: { id: true },
-      });
-      if (exists) {
-        skipped += 1;
-        continue;
-      }
-
-      const payerOurs = doc.payerAccount === ourNumber;
-      const flowType = payerOurs ? "EXPENSE" : "INCOME";
-      // Вторая сторона операции — тоже наш счёт → перевод между своими счетами
-      // (не доход/расход, контрагент не нужен, статья не назначается).
-      const otherAccount = payerOurs ? doc.payeeAccount : doc.payerAccount;
-      const isTransfer = otherAccount != null && ourNumbers.has(otherAccount);
-      const cpName = isTransfer ? null : payerOurs ? doc.payeeName : doc.payerName;
-      const cpInn = isTransfer ? null : payerOurs ? doc.payeeInn : doc.payerInn;
-      const counterpartyId = await resolveCounterparty(tx, cpName, cpInn, newCounterparties);
-      const description = doc.purpose ?? "";
-
-      const auto = isTransfer
-        ? null
-        : await applyAutoRules({ flowType, counterpartyId, description });
-      const articleId = auto?.articleId ?? null;
-      const dealId = auto?.dealId ?? null;
-
-      await tx.cashFlow.create({
-        data: {
-          amount: doc.amount.toFixed(2),
-          flowType,
-          accountId: account.id,
-          counterpartyId,
-          description,
-          articleId,
-          dealId,
-          statementId: statement.id,
-          date: new Date(doc.date || statementDate),
-          isAutoAssigned: isTransfer || Boolean(articleId),
-          isTransfer,
-          importKey: key,
-        },
-      });
-
-      imported += 1;
-      if (!isTransfer && !articleId) unassigned += 1;
-      if (dealId) affectedDeals.add(dealId);
-    }
-
-    // Банк — источник истины: остаток приравниваем к «конечному остатку»
-    // выписки и переносим точку отсчёта на конец периода. Расчётный остаток
-    // (прошлый якорь + операции периода) сверяем с фактом; при расхождении
-    // ставим бейдж «≠» на счёт и выписку, но оставляем сумму из выписки.
-    //
-    // Защита от отката: выписка за прошлый период (конец раньше текущей точки
-    // отсчёта) якорь НЕ двигает — иначе повторная загрузка старого архива
-    // вернула бы остаток в прошлое. Операции при этом импортируются как обычно
-    // (дедупликация отсеет повторы).
-    const advanceAnchor = shouldAdvanceAnchor(
-      priorAsOf,
-      isoDay(dayToDate(statementDate, 1)),
-    );
-    if (parsed.closingBalance != null && !advanceAnchor) {
-      warning =
-        `Выписка за прошлый период (по ${statementDate}) — остаток счёта не изменён, ` +
-        `текущая точка отсчёта (${priorAsOf}) новее.`;
-    }
-
-    let mismatch = false;
-    if (parsed.closingBalance != null && advanceAnchor) {
-      const accountFlows = await tx.cashFlow.findMany({
-        where: { accountId: account.id },
-        select: { accountId: true, date: true, flowType: true, amount: true },
-      });
-      const flowsUpToEnd: BalanceFlow[] = accountFlows
-        .map((f) => ({
-          accountId: f.accountId,
-          date: isoDay(f.date),
-          flowType: f.flowType,
-          amount: num(f.amount),
-        }))
-        .filter((f) => f.date <= statementDate);
-
-      const expected = computeAccountBalance(
-        { openingBalance: priorOpening, balanceAsOf: priorAsOf },
-        flowsUpToEnd,
-      );
-      mismatch = Math.abs(expected - parsed.closingBalance) > 0.01;
-
-      await tx.account.update({
-        where: { id: account.id },
-        data: {
-          balance: parsed.closingBalance.toFixed(2),
-          openingBalance: parsed.closingBalance.toFixed(2),
-          balanceAsOf: dayToDate(statementDate, 1),
-          balanceMismatch: mismatch,
-        },
-      });
-      await tx.statement.update({ where: { id: statement.id }, data: { mismatch } });
-
-      if (mismatch) {
-        warning =
-          `Расчётный остаток (${expected.toFixed(2)}) не совпал с конечным остатком ` +
-          `выписки (${parsed.closingBalance.toFixed(2)}). Оставлен остаток из выписки.`;
-      }
-    }
-
-    return statement.id;
-  });
-
-  if (isNewAccount) {
-    const quarantineNote =
-      "Счёт создан автоматически и не подтверждён — его операции скрыты в ДДС до " +
-      "подтверждения в Настройках → Счета.";
-    warning = warning ? `${warning} ${quarantineNote}` : quarantineNote;
-  }
-
-  await writeChangeLog({
-    entity: "Statement",
-    entityId: statementId,
-    newValues: { file: fileName, account: ourNumber, operations: imported, skipped },
-  });
-
-  // Сделки, затронутые автоправилами, пересчитываем (доставка → себестоимость).
-  for (const dealId of affectedDeals) await syncDeal(dealId);
-
-  const [statement, accounts, allFlows, counterparties] = await Promise.all([
-    prisma.statement.findUniqueOrThrow({
-      where: { id: statementId },
-      include: { account: true, cashFlows: true },
-    }),
-    prisma.account.findMany({ orderBy: { name: "asc" } }),
-    prisma.cashFlow.findMany({
-      select: { accountId: true, date: true, flowType: true, amount: true },
-    }),
-    prisma.counterparty.findMany({ orderBy: { name: "asc" } }),
-  ]);
-
-  // Операции счёта в карантине не отдаём в ДДС клиента (даже как «новые»
-  // после импорта) — подтверждение в Настройках подтянет их сразу.
-  const newCashFlows = accountConfirmed
-    ? await prisma.cashFlow.findMany({
-        where: { statementId },
-        include: { account: true, counterparty: true, article: true, deal: true },
-        orderBy: { date: "desc" },
-      })
-    : [];
-
-  revalidatePath(PATH);
-  revalidatePath(SETTINGS_PATH);
-  return {
-    statement: serStatement(statement),
-    newCashFlows: newCashFlows.map(serCashFlow),
-    accounts: serAccountsWithBalances(accounts, allFlows),
-    counterparties: counterparties.map((c) => ({ id: c.id, name: c.name, inn: c.inn })),
-    importedCount: imported,
-    unassignedCount: unassigned,
-    skippedCount: skipped,
-    warning,
-  };
+  await requireAdmin();
+  return importStatementInternal(content, fileName, bindAccountId);
 }
 
 /** Операции конкретной выписки (для просмотра карточки). */
 export async function getStatementDetail(id: string): Promise<FinanceCashFlowRow[]> {
+  await requireAdmin();
   const flows = await prisma.cashFlow.findMany({
     where: { statementId: id },
     include: { account: true, counterparty: true, article: true, deal: true },
@@ -1588,6 +1280,7 @@ export interface DeleteStatementResult {
  * восстанавливается из последней оставшейся выписки этого счёта.
  */
 export async function deleteStatement(id: string): Promise<DeleteStatementResult> {
+  await requireAdmin();
   const [stmt, flows] = await Promise.all([
     prisma.statement.findUnique({ where: { id } }),
     prisma.cashFlow.findMany({
@@ -1596,9 +1289,7 @@ export async function deleteStatement(id: string): Promise<DeleteStatementResult
     }),
   ]);
   const removedIds = flows.map((f) => f.id);
-  const affectedDeals = new Set(
-    flows.map((f) => f.dealId).filter((d): d is string => Boolean(d)),
-  );
+  const affectedDeals = new Set(flows.map((f) => f.dealId).filter((d): d is string => Boolean(d)));
 
   await prisma.$transaction(async (tx) => {
     await tx.cashFlow.deleteMany({ where: { statementId: id } });
@@ -1635,7 +1326,7 @@ export async function deleteStatement(id: string): Promise<DeleteStatementResult
   });
   await writeChangeLog({ entity: "Statement", entityId: id, oldValues: { deleted: true } });
 
-  for (const dealId of affectedDeals) await syncDeal(dealId);
+  for (const dealId of affectedDeals) await syncDealInternal(dealId);
   revalidatePath(PATH);
   revalidatePath(SETTINGS_PATH);
   return { removedIds, accounts: await getAccounts() };

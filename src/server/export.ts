@@ -1,6 +1,7 @@
 "use server";
 
 import ExcelJS from "exceljs";
+import { requireAdmin } from "@/server/session";
 import type { XlsxSheet } from "@/lib/xlsx-types";
 
 /**
@@ -8,6 +9,7 @@ import type { XlsxSheet } from "@/lib/xlsx-types";
  * скачивает). ExcelJS остаётся серверным — не тянем его в клиентский бандл.
  */
 export async function buildXlsx(sheets: XlsxSheet[]): Promise<string> {
+  await requireAdmin();
   const wb = new ExcelJS.Workbook();
   wb.creator = "Stell22";
   wb.created = new Date();

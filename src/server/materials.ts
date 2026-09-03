@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { Material as PrismaMaterial } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { requireAdmin } from "@/server/session";
 import type { Material } from "@/types/domain";
 
 const PATH = "/nomenclature";
@@ -35,6 +36,7 @@ function requireSection(v: MaterialFormValues): { w: number; h: number } {
 }
 
 export async function getMaterials(): Promise<Material[]> {
+  await requireAdmin();
   const rows = await prisma.material.findMany({
     orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
   });
@@ -42,6 +44,7 @@ export async function getMaterials(): Promise<Material[]> {
 }
 
 export async function createMaterial(values: MaterialFormValues): Promise<Material> {
+  await requireAdmin();
   const name = values.name.trim();
   if (!name) throw new Error("Название материала обязательно");
   const { w, h } = requireSection(values);
@@ -61,6 +64,7 @@ export async function createMaterial(values: MaterialFormValues): Promise<Materi
 }
 
 export async function updateMaterial(id: string, values: MaterialFormValues): Promise<Material> {
+  await requireAdmin();
   const name = values.name.trim();
   if (!name) throw new Error("Название материала обязательно");
 
@@ -107,14 +111,17 @@ async function setStatus(id: string, status: "ACTIVE" | "ARCHIVED"): Promise<Mat
 }
 
 export async function archiveMaterial(id: string): Promise<Material> {
+  await requireAdmin();
   return setStatus(id, "ARCHIVED");
 }
 
 export async function restoreMaterial(id: string): Promise<Material> {
+  await requireAdmin();
   return setStatus(id, "ACTIVE");
 }
 
 export async function deleteMaterial(id: string): Promise<void> {
+  await requireAdmin();
   const [batches, details, products, blanks] = await Promise.all([
     prisma.batch.count({ where: { materialId: id } }),
     prisma.detail.count({ where: { materialId: id } }),

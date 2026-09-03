@@ -4,11 +4,12 @@ import { revalidatePath } from "next/cache";
 import type { Batch as PrismaBatch, RailLot as PrismaRailLot } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { requireAdmin } from "@/server/session";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { sectionAreaM2, type PurchaseBatchRow } from "@/lib/batch-stats";
 import { isBatchCostMismatch } from "@/lib/cost";
 import { allocatePackageCode } from "@/lib/package-code";
-import { archiveBatchIfDepleted } from "@/server/cost";
+import { archiveBatchIfDepleted } from "@/server/internal/cost";
 import type { Material, NomenclatureItem, RailType, Sort } from "@/types/domain";
 
 const PATH = "/purchases";
@@ -102,6 +103,7 @@ export interface PurchasesData {
 }
 
 export async function getPurchasesData(): Promise<PurchasesData> {
+  await requireAdmin();
   const [batches, lots, items, materials] = await Promise.all([
     prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
     prisma.railLot.findMany(),
@@ -172,6 +174,7 @@ export interface PackageLabelData {
 
 /** Этикетки пакетов партии (коды + параметры рейки) для печати. */
 export async function getBatchLabels(batchId: string): Promise<PackageLabelData[]> {
+  await requireAdmin();
   const batch = await prisma.batch.findUnique({
     where: { id: batchId },
     include: { railLots: { where: { isPackage: true }, orderBy: { code: "asc" } } },
@@ -232,6 +235,7 @@ async function loadUsedPackageCodes(): Promise<Set<string>> {
 }
 
 export async function createBatch(values: BatchFormValues): Promise<PurchaseBatchRow> {
+  await requireAdmin();
   validateBatch(values, { requirePackages: true });
   await assertUniqueBatchName(values.name);
   const section = await resolveMaterialSection(values.materialId);
@@ -286,6 +290,7 @@ export async function createBatch(values: BatchFormValues): Promise<PurchaseBatc
  * и их правка ведётся отдельно (чтобы не сбить remainingQuantity).
  */
 export async function updateBatch(id: string, values: BatchFormValues): Promise<PurchaseBatchRow> {
+  await requireAdmin();
   validateBatch(values);
   await assertUniqueBatchName(values.name, id);
   const section = await resolveMaterialSection(values.materialId);
@@ -325,6 +330,7 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
 
 /** Списать остаток партии в отход: обнуляем остатки всех реек (атомарно). */
 export async function writeOffBatchRemainder(id: string): Promise<PurchaseBatchRow> {
+  await requireAdmin();
   // Чтение остатка, обнуление и запись в журнал — одной транзакцией, чтобы
   // параллельная торцовка не разошлась с журналом.
   await prisma.$transaction(async (tx) => {
@@ -361,6 +367,7 @@ export async function writeOffBatchRemainder(id: string): Promise<PurchaseBatchR
 }
 
 export async function deleteBatch(id: string): Promise<void> {
+  await requireAdmin();
   const [ops, deals] = await Promise.all([
     prisma.productionOperation.count({ where: { batchId: id } }),
     prisma.dealItem.count({ where: { batchId: id } }),
@@ -395,6 +402,7 @@ export interface SimplePurchaseFormValues {
 }
 
 export async function createSimplePurchase(values: SimplePurchaseFormValues): Promise<void> {
+  await requireAdmin();
   if (!values.nomenclatureId) throw new Error("Выберите номенклатуру");
   if (!values.quantity || values.quantity <= 0) throw new Error("Укажите количество");
   if (values.unitPrice == null || values.unitPrice < 0) throw new Error("Укажите цену");

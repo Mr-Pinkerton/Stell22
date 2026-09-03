@@ -9,19 +9,22 @@ import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
 import { submitPrisadka } from "@/server/terminal";
 import { sectionLabel } from "@/lib/material";
-import type { Detail, Employee } from "@/types/domain";
-import type { TerminalData } from "@/components/terminal/types";
+import type {
+  TerminalData,
+  TerminalDetail,
+  TerminalEmployee,
+} from "@/components/terminal/types";
 
 interface PrisadkaScreenProps {
   data: TerminalData;
-  employee: Employee;
+  employee: TerminalEmployee;
   onDone: () => void;
 }
 
 type PrisadkaKind = "torcev" | "plosk";
 
 interface Tile {
-  detail: Detail;
+  detail: TerminalDetail;
   kind: PrisadkaKind;
   label: string;
   pending: number;

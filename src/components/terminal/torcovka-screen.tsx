@@ -12,12 +12,17 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatLength } from "@/lib/format";
 import { maxDetailQuantity, sumDetailLengthM, type TorcovkaPick } from "@/lib/torcovka";
 import { submitTorcovka } from "@/server/terminal";
-import type { Batch, Employee, RailLot, RailType, Sort } from "@/types/domain";
-import type { TerminalData } from "@/components/terminal/types";
+import type { RailType, Sort } from "@/types/domain";
+import type {
+  TerminalBatch,
+  TerminalData,
+  TerminalEmployee,
+  TerminalRailLot,
+} from "@/components/terminal/types";
 
 interface TorcovkaScreenProps {
   data: TerminalData;
-  employee: Employee;
+  employee: TerminalEmployee;
   onDone: () => void;
 }
 
@@ -86,12 +91,12 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
     setPicked({});
   };
 
-  const selectBatch = (b: Batch) => {
+  const selectBatch = (b: TerminalBatch) => {
     setBatchId(b.id);
     resetLot();
   };
 
-  const selectLot = (l: RailLot) => {
+  const selectLot = (l: TerminalRailLot) => {
     if (l.id === lotId) {
       setDialog({ kind: "rails" });
       return;

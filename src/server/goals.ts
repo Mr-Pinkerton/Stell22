@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
+import { requireAdmin } from "@/server/session";
 import { formatGoalMonthIso } from "@/lib/goals";
 import { formatProductSku } from "@/lib/format";
 import type { GoalRow } from "@/mocks/goals-fixtures";
@@ -27,6 +28,7 @@ function monthStart(d: Date): Date {
  * (операции УПАКОВКИ) этого изделия за календарный месяц цели.
  */
 export async function getGoalsData(): Promise<GoalsData> {
+  await requireAdmin();
   const [goals, products, upakovka] = await Promise.all([
     prisma.goal.findMany({ include: { product: true }, orderBy: { month: "desc" } }),
     prisma.product.findMany({ where: { status: "ACTIVE" }, orderBy: { name: "asc" } }),
@@ -76,6 +78,7 @@ export interface CreateGoalInput {
 
 /** Создать цель на текущий календарный месяц. */
 export async function createGoal(input: CreateGoalInput): Promise<{ ok: true } | { ok: false; error: string }> {
+  await requireAdmin();
   const name = input.name.trim();
   if (!name) return { ok: false, error: "Укажите название цели" };
   if (!input.productId) return { ok: false, error: "Выберите изделие" };
