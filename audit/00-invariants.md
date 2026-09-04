@@ -1,6 +1,8 @@
 # Этап 0: инварианты, уже выраженные в коде
 
-Фиксируется **существующее** поведение, не желаемое из v2, если оно не реализовано.  
+Фиксируется **существующее** поведение. Расхождение с v2 / старым планом — не баг
+само по себе (см. `audit/00-audit-principles.md`).
+
 Zod нет. Слои: client (UI), server (`throw new Error`), database (unique/enum/FK: required→Restrict on delete, optional→SetNull on delete; onUpdate Cascade).
 
 ---

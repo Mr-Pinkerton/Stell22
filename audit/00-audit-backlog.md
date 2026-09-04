@@ -1,5 +1,7 @@
 # Этап 0: очередь глубокого аудита
 
+**Устав:** `audit/00-audit-principles.md` — старое ТЗ не абсолютный source of truth; drift ≠ баг.
+
 Это **не список багов**. Приоритет = насколько рано проверять на следующих этапах (бизнес-логика, деньги, склад, ЗП, security, concurrency, тесты, production).
 
 Уровни: `CRITICAL TO AUDIT` | `HIGH` | `MEDIUM` | `LOW`.
@@ -558,4 +560,26 @@ Priority to audit: LOW
 
 Question:  
 Архитектурная чистка internal split (дубли имён, commented leftovers, единый слой server/internal) — отдельный этап, не security blocker.
+
+---
+
+## Data Integrity phase 1 — confirmed (не чинить в этом pass)
+
+Этап закрыт как **audit-only**. Полные карточки: `audit/01-data-integrity-findings.md`. Карта TX: `audit/01-data-integrity-map.md`. Таблица A/B/C/D: `audit/01-data-integrity-invariants.md`. HEAD `5479580`.
+
+Связь с очередью этапа 0 (только то, что **подтверждено** evidence):
+
+| REVIEW | Finding | Итог аудита |
+| --- | --- | --- |
+| REVIEW-005 / REVIEW-018 | [DI-006](01-data-integrity-findings.md#di-006), [DI-012](01-data-integrity-findings.md#di-012) | Recalc без TX/lock; PRELIMINARY не SoT. Freeze = unpaid TORCOVKA — EXPECTED vs v2. |
+| REVIEW-007 | — | gte+updateMany на terminal/reverse **race-safe** для qty (не P0/P1). |
+| REVIEW-008 | [DI-014](01-data-integrity-findings.md#di-014), [DI-015](01-data-integrity-findings.md#di-015) | Double pay через markEmployeePaid **не** подтверждён (claim). Ставки live — decision. |
+| REVIEW-009 | [DI-004](01-data-integrity-findings.md#di-004), [DI-010](01-data-integrity-findings.md#di-010), [DI-011](01-data-integrity-findings.md#di-011) | Sequential supply идемпотентен; concurrent sync — нет; SKU не unique. |
+| REVIEW-010 / REVIEW-015 / REVIEW-021 | [DI-001](01-data-integrity-findings.md#di-001), [DI-005](01-data-integrity-findings.md#di-005), [DI-013](01-data-integrity-findings.md#di-013) | updateBatch не синхронизирует totalCost; freeze race на totalCost; derived вне TX источника. |
+| REVIEW-011 | [DI-003](01-data-integrity-findings.md#di-003) | importKey index-only; concurrent IMAP+UI дублирует CF. |
+| REVIEW-012 | [DI-002](01-data-integrity-findings.md#di-002) | Unconfirmed отфильтрованы в ДДС/overhead. Confirm **без** resync totals. |
+| REVIEW-013 | — | TORCOVKA не возвращает рейки — **EXPECTED** (v2 + JSDoc + smoke). |
+| REVIEW-014 | [DI-009](01-data-integrity-findings.md#di-009), [DI-016](01-data-integrity-findings.md#di-016) | Absolute qty set; DRAFT не unique в БД. |
+
+P1 к следующему fix-pass (порядок): DI-001, DI-002, DI-003, DI-004. Application/Prisma/tests в этом этапе не менялись.
 
