@@ -9,6 +9,10 @@ import type {
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
+import {
+  assertUniqueActiveSkus,
+  throwFriendlyActiveSkuConflict,
+} from "@/lib/active-sku";
 import type {
   Detail,
   Material,
@@ -382,31 +386,38 @@ export async function createProduct(values: ProductFormValues): Promise<Product>
   await requireAdmin();
   validateProduct(values);
   await assertProductDetailsMaterial(values);
+  await assertUniqueActiveSkus(values.skuOzon, values.skuWb);
 
-  const created = await prisma.product.create({
-    data: {
-      name: values.name.trim(),
-      materialId: values.materialId,
-      skuOzon: values.skuOzon.trim(),
-      skuWb: values.skuWb.trim(),
-      sort: values.sort,
-      packagingId: values.packagingId || null,
-      details: {
-        create: values.details.map((d) => ({
-          detailId: d.detailId,
-          quantity: d.quantity,
-        })),
+  let created;
+  try {
+    created = await prisma.product.create({
+      data: {
+        name: values.name.trim(),
+        materialId: values.materialId,
+        skuOzon: values.skuOzon.trim(),
+        skuWb: values.skuWb.trim(),
+        sort: values.sort,
+        packagingId: values.packagingId || null,
+        details: {
+          create: values.details.map((d) => ({
+            detailId: d.detailId,
+            quantity: d.quantity,
+          })),
+        },
+        fasteners: {
+          create: values.fasteners.map((f) => ({
+            nomenclatureId: f.nomenclatureId,
+            quantity: f.quantity,
+          })),
+        },
+        extras: { create: values.extraIds.map((nomenclatureId) => ({ nomenclatureId })) },
       },
-      fasteners: {
-        create: values.fasteners.map((f) => ({
-          nomenclatureId: f.nomenclatureId,
-          quantity: f.quantity,
-        })),
-      },
-      extras: { create: values.extraIds.map((nomenclatureId) => ({ nomenclatureId })) },
-    },
-    include: productInclude,
-  });
+      include: productInclude,
+    });
+  } catch (err) {
+    throwFriendlyActiveSkuConflict(err);
+    throw err;
+  }
   await writeChangeLog({
     entity: "Product",
     entityId: created.id,
@@ -423,9 +434,14 @@ export async function updateProduct(id: string, values: ProductFormValues): Prom
 
   const before = await prisma.product.findUnique({ where: { id }, include: productInclude });
   if (!before) throw new Error("Изделие не найдено");
+  if (before.status === "ACTIVE") {
+    await assertUniqueActiveSkus(values.skuOzon, values.skuWb, id);
+  }
 
   // Состав заменяем целиком: удаляем дочерние строки и создаём заново (атомарно).
-  const updated = await prisma.$transaction(async (tx) => {
+  let updated;
+  try {
+    updated = await prisma.$transaction(async (tx) => {
     await tx.productDetail.deleteMany({ where: { productId: id } });
     await tx.productFastener.deleteMany({ where: { productId: id } });
     await tx.productExtra.deleteMany({ where: { productId: id } });
@@ -454,7 +470,11 @@ export async function updateProduct(id: string, values: ProductFormValues): Prom
       },
       include: productInclude,
     });
-  });
+    });
+  } catch (err) {
+    throwFriendlyActiveSkuConflict(err);
+    throw err;
+  }
 
   await writeChangeLog({
     entity: "Product",
@@ -469,11 +489,20 @@ export async function updateProduct(id: string, values: ProductFormValues): Prom
 async function setProductStatus(id: string, status: "ACTIVE" | "ARCHIVED"): Promise<Product> {
   const before = await prisma.product.findUnique({ where: { id } });
   if (!before) throw new Error("Изделие не найдено");
-  const updated = await prisma.product.update({
-    where: { id },
-    data: { status },
-    include: productInclude,
-  });
+  if (status === "ACTIVE") {
+    await assertUniqueActiveSkus(before.skuOzon, before.skuWb, id);
+  }
+  let updated;
+  try {
+    updated = await prisma.product.update({
+      where: { id },
+      data: { status },
+      include: productInclude,
+    });
+  } catch (err) {
+    throwFriendlyActiveSkuConflict(err);
+    throw err;
+  }
   await writeChangeLog({
     entity: "Product",
     entityId: id,

@@ -113,6 +113,146 @@ SQL
   )" >&2
 fi
 
+# --- DI-003: duplicate Account.accountNumber ---
+dup_account_n="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*)
+FROM "Account" a
+WHERE a."accountNumber" IS NOT NULL
+  AND a."accountNumber" IN (
+    SELECT "accountNumber"
+    FROM "Account"
+    WHERE "accountNumber" IS NOT NULL
+    GROUP BY 1
+    HAVING COUNT(*) > 1
+  );
+SQL
+)" | tr -d '[:space:]')"
+
+if ! [[ "$dup_account_n" =~ ^[0-9]+$ ]]; then
+  echo "PRECHECK FAILED" >&2
+  echo "Could not read duplicate Account.accountNumber count" >&2
+  exit 1
+fi
+
+if [[ "$dup_account_n" -gt 0 ]]; then
+  failed=1
+  echo "DI-003: duplicate Account.accountNumber: ${dup_account_n} row(s). STOP. Do not migrate/merge/delete." >&2
+  echo "id / name / accountNumber / confirmed / bik / cashflow_n / statement_n:" >&2
+  psql_q "$(
+    cat <<'SQL'
+SELECT a.id || ' / ' || a.name || ' / ' || a."accountNumber" || ' / ' || a.confirmed::text || ' / ' || coalesce(a.bik, '') || ' / ' ||
+       (SELECT COUNT(*) FROM "CashFlow" cf WHERE cf."accountId" = a.id)::text || ' / ' ||
+       (SELECT COUNT(*) FROM "Statement" s WHERE s."accountId" = a.id)::text
+FROM "Account" a
+WHERE a."accountNumber" IS NOT NULL
+  AND a."accountNumber" IN (
+    SELECT "accountNumber"
+    FROM "Account"
+    WHERE "accountNumber" IS NOT NULL
+    GROUP BY 1
+    HAVING COUNT(*) > 1
+  )
+ORDER BY a."accountNumber", a.id;
+SQL
+  )" >&2
+fi
+
+# --- DI-003: duplicate CashFlow (accountId, importKey) ---
+dup_importkey_groups="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*)
+FROM (
+  SELECT "accountId", "importKey"
+  FROM "CashFlow"
+  WHERE "importKey" IS NOT NULL
+  GROUP BY "accountId", "importKey"
+  HAVING COUNT(*) > 1
+) d;
+SQL
+)" | tr -d '[:space:]')"
+
+if ! [[ "$dup_importkey_groups" =~ ^[0-9]+$ ]]; then
+  echo "PRECHECK FAILED" >&2
+  echo "Could not read duplicate CashFlow importKey group count" >&2
+  exit 1
+fi
+
+if [[ "$dup_importkey_groups" -gt 0 ]]; then
+  failed=1
+  echo "DI-003: duplicate CashFlow (accountId, importKey): ${dup_importkey_groups} group(s). STOP. Do not migrate/fix automatically." >&2
+  echo "id / accountId / importKey / date / amount / statementId / description:" >&2
+  psql_q "$(
+    cat <<'SQL'
+SELECT cf.id || ' / ' || cf."accountId" || ' / ' || cf."importKey" || ' / ' || cf.date::text || ' / ' || cf.amount::text || ' / ' || coalesce(cf."statementId", '') || ' / ' || coalesce(cf.description, '')
+FROM "CashFlow" cf
+WHERE (cf."accountId", cf."importKey") IN (
+  SELECT "accountId", "importKey"
+  FROM "CashFlow"
+  WHERE "importKey" IS NOT NULL
+  GROUP BY 1, 2
+  HAVING COUNT(*) > 1
+)
+ORDER BY cf."accountId", cf."importKey", cf.id;
+SQL
+  )" >&2
+fi
+
+# --- DI-010: duplicate ACTIVE marketplace SKUs ---
+dup_sku_ozon_groups="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*)
+FROM (
+  SELECT "skuOzon"
+  FROM "Product"
+  WHERE status = 'ACTIVE'
+  GROUP BY 1
+  HAVING COUNT(*) > 1
+) d;
+SQL
+)" | tr -d '[:space:]')"
+
+dup_sku_wb_groups="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*)
+FROM (
+  SELECT "skuWb"
+  FROM "Product"
+  WHERE status = 'ACTIVE'
+  GROUP BY 1
+  HAVING COUNT(*) > 1
+) d;
+SQL
+)" | tr -d '[:space:]')"
+
+if ! [[ "$dup_sku_ozon_groups" =~ ^[0-9]+$ && "$dup_sku_wb_groups" =~ ^[0-9]+$ ]]; then
+  echo "PRECHECK FAILED" >&2
+  echo "Could not read duplicate ACTIVE SKU group counts" >&2
+  exit 1
+fi
+
+if [[ "$dup_sku_ozon_groups" -gt 0 || "$dup_sku_wb_groups" -gt 0 ]]; then
+  failed=1
+  echo "DI-010: duplicate ACTIVE SKU. Ozon groups=${dup_sku_ozon_groups} WB groups=${dup_sku_wb_groups}. STOP. Do not migrate/rename/archive/merge." >&2
+  echo "id / name / status / skuOzon / skuWb:" >&2
+  psql_q "$(
+    cat <<'SQL'
+SELECT p.id || ' / ' || p.name || ' / ' || p.status || ' / ' || p."skuOzon" || ' / ' || p."skuWb"
+FROM "Product" p
+WHERE p.status = 'ACTIVE'
+  AND (
+    p."skuOzon" IN (
+      SELECT "skuOzon" FROM "Product" WHERE status = 'ACTIVE' GROUP BY 1 HAVING COUNT(*) > 1
+    )
+    OR p."skuWb" IN (
+      SELECT "skuWb" FROM "Product" WHERE status = 'ACTIVE' GROUP BY 1 HAVING COUNT(*) > 1
+    )
+  )
+ORDER BY p."skuOzon", p."skuWb", p.id;
+SQL
+  )" >&2
+fi
+
 if [[ "$failed" -ne 0 ]]; then
   echo "PRECHECK FAILED" >&2
   exit 1

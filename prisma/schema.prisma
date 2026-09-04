@@ -278,6 +278,7 @@ model Product {
   // Артикулы маркетплейсов у одного изделия различаются, поэтому храним оба.
   // Синхронизация МП сопоставляет продажи/поставки/остатки по своему артикулу:
   // Ozon — по skuOzon, WB — по skuWb.
+  // Partial UNIQUE among ACTIVE: Product_skuOzon_active_key / Product_skuWb_active_key.
   skuOzon       String // offer_id (Ozon)
   skuWb         String // supplierArticle (Wildberries)
   sort          Sort
@@ -532,7 +533,9 @@ model InventoryLine {
 model Account {
   id            String  @id @default(cuid())
   name          String
-  accountNumber String? // РасчСчет из выписки (для авто-сопоставления)
+  // Canonical bank identity (РасчСчет). Partial UNIQUE Account_accountNumber_key
+  // WHERE accountNumber IS NOT NULL — NULLs stay allowed (manual/cash accounts).
+  accountNumber String?
   bik           String?
   balance       Decimal @db.Decimal(14, 2) @default(0) // кэш текущего остатка (пересчитывается на чтении)
 
@@ -645,7 +648,8 @@ model CashFlow {
   transferId     String?  // пара ног одного перевода (списание+зачисление)
 
   @@index([date])
-  @@index([accountId, importKey])
+  // Partial UNIQUE CashFlow_accountId_importKey_key WHERE importKey IS NOT NULL
+  // (raw SQL migration). NULL importKey stays allowed for manual CashFlow.
   @@index([transferId])
 }
 

@@ -1,5 +1,4 @@
-import type { Prisma } from "@prisma/client";
-import { revalidatePath } from "next/cache";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { D } from "@/lib/cost";
 import {
@@ -9,9 +8,10 @@ import {
   sumConfirmedExpense,
   type DealCashFlowLite,
 } from "@/lib/deal-cost";
-import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import type { FinanceAutoRule } from "@/mocks/finance-fixtures";
 import type { FlowType } from "@/types/domain";
+
+export type FinanceDb = Prisma.TransactionClient | typeof prisma;
 
 function num(value: Prisma.Decimal | number | null): number {
   if (value == null) return 0;
@@ -56,6 +56,93 @@ function toCfLite(flows: CashFlowWithAccountConfirmed[]): DealCashFlowLite[] {
 }
 const CF_WITH_CONFIRMED = { include: { account: { select: { confirmed: true } } } } as const;
 
+const TABLE_IDENT = {
+  Account: Prisma.raw(`"Account"`),
+  Deal: Prisma.raw(`"Deal"`),
+  Batch: Prisma.raw(`"Batch"`),
+} as const;
+
+export function sortedUniqueIds(ids: Iterable<string | null | undefined>): string[] {
+  return [...new Set([...ids].filter((id): id is string => Boolean(id)))].sort();
+}
+
+export function sameSortedIds(
+  a: Iterable<string | null | undefined>,
+  b: Iterable<string | null | undefined>,
+): boolean {
+  const left = sortedUniqueIds(a);
+  const right = sortedUniqueIds(b);
+  return left.length === right.length && left.every((id, i) => id === right[i]);
+}
+
+/** Thrown to roll back a writer TX and retry from scratch (lock set changed). */
+export class LockSetChangedError extends Error {
+  constructor() {
+    super("LOCK_SET_CHANGED");
+    this.name = "LockSetChangedError";
+  }
+}
+
+const WRITER_LOCK_RETRY_ATTEMPTS = 4;
+
+export async function retryOnLockSetChange<T>(
+  run: () => Promise<T>,
+  attempts = WRITER_LOCK_RETRY_ATTEMPTS,
+): Promise<T> {
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await run();
+    } catch (err) {
+      last = err;
+      if (!(err instanceof LockSetChangedError)) throw err;
+    }
+  }
+  throw last;
+}
+
+async function lockTableIds(
+  db: FinanceDb,
+  table: keyof typeof TABLE_IDENT,
+  ids: Iterable<string | null | undefined>,
+): Promise<void> {
+  const unique = sortedUniqueIds(ids);
+  if (unique.length === 0) return;
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM ${TABLE_IDENT[table]} WHERE id IN (${Prisma.join(unique)}) ORDER BY id FOR UPDATE`,
+  );
+}
+
+export async function lockDealsThenBatches(
+  db: FinanceDb,
+  dealIds: Iterable<string | null | undefined>,
+  extraBatchIds: Iterable<string | null | undefined> = [],
+): Promise<void> {
+  const deals = sortedUniqueIds(dealIds);
+  await lockTableIds(db, "Deal", deals);
+  const items =
+    deals.length > 0
+      ? await db.dealItem.findMany({
+          where: { dealId: { in: deals } },
+          select: { batchId: true },
+        })
+      : [];
+  await lockTableIds(db, "Batch", [
+    ...items.map((i) => i.batchId),
+    ...extraBatchIds,
+  ]);
+}
+
+export async function lockAccountsThenDealsThenBatches(
+  db: FinanceDb,
+  accountIds: Iterable<string | null | undefined>,
+  dealIds: Iterable<string | null | undefined>,
+  extraBatchIds: Iterable<string | null | undefined> = [],
+): Promise<void> {
+  await lockTableIds(db, "Account", accountIds);
+  await lockDealsThenBatches(db, dealIds, extraBatchIds);
+}
+
 /**
  * «Стоимость общая» партии = закупочная + доставка/доп. расходы из её сделок.
  * Доставка сделки = расходные операции ДДС сверх суммы закупочных стоимостей
@@ -63,11 +150,15 @@ const CF_WITH_CONFIRMED = { include: { account: { select: { confirmed: true } } 
  * Учитываются только операции по подтверждённым счетам (A13, карантин импорта).
  * Замороженные партии не трогаем (cost-integrity).
  */
-export async function syncBatchTotalCostInternal(batchId: string): Promise<void> {
-  const batch = await prisma.batch.findUnique({ where: { id: batchId } });
-  if (!batch || batch.frozenAt) return;
+export async function syncBatchTotalCostInternal(
+  batchId: string,
+  db: FinanceDb = prisma,
+): Promise<string | null> {
+  await lockTableIds(db, "Batch", [batchId]);
+  const batch = await db.batch.findUnique({ where: { id: batchId } });
+  if (!batch || batch.frozenAt) return null;
 
-  const items = await prisma.dealItem.findMany({
+  const items = await db.dealItem.findMany({
     where: { batchId },
     include: {
       deal: { include: { items: { include: { batch: true } }, cashFlows: CF_WITH_CONFIRMED } },
@@ -88,27 +179,37 @@ export async function syncBatchTotalCostInternal(batchId: string): Promise<void>
   }
 
   const newTotal = batchTotalCost(num(batch.purchaseCost), extra);
-  await prisma.batch.update({ where: { id: batchId }, data: { totalCost: newTotal.toFixed(2) } });
-  await enqueueRecalcBatchCosts(batchId);
+  const written = await db.batch.updateMany({
+    where: { id: batchId, frozenAt: null },
+    data: { totalCost: newTotal.toFixed(2) },
+  });
+  if (written.count === 0) return null;
+  return batchId;
 }
 
 /** Пересчёт суммы сделки и «Стоимости общей» её партий. */
-export async function syncDealInternal(dealId: string): Promise<void> {
-  const deal = await prisma.deal.findUnique({
+export async function syncDealInternal(
+  dealId: string,
+  db: FinanceDb = prisma,
+): Promise<string[]> {
+  await lockDealsThenBatches(db, [dealId]);
+  const deal = await db.deal.findUnique({
     where: { id: dealId },
     include: { items: { include: { batch: true } }, cashFlows: CF_WITH_CONFIRMED },
   });
-  if (!deal) return;
+  if (!deal) return [];
 
   const expense = sumConfirmedExpense(toCfLite(deal.cashFlows)).toNumber();
   const purchaseTotal = deal.items.reduce((s, i) => s + num(i.batch?.purchaseCost ?? null), 0);
   const total = purchaseTotal + Math.max(0, expense - purchaseTotal);
 
-  await prisma.deal.update({ where: { id: dealId }, data: { total: total.toFixed(2) } });
+  await db.deal.update({ where: { id: dealId }, data: { total: total.toFixed(2) } });
 
+  const batchIds: string[] = [];
   for (const item of deal.items) {
-    if (item.batchId) await syncBatchTotalCostInternal(item.batchId);
+    if (!item.batchId) continue;
+    const written = await syncBatchTotalCostInternal(item.batchId, db);
+    if (written) batchIds.push(written);
   }
-  revalidatePath("/purchases");
-  revalidatePath("/reports");
+  return batchIds;
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   computeAccountBalance,
   computeAccountBalances,
+  cashFlowBelongsInDds,
   isAccountConfirmed,
   shouldAdvanceAnchor,
   signedFlow,
@@ -112,5 +113,46 @@ describe("isAccountConfirmed", () => {
 
   it("false — счёт в карантине (скрыт из ДДС/KPI)", () => {
     expect(isAccountConfirmed(false)).toBe(false);
+  });
+});
+
+describe("cashFlowBelongsInDds", () => {
+  const accounts = [
+    { id: "c", name: "Confirmed", confirmed: true },
+    { id: "u", name: "Quarantine", confirmed: false },
+  ];
+
+  it("includes a row on a confirmed account", () => {
+    expect(cashFlowBelongsInDds({ accountId: "c", accountName: "Confirmed" }, accounts)).toBe(true);
+  });
+
+  it("excludes a row on an unconfirmed account", () => {
+    expect(cashFlowBelongsInDds({ accountId: "u", accountName: "Quarantine" }, accounts)).toBe(
+      false,
+    );
+  });
+
+  it("matches only by id when accountId is present (duplicate names)", () => {
+    const dup = [
+      { id: "c1", name: "Same", confirmed: true },
+      { id: "u1", name: "Same", confirmed: false },
+    ];
+    expect(cashFlowBelongsInDds({ accountId: "u1", accountName: "Same" }, dup)).toBe(false);
+    expect(cashFlowBelongsInDds({ accountId: "c1", accountName: "Same" }, dup)).toBe(true);
+  });
+
+  it("unknown accountId is fail-closed (no name fallback)", () => {
+    expect(
+      cashFlowBelongsInDds({ accountId: "missing", accountName: "Confirmed" }, accounts),
+    ).toBe(false);
+  });
+
+  it("falls back to name only when accountId is absent", () => {
+    expect(cashFlowBelongsInDds({ accountName: "Confirmed" }, accounts)).toBe(true);
+    expect(cashFlowBelongsInDds({ accountName: "Quarantine" }, accounts)).toBe(false);
+  });
+
+  it("no account id or name → false", () => {
+    expect(cashFlowBelongsInDds({}, accounts)).toBe(false);
   });
 });

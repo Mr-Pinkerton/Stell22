@@ -1,10 +1,14 @@
-import { revalidatePath } from "next/cache";
 import { Decimal } from "decimal.js";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { loadStoredApiCredentialsInternal } from "@/server/internal/api-credentials";
 import { writeSystemLog } from "@/server/system-log";
-import { computeSupplyDeduction } from "@/lib/supply-stock";
+import {
+  applySupplyDeduction,
+  lockSuppliesInOrder,
+  retryOnceOnSyncDeadlock,
+  type SupplyKey,
+} from "@/server/internal/supply-deduct";
 import {
   formatMpSyncMessage,
   mpSyncLogLevel,
@@ -469,7 +473,11 @@ export async function syncMarketplacesAsUserInternal(userId: string): Promise<Sy
   let deductedTotal = 0;
   let shortfallTotal = 0;
   let restoredTotal = 0;
-  await prisma.$transaction(async (tx) => {
+  await retryOnceOnSyncDeadlock(async () => {
+    deductedTotal = 0;
+    shortfallTotal = 0;
+    restoredTotal = 0;
+    await prisma.$transaction(async (tx) => {
     for (const s of sales) {
       await tx.sale.upsert({
         where: { marketplace_externalId: { marketplace: s.marketplace, externalId: s.externalId } },
@@ -501,9 +509,6 @@ export async function syncMarketplacesAsUserInternal(userId: string): Promise<Sy
           sku: s.sku,
         },
       };
-      const existing = await tx.supply.findUnique({ where: key });
-      const alreadyDeducted = existing?.deductedQty ?? 0;
-      const alreadyShort = existing?.shortfallQty ?? 0;
 
       await tx.supply.upsert({
         where: key,
@@ -526,45 +531,54 @@ export async function syncMarketplacesAsUserInternal(userId: string): Promise<Sy
           warehouseName: s.warehouseName,
         },
       });
+    }
 
-      // Списание со склада производства: отгрузка (SHIPPED/ACCEPTED) означает,
-      // что изделия физически ушли со склада. Учитываем «новую» часть
-      // (quantity − уже учтённое), где учтённое = фактически списано + недостача.
-      // deductedQty хранит именно ФАКТ (для корректного восстановления при
-      // отмене), shortfallQty — учтённую недостачу (чтобы не пытаться списать
-      // её повторно каждую синхронизацию). Нельзя в минус — недостача = «потеря ГП».
+    const deductKeys: SupplyKey[] = supplies
+      .filter((s) => {
+        const shipped = s.status === "SHIPPED" || s.status === "ACCEPTED";
+        return shipped && Boolean(productIdForRecord(s.marketplace, s.sku));
+      })
+      .map((s) => ({
+        marketplace: s.marketplace,
+        externalId: s.externalId,
+        sku: s.sku,
+      }));
+    const cancelRows =
+      ozonCancelledExternalIds.length > 0
+        ? await tx.supply.findMany({
+            where: {
+              marketplace: "OZON",
+              externalId: { in: ozonCancelledExternalIds },
+              deductedQty: { gt: 0 },
+            },
+            select: { marketplace: true, externalId: true, sku: true },
+          })
+        : [];
+    await lockSuppliesInOrder(tx, [...deductKeys, ...cancelRows]);
+
+    for (const s of supplies) {
+      const productId = productIdForRecord(s.marketplace, s.sku);
       const shipped = s.status === "SHIPPED" || s.status === "ACCEPTED";
       const target = shipped ? s.quantity : 0;
-      if (target > alreadyDeducted + alreadyShort && productId) {
-        const ps = await tx.productStock.findUnique({ where: { productId } });
-        const { toRemove, shortfall, newDeducted, newShort } = computeSupplyDeduction({
-          targetQty: target,
-          alreadyDeducted,
-          alreadyShort,
-          available: ps?.quantity ?? 0,
-        });
-        if (toRemove > 0) {
-          await tx.productStock.update({
-            where: { productId },
-            data: { quantity: { decrement: toRemove } },
-          });
-          deductedTotal += toRemove;
-        }
-        if (shortfall > 0) {
-          shortfallTotal += shortfall;
-          await writeChangeLog(
-            {
-              entity: "Supply",
-              entityId: `${s.marketplace}:${s.externalId}:${s.sku}`,
-              newValues: { event: "gp_shortfall", sku: s.sku, shortfall },
-            },
-            tx,
-          );
-        }
-        await tx.supply.update({
-          where: key,
-          data: { deductedQty: newDeducted, shortfallQty: newShort },
-        });
+      if (!(target > 0 && productId)) continue;
+      const { toRemove, shortfall } = await applySupplyDeduction(tx, {
+        marketplace: s.marketplace,
+        externalId: s.externalId,
+        sku: s.sku,
+        targetQty: target,
+        productId,
+      });
+      deductedTotal += toRemove;
+      if (shortfall > 0) {
+        shortfallTotal += shortfall;
+        await writeChangeLog(
+          {
+            entity: "Supply",
+            entityId: `${s.marketplace}:${s.externalId}:${s.sku}`,
+            newValues: { event: "gp_shortfall", sku: s.sku, shortfall },
+          },
+          tx,
+        );
       }
     }
 
@@ -578,6 +592,9 @@ export async function syncMarketplacesAsUserInternal(userId: string): Promise<Sy
       });
       for (const row of rows) {
         if (row.productId && row.deductedQty > 0) {
+          await tx.$queryRaw`
+            SELECT id FROM "ProductStock" WHERE "productId" = ${row.productId} FOR UPDATE
+          `;
           await tx.productStock.upsert({
             where: { productId: row.productId },
             create: { productId: row.productId, quantity: row.deductedQty },
@@ -643,6 +660,7 @@ export async function syncMarketplacesAsUserInternal(userId: string): Promise<Sy
       tx,
     );
   });
+  });
 
   const report: MpSyncReport = {
     since: since.toISOString(),
@@ -664,14 +682,6 @@ export async function syncMarketplacesAsUserInternal(userId: string): Promise<Sy
   };
   await persistMpSyncLog(report, userId);
 
-  try {
-    revalidatePath("/sales");
-    revalidatePath("/warehouse");
-    revalidatePath("/reports");
-    revalidatePath("/settings");
-  } catch {
-    // вне Next.js runtime (CLI-скрипты)
-  }
   return {
     ok: true,
     salesAdded: sales.length,

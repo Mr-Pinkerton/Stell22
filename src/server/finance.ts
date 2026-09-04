@@ -4,14 +4,22 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
+import { throwFriendlyAccountNumberConflict } from "@/lib/prisma-unique-conflict";
 import { requireAdmin } from "@/server/session";
 import { importStatementInternal } from "@/server/internal/statement-import";
 import {
   applyAutoRulesInternal,
+  lockAccountsThenDealsThenBatches,
+  lockDealsThenBatches,
+  LockSetChangedError,
+  retryOnLockSetChange,
+  sameSortedIds,
+  sortedUniqueIds,
   syncBatchTotalCostInternal,
   syncDealInternal,
 } from "@/server/internal/finance-operations";
 import { writeChangeLog } from "@/server/change-log";
+import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { sumConfirmedExpense, type DealCashFlowLite } from "@/lib/deal-cost";
 import { computeAccountBalances, type BalanceFlow } from "@/lib/account-balance";
 import type { FlowType } from "@/types/domain";
@@ -33,6 +41,13 @@ import type { DealFormValues } from "@/components/finance/deal-form-dialog";
 import type { StatementUploadValues } from "@/components/finance/statement-upload-dialog";
 
 const PATH = "/finance";
+
+async function afterTotalsCommit(batchIds: string[]): Promise<void> {
+  for (const id of [...new Set(batchIds)]) await enqueueRecalcBatchCosts(id);
+  revalidatePath("/purchases");
+  revalidatePath("/reports");
+  revalidatePath(PATH);
+}
 
 const OVERHEAD_CATEGORY = "Производственные (накладные)";
 
@@ -315,14 +330,20 @@ export async function createAccount(values: AccountFormValues): Promise<FinanceA
   const name = values.name.trim();
   if (!name) throw new Error("Укажите название счёта");
 
-  const created = await prisma.account.create({
-    data: {
-      name,
-      openingBalance: values.openingBalance.toFixed(2),
-      balanceAsOf: values.openingDate ? dayToDate(values.openingDate) : null,
-      balance: values.openingBalance.toFixed(2),
-    },
-  });
+  let created;
+  try {
+    created = await prisma.account.create({
+      data: {
+        name,
+        openingBalance: values.openingBalance.toFixed(2),
+        balanceAsOf: values.openingDate ? dayToDate(values.openingDate) : null,
+        balance: values.openingBalance.toFixed(2),
+      },
+    });
+  } catch (err) {
+    throwFriendlyAccountNumberConflict(err);
+    throw err;
+  }
   await writeChangeLog({
     entity: "Account",
     entityId: created.id,
@@ -341,16 +362,21 @@ export async function updateAccount(
   const name = values.name.trim();
   if (!name) throw new Error("Укажите название счёта");
 
-  await prisma.account.update({
-    where: { id },
-    data: {
-      name,
-      openingBalance: values.openingBalance.toFixed(2),
-      balanceAsOf: values.openingDate ? dayToDate(values.openingDate) : null,
-      // Ручная смена точки отсчёта снимает бейдж расхождения по прошлой выписке.
-      balanceMismatch: false,
-    },
-  });
+  try {
+    await prisma.account.update({
+      where: { id },
+      data: {
+        name,
+        openingBalance: values.openingBalance.toFixed(2),
+        balanceAsOf: values.openingDate ? dayToDate(values.openingDate) : null,
+        // Ручная смена точки отсчёта снимает бейдж расхождения по прошлой выписке.
+        balanceMismatch: false,
+      },
+    });
+  } catch (err) {
+    throwFriendlyAccountNumberConflict(err);
+    throw err;
+  }
   await writeChangeLog({
     entity: "Account",
     entityId: id,
@@ -369,10 +395,27 @@ export async function updateAccount(
  */
 export async function setAccountConfirmed(id: string, confirmed: boolean): Promise<FinanceAccount> {
   await requireAdmin();
-  await prisma.account.update({ where: { id }, data: { confirmed } });
+  const batchIds: string[] = [];
+  await prisma.$transaction(async (tx) => {
+    await lockAccountsThenDealsThenBatches(tx, [id], []);
+    const dealIds = sortedUniqueIds(
+      (
+        await tx.cashFlow.findMany({
+          where: { accountId: id, dealId: { not: null } },
+          select: { dealId: true },
+        })
+      ).map((r) => r.dealId),
+    );
+    await lockDealsThenBatches(tx, dealIds);
+    await tx.account.update({ where: { id }, data: { confirmed } });
+    for (const dealId of dealIds) {
+      batchIds.push(...(await syncDealInternal(dealId, tx)));
+    }
+  });
   await writeChangeLog({ entity: "Account", entityId: id, newValues: { confirmed } });
-  revalidatePath(PATH);
+  await afterTotalsCommit(batchIds);
   revalidatePath(SETTINGS_PATH);
+  revalidatePath("/dashboard");
   return loadAccount(id);
 }
 
@@ -763,33 +806,57 @@ export async function reapplyAutoRules(): Promise<ReapplyAutoRulesResult> {
   await requireAdmin();
   const pending = await prisma.cashFlow.findMany({ where: { articleId: null } });
   const updatedIds: string[] = [];
-  const dealsToSync = new Set<string>();
+  const batchIds: string[] = [];
 
   for (const cf of pending) {
-    const auto = await applyAutoRulesInternal({
-      flowType: cf.flowType,
-      counterpartyId: cf.counterpartyId,
-      description: cf.description ?? "",
-    });
-    if (!auto?.articleId) continue;
+    let assigned = false;
+    let assignedBatchIds: string[] = [];
+    await retryOnLockSetChange(async () => {
+      assigned = false;
+      assignedBatchIds = [];
+      await prisma.$transaction(async (tx) => {
+        const peek = await tx.cashFlow.findUnique({ where: { id: cf.id } });
+        if (!peek) return;
+        await lockAccountsThenDealsThenBatches(tx, [peek.accountId], []);
+        const current = await tx.cashFlow.findUnique({ where: { id: cf.id } });
+        if (!current) return;
+        if (!sameSortedIds([current.accountId], [peek.accountId])) {
+          throw new LockSetChangedError();
+        }
+        if (current.articleId != null) return;
 
-    const dealId = cf.dealId ?? auto.dealId;
-    await prisma.cashFlow.update({
-      where: { id: cf.id },
-      data: { articleId: auto.articleId, dealId, isAutoAssigned: true },
+        const auto = await applyAutoRulesInternal({
+          flowType: current.flowType,
+          counterpartyId: current.counterpartyId,
+          description: current.description ?? "",
+        });
+        if (!auto?.articleId) return;
+
+        const dealId = current.dealId ?? auto.dealId;
+        await lockDealsThenBatches(tx, dealId ? [dealId] : []);
+        await tx.cashFlow.update({
+          where: { id: current.id },
+          data: { articleId: auto.articleId, dealId, isAutoAssigned: true },
+        });
+        if (auto.dealId && !current.dealId) {
+          assignedBatchIds.push(...(await syncDealInternal(auto.dealId, tx)));
+        }
+        assigned = true;
+      });
     });
-    if (auto.dealId && !cf.dealId) dealsToSync.add(auto.dealId);
-    updatedIds.push(cf.id);
+    if (assigned) {
+      updatedIds.push(cf.id);
+      batchIds.push(...assignedBatchIds);
+    }
   }
 
-  for (const d of dealsToSync) await syncDealInternal(d);
   if (updatedIds.length > 0) {
     await writeChangeLog({
       entity: "CashFlow",
       entityId: "reapply",
       newValues: { reappliedCount: updatedIds.length, ids: updatedIds },
     });
-    revalidatePath(PATH);
+    await afterTotalsCommit(batchIds);
   }
 
   const updated = updatedIds.length
@@ -843,27 +910,34 @@ export async function createCashFlow(values: CashflowFormValues): Promise<Financ
     }
   }
 
-  const created = await prisma.cashFlow.create({
-    data: {
-      amount: values.amount,
-      flowType: values.flowType,
-      accountId: account.id,
-      counterpartyId: counterparty?.id ?? null,
-      description: values.description.trim(),
-      articleId,
-      dealId,
-      date: new Date(values.date),
-      isAutoAssigned,
-    },
+  const batchIds: string[] = [];
+  const createdId = await prisma.$transaction(async (tx) => {
+    await lockAccountsThenDealsThenBatches(tx, [account.id], dealId ? [dealId] : []);
+    const created = await tx.cashFlow.create({
+      data: {
+        amount: values.amount,
+        flowType: values.flowType,
+        accountId: account.id,
+        counterpartyId: counterparty?.id ?? null,
+        description: values.description.trim(),
+        articleId,
+        dealId,
+        date: new Date(values.date),
+        isAutoAssigned,
+      },
+    });
+    if (dealId) {
+      batchIds.push(...(await syncDealInternal(dealId, tx)));
+    }
+    return created.id;
   });
   await writeChangeLog({
     entity: "CashFlow",
-    entityId: created.id,
+    entityId: createdId,
     newValues: { amount: values.amount, flowType: values.flowType, article: values.articleName },
   });
-  if (dealId) await syncDealInternal(dealId);
-  revalidatePath(PATH);
-  return loadCashFlow(created.id);
+  await afterTotalsCommit(batchIds);
+  return loadCashFlow(createdId);
 }
 
 /**
@@ -898,35 +972,37 @@ export async function createTransfer(values: TransferFormValues): Promise<Financ
     transferId,
   };
 
-  const [expenseLeg, incomeLeg] = await prisma.$transaction([
-    prisma.cashFlow.create({
+  const [expenseLegId, incomeLegId] = await prisma.$transaction(async (tx) => {
+    await lockAccountsThenDealsThenBatches(tx, [from.id, to.id], []);
+    const expenseLeg = await tx.cashFlow.create({
       data: {
         ...base,
         flowType: "EXPENSE",
         accountId: from.id,
         description: note || `Перевод на «${to.name}»`,
       },
-    }),
-    prisma.cashFlow.create({
+    });
+    const incomeLeg = await tx.cashFlow.create({
       data: {
         ...base,
         flowType: "INCOME",
         accountId: to.id,
         description: note || `Перевод с «${from.name}»`,
       },
-    }),
-  ]);
+    });
+    return [expenseLeg.id, incomeLeg.id] as const;
+  });
 
   await writeChangeLog({
     entity: "CashFlow",
-    entityId: expenseLeg.id,
+    entityId: expenseLegId,
     newValues: { transfer: `${from.name} → ${to.name}`, amount: values.amount },
   });
 
   revalidatePath(PATH);
   const [expenseRow, incomeRow] = await Promise.all([
-    loadCashFlow(expenseLeg.id),
-    loadCashFlow(incomeLeg.id),
+    loadCashFlow(expenseLegId),
+    loadCashFlow(incomeLegId),
   ]);
   return [expenseRow, incomeRow];
 }
@@ -943,7 +1019,6 @@ export async function assignCashFlow(
   patch: CashFlowAssignPatch,
 ): Promise<FinanceCashFlowRow> {
   await requireAdmin();
-  const before = await prisma.cashFlow.findUnique({ where: { id } });
 
   const data: Prisma.CashFlowUncheckedUpdateInput = {};
   if (patch.counterpartyId !== undefined) data.counterpartyId = patch.counterpartyId;
@@ -953,16 +1028,29 @@ export async function assignCashFlow(
     // Разнесение вручную снимает подсветку «не разнесено».
     data.isAutoAssigned = Boolean(patch.articleId);
   }
-  await prisma.cashFlow.update({ where: { id }, data });
+
+  let batchIds: string[] = [];
+  await retryOnLockSetChange(async () => {
+    batchIds = [];
+    await prisma.$transaction(async (tx) => {
+      const peek = await tx.cashFlow.findUnique({ where: { id } });
+      if (!peek) throw new Error("Операция не найдена");
+      await lockAccountsThenDealsThenBatches(tx, [peek.accountId], []);
+      const current = await tx.cashFlow.findUnique({ where: { id } });
+      if (!current) throw new Error("Операция не найдена");
+      if (!sameSortedIds([current.accountId], [peek.accountId])) {
+        throw new LockSetChangedError();
+      }
+      const dealIds = sortedUniqueIds([current.dealId, patch.dealId]);
+      await lockDealsThenBatches(tx, dealIds);
+      await tx.cashFlow.update({ where: { id }, data });
+      for (const dealId of dealIds) {
+        batchIds.push(...(await syncDealInternal(dealId, tx)));
+      }
+    });
+  });
   await writeChangeLog({ entity: "CashFlow", entityId: id, newValues: { ...patch } });
-
-  // Привязка/отвязка к сделке меняет её доставку → пересчёт партий.
-  const affectedDeals = new Set<string>();
-  if (before?.dealId) affectedDeals.add(before.dealId);
-  if (patch.dealId) affectedDeals.add(patch.dealId);
-  for (const dealId of affectedDeals) await syncDealInternal(dealId);
-
-  revalidatePath(PATH);
+  await afterTotalsCommit(batchIds);
   return loadCashFlow(id);
 }
 
@@ -973,23 +1061,47 @@ export async function assignCashFlow(
  */
 export async function deleteCashFlow(id: string): Promise<string[]> {
   await requireAdmin();
-  const before = await prisma.cashFlow.findUnique({ where: { id } });
+  let batchIds: string[] = [];
+  const removedIds = await retryOnLockSetChange(async () => {
+    batchIds = [];
+    return prisma.$transaction(async (tx) => {
+      const peek = await tx.cashFlow.findUnique({ where: { id } });
+      if (!peek) throw new Error("Операция не найдена");
+      const peekLegs =
+        peek.isTransfer && peek.transferId
+          ? await tx.cashFlow.findMany({ where: { transferId: peek.transferId } })
+          : [peek];
+      const lockedAccounts = sortedUniqueIds(peekLegs.map((l) => l.accountId));
+      await lockAccountsThenDealsThenBatches(tx, lockedAccounts, []);
 
-  let removedIds = [id];
-  if (before?.isTransfer && before.transferId) {
-    const legs = await prisma.cashFlow.findMany({
-      where: { transferId: before.transferId },
-      select: { id: true },
+      const current = await tx.cashFlow.findUnique({ where: { id } });
+      if (!current) throw new Error("Операция не найдена");
+      const legs =
+        current.isTransfer && current.transferId
+          ? await tx.cashFlow.findMany({ where: { transferId: current.transferId } })
+          : [current];
+      if (!sameSortedIds(legs.map((l) => l.accountId), lockedAccounts)) {
+        throw new LockSetChangedError();
+      }
+
+      await lockDealsThenBatches(
+        tx,
+        legs.map((l) => l.dealId),
+      );
+      if (current.isTransfer && current.transferId) {
+        await tx.cashFlow.deleteMany({ where: { transferId: current.transferId } });
+      } else {
+        await tx.cashFlow.delete({ where: { id } });
+      }
+      for (const dealId of sortedUniqueIds(legs.map((l) => l.dealId))) {
+        batchIds.push(...(await syncDealInternal(dealId, tx)));
+      }
+      return legs.map((l) => l.id);
     });
-    removedIds = legs.map((l) => l.id);
-    await prisma.cashFlow.deleteMany({ where: { transferId: before.transferId } });
-  } else {
-    await prisma.cashFlow.delete({ where: { id } });
-  }
+  });
 
   await writeChangeLog({ entity: "CashFlow", entityId: id, oldValues: { deleted: true } });
-  if (before?.dealId) await syncDealInternal(before.dealId);
-  revalidatePath(PATH);
+  await afterTotalsCommit(batchIds);
   return removedIds;
 }
 
@@ -1016,46 +1128,71 @@ export async function convertCashFlowToTransfer(
   if (!other) throw new Error("Счёт не найден");
 
   const transferId = randomUUID();
-  // Списание с р/с → деньги пришли на второй счёт (зачисление), и наоборот.
-  const oppositeType = source.flowType === "INCOME" ? "EXPENSE" : "INCOME";
-  const note = source.description?.trim() || "";
 
-  const [, otherLeg] = await prisma.$transaction([
-    prisma.cashFlow.update({
-      where: { id },
-      data: {
-        isTransfer: true,
-        transferId,
-        isAutoAssigned: true,
-        counterpartyId: null,
-        articleId: null,
-        dealId: null,
-      },
-    }),
-    prisma.cashFlow.create({
-      data: {
-        amount: source.amount,
-        date: source.date,
-        flowType: oppositeType,
-        accountId: other.id,
-        description: note || `Перевод ${source.flowType === "INCOME" ? "на" : "с"} «${other.name}»`,
-        isTransfer: true,
-        isAutoAssigned: true,
-        transferId,
-      },
-    }),
-  ]);
+  let batchIds: string[] = [];
+  const otherLegId = await retryOnLockSetChange(async () => {
+    batchIds = [];
+    return prisma.$transaction(async (tx) => {
+      const peek = await tx.cashFlow.findUnique({ where: { id } });
+      if (!peek) throw new Error("Операция не найдена");
+      if (peek.isTransfer) throw new Error("Операция уже является переводом");
+      if (otherAccountId === peek.accountId) {
+        throw new Error("Второй счёт должен отличаться от счёта операции");
+      }
+      const lockedAccounts = sortedUniqueIds([peek.accountId, otherAccountId]);
+      await lockAccountsThenDealsThenBatches(tx, lockedAccounts, []);
 
-  // Операция могла быть привязана к сделке (её доставка) — пересчитать.
-  if (source.dealId) await syncDealInternal(source.dealId);
+      const current = await tx.cashFlow.findUnique({ where: { id } });
+      if (!current) throw new Error("Операция не найдена");
+      if (current.isTransfer) throw new Error("Операция уже является переводом");
+      if (!sameSortedIds([current.accountId, otherAccountId], lockedAccounts)) {
+        throw new LockSetChangedError();
+      }
+      const otherAcc = await tx.account.findUnique({ where: { id: otherAccountId } });
+      if (!otherAcc) throw new Error("Счёт не найден");
+
+      await lockDealsThenBatches(tx, current.dealId ? [current.dealId] : []);
+      const oppositeType = current.flowType === "INCOME" ? "EXPENSE" : "INCOME";
+      const note = current.description?.trim() || "";
+
+      await tx.cashFlow.update({
+        where: { id },
+        data: {
+          isTransfer: true,
+          transferId,
+          isAutoAssigned: true,
+          counterpartyId: null,
+          articleId: null,
+          dealId: null,
+        },
+      });
+      const otherLeg = await tx.cashFlow.create({
+        data: {
+          amount: current.amount,
+          date: current.date,
+          flowType: oppositeType,
+          accountId: otherAcc.id,
+          description:
+            note || `Перевод ${current.flowType === "INCOME" ? "на" : "с"} «${otherAcc.name}»`,
+          isTransfer: true,
+          isAutoAssigned: true,
+          transferId,
+        },
+      });
+      if (current.dealId) {
+        batchIds.push(...(await syncDealInternal(current.dealId, tx)));
+      }
+      return otherLeg.id;
+    });
+  });
 
   await writeChangeLog({
     entity: "CashFlow",
     entityId: id,
     newValues: { convertedToTransfer: other.name, amount: num(source.amount) },
   });
-  revalidatePath(PATH);
-  const [sourceRow, otherRow] = await Promise.all([loadCashFlow(id), loadCashFlow(otherLeg.id)]);
+  await afterTotalsCommit(batchIds);
+  const [sourceRow, otherRow] = await Promise.all([loadCashFlow(id), loadCashFlow(otherLegId)]);
   return [sourceRow, otherRow];
 }
 
@@ -1070,28 +1207,54 @@ export async function unlinkTransfer(
   id: string,
 ): Promise<{ removedIds: string[]; updated: FinanceCashFlowRow }> {
   await requireAdmin();
-  const leg = await prisma.cashFlow.findUnique({ where: { id } });
-  if (!leg || !leg.isTransfer || !leg.transferId) throw new Error("Это не перевод");
 
-  const legs = await prisma.cashFlow.findMany({ where: { transferId: leg.transferId } });
-  const keep = legs.find((l) => l.statementId) ?? leg;
-  const removed = legs.filter((l) => l.id !== keep.id);
+  let keepId = id;
+  let removedIds: string[] = [];
+  await retryOnLockSetChange(async () => {
+    keepId = id;
+    removedIds = [];
+    await prisma.$transaction(async (tx) => {
+      const peek = await tx.cashFlow.findUnique({ where: { id } });
+      if (!peek || !peek.isTransfer || !peek.transferId) throw new Error("Это не перевод");
+      const peekLegs = await tx.cashFlow.findMany({ where: { transferId: peek.transferId } });
+      const lockedAccounts = sortedUniqueIds(peekLegs.map((l) => l.accountId));
+      await lockAccountsThenDealsThenBatches(tx, lockedAccounts, []);
 
-  await prisma.$transaction([
-    prisma.cashFlow.deleteMany({ where: { id: { in: removed.map((l) => l.id) } } }),
-    prisma.cashFlow.update({
-      where: { id: keep.id },
-      data: { isTransfer: false, transferId: null, isAutoAssigned: false },
-    }),
-  ]);
+      const current = await tx.cashFlow.findUnique({ where: { id } });
+      if (!current || !current.isTransfer || !current.transferId) throw new Error("Это не перевод");
+      const legs = await tx.cashFlow.findMany({ where: { transferId: current.transferId } });
+      if (!sameSortedIds(legs.map((l) => l.accountId), lockedAccounts)) {
+        throw new LockSetChangedError();
+      }
+
+      await lockDealsThenBatches(
+        tx,
+        legs.map((l) => l.dealId),
+      );
+      const keep = legs.find((l) => l.statementId) ?? legs.find((l) => l.id === id) ?? legs[0];
+      if (!keep) throw new Error("Это не перевод");
+      const removed = legs.filter((l) => l.id !== keep.id);
+      keepId = keep.id;
+      removedIds = removed.map((l) => l.id);
+
+      await tx.cashFlow.deleteMany({ where: { id: { in: removedIds } } });
+      await tx.cashFlow.update({
+        where: { id: keep.id },
+        data: { isTransfer: false, transferId: null, isAutoAssigned: false },
+      });
+      for (const dealId of sortedUniqueIds(legs.map((l) => l.dealId))) {
+        await syncDealInternal(dealId, tx);
+      }
+    });
+  });
 
   await writeChangeLog({
     entity: "CashFlow",
-    entityId: keep.id,
+    entityId: keepId,
     newValues: { unlinkedTransfer: true },
   });
   revalidatePath(PATH);
-  return { removedIds: removed.map((l) => l.id), updated: await loadCashFlow(keep.id) };
+  return { removedIds, updated: await loadCashFlow(keepId) };
 }
 
 // ============================ СДЕЛКИ → СЕБЕСТОИМОСТЬ =======================
@@ -1131,21 +1294,26 @@ export async function createDeal(values: DealFormValues): Promise<FinanceDeal> {
   if (values.batchNames.length === 0) throw new Error("Выберите хотя бы одну закупку");
 
   const found = await prisma.batch.findMany({ where: { name: { in: values.batchNames } } });
-  const deal = await prisma.deal.create({
-    data: {
-      name,
-      status: "OPEN",
-      total: 0,
-      items: { create: found.map((b) => ({ batchId: b.id })) },
-    },
+  const batchIds: string[] = [];
+  const deal = await prisma.$transaction(async (tx) => {
+    const created = await tx.deal.create({
+      data: {
+        name,
+        status: "OPEN",
+        total: 0,
+        items: { create: found.map((b) => ({ batchId: b.id })) },
+      },
+    });
+    await lockDealsThenBatches(tx, [created.id]);
+    batchIds.push(...(await syncDealInternal(created.id, tx)));
+    return created;
   });
   await writeChangeLog({
     entity: "Deal",
     entityId: deal.id,
     newValues: { name, batches: values.batchNames },
   });
-  await syncDealInternal(deal.id);
-  revalidatePath(PATH);
+  await afterTotalsCommit(batchIds);
   return loadDeal(deal.id);
 }
 
@@ -1157,28 +1325,34 @@ export async function updateDeal(id: string, values: DealFormValues): Promise<Fi
 
   const found = await prisma.batch.findMany({ where: { name: { in: values.batchNames } } });
   const newBatchIds = new Set(found.map((b) => b.id));
-  const oldItems = await prisma.dealItem.findMany({ where: { dealId: id } });
 
+  const batchIds: string[] = [];
   await prisma.$transaction(async (tx) => {
+    await lockDealsThenBatches(
+      tx,
+      [id],
+      found.map((b) => b.id),
+    );
+    const currentItems = await tx.dealItem.findMany({ where: { dealId: id } });
     await tx.dealItem.deleteMany({ where: { dealId: id } });
     await tx.deal.update({
       where: { id },
       data: { name, items: { create: found.map((b) => ({ batchId: b.id })) } },
     });
+    batchIds.push(...(await syncDealInternal(id, tx)));
+    for (const item of currentItems) {
+      if (item.batchId && !newBatchIds.has(item.batchId)) {
+        const written = await syncBatchTotalCostInternal(item.batchId, tx);
+        if (written) batchIds.push(written);
+      }
+    }
   });
   await writeChangeLog({
     entity: "Deal",
     entityId: id,
     newValues: { name, batches: values.batchNames },
   });
-
-  await syncDealInternal(id);
-  // Партии, отвязанные от сделки, тоже пересчитываем.
-  for (const item of oldItems) {
-    if (item.batchId && !newBatchIds.has(item.batchId))
-      await syncBatchTotalCostInternal(item.batchId);
-  }
-  revalidatePath(PATH);
+  await afterTotalsCommit(batchIds);
   return loadDeal(id);
 }
 
@@ -1192,18 +1366,22 @@ export async function setDealStatus(id: string, status: "OPEN" | "ARCHIVED"): Pr
 
 export async function deleteDeal(id: string): Promise<void> {
   await requireAdmin();
-  const items = await prisma.dealItem.findMany({ where: { dealId: id } });
-  const batchIds = items.map((i) => i.batchId).filter((b): b is string => Boolean(b));
 
+  const batchIds: string[] = [];
   await prisma.$transaction(async (tx) => {
+    await lockDealsThenBatches(tx, [id]);
+    const currentItems = await tx.dealItem.findMany({ where: { dealId: id } });
     await tx.cashFlow.updateMany({ where: { dealId: id }, data: { dealId: null } });
     await tx.dealItem.deleteMany({ where: { dealId: id } });
     await tx.deal.delete({ where: { id } });
+    for (const item of currentItems) {
+      if (!item.batchId) continue;
+      const written = await syncBatchTotalCostInternal(item.batchId, tx);
+      if (written) batchIds.push(written);
+    }
   });
   await writeChangeLog({ entity: "Deal", entityId: id, oldValues: { deleted: true } });
-
-  for (const batchId of batchIds) await syncBatchTotalCostInternal(batchId);
-  revalidatePath(PATH);
+  await afterTotalsCommit(batchIds);
 }
 
 // ============================ ВЫПИСКИ ======================================
@@ -1253,7 +1431,14 @@ export async function importStatement(
   bindAccountId?: string | null,
 ): Promise<ImportStatementResult> {
   await requireAdmin();
-  return importStatementInternal(content, fileName, bindAccountId);
+  const { affectedBatchIds, ...rest } = await importStatementInternal(
+    content,
+    fileName,
+    bindAccountId,
+  );
+  await afterTotalsCommit(affectedBatchIds);
+  revalidatePath(SETTINGS_PATH);
+  return rest;
 }
 
 /** Операции конкретной выписки (для просмотра карточки). */
@@ -1281,17 +1466,22 @@ export interface DeleteStatementResult {
  */
 export async function deleteStatement(id: string): Promise<DeleteStatementResult> {
   await requireAdmin();
-  const [stmt, flows] = await Promise.all([
-    prisma.statement.findUnique({ where: { id } }),
-    prisma.cashFlow.findMany({
-      where: { statementId: id },
-      select: { id: true, dealId: true },
-    }),
-  ]);
-  const removedIds = flows.map((f) => f.id);
-  const affectedDeals = new Set(flows.map((f) => f.dealId).filter((d): d is string => Boolean(d)));
+  const batchIds: string[] = [];
+  const removedIds: string[] = [];
 
   await prisma.$transaction(async (tx) => {
+    const stmt = await tx.statement.findUnique({ where: { id } });
+    if (stmt?.accountId) {
+      await lockAccountsThenDealsThenBatches(tx, [stmt.accountId], []);
+    }
+    const flows = await tx.cashFlow.findMany({
+      where: { statementId: id },
+      select: { id: true, dealId: true },
+    });
+    removedIds.push(...flows.map((f) => f.id));
+    const affectedDeals = sortedUniqueIds(flows.map((f) => f.dealId));
+    await lockDealsThenBatches(tx, affectedDeals);
+
     await tx.cashFlow.deleteMany({ where: { statementId: id } });
     await tx.statement.delete({ where: { id } });
 
@@ -1323,11 +1513,13 @@ export async function deleteStatement(id: string): Promise<DeleteStatementResult
         }
       }
     }
+
+    for (const dealId of affectedDeals) {
+      batchIds.push(...(await syncDealInternal(dealId, tx)));
+    }
   });
   await writeChangeLog({ entity: "Statement", entityId: id, oldValues: { deleted: true } });
-
-  for (const dealId of affectedDeals) await syncDealInternal(dealId);
-  revalidatePath(PATH);
+  await afterTotalsCommit(batchIds);
   revalidatePath(SETTINGS_PATH);
   return { removedIds, accounts: await getAccounts() };
 }

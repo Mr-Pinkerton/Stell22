@@ -15,6 +15,7 @@ import { unzipSync } from "fflate";
 import { writeSystemLog } from "@/server/system-log";
 import { decodeStatementBytes, is1CStatement } from "@/lib/bank-statement-1c";
 import { importStatementInternal } from "@/server/internal/statement-import";
+import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 
 const LOG_SOURCE = "Выписки (почта)";
 
@@ -66,21 +67,6 @@ export function readMailConfig(): MailIntakeConfig | null {
     markSeen: (process.env.MAIL_MARK_SEEN ?? "true").toLowerCase() !== "false",
     mailbox: process.env.MAIL_IMAP_MAILBOX?.trim() || "INBOX",
   };
-}
-
-/**
- * `importStatement` вызывает `revalidatePath` после успешного commit, а вне
- * Next request-контекста (CLI/cron) это бросает "static generation store
- * missing". Данные к этому моменту уже записаны — глушим только эту ошибку.
- */
-async function ignoringRevalidate<T>(fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("static generation store missing")) return undefined as T;
-    throw err;
-  }
 }
 
 /**
@@ -205,11 +191,10 @@ export async function runMailIntake(config: MailIntakeConfig): Promise<MailIntak
             const { statements, skipped } = extractStatements(name, bytes);
             result.attachmentsSkipped += skipped;
             for (const st of statements) {
-              const res = await ignoringRevalidate(() =>
-                importStatementInternal(st.content, st.fileName),
-              );
+              const res = await importStatementInternal(st.content, st.fileName);
+              for (const batchId of res.affectedBatchIds) await enqueueRecalcBatchCosts(batchId);
               result.statementsImported += 1;
-              if (res) result.operationsImported += res.importedCount;
+              result.operationsImported += res.importedCount;
             }
           }
 

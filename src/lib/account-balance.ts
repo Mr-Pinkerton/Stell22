@@ -84,3 +84,21 @@ export function shouldAdvanceAnchor(currentAsOf: string | null, newAsOf: string)
 export function isAccountConfirmed(confirmed: boolean | undefined): boolean {
   return confirmed !== false;
 }
+
+/** ДДС/KPI state: only CashFlow whose Account is confirmed. Per-leg for transfers. */
+export function cashFlowBelongsInDds(
+  row: { accountId?: string | null; accountName?: string | null },
+  accounts: { id: string; name: string; confirmed?: boolean }[],
+): boolean {
+  if (row.accountId) {
+    const account = accounts.find((a) => a.id === row.accountId);
+    if (!account) return false;
+    return isAccountConfirmed(account.confirmed);
+  }
+  if (row.accountName) {
+    const account = accounts.find((a) => a.name === row.accountName);
+    if (!account) return false;
+    return isAccountConfirmed(account.confirmed);
+  }
+  return false;
+}

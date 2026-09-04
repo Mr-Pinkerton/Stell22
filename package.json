@@ -12,6 +12,7 @@
     "format:check": "prettier --check .",
     "test": "node scripts/vitest-run.mjs run",
     "test:watch": "node scripts/vitest-run.mjs",
+    "test:integrity": "node scripts/setup-integrity-db.mjs",
     "security:actions": "node scripts/security/check-server-action-source.mjs",
     "security:manifest": "node scripts/security/check-server-action-manifest.mjs",
     "security:classify": "node scripts/security/render-action-classification.mjs",

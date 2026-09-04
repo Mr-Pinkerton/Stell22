@@ -8,8 +8,18 @@ import { requireAdmin } from "@/server/session";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { sectionAreaM2, type PurchaseBatchRow } from "@/lib/batch-stats";
 import { isBatchCostMismatch } from "@/lib/cost";
+import { frozenBatchMoneyChanged } from "@/lib/frozen-batch-money";
 import { allocatePackageCode } from "@/lib/package-code";
 import { archiveBatchIfDepleted } from "@/server/internal/cost";
+import {
+  lockDealsThenBatches,
+  LockSetChangedError,
+  retryOnLockSetChange,
+  sameSortedIds,
+  sortedUniqueIds,
+  syncBatchTotalCostInternal,
+  syncDealInternal,
+} from "@/server/internal/finance-operations";
 import type { Material, NomenclatureItem, RailType, Sort } from "@/types/domain";
 
 const PATH = "/purchases";
@@ -298,21 +308,101 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
   const before = await prisma.batch.findUnique({ where: { id } });
   if (!before) throw new Error("Партия не найдена");
 
-  const updated = await prisma.batch.update({
-    where: { id },
-    data: {
-      name: values.name.trim(),
-      materialId: values.materialId,
-      sectionWidthMm: section.w,
-      sectionHeightMm: section.h,
-      purchaseCost: values.purchaseCost ?? 0,
-      priceSort1: values.priceSort1 ?? 0,
-      priceSort2: values.priceSort2 ?? 0,
-      purchaseDate: parseDate(values.purchaseDate),
-      note: values.note.trim() || null,
-    },
+  const nextMoney = {
+    purchaseCost: values.purchaseCost ?? 0,
+    priceSort1: values.priceSort1 ?? 0,
+    priceSort2: values.priceSort2 ?? 0,
+  };
+
+  const scalarData = {
+    name: values.name.trim(),
+    materialId: values.materialId,
+    sectionWidthMm: section.w,
+    sectionHeightMm: section.h,
+    purchaseCost: nextMoney.purchaseCost,
+    priceSort1: nextMoney.priceSort1,
+    priceSort2: nextMoney.priceSort2,
+    purchaseDate: parseDate(values.purchaseDate),
+    note: values.note.trim() || null,
+  };
+
+  let batchIds: string[] = [];
+  await retryOnLockSetChange(async () => {
+    batchIds = [];
+    await prisma.$transaction(async (tx) => {
+      const candidateDealIds = sortedUniqueIds(
+        (
+          await tx.dealItem.findMany({
+            where: { batchId: id },
+            select: { dealId: true },
+          })
+        ).map((r) => r.dealId),
+      );
+      if (candidateDealIds.length > 0) {
+        await lockDealsThenBatches(tx, candidateDealIds, [id]);
+        const currentDealIds = sortedUniqueIds(
+          (
+            await tx.dealItem.findMany({
+              where: { batchId: id },
+              select: { dealId: true },
+            })
+          ).map((r) => r.dealId),
+        );
+        if (!sameSortedIds(candidateDealIds, currentDealIds)) {
+          throw new LockSetChangedError();
+        }
+      } else {
+        await lockDealsThenBatches(tx, [], [id]);
+        const currentDealIds = sortedUniqueIds(
+          (
+            await tx.dealItem.findMany({
+              where: { batchId: id },
+              select: { dealId: true },
+            })
+          ).map((r) => r.dealId),
+        );
+        if (currentDealIds.length > 0) {
+          throw new LockSetChangedError();
+        }
+      }
+
+      const current = await tx.batch.findUnique({ where: { id } });
+      if (!current) throw new Error("Партия не найдена");
+      if (
+        current.frozenAt &&
+        frozenBatchMoneyChanged(
+          {
+            purchaseCost: num(current.purchaseCost),
+            priceSort1: num(current.priceSort1),
+            priceSort2: num(current.priceSort2),
+          },
+          nextMoney,
+        )
+      ) {
+        throw new Error("Нельзя менять закупочную стоимость и цены сортов у замороженной партии");
+      }
+
+      await tx.batch.update({ where: { id }, data: scalarData });
+      const dealIds = sortedUniqueIds(
+        (
+          await tx.dealItem.findMany({
+            where: { batchId: id },
+            select: { dealId: true },
+          })
+        ).map((r) => r.dealId),
+      );
+      if (dealIds.length > 0) {
+        for (const dealId of dealIds) {
+          batchIds.push(...(await syncDealInternal(dealId, tx)));
+        }
+      } else {
+        const written = await syncBatchTotalCostInternal(id, tx);
+        if (written) batchIds.push(written);
+      }
+    });
   });
 
+  const updated = await prisma.batch.findUniqueOrThrow({ where: { id } });
   await writeChangeLog({
     entity: "Batch",
     entityId: id,
@@ -320,8 +410,7 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
     newValues: { name: updated.name, purchaseCost: num(updated.purchaseCost) },
   });
 
-  // Стоимость/сечение/цены сортов влияют на распределение — пересчёт (если открыта).
-  await enqueueRecalcBatchCosts(id);
+  for (const batchId of [...new Set(batchIds)]) await enqueueRecalcBatchCosts(batchId);
 
   revalidatePath(PATH);
   revalidatePath("/reports");

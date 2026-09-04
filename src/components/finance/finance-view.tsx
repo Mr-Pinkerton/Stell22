@@ -11,7 +11,7 @@ import type {
   FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { matchesDateFilter } from "@/lib/match-date-filter";
-import { computeAccountBalances, isAccountConfirmed } from "@/lib/account-balance";
+import { computeAccountBalances, cashFlowBelongsInDds, isAccountConfirmed } from "@/lib/account-balance";
 import {
   type FinanceData,
   assignCashFlow,
@@ -666,7 +666,9 @@ export function FinanceView({ data }: { data: FinanceData }) {
         onSubmit={(values) =>
           run(async () => {
             const row = await createCashFlow(values);
-            setCashFlows((prev) => [row, ...prev]);
+            if (cashFlowBelongsInDds(row, accounts)) {
+              setCashFlows((prev) => [row, ...prev]);
+            }
             toast.success("Операция добавлена");
           })
         }
@@ -679,7 +681,10 @@ export function FinanceView({ data }: { data: FinanceData }) {
         onSubmit={(values) =>
           run(async () => {
             const legs = await createTransfer(values);
-            setCashFlows((prev) => [...legs, ...prev]);
+            const visible = legs.filter((leg) => cashFlowBelongsInDds(leg, accounts));
+            if (visible.length > 0) {
+              setCashFlows((prev) => [...visible, ...prev]);
+            }
             toast.success("Перевод добавлен");
           })
         }
@@ -695,10 +700,10 @@ export function FinanceView({ data }: { data: FinanceData }) {
           if (!source) return;
           run(async () => {
             const [sourceRow, otherRow] = await convertCashFlowToTransfer(source.id, otherAccountId);
-            setCashFlows((prev) => [
-              otherRow,
-              ...prev.map((r) => (r.id === sourceRow.id ? sourceRow : r)),
-            ]);
+            setCashFlows((prev) => {
+              const next = prev.map((r) => (r.id === sourceRow.id ? sourceRow : r));
+              return cashFlowBelongsInDds(otherRow, accounts) ? [otherRow, ...next] : next;
+            });
             toast.success("Операция стала переводом");
           });
         }}

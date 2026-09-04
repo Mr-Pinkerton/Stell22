@@ -1,10 +1,18 @@
-import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
-import { applyAutoRulesInternal, syncDealInternal } from "@/server/internal/finance-operations";
+import {
+  applyAutoRulesInternal,
+  lockAccountsThenDealsThenBatches,
+  lockDealsThenBatches,
+  syncDealInternal,
+} from "@/server/internal/finance-operations";
 import { writeChangeLog } from "@/server/change-log";
 import { is1CStatement, parse1CStatement } from "@/lib/bank-statement-1c";
 import { statementImportKey } from "@/lib/statement-import";
+import {
+  retryOnceOnImportUnique,
+  throwFriendlyAccountNumberBindConflict,
+} from "@/lib/prisma-unique-conflict";
 import {
   computeAccountBalance,
   computeAccountBalances,
@@ -18,9 +26,6 @@ import type {
   FinanceCounterparty,
   FinanceStatementRow,
 } from "@/mocks/finance-fixtures";
-
-const PATH = "/finance";
-const SETTINGS_PATH = "/settings";
 
 function num(value: Prisma.Decimal | number | null): number {
   if (value == null) return 0;
@@ -130,6 +135,7 @@ export interface ImportStatementInternalResult {
   unassignedCount: number;
   skippedCount: number;
   warning: string | null;
+  affectedBatchIds: string[];
 }
 
 const last4 = (account: string) => account.slice(-4);
@@ -184,6 +190,7 @@ export async function importStatementInternal(
   const statementDate = parsed.dateEnd ?? parsed.dateStart ?? new Date().toISOString().slice(0, 10);
   const statementStart = parsed.dateStart ?? statementDate;
 
+  return retryOnceOnImportUnique(async () => {
   const newCounterparties: { id: string; name: string }[] = [];
   const affectedDeals = new Set<string>();
   let imported = 0;
@@ -193,7 +200,7 @@ export async function importStatementInternal(
   let isNewAccount = false;
   let accountConfirmed = true;
 
-  const statementId = await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     // Счёт: по номеру → по явной привязке → создаём новый.
     let account = await tx.account.findFirst({ where: { accountNumber: ourNumber } });
     if (!account && bindAccountId) {
@@ -218,15 +225,24 @@ export async function importStatementInternal(
         },
       });
     } else {
-      // Привязываем номер/БИК к существующему счёту, если их ещё нет.
       const patch: Prisma.AccountUncheckedUpdateInput = {};
       if (!account.accountNumber) patch.accountNumber = ourNumber;
       if (parsed.bik && !account.bik) patch.bik = parsed.bik;
       if (Object.keys(patch).length > 0) {
-        account = await tx.account.update({ where: { id: account.id }, data: patch });
+        try {
+          account = await tx.account.update({ where: { id: account.id }, data: patch });
+        } catch (err) {
+          throwFriendlyAccountNumberBindConflict(err);
+          throw err;
+        }
       }
     }
 
+    await lockAccountsThenDealsThenBatches(tx, [account.id], []);
+
+    const lockedAccount = await tx.account.findUnique({ where: { id: account.id } });
+    if (!lockedAccount) throw new Error("Счёт не найден");
+    account = lockedAccount;
     accountConfirmed = account.confirmed;
 
     // Точка отсчёта ДО импорта — по ней сверяем расчётный остаток с выпиской.
@@ -358,8 +374,17 @@ export async function importStatementInternal(
       }
     }
 
-    return statement.id;
+    await lockDealsThenBatches(tx, [...affectedDeals]);
+    const syncedBatchIds: string[] = [];
+    for (const dealId of affectedDeals) {
+      syncedBatchIds.push(...(await syncDealInternal(dealId, tx)));
+    }
+
+    return { statementId: statement.id, syncedBatchIds };
   });
+
+  const statementId = result.statementId;
+  const affectedBatchIds = [...new Set(result.syncedBatchIds)];
 
   if (isNewAccount) {
     const quarantineNote =
@@ -373,9 +398,6 @@ export async function importStatementInternal(
     entityId: statementId,
     newValues: { file: fileName, account: ourNumber, operations: imported, skipped },
   });
-
-  // Сделки, затронутые автоправилами, пересчитываем (доставка → себестоимость).
-  for (const dealId of affectedDeals) await syncDealInternal(dealId);
 
   const [statement, accounts, allFlows, counterparties] = await Promise.all([
     prisma.statement.findUniqueOrThrow({
@@ -399,8 +421,6 @@ export async function importStatementInternal(
       })
     : [];
 
-  revalidatePath(PATH);
-  revalidatePath(SETTINGS_PATH);
   return {
     statement: serStatement(statement),
     newCashFlows: newCashFlows.map(serCashFlow),
@@ -410,5 +430,7 @@ export async function importStatementInternal(
     unassignedCount: unassigned,
     skippedCount: skipped,
     warning,
+    affectedBatchIds: [...new Set(affectedBatchIds)],
   };
+  });
 }

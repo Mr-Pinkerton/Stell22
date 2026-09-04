@@ -2,6 +2,7 @@
 
 import { prisma } from "@/server/db";
 import { requireAdmin } from "@/server/session";
+import { revalidatePath } from "next/cache";
 import { syncMarketplacesAsUserInternal } from "@/server/internal/marketplace-sync";
 import type { SalesReportRow } from "@/mocks/report-fixtures";
 import type {
@@ -138,5 +139,10 @@ export interface SyncResult {
 /** Синхронизация маркетплейсов для текущего администратора. */
 export async function syncMarketplaces(): Promise<SyncResult> {
   const admin = await requireAdmin();
-  return syncMarketplacesAsUserInternal(admin.id);
+  const result = await syncMarketplacesAsUserInternal(admin.id);
+  revalidatePath("/sales");
+  revalidatePath("/warehouse");
+  revalidatePath("/reports");
+  revalidatePath("/settings");
+  return result;
 }
