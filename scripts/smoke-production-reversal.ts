@@ -240,15 +240,29 @@ async function testTorcovkaDeleteDoesNotReturnRails() {
     }))?.quantity ?? 0;
   const remainingBefore = lot.remainingQuantity;
 
-  await withTerminalSession(employee.id, () =>
-    submitTorcovka({
-      employeeId: employee.id,
-      batchId: lot.batchId,
-      railLotId: lot.id,
-      railsTaken: 5,
-      picks: [{ lengthM: Number(detail.lengthM), sort: detail.sort, quantity: 20 }],
-    }),
-  );
+  const submitInput = {
+    employeeId: employee.id,
+    batchId: lot.batchId,
+    railLotId: lot.id,
+    railsTaken: 5,
+    picks: [{ lengthM: Number(detail.lengthM), sort: detail.sort, quantity: 20 }],
+  };
+  await withTerminalSession(employee.id, async () => {
+    const first = await submitTorcovka(submitInput);
+    if (first.status === "ACK_REQUIRED") {
+      await submitTorcovka({
+        ...submitInput,
+        plausibilityAck: {
+          kind: first.band === "EXTREME" ? "HIGH_WASTE" : "SUSPICIOUS",
+          railsTaken: submitInput.railsTaken,
+          takenM: first.takenM,
+          producedM: first.producedM,
+          wastePct: first.wastePct,
+          ...(first.band === "EXTREME" ? { reason: "KNOTS" as const } : {}),
+        },
+      });
+    }
+  });
 
   const remainingAfterSubmit = (await prisma.railLot.findUniqueOrThrow({ where: { id: lot.id } }))
     .remainingQuantity;

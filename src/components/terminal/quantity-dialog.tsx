@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -9,7 +10,7 @@ import { NumericKeypad } from "@/components/terminal/numeric-keypad";
 interface QuantityDialogProps {
   open: boolean;
   title: string;
-  hint?: string;
+  hint?: ReactNode;
   /** Стартовое значение поля (напр. ранее введённое количество). */
   initial?: number;
   /** Жёсткий лимит ввода (нельзя подтвердить больше). */

@@ -430,7 +430,22 @@ export async function maybeFreezeBatch(
 export async function archiveBatchIfDepleted(
   tx: Prisma.TransactionClient,
   batchId: string,
+  opts?: { batchAlreadyLocked?: boolean },
 ): Promise<boolean> {
+  const preBatch = await tx.batch.findUnique({ where: { id: batchId } });
+  if (!preBatch || preBatch.closedAt) return false;
+  const preLots = await tx.railLot.findMany({
+    where: { batchId },
+    select: { remainingQuantity: true },
+  });
+  if (preLots.length === 0) return false;
+  const preRemaining = preLots.reduce((s, l) => s + l.remainingQuantity, 0);
+  if (preRemaining > 0) return false;
+
+  if (!opts?.batchAlreadyLocked) {
+    await lockBatches(tx, [batchId]);
+  }
+
   const batch = await tx.batch.findUnique({ where: { id: batchId } });
   if (!batch || batch.closedAt) return false;
   const lots = await tx.railLot.findMany({
@@ -440,6 +455,7 @@ export async function archiveBatchIfDepleted(
   if (lots.length === 0) return false;
   const remaining = lots.reduce((s, l) => s + l.remainingQuantity, 0);
   if (remaining > 0) return false;
+
   await tx.batch.update({
     where: { id: batchId },
     data: { status: "ARCHIVED", closedAt: new Date() },

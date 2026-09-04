@@ -6,7 +6,8 @@ import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
-import { lockBatches, lockProductionOperations } from "@/server/internal/finance-operations";
+import { lockBatches, lockProductionOperations, lockRailLots } from "@/server/internal/finance-operations";
+import { D } from "@/lib/cost";
 import { maybeFreezeBatch } from "@/server/internal/cost";
 import {
   applyPrisadkaPick,
@@ -50,7 +51,9 @@ interface RefMaps {
     }
   >;
   batchName: Map<string, string>;
+  batchFrozenAt: Map<string, string | null>;
   lotLength: Map<string, number>;
+  lotRemaining: Map<string, number>;
   productName: Map<string, string>;
   detail: Map<string, { name: string; sort: "SORT1" | "SORT2" }>;
   logs: Map<string, ProductionChangeLogEntry[]>;
@@ -114,6 +117,12 @@ function serializeRow(op: OpFull, maps: RefMaps): ProductionEntryRow {
     batchName: op.batchId ? maps.batchName.get(op.batchId) : undefined,
     railsTaken: op.railsTaken ?? undefined,
     railLengthM: op.railLotId ? maps.lotLength.get(op.railLotId) : undefined,
+    lotRemainingQuantity: op.railLotId ? maps.lotRemaining.get(op.railLotId) : undefined,
+    producedM:
+      op.type === "TORCOVKA"
+        ? op.lines.reduce((sum, l) => sum + num(l.blankLengthM) * l.quantity, 0)
+        : undefined,
+    batchFrozenAt: op.batchId ? (maps.batchFrozenAt.get(op.batchId) ?? null) : undefined,
     productName: op.productId ? maps.productName.get(op.productId) : undefined,
     detailLines: detailLines.length > 0 ? detailLines : undefined,
     changeLog: maps.logs.get(op.id) ?? [],
@@ -123,8 +132,8 @@ function serializeRow(op: OpFull, maps: RefMaps): ProductionEntryRow {
 async function buildMaps(ops: OpFull[]): Promise<RefMaps> {
   const [employees, batches, lots, products, details, logs] = await Promise.all([
     prisma.employee.findMany(),
-    prisma.batch.findMany({ select: { id: true, name: true } }),
-    prisma.railLot.findMany({ select: { id: true, lengthM: true } }),
+    prisma.batch.findMany({ select: { id: true, name: true, frozenAt: true } }),
+    prisma.railLot.findMany({ select: { id: true, lengthM: true, remainingQuantity: true } }),
     prisma.product.findMany({ select: { id: true, name: true } }),
     prisma.detail.findMany({ select: { id: true, name: true, sort: true } }),
     prisma.changeLog.findMany({
@@ -143,8 +152,10 @@ async function buildMaps(ops: OpFull[]): Promise<RefMaps> {
       changedAt: log.changedAt.toISOString(),
       userName: "Админ",
       field: nv.field,
-      oldValue: String(nv.oldValue ?? ""),
-      newValue: String(nv.newValue ?? ""),
+      oldValue:
+        nv.oldRailsTaken != null ? String(nv.oldRailsTaken) : String(nv.oldValue ?? ""),
+      newValue:
+        nv.newRailsTaken != null ? String(nv.newRailsTaken) : String(nv.newValue ?? ""),
     });
     logMap.set(log.entityId, list);
   }
@@ -165,7 +176,11 @@ async function buildMaps(ops: OpFull[]): Promise<RefMaps> {
       ]),
     ),
     batchName: new Map(batches.map((b) => [b.id, b.name])),
+    batchFrozenAt: new Map(
+      batches.map((b) => [b.id, b.frozenAt ? b.frozenAt.toISOString() : null]),
+    ),
     lotLength: new Map(lots.map((l) => [l.id, num(l.lengthM)])),
+    lotRemaining: new Map(lots.map((l) => [l.id, l.remainingQuantity])),
     productName: new Map(products.map((p) => [p.id, p.name])),
     detail: new Map(details.map((d) => [d.id, { name: d.name, sort: d.sort }])),
     logs: logMap,
@@ -447,4 +462,112 @@ export async function deleteProductionOperation(id: string): Promise<void> {
 
   revalidatePath(PATH);
   revalidatePath("/reports");
+}
+
+export async function correctTorcovkaRailsTaken(input: {
+  operationId: string;
+  newRailsTaken: number;
+  reason: string;
+}): Promise<ProductionEntryRow> {
+  await requireAdmin();
+  const { operationId } = input;
+  const newRailsTaken = input.newRailsTaken;
+  const reason = input.reason.trim();
+  if (!reason) throw new Error("Укажите причину исправления");
+  if (!Number.isInteger(newRailsTaken) || newRailsTaken <= 0) {
+    throw new Error("Количество реек должно быть целым и больше нуля");
+  }
+
+  let enqueueBatchId: string | null = null;
+
+  await prisma.$transaction(async (tx) => {
+    await lockProductionOperations(tx, [operationId]);
+    const op = await tx.productionOperation.findUnique({
+      where: { id: operationId },
+      include: { lines: true },
+    });
+    if (!op) throw new Error("Операция не найдена");
+    if (op.type !== "TORCOVKA") throw new Error("Исправление реек доступно только для торцовки");
+    if (!op.railLotId || !op.batchId || op.railsTaken == null) {
+      throw new Error("У операции не указаны пакет и количество реек");
+    }
+    const oldRailsTaken = op.railsTaken;
+    if (!(newRailsTaken < oldRailsTaken)) {
+      throw new Error("Можно только уменьшить количество фактически взятых реек");
+    }
+
+    await lockRailLots(tx, [op.railLotId]);
+    const lot = await tx.railLot.findUnique({ where: { id: op.railLotId } });
+    if (!lot) throw new Error("Пакет реек не найден");
+
+    await lockBatches(tx, [op.batchId]);
+    const batch = await tx.batch.findUnique({ where: { id: op.batchId } });
+    if (!batch) throw new Error("Партия не найдена");
+    if (batch.frozenAt != null) {
+      throw new Error("Нельзя исправить — себестоимость партии заморожена");
+    }
+
+    const producedM = op.lines.reduce(
+      (sum, l) => sum.plus(D(num(l.blankLengthM)).times(l.quantity)),
+      D(0),
+    );
+    const newTakenM = D(newRailsTaken).times(D(lot.lengthM));
+    if (producedM.gt(newTakenM)) {
+      throw new Error("Суммарная длина заготовок превышает длину взятых реек");
+    }
+
+    const delta = oldRailsTaken - newRailsTaken;
+    await tx.railLot.update({
+      where: { id: op.railLotId },
+      data: { remainingQuantity: { increment: delta } },
+    });
+    await tx.productionOperation.update({
+      where: { id: operationId },
+      data: { railsTaken: newRailsTaken },
+    });
+    await writeChangeLog(
+      {
+        entity: "ProductionOperation",
+        entityId: operationId,
+        newValues: {
+          field: "railsTaken",
+          oldRailsTaken,
+          newRailsTaken,
+          deltaReturned: delta,
+          reason,
+        },
+      },
+      tx,
+    );
+
+    const lots = await tx.railLot.findMany({
+      where: { batchId: op.batchId },
+      select: { remainingQuantity: true },
+    });
+    const remaining = lots.reduce((s, l) => s + l.remainingQuantity, 0);
+    if (remaining > 0 && (batch.status !== "IN_WORK" || batch.closedAt != null)) {
+      await tx.batch.update({
+        where: { id: op.batchId },
+        data: { status: "IN_WORK", closedAt: null },
+      });
+      await writeChangeLog(
+        {
+          entity: "Batch",
+          entityId: op.batchId,
+          newValues: { reopened: true, viaOperationId: operationId },
+        },
+        tx,
+      );
+    }
+
+    enqueueBatchId = op.batchId;
+  });
+
+  if (enqueueBatchId) await enqueueRecalcBatchCosts(enqueueBatchId);
+
+  revalidatePath(PATH);
+  revalidatePath("/reports");
+  revalidatePath("/purchases");
+  revalidatePath("/", "layout");
+  return reloadRow(operationId);
 }

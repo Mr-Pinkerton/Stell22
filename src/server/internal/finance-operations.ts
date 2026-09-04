@@ -61,6 +61,7 @@ const TABLE_IDENT = {
   Deal: Prisma.raw(`"Deal"`),
   Batch: Prisma.raw(`"Batch"`),
   ProductionOperation: Prisma.raw(`"ProductionOperation"`),
+  RailLot: Prisma.raw(`"RailLot"`),
 } as const;
 
 export function sortedUniqueIds(ids: Iterable<string | null | undefined>): string[] {
@@ -126,6 +127,13 @@ export async function lockProductionOperations(
   ids: Iterable<string | null | undefined>,
 ): Promise<void> {
   await lockTableIds(db, "ProductionOperation", ids);
+}
+
+export async function lockRailLots(
+  db: FinanceDb,
+  ids: Iterable<string | null | undefined>,
+): Promise<void> {
+  await lockTableIds(db, "RailLot", ids);
 }
 
 export async function lockDealsThenBatches(

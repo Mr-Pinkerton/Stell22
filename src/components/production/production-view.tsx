@@ -10,6 +10,7 @@ import {
 import {
   deleteProductionOperation,
   updateProductionLineQuantity,
+  correctTorcovkaRailsTaken,
 } from "@/server/production";
 import {
   filterProductionEntries,
@@ -42,6 +43,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { FormDialog } from "@/components/form-dialog-shared";
+import { Field, fieldClass } from "@/components/nomenclature/form-shared";
 import {
   TableBody,
   TableCell,
@@ -89,6 +92,9 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
   const [entries, setEntries] = useState(initialEntries);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [correctRow, setCorrectRow] = useState<ProductionEntryRow | null>(null);
+  const [newRailsTakenRaw, setNewRailsTakenRaw] = useState("");
+  const [correctReason, setCorrectReason] = useState("");
   const [, startTransition] = useTransition();
   const [exporting, startExport] = useTransition();
 
@@ -165,6 +171,39 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
     });
   };
 
+  const openCorrect = (row: ProductionEntryRow) => {
+    setCorrectRow(row);
+    setNewRailsTakenRaw("");
+    setCorrectReason("");
+  };
+
+  const handleCorrectRails = () => {
+    if (!correctRow) return;
+    const next = Number(newRailsTakenRaw);
+    if (!Number.isInteger(next) || next <= 0) {
+      toast.error("Укажите целое количество реек больше нуля");
+      return;
+    }
+    if (!correctReason.trim()) {
+      toast.error("Укажите причину исправления");
+      return;
+    }
+    startTransition(async () => {
+      try {
+        const updated = await correctTorcovkaRailsTaken({
+          operationId: correctRow.id,
+          newRailsTaken: next,
+          reason: correctReason,
+        });
+        setEntries((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
+        setCorrectRow(null);
+        toast.success("Количество взятых реек исправлено");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Ошибка исправления");
+      }
+    });
+  };
+
   return (
     <>
       <PageHeader
@@ -223,6 +262,7 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
                         setExpandedId((id) => (id === row.id ? null : row.id))
                       }
                       onDelete={() => handleDelete(row.id)}
+                      onCorrect={() => openCorrect(row)}
                       onSaveQuantity={(lineIndex, qty) =>
                         handleSaveQuantity(row.id, lineIndex, qty)
                       }
@@ -234,6 +274,61 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
           </div>
         </CardContent>
       </Card>
+
+      <FormDialog
+        open={correctRow != null}
+        onOpenChange={(open) => {
+          if (!open) setCorrectRow(null);
+        }}
+        title="Исправить количество фактически взятых реек"
+        maxWidth="sm:max-w-lg"
+        submitLabel="Исправить"
+        canSubmit={
+          Number.isInteger(Number(newRailsTakenRaw)) &&
+          Number(newRailsTakenRaw) > 0 &&
+          correctReason.trim().length > 0
+        }
+        onInvalid={() => {
+          if (!Number.isInteger(Number(newRailsTakenRaw)) || Number(newRailsTakenRaw) <= 0) {
+            toast.error("Укажите целое количество реек больше нуля");
+          } else if (!correctReason.trim()) {
+            toast.error("Укажите причину исправления");
+          }
+        }}
+        onSubmit={handleCorrectRails}
+      >
+        {correctRow && (
+          <div className="grid gap-4">
+            <p className="text-muted-foreground text-sm">
+              Сейчас взято: {correctRow.railsTaken ?? "—"} шт
+              {correctRow.lotRemainingQuantity != null
+                ? ` · остаток пакета: ${correctRow.lotRemainingQuantity} шт`
+                : ""}
+              {correctRow.producedM != null
+                ? ` · полезный выход: ${formatLength(correctRow.producedM)}`
+                : ""}
+            </p>
+            <Field id="correct-rails" label="Новое количество реек" required>
+              <Input
+                id="correct-rails"
+                type="number"
+                min={1}
+                className={fieldClass}
+                value={newRailsTakenRaw}
+                onChange={(e) => setNewRailsTakenRaw(e.target.value)}
+              />
+            </Field>
+            <Field id="correct-reason" label="Причина" required>
+              <Input
+                id="correct-reason"
+                className={fieldClass}
+                value={correctReason}
+                onChange={(e) => setCorrectReason(e.target.value)}
+              />
+            </Field>
+          </div>
+        )}
+      </FormDialog>
     </>
   );
 }
@@ -244,6 +339,7 @@ function ProductionRowGroup({
   striped,
   onToggle,
   onDelete,
+  onCorrect,
   onSaveQuantity,
 }: {
   row: ProductionEntryRow;
@@ -251,6 +347,7 @@ function ProductionRowGroup({
   striped: boolean;
   onToggle: () => void;
   onDelete: () => void;
+  onCorrect: () => void;
   onSaveQuantity: (lineIndex: number, qty: number) => void;
 }) {
   const editRows = useMemo(() => buildDetailEditRows(row), [row]);
@@ -350,6 +447,7 @@ function ProductionRowGroup({
                 setEditQty((prev) => ({ ...prev, [index]: value }))
               }
               onSaveLine={(index) => onSaveQuantity(index, Number(editQty[index]))}
+              onCorrect={onCorrect}
             />
           </div>
         </ExpandableDetailRow>
@@ -364,12 +462,14 @@ function ProductionEntryDetail({
   editQty,
   onEditQtyChange,
   onSaveLine,
+  onCorrect,
 }: {
   row: ProductionEntryRow;
   editRows: DetailEditRow[];
   editQty: Record<number, string>;
   onEditQtyChange: (index: number, value: string) => void;
   onSaveLine: (index: number) => void;
+  onCorrect: () => void;
 }) {
   const unit = OPERATION_TYPE_UNIT[row.type];
 
@@ -392,6 +492,14 @@ function ProductionEntryDetail({
         <span className="text-muted-foreground"> · </span>
         <span className="font-semibold tabular-nums">{formatMoney(row.amount)}</span>
       </p>
+
+      {row.type === "TORCOVKA" && !row.batchFrozenAt && (
+        <div className="pl-1">
+          <Button type="button" variant="outline" className="h-9 rounded-xl" onClick={onCorrect}>
+            Исправить количество фактически взятых реек
+          </Button>
+        </div>
+      )}
 
       <NestedTable
         headers={[...DETAIL_HEADERS]}
@@ -491,7 +599,8 @@ function ProductionEntryDetail({
 
       {row.isPaid && (
         <p className="text-muted-foreground pl-1 text-xs leading-relaxed">
-          Операция выплачена — редактирование и удаление недоступны.
+          Операция выплачена — изменение выхода и удаление недоступны.
+          Ошибочно указанное количество взятых реек можно исправить отдельно.
         </p>
       )}
     </div>

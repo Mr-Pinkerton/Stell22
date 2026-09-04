@@ -80,3 +80,8 @@ export interface TerminalData {
   products: TerminalProduct[];
   stock: TerminalStock;
 }
+
+export type {
+  SubmitTorcovkaResult,
+  TorcovkaPlausibilityAck,
+} from "@/lib/torcovka-plausibility";

@@ -10,6 +10,8 @@ HEAD `9b5ed66da36543c3a58d7ab8e392fcd19e78b9c1` (после P1 `199fe2f`). Ка�
 
 **Pass 01.2 (этот файл):** пересмотрены DI-005 / DI-006 (+ DI-018, DI-019). Карточки DI-001/002/003/004/010/013 ниже — снимок фазы 1 на `5479580`; production P1 их закрывал, здесь не переоценивались.
 
+**Pass 01.4:** добавлен DI-020. Production SELECT read-only 2026-09-04. Карточка в этом файле; разбор `audit/01.4-torcovka-input-safety-review.md`.
+
 ---
 
 ## Сводка
@@ -35,6 +37,9 @@ HEAD `9b5ed66da36543c3a58d7ab8e392fcd19e78b9c1` (после P1 `199fe2f`). Ка�
 | DI-017 | P3 | INVARIANT WEAKNESS | Marketplace | MpStock без unique (marketplace,sku) |
 | DI-018 | P2 | REMEDIATING | Cost/Payroll | два last TORCOVKA payment → freeze не ставится |
 | DI-019 | P2 | REMEDIATING | Cost/Production | update TORCOVKA qty после pay/freeze; FINAL stale |
+| DI-020 | P1 | INVARIANT WEAKNESS | Production/Terminal | TORCOVKA принимает неправдоподобный расход без guard |
+
+Pass 01.4: `audit/01.4-torcovka-input-safety-review.md`. DI-021 (per-rail bin-packing) **не открывать**.
 
 ---
 
@@ -962,12 +967,90 @@ Confidence: HIGH
 
 ---
 
+## DI-020
+
+```
+ID: DI-020
+Severity: P1
+Status: INVARIANT WEAKNESS
+         (+ DESIGN RISK по UX копи; + NEEDS BUSINESS DECISION по порогам
+            и correction workflow)
+Domain: Production / Terminal / Cost / Inventory
+Reviewed: 01.4 @ HEAD cc571f5, production SELECT 2026-09-04 read-only
+
+Invariant (отсутствует):
+Система не отличает физически правдоподобный расход реек от очевидной
+ошибки ввода. Нет верхней границы wastePct на submit. Нет сценария
+«исправить ошибочный railsTaken» с возвратом remainingQuantity.
+
+Waste model (owner 2026-09-04):
+Агрегат операции: railsTaken × lengthM vs Σ длин заготовок.
+Не раскрой каждой рейки. DI-021 / bin-packing не открывать.
+Минимум физики: заготовка ≤ длина рейки лота; Σ выход ≤ Σ взятых (INV-008).
+
+Evidence (code):
+torcovka-screen.tsx: «Сколько реек взято?», hint «Доступно N шт»,
+  confirm bar без %; destructive только при overLength
+terminal.ts:submitTorcovka — INV-008, gte remaining, нет max waste
+production.ts:update — railsTaken immutable
+production.ts:delete TORCOVKA — remaining не возвращается (INV-047)
+src/ нет increment remainingQuantity
+
+Evidence (production, READ ONLY, 2026-09-04):
+Live ProductionOperation TORCOVKA N=0 (все 3 ops deleted).
+ChangeLog reconstruction N=3, all later_deleted:
+  5.21% (410/1280 пакета), 6.95% (420/1280), 72.98% (1280/1280 весь пакет).
+Incident-like: cmtmj4dpi000srp29ek0iw37f ПАК-40-1280-01-7
+  railsTaken=1280=lot_qty, taken_m=5120, produced_m=1383.48, waste_pct=72.98
+  deleted 9 min later; remaining still 0.
+Память «~97%» с этой строкой не совпадает; класс тот же.
+P75/P90/P95 на N=3 непригодны (квантиль = инцидент).
+
+Current behavior:
+Любая пара (railsTaken ≤ remaining, producedM ≤ takenM, producedM > 0)
+принимается. 73% и 97% внутренне согласованы с вводом.
+
+Failure scenario (prod, already happened):
+1. Пакет 1280 реек, hint «Доступно 1280 шт».
+2. Ввод railsTaken=1280 вместо фактически взятых.
+3. Небольшой выход относительно takenM (1383 м из 5120 м).
+4. Submit ок. Delete не возвращает рейки.
+
+Concurrency: не нужна. Sequential intended path.
+
+Business impact:
+Неверный склад реек. Завышенный % отхода и ₽/м³. ЗП по заготовкам.
+Не data corruption «сама по себе»: цифры применены как введены.
+
+Detection:
+wastePct операции ≫ нормы; railsTaken = lot.quantity при малом producedM;
+remaining=0 при физическом наличии реек.
+
+Recovery:
+Штатного пути нет. Delete не возвращает рейки. Нужен отдельный
+corrective workflow (01.4 §8 CASE A). Ops в этом pass не чинить.
+
+Proposed guard bands (01.4 §7.5, не wasteThresholdPct=30):
+NORMAL < 20%; SUSPICIOUS 20–50% (повторный confirm); EXTREME ≥ 50%
+(только поток высокого отхода / брак).
+
+Minimal fix direction:
+1) plausibility guard терминал+сервер (агрегат %, не bin-pack);
+2) «исправить ошибочный ввод» (снизить railsTaken, вернуть remaining);
+3) не менять обычный delete TORCOVKA.
+
+Confidence: HIGH
+```
+
+---
+
 ## Явно не баги (для ревью)
 
 | Тема | Почему |
 | --- | --- |
 | Двойное списание RailLot/Blank/Detail/Nom/GP на terminal+reverse | `updateMany`+`gte` под RC; оба 8 из 10 не проходят |
-| TORCOVKA delete не возвращает remainingQuantity | v2:242-245; production.ts:372-381; smoke |
+| TORCOVKA delete не возвращает remainingQuantity | v2:242-245; production.ts:372-381; smoke; prod 01.4: remaining ПАК-40-1280-01-7 всё ещё 0 после delete |
+| Per-rail cutting / bin-packing (не DI-021) | владелец 2026-09-04: отход агрегатный по операции |
 | Sequential retry импорта / supply | findFirst / deductedQty |
 | markEmployeePaid двойной клик | claim count mismatch rollback |
 | Payment+freeze | один interactive TX |

@@ -33,6 +33,9 @@ export interface ProductionEntryRow {
   batchName?: string;
   railsTaken?: number;
   railLengthM?: number;
+  lotRemainingQuantity?: number;
+  producedM?: number;
+  batchFrozenAt?: string | null;
   productName?: string;
   detailLines?: ProductionDetailLine[];
   changeLog: ProductionChangeLogEntry[];

@@ -12,7 +12,9 @@ import { frozenBatchCostInputsChanged } from "@/lib/frozen-batch-money";
 import { allocatePackageCode } from "@/lib/package-code";
 import { archiveBatchIfDepleted } from "@/server/internal/cost";
 import {
+  lockBatches,
   lockDealsThenBatches,
+  lockRailLots,
   LockSetChangedError,
   retryOnLockSetChange,
   sameSortedIds,
@@ -437,9 +439,15 @@ export async function writeOffBatchRemainder(id: string): Promise<PurchaseBatchR
   await prisma.$transaction(async (tx) => {
     const lots = await tx.railLot.findMany({
       where: { batchId: id },
+      select: { id: true, remainingQuantity: true },
+    });
+    await lockRailLots(tx, lots.map((l) => l.id));
+    await lockBatches(tx, [id]);
+    const lockedLots = await tx.railLot.findMany({
+      where: { batchId: id },
       select: { remainingQuantity: true },
     });
-    const remaining = lots.reduce((s, l) => s + l.remainingQuantity, 0);
+    const remaining = lockedLots.reduce((s, l) => s + l.remainingQuantity, 0);
     if (remaining <= 0) throw new Error("Остаток уже нулевой");
 
     await tx.railLot.updateMany({
@@ -456,9 +464,7 @@ export async function writeOffBatchRemainder(id: string): Promise<PurchaseBatchR
       tx,
     );
 
-    // Остаток списан в отход → партия выработана: архивируем (заморозка — после
-    // выплаты всех операций).
-    await archiveBatchIfDepleted(tx, id);
+    await archiveBatchIfDepleted(tx, id, { batchAlreadyLocked: true });
   });
   revalidatePath(PATH);
   revalidatePath("/reports");

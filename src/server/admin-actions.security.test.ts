@@ -53,7 +53,7 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 import { createCashFlow } from "@/server/finance";
 import { markEmployeePaid } from "@/server/payroll";
 import { createBatch } from "@/server/purchases";
-import { deleteProductionOperation } from "@/server/production";
+import { deleteProductionOperation, correctTorcovkaRailsTaken } from "@/server/production";
 import { getApiCredentials } from "@/server/settings";
 import { conductInventory } from "@/server/warehouse";
 
@@ -70,6 +70,9 @@ describe("representative admin action boundaries", () => {
     ["payroll", () => markEmployeePaid("employee-1")],
     ["purchases", () => createBatch({} as never)],
     ["production", () => deleteProductionOperation("operation-1")],
+    ["production-rails-correct", () =>
+      correctTorcovkaRailsTaken({ operationId: "operation-1", newRailsTaken: 1, reason: "test" }),
+    ],
     ["warehouse", () => conductInventory("inventory-1")],
     ["settings", () => getApiCredentials()],
   ])("rejects %s before any database access", async (_domain, invoke) => {

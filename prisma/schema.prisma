@@ -63,6 +63,21 @@ enum OperationType {
   HOURS // рабочие часы
 }
 
+enum TorcovkaAckBand {
+  SUSPICIOUS
+  HIGH_WASTE
+}
+
+enum TorcovkaWasteReason {
+  CURVATURE
+  CRACKS
+  KNOTS
+  MATERIAL_DEFECT
+  COLOR_TEXTURE
+  WRONG_SIZE
+  OTHER
+}
+
 enum FlowType {
   INCOME  // поступление
   EXPENSE // списание
@@ -345,6 +360,11 @@ model ProductionOperation {
   railLotId    String?
   railLot      RailLot? @relation(fields: [railLotId], references: [id])
   railsTaken   Int?     // взято реек (длина = railsTaken * railLot.lengthM)
+
+  // Submit-time acknowledgement (история подтверждения работником, не current waste).
+  torcovkaSubmitAckBand     TorcovkaAckBand?
+  torcovkaSubmitWasteReason TorcovkaWasteReason?
+  torcovkaSubmitWasteNote   String?
 
   // Часы
   hours        Decimal? @db.Decimal(8, 2)

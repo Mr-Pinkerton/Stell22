@@ -23,7 +23,14 @@ import {
   type BlankStockRow,
   type DetailStockRow,
 } from "@/lib/detail-stock";
-import { isOverRailLength, sumDetailLengthM } from "@/lib/torcovka";
+import { D } from "@/lib/cost";
+import { lockRailLots } from "@/server/internal/finance-operations";
+import {
+  computeTorcovkaWasteMetrics,
+  decideTorcovkaSubmit,
+  type SubmitTorcovkaResult,
+  type TorcovkaPlausibilityAck,
+} from "@/lib/torcovka-plausibility";
 import { resolvePinLookup } from "@/lib/terminal-auth";
 import { RateLimiter, retryAfterSeconds } from "@/lib/rate-limit";
 import {
@@ -324,6 +331,8 @@ export async function terminalLogout(): Promise<void> {
 
 // ============================ ТОРЦОВКА =====================================
 
+export type { SubmitTorcovkaResult, TorcovkaPlausibilityAck };
+
 export interface TorcovkaInput {
   employeeId: string;
   /** Ключ идемпотентности с клиента (A21): один на попытку операции. */
@@ -337,33 +346,44 @@ export interface TorcovkaInput {
    * и 1, и 2 сорта (см. МОДЕЛЬ СЕБЕСТОИМОСТИ — факт vs заявленное).
    */
   picks: { lengthM: number; sort: Sort; quantity: number }[];
+  plausibilityAck?: TorcovkaPlausibilityAck;
 }
 
-export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
+export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcovkaResult> {
   await requireTerminalEmployee(input?.employeeId);
   const { employeeId, batchId, railLotId, railsTaken } = input;
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
-  if (railsTaken <= 0) throw new Error("Укажите количество взятых реек");
+  if (!Number.isInteger(railsTaken) || railsTaken <= 0) {
+    throw new Error("Укажите количество взятых реек");
+  }
   if (picks.length === 0) throw new Error("Не выбраны длины заготовок");
 
-  await prisma.$transaction(async (tx) => {
-    // Тип заготовок определяется пакетом реек; фактический сорт — из pick.
+  const txResult = await prisma.$transaction(async (tx) => {
+    await lockRailLots(tx, [railLotId]);
     const lot = await tx.railLot.findUnique({ where: { id: railLotId } });
     if (!lot || lot.batchId !== batchId) throw new Error("Пакет реек не найден");
-    // Материал заготовок наследуется от партии-источника.
     const batch = await tx.batch.findUniqueOrThrow({ where: { id: batchId } });
     const materialId = batch.materialId;
 
-    // Суммарная длина нарезанных заготовок не может превышать длину взятых
-    // реек (A7). UI это ограничивает, но серверный вызов обязан проверять сам —
-    // иначе заготовки «из воздуха» искажают отход и цену за м³.
-    const takenLengthM = railsTaken * (num(lot.lengthM) ?? 0);
-    if (isOverRailLength(takenLengthM, sumDetailLengthM(picks))) {
+    for (const p of picks) {
+      if (D(p.lengthM).gt(D(lot.lengthM))) {
+        throw new Error("Длина заготовки превышает длину рейки пакета");
+      }
+    }
+
+    const metrics = computeTorcovkaWasteMetrics(railsTaken, lot.lengthM, picks);
+    if (metrics.producedM.gt(metrics.takenM)) {
       throw new Error("Суммарная длина заготовок превышает длину взятых реек");
     }
 
-    // Атомарное списание: уйти в минус нельзя (cost-integrity).
+    const decision = decideTorcovkaSubmit({
+      railsTaken,
+      metrics,
+      ack: input.plausibilityAck,
+    });
+    if (decision.status === "ACK_REQUIRED") return decision;
+
     const dec = await tx.railLot.updateMany({
       where: { id: railLotId, batchId, remainingQuantity: { gte: railsTaken } },
       data: { remainingQuantity: { decrement: railsTaken } },
@@ -378,6 +398,9 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
         batchId,
         railLotId,
         railsTaken,
+        torcovkaSubmitAckBand: decision.persist.torcovkaSubmitAckBand,
+        torcovkaSubmitWasteReason: decision.persist.torcovkaSubmitWasteReason,
+        torcovkaSubmitWasteNote: decision.persist.torcovkaSubmitWasteNote,
         workDate: new Date(),
         lines: {
           create: picks.map((p) => ({
@@ -391,8 +414,6 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
       },
     });
 
-    // Произведённые заготовки приходуются на склад заготовок (конкретная деталь
-    // определится на присадке). Сорт — фактический, назначенный работником.
     for (const p of picks) {
       await tx.blankStock.upsert({
         where: {
@@ -423,23 +444,22 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<void> {
       tx,
     );
 
-    // Остаток дошёл до нуля → партия выработана: архивируем (заморозка — после
-    // выплаты всех операций).
     await archiveBatchIfDepleted(tx, batchId);
+    return { status: "CREATED" as const };
   }).catch((e) => {
-    if (isDuplicateClientRequest(e)) return; // A21: повтор уже обработан
+    if (isDuplicateClientRequest(e)) return { status: "CREATED" as const };
     throw e;
   });
 
-  // Произведённые детали меняют распределение стоимости партии по сортам
-  // (архивная-незамороженная партия ещё пересчитывается).
+  if (txResult.status === "ACK_REQUIRED") return txResult;
+
   await enqueueRecalcBatchCosts(batchId);
 
   revalidatePath("/production");
   revalidatePath("/terminal");
   revalidatePath("/reports");
-  // Возможное «партия выработана» — сразу обновить колокольчик в шапке.
   revalidatePath("/", "layout");
+  return { status: "CREATED" };
 }
 
 // ============================ ПРИСАДКА =====================================
