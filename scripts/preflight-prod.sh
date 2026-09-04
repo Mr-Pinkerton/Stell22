@@ -253,6 +253,47 @@ SQL
   )" >&2
 fi
 
+# --- DI-005: duplicate BatchCost FINAL per batch ---
+dup_final_groups="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*)
+FROM (
+  SELECT "batchId"
+  FROM "BatchCost"
+  WHERE status = 'FINAL'
+  GROUP BY 1
+  HAVING COUNT(*) > 1
+) d;
+SQL
+)" | tr -d '[:space:]')"
+
+if ! [[ "$dup_final_groups" =~ ^[0-9]+$ ]]; then
+  echo "PRECHECK FAILED" >&2
+  echo "Could not read duplicate BatchCost FINAL group count" >&2
+  exit 1
+fi
+
+if [[ "$dup_final_groups" -gt 0 ]]; then
+  failed=1
+  echo "DI-005: duplicate BatchCost FINAL: ${dup_final_groups} group(s). STOP. Do not migrate/delete/merge." >&2
+  echo "batchId / BatchCost.id / calculatedAt / costSort1 / costSort2:" >&2
+  psql_q "$(
+    cat <<'SQL'
+SELECT bc."batchId" || ' / ' || bc.id || ' / ' || bc."calculatedAt"::text || ' / ' || bc."costSort1"::text || ' / ' || bc."costSort2"::text
+FROM "BatchCost" bc
+WHERE bc.status = 'FINAL'
+  AND bc."batchId" IN (
+    SELECT "batchId"
+    FROM "BatchCost"
+    WHERE status = 'FINAL'
+    GROUP BY 1
+    HAVING COUNT(*) > 1
+  )
+ORDER BY bc."batchId", bc.id;
+SQL
+  )" >&2
+fi
+
 if [[ "$failed" -ne 0 ]]; then
   echo "PRECHECK FAILED" >&2
   exit 1

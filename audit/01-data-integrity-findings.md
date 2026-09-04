@@ -1,10 +1,14 @@
 # Этап 1: Data Integrity findings
 
-HEAD `5479580bdb1a33f53dec8005a2354456537ec8d4`. Карта: `audit/01-data-integrity-map.md`. Инварианты: `audit/01-data-integrity-invariants.md`.
+HEAD `9b5ed66da36543c3a58d7ab8e392fcd19e78b9c1` (после P1 `199fe2f`). Карта: `audit/01-data-integrity-map.md`. Инварианты: `audit/01-data-integrity-invariants.md`. Freeze/recalc: `audit/01.2-cost-freeze-review.md`.
 
 Только подтверждённые находки с evidence. Не баги: двойное списание реек/деталей на gte-путях; «торцовка не возвращает рейки»; sequential retry импорта/supply; payroll claim; freeze в той же TX что Payment.
 
+**Remediation in progress (code not yet shipped):** DI-005 / DI-006 / DI-018 / DI-019 + BD-3 frozen section/`materialId` + partial UNIQUE FINAL. Historical FINAL vs `totalCost` is **not** auto-rewritten (BD-2). See `audit/01.3-cost-freeze-remediation-plan.md`.
+
 Шкала: P0 массовая порча без восстановления; P1 реальный неверный склад/деньги/ЗП/с/с; P2 слабый invariant / редкий race; P3 долг без текущего нарушения.
+
+**Pass 01.2 (этот файл):** пересмотрены DI-005 / DI-006 (+ DI-018, DI-019). Карточки DI-001/002/003/004/010/013 ниже — снимок фазы 1 на `5479580`; production P1 их закрывал, здесь не переоценивались.
 
 ---
 
@@ -16,8 +20,8 @@ HEAD `5479580bdb1a33f53dec8005a2354456537ec8d4`. Карта: `audit/01-data-inte
 | DI-002 | P1 | CONFIRMED BUG | Finance/Cost | `setAccountConfirmed` не пересчитывает Deal/Batch totals |
 | DI-003 | P1 | CONFIRMED RACE | Finance | `importKey` не UNIQUE — concurrent import дублирует CashFlow |
 | DI-004 | P1 | CONFIRMED RACE | Marketplace | Два sync могут дважды списать ProductStock (в минус) |
-| DI-005 | P2 | CONFIRMED RACE | Cost | `syncBatchTotalCost` может записать `totalCost` после freeze |
-| DI-006 | P2 | CONFIRMED RACE | Cost | recalc без TX/lock: orphan PRELIMINARY рядом с FINAL |
+| DI-005 | P2 | REMEDIATING | Cost | freeze считает FINAL без Batch lock; concurrent sync пишет C=B |
+| DI-006 | P2 | REMEDIATING | Cost | recalc без TX/lock: orphan PRELIMINARY рядом с FINAL |
 | DI-007 | P2 | INVARIANT WEAKNESS | Production | Torcovka: decrement реек до unique insert; retry может вернуть ошибку |
 | DI-008 | P2 | INVARIANT WEAKNESS | Production | `clientRequestId` nullable UNIQUE |
 | DI-009 | P2 | DESIGN RISK | Inventory | `conductInventory` ставит qty=X, ломает reverse/provenance |
@@ -29,6 +33,8 @@ HEAD `5479580bdb1a33f53dec8005a2354456537ec8d4`. Карта: `audit/01-data-inte
 | DI-015 | P3 | NEEDS BUSINESS DECISION | Payroll | ставки live, не snapshot на операции |
 | DI-016 | P3 | INVARIANT WEAKNESS | Inventory | два DRAFT при concurrent create |
 | DI-017 | P3 | INVARIANT WEAKNESS | Marketplace | MpStock без unique (marketplace,sku) |
+| DI-018 | P2 | REMEDIATING | Cost/Payroll | два last TORCOVKA payment → freeze не ставится |
+| DI-019 | P2 | REMEDIATING | Cost/Production | update TORCOVKA qty после pay/freeze; FINAL stale |
 
 ---
 
@@ -270,43 +276,51 @@ ID: DI-005
 Severity: P2
 Status: CONFIRMED RACE
 Domain: Cost / Finance
+Reviewed: 01.2 @ HEAD 9b5ed66 (после P1 199fe2f)
 
 Invariant:
-После freeze Batch.totalCost и FINAL snapshot не меняются
-(finance-operations.ts:64 «Замороженные партии не трогаем»).
+После freeze Batch.totalCost и FINAL — одна замороженная C
+(finance-operations.ts:151 «Замороженные партии не трогаем»; P1:
+money-поля updateBatch запрещены если frozenAt уже set).
 
 Evidence:
-syncBatchTotalCostInternal L67-68: if (!batch || batch.frozenAt) return;
-L91: prisma.batch.update({ data: { totalCost } }) — без where frozenAt: null.
-recalc пропускает frozenAt != null на стартовом findMany (cost.ts:344-346)
-и не переписывает FINAL.
-freezeBatch в payroll TX ставит frozenAt + FINAL.
+P1 закрыл запись C ПОСЛЕ committed frozenAt:
+  syncBatchTotalCostInternal L157 FOR UPDATE Batch;
+  L159 skip if frozenAt; L182-186 updateMany where { id, frozenAt: null }.
+P1 НЕ менял freeze path (internal/cost.ts, payroll.ts нет в 199fe2f):
+  maybeFreezeBatch L400 findUnique БЕЗ FOR UPDATE;
+  freezeBatch L370 computeBatchSnapshot(in-memory batch) ДО
+  L371 batch.update frozenAt.
+Тест p1-review-concurrency «freeze || updateBatch» сам делает
+SELECT Batch FOR UPDATE — это не maybeFreezeBatch.
 
 Current behavior:
-Sequential: frozen партия, sync сразу выходит — OK.
-Race: process A прочитал frozenAt=null; process B freeze commit; A пишет
-новый totalCost. FINAL в BatchCost прежний. Live cost report для frozen
-берёт FINAL (loadCostContext L181, L234). Purchases/reports KPI читают
-Batch.totalCost — расходится с FINAL.
+Sequential: sync/updateBatch после freeze не меняют C / money — OK.
+Race F1 (01.2): TX F считает FINAL из A до lock строки; TX S (sync /
+updateBatch / confirm / import) держит FOR UPDATE, пишет totalCost=B,
+коммитит; F ставит frozenAt и FINAL(A). Recalc skip frozen.
+Отчёт с/с: FINAL. Закупки «Общая»: B.
 
 Concurrency:
-Нужны параллельные sync сделки и выплата, закрывающая freeze.
-Реже, чем DI-001.
+Параллельные: выплата, закрывающая freeze, И мутация C/цен закрытой
+партии. Окно = findUnique → UPDATE frozenAt.
 
 Business impact:
-У frozen партии «Общая» в закупках может уехать от замороженного распределения.
-Отчёт с/с изделия по FINAL скорее цел.
+У frozen партии «Общая» расходится с замороженным распределением.
+B больше не попадает в cost.
 
 Detection:
 frozenAt IS NOT NULL AND Batch.totalCost != costSort1+costSort2 FINAL
-(с учётом округления).
+(с учётом округления distribute).
 
 Recovery:
-Вернуть totalCost к сумме FINAL или пересчитать только отображение из FINAL.
+Сверить, что истина (BD-2 в 01.2): вернуть totalCost к сумме FINAL
+или один раз пересчитать FINAL (ломает «заморозка»).
 
 Minimal fix direction:
-update с where: { id, frozenAt: null } и проверка count; либо sync внутри
-того же lock/tx что freeze.
+В maybeFreezeBatch: SELECT Batch FOR UPDATE, затем перечитать C/prices
+и ops, затем compute FINAL, затем frozenAt. Не считать из объекта
+до lock. Починить тест P1, чтобы звал реальный freeze.
 
 Confidence: HIGH
 ```
@@ -320,42 +334,49 @@ ID: DI-006
 Severity: P2
 Status: CONFIRMED RACE
 Domain: Cost
+Reviewed: 01.2 @ HEAD 9b5ed66
 
-Invariant:
-Пока партия не frozen — один актуальный PRELIMINARY; после freeze — только FINAL.
-recalc не должен писать после freeze.
+Invariant (намерение freezeBatch, не UI SoT):
+После freeze в BatchCost остаётся FINAL; recalc не пишет.
+PRELIMINARY — cache, не SoT текущего отчёта.
 
 Evidence:
-internal/cost.ts:recalcBatchCosts L340-361: нет $transaction, нет lock.
-deleteMany PRELIMINARY затем create PRELIMINARY отдельными await.
-Schema BatchCost @@index(batchId) без unique (status).
-cost-queue.ts:11-39 in-process Map — не шарится с прямым recalc и не с CLI.
-freeze между deleteMany и create: FINAL уже есть, late create добавляет
-PRELIMINARY. Отчёт читает только FINAL L181.
+recalcBatchCosts L340-361: нет $transaction, нет lock, нет recheck
+frozenAt на create. deleteMany PRELIMINARY затем create — два statement.
+Schema: @@index(batchId) only; unique (batchId,status) нет; FK RESTRICT.
+loadCostContext L181: findMany { status: FINAL } only.
+Бейдж отчёта: batch.frozenAt, не BatchCost.status (cost-report.ts:385).
+Ни один reader не find PRELIMINARY.
+cost-queue in-memory; recalcBatchCostsInternal нет; CLI recalc нет.
+P1 cost.ts не трогал.
 
 Current behavior:
-Очередь на одном app-процессе коалесцирует enqueue. Два recalc в обход
-очереди / freeze vs recalc → несколько PRELIMINARY или PRELIMINARY+FINAL.
-Содержимое PRELIMINARY может lost-update. На cost UI почти не влияет.
+Несколько PRELIMINARY у открытой партии: queue 1 процесса коалесцирует
+один ключ. Не автобаг — UI cache не читает.
+Race F2: freeze между findMany/deleteMany и create → PRELIMINARY рядом
+с FINAL при frozenAt set. Содержимое PRELIMINARY может быть stale vs
+FINAL; отчёт берёт FINAL.
 
 Concurrency:
-Параллельный recalc или freeze vs recalc.
+freeze (payroll/archive TX) vs after-commit enqueue с finance/torcovka.
+Два recalc одной партии: 2 процесса или вызов в обход очереди.
 
 Business impact:
-Сейчас низкий (PRELIMINARY write-mostly). Риск если кто-то начнёт читать
-PRELIMINARY как SoT. Мусорные строки в BatchCost.
+Текущий cost UI не врёт из-за orphan PRELIMINARY. Мусор в BatchCost;
+сломанный инвариант freeze deleteMany-all; риск будущего reader.
 
 Detection:
-COUNT(*) FROM BatchCost GROUP BY batchId, status HAVING count>1;
-PRELIMINARY при frozenAt IS NOT NULL.
+PRELIMINARY при Batch.frozenAt IS NOT NULL;
+COUNT(*) GROUP BY batchId, status HAVING count>1.
 
 Recovery:
-delete лишних PRELIMINARY у frozen; для открытых — один enqueue.
+DELETE PRELIMINARY у frozen партий. Для открытых — не обязательно
+схлопывать, пока cache не SoT (BD-1).
 
 Minimal fix direction:
-Обернуть delete+create в TX; where frozenAt null на write;
-UNIQUE (batchId) WHERE status='PRELIMINARY' или upsert; не писать если
-frozenAt уже не null.
+delete+create в TX с Batch FOR UPDATE или where frozenAt null на write;
+не create если уже frozen. UNIQUE FINAL. UNIQUE PRELIMINARY — только
+после BD-1.
 
 Confidence: HIGH
 ```
@@ -836,6 +857,111 @@ Confidence: HIGH
 
 ---
 
+## DI-018
+
+```
+ID: DI-018
+Severity: P2
+Status: CONFIRMED RACE
+Domain: Cost / Payroll
+Reviewed: 01.2 @ HEAD 9b5ed66
+
+Invariant:
+Закрытая партия (closedAt) с unpaid TORCOVKA = 0 должна получить
+frozenAt + FINAL (canFreezeBatch; payroll.ts:234-237).
+
+Evidence:
+maybeFreezeBatch L402-404: count isPaid:false TORCOVKA без lock всех
+ops партии и без Batch FOR UPDATE.
+markEmployeePaid вызывает maybeFreeze только для batchId TORCOVKA
+этой выплаты.
+archiveBatchIfDepleted L417: если closedAt уже set → return, freeze нет.
+Других callers maybeFreezeBatch нет.
+
+Current behavior:
+Sequential: последняя выплата TORCOVKA видит count=0 → freeze. OK.
+Race F3: две параллельные выплаты последних T1 и T2. Каждая claim
+свои ops; каждая count ещё видит чужие unpaid (RC) → обе skip freeze.
+После commit: все TORCOVKA paid, frozenAt=null, FINAL нет. Повторного
+прохода нет.
+
+Concurrency:
+Два markEmployeePaid разных сотрудников по последним TORCOVKA одной
+уже закрытой партии.
+
+Business impact:
+Партия навсегда «предварительная»: C/цены ещё редактируются; отчёт
+live, не FINAL. Редко.
+
+Detection:
+closedAt IS NOT NULL AND frozenAt IS NULL AND unpaid TORCOVKA count=0.
+
+Recovery:
+Ручной повтор maybeFreeze (сейчас нет UI) или SQL frozenAt+FINAL.
+
+Minimal fix direction:
+Тот же Batch FOR UPDATE до count unpaid (сериализация выплат по партии).
+
+Confidence: HIGH
+```
+
+---
+
+## DI-019
+
+```
+ID: DI-019
+Severity: P2
+Status: CONFIRMED RACE
+Domain: Cost / Production
+Reviewed: 01.2b @ HEAD 9b5ed66
+
+Invariant:
+После выплаты TORCOVKA (и freeze FINAL) факт lines не меняется.
+FINAL считается из TORCOVKA lines (freezeBatch / distribute).
+
+Evidence:
+updateProductionLineQuantity L210-215 isPaid check ВНЕ TX.
+TORCOVKA TX L306-362: BlankStock ±; operationDetailLine.update qty.
+Нет lock ProductionOperation. Нет where isPaid=false.
+deleteProductionOperation L390-395 isPaid вне TX; L436 delete({ id })
+без isPaid. PaymentBatchItem.operationId ON DELETE RESTRICT (init L609).
+OperationDetailLine.operationId ON DELETE RESTRICT (init L555) —
+lines удаляют до Op, это не про Payment.
+Parent UPDATE isPaid не блокирует child quantity UPDATE.
+
+Current behavior:
+UPDATE: sequential isPaid=true → throw до TX. Concurrent pay+freeze
+затем (или во время) update qty → COMMIT. Recalc skip frozen.
+DELETE: после committed Payment delete Op → P2003 RESTRICT → rollback
+stock. Заявленный «delete after freeze» end-state не достигается.
+
+Concurrency:
+markEmployeePaid (последние TORCOVKA закрытой партии) || admin
+правка qty той же TORCOVKA.
+
+Business impact:
+FINAL и склад/lines расходятся. Отчёт с/с заморожен; факт производства
+и отход live. ЗП уже по старым qty (amount до TX payroll).
+
+Detection:
+frozenAt IS NOT NULL AND SUM(TORCOVKA line qty/volume) != FINAL volumes
+(через сечение). ChangeLog ProductionOperation после Batch.frozenAt.
+
+Recovery:
+Не auto-fix FINAL (BD-2). Вернуть lines к FINAL или принять drift
+вручную. Stock выровнять инвентаризацией осторожно.
+
+Minimal fix direction:
+В TX: lock ProductionOperation WHERE id AND isPaid=false FIRST,
+потом stock/line. Тот же каркас на delete (defense; FK уже стопит).
+Lock order: Op → (optional Batch) → stock. Не Batch затем Op.
+
+Confidence: HIGH
+```
+
+---
+
 ## Явно не баги (для ревью)
 
 | Тема | Почему |
@@ -845,7 +971,9 @@ Confidence: HIGH
 | Sequential retry импорта / supply | findFirst / deductedQty |
 | markEmployeePaid двойной клик | claim count mismatch rollback |
 | Payment+freeze | один interactive TX |
+| Delete TORCOVKA после committed Payment | `PaymentBatchItem.operationId` ON DELETE RESTRICT; не DI-019 end-state |
 | PRELIMINARY лагает после torcovka | отчёт live; PRELIMINARY не SoT |
+| Несколько PRELIMINARY у открытой партии | cache, UI не читает; не автобаг (BD-1 в 01.2) |
 | Freeze только unpaid TORCOVKA | v2:700-702 |
 | Unconfirmed в балансе счёта, не в KPI | finance.ts:223-245 намеренно |
 | Две вкладки терминала = два id | ключ попытки, не дедуп действия |

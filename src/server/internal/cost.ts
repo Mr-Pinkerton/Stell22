@@ -9,6 +9,7 @@ import type {
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { notifyEvent } from "@/server/internal/notification-event";
+import { lockBatches } from "@/server/internal/finance-operations";
 import { canFreezeBatch, D } from "@/lib/cost";
 import {
   blendedCostPerMeterByMaterial,
@@ -338,40 +339,53 @@ function computeBatchSnapshot(
 }
 
 export async function recalcBatchCosts(
-  opts: { batchId?: string; db?: Db } = {},
+  opts: { batchId?: string } = {},
 ): Promise<void> {
-  const db = opts.db ?? prisma;
-  const batches = await db.batch.findMany({
-    where: { frozenAt: null, ...(opts.batchId ? { id: opts.batchId } : {}) },
-  });
-  if (batches.length === 0) return;
-  const batchIds = batches.map((b) => b.id);
-  const ops = await db.productionOperation.findMany({
-    where: { type: "TORCOVKA", batchId: { in: batchIds } },
-    include: { lines: true },
-  });
-  const lines = producedLinesFromOperations(ops.map(toOperationForCost));
-  for (const batch of batches) {
-    await db.batchCost.deleteMany({ where: { batchId: batch.id, status: "PRELIMINARY" } });
-    const snapshot = computeBatchSnapshot(batch, lines);
-    if (!snapshot) continue;
-    await db.batchCost.create({
-      data: { batchId: batch.id, status: "PRELIMINARY", ...snapshot },
+  const ids = opts.batchId
+    ? [opts.batchId]
+    : (await prisma.batch.findMany({ where: { frozenAt: null }, select: { id: true } })).map(
+        (b) => b.id,
+      );
+  ids.sort();
+  for (const batchId of ids) {
+    await prisma.$transaction(async (tx) => {
+      await lockBatches(tx, [batchId]);
+      const batch = await tx.batch.findUnique({ where: { id: batchId } });
+      if (!batch) return;
+      if (batch.frozenAt) {
+        await tx.batchCost.deleteMany({ where: { batchId, status: "PRELIMINARY" } });
+        return;
+      }
+      const ops = await tx.productionOperation.findMany({
+        where: { type: "TORCOVKA", batchId },
+        include: { lines: true },
+      });
+      const lines = producedLinesFromOperations(ops.map(toOperationForCost));
+      const snapshot = computeBatchSnapshot(batch, lines);
+      await tx.batchCost.deleteMany({ where: { batchId, status: "PRELIMINARY" } });
+      if (snapshot) {
+        await tx.batchCost.create({
+          data: { batchId, status: "PRELIMINARY", ...snapshot },
+        });
+      }
     });
   }
 }
 
-async function freezeBatch(tx: Prisma.TransactionClient, batch: PrismaBatch): Promise<void> {
+async function freezeBatch(tx: Prisma.TransactionClient, batchId: string): Promise<void> {
+  const batch = await tx.batch.findUnique({ where: { id: batchId } });
+  if (!batch) return;
   const ops = await tx.productionOperation.findMany({
-    where: { type: "TORCOVKA", batchId: batch.id },
+    where: { type: "TORCOVKA", batchId },
     include: { lines: true },
   });
   const lines = producedLinesFromOperations(ops.map(toOperationForCost));
   const snapshot = computeBatchSnapshot(batch, lines);
-  await tx.batch.update({ where: { id: batch.id }, data: { frozenAt: new Date() } });
-  await tx.batchCost.deleteMany({ where: { batchId: batch.id } });
+  if (batch.frozenAt) return;
+  await tx.batch.update({ where: { id: batchId }, data: { frozenAt: new Date() } });
+  await tx.batchCost.deleteMany({ where: { batchId, status: "PRELIMINARY" } });
   if (snapshot) {
-    await tx.batchCost.create({ data: { batchId: batch.id, status: "FINAL", ...snapshot } });
+    await tx.batchCost.create({ data: { batchId, status: "FINAL", ...snapshot } });
   }
   await writeChangeLog(
     {
@@ -396,7 +410,11 @@ async function freezeBatch(tx: Prisma.TransactionClient, batch: PrismaBatch): Pr
 export async function maybeFreezeBatch(
   tx: Prisma.TransactionClient,
   batchId: string,
+  opts?: { batchAlreadyLocked?: boolean },
 ): Promise<boolean> {
+  if (!opts?.batchAlreadyLocked) {
+    await lockBatches(tx, [batchId]);
+  }
   const batch = await tx.batch.findUnique({ where: { id: batchId } });
   if (!batch || batch.frozenAt || !batch.closedAt) return false;
   const unpaidTorcovkaCount = await tx.productionOperation.count({
@@ -405,7 +423,7 @@ export async function maybeFreezeBatch(
   if (!canFreezeBatch({ frozenAt: batch.frozenAt, closedAt: batch.closedAt, unpaidTorcovkaCount })) {
     return false;
   }
-  await freezeBatch(tx, batch);
+  await freezeBatch(tx, batchId);
   return true;
 }
 
@@ -445,6 +463,6 @@ export async function archiveBatchIfDepleted(
     },
     tx,
   );
-  await maybeFreezeBatch(tx, batchId);
+  await maybeFreezeBatch(tx, batchId, { batchAlreadyLocked: true });
   return true;
 }

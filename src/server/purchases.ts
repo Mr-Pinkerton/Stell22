@@ -8,7 +8,7 @@ import { requireAdmin } from "@/server/session";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { sectionAreaM2, type PurchaseBatchRow } from "@/lib/batch-stats";
 import { isBatchCostMismatch } from "@/lib/cost";
-import { frozenBatchMoneyChanged } from "@/lib/frozen-batch-money";
+import { frozenBatchCostInputsChanged } from "@/lib/frozen-batch-money";
 import { allocatePackageCode } from "@/lib/package-code";
 import { archiveBatchIfDepleted } from "@/server/internal/cost";
 import {
@@ -370,16 +370,28 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
       if (!current) throw new Error("Партия не найдена");
       if (
         current.frozenAt &&
-        frozenBatchMoneyChanged(
+        frozenBatchCostInputsChanged(
           {
             purchaseCost: num(current.purchaseCost),
             priceSort1: num(current.priceSort1),
             priceSort2: num(current.priceSort2),
+            sectionWidthMm: num(current.sectionWidthMm),
+            sectionHeightMm: num(current.sectionHeightMm),
+            materialId: current.materialId,
           },
-          nextMoney,
+          {
+            purchaseCost: nextMoney.purchaseCost,
+            priceSort1: nextMoney.priceSort1,
+            priceSort2: nextMoney.priceSort2,
+            sectionWidthMm: section.w,
+            sectionHeightMm: section.h,
+            materialId: values.materialId,
+          },
         )
       ) {
-        throw new Error("Нельзя менять закупочную стоимость и цены сортов у замороженной партии");
+        throw new Error(
+          "Нельзя менять закупочную стоимость, цены сортов, сечение и материал у замороженной партии",
+        );
       }
 
       await tx.batch.update({ where: { id }, data: scalarData });

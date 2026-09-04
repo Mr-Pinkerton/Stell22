@@ -7,6 +7,11 @@ import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
 import { maybeFreezeBatch } from "@/server/internal/cost";
 import { notifyEvent } from "@/server/internal/notification-event";
+import {
+  lockBatches,
+  lockProductionOperations,
+  sortedUniqueIds,
+} from "@/server/internal/finance-operations";
 import { formatMoney } from "@/lib/format";
 import { operationEarning } from "@/lib/payroll";
 import { dayKey } from "@/lib/entries";
@@ -31,10 +36,10 @@ interface ComputedOp {
 }
 
 /** Карты расценок работников и сортов деталей для расчёта сумм операций. */
-async function buildRefMaps() {
+async function buildRefMaps(db: typeof prisma | Prisma.TransactionClient = prisma) {
   const [employees, details] = await Promise.all([
-    prisma.employee.findMany(),
-    prisma.detail.findMany({ select: { id: true, sort: true } }),
+    db.employee.findMany(),
+    db.detail.findMany({ select: { id: true, sort: true } }),
   ]);
   return {
     employeeName: new Map(employees.map((e) => [e.id, e.fullName])),
@@ -184,30 +189,28 @@ export async function getSalaryReport(scope?: Period | null): Promise<SalaryRepo
  */
 export async function markEmployeePaid(employeeId: string): Promise<SalaryReportRow[]> {
   await requireAdmin();
-  const maps = await buildRefMaps();
-  const ops = await prisma.productionOperation.findMany({
+  const unpaid = await prisma.productionOperation.findMany({
     where: { employeeId, isPaid: false },
-    include: { lines: true },
+    select: { id: true },
   });
-  if (ops.length === 0) throw new Error("Нет невыплаченных операций");
+  const opIds = sortedUniqueIds(unpaid.map((o) => o.id));
+  if (opIds.length === 0) throw new Error("Нет невыплаченных операций");
 
-  const amount = round2(ops.reduce((s, op) => s + computeOp(op, maps).amount, 0));
   const paidAt = new Date();
-  const opIds = ops.map((o) => o.id);
-  // Партии выплачиваемых операций торцовки — кандидаты на заморозку.
-  const torcovkaBatchIds = [
-    ...new Set(
-      ops
-        .filter((o) => o.type === "TORCOVKA" && o.batchId)
-        .map((o) => o.batchId as string),
-    ),
-  ];
 
   await prisma.$transaction(async (tx) => {
-    // Анти-TOCTOU (A19): сначала АТОМАРНО «клеймим» операции, помечая isPaid.
-    // Фильтр isPaid:false + сверка count гарантируют, что параллельный второй
-    // вызов (двойной клик/две вкладки) не создаст дубль-выплату — проиграв гонку,
-    // он увидит count!=ожидаемого и откатит транзакцию, не создав Payment.
+    await lockProductionOperations(tx, opIds);
+    const ops = await tx.productionOperation.findMany({
+      where: { id: { in: opIds } },
+      include: { lines: true },
+    });
+    if (ops.length !== opIds.length || ops.some((o) => o.isPaid)) {
+      throw new Error("Операции уже выплачены — обновите отчёт");
+    }
+
+    const maps = await buildRefMaps(tx);
+    const amount = round2(ops.reduce((s, op) => s + computeOp(op, maps).amount, 0));
+
     const claimed = await tx.productionOperation.updateMany({
       where: { id: { in: opIds }, isPaid: false },
       data: { isPaid: true, paidAt },
@@ -231,10 +234,12 @@ export async function markEmployeePaid(employeeId: string): Promise<SalaryReport
       tx,
     );
 
-    // Выработанная партия, у которой все операции торцовки выплачены, —
-    // замораживаем себестоимость (FINAL).
+    const torcovkaBatchIds = sortedUniqueIds(
+      ops.filter((o) => o.type === "TORCOVKA").map((o) => o.batchId),
+    );
+    await lockBatches(tx, torcovkaBatchIds);
     for (const batchId of torcovkaBatchIds) {
-      await maybeFreezeBatch(tx, batchId);
+      await maybeFreezeBatch(tx, batchId, { batchAlreadyLocked: true });
     }
 
     await notifyEvent(

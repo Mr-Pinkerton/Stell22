@@ -1,5 +1,7 @@
 # Этап 1: инварианты Data Integrity (A/B/C/D)
 
+HEAD `9b5ed66`. Freeze/recalc pass: `audit/01.2-cost-freeze-review.md` (DI-005/006/018). Строки P1 (totalCost writers, importKey, SKU) ниже могут отставать от `199fe2f` — не переоценивались в 01.2, кроме freeze-adjacent.
+
 Классификация **как гарантируется сейчас**, не как хотелось бы в v2.
 
 | Код | Значение |
@@ -30,15 +32,17 @@ Evidence: schema + named migration или `file:function`. Findings — `audit/0
 | Несколько Op с `clientRequestId=NULL` | UNIQUE допускает много NULL | — | C: UI шлёт id; API может не слать | **нет** | WEAK — DI-008 |
 | Удаление TORCOVKA не возвращает рейки | — | B: просто нет write | C: явный комментарий | n/a | EXPECTED (v2 + JSDoc + smoke) |
 | Удаление/правка PRISADKA/UPAKOVKA возвращает provenance stock | — | B | C: reverse helpers | да, если gte проходит | EXPECTED / WEAK после inventory — [DI-009](01-data-integrity-findings.md#di-009) |
-| Выплаченную Op нельзя править/удалить | — | — | C: `op.isPaid` | claim в другой TX уже поставил isPaid | SAFE (app) |
+| Выплаченную Op нельзя **удалить** (TORCOVKA) | A: `PaymentBatchItem.operationId` RESTRICT init | B: delete Op в TX | C: isPaid **вне** TX | после committed Payment delete Op fail → rollback | SAFE (FK), не app-check |
+| Выплаченную TORCOVKA нельзя **править qty** | — | update lines **без** lock Op | C: isPaid только pre-TX | claim/freeze коммитится, затем line UPDATE | UNSAFE — [DI-019](01-data-integrity-findings.md#di-019) |
 | Выплата не дублирует ops в два Payment | нет UNIQUE `PaymentBatchItem.operationId` (init FK only) | B: claim+Payment | C: `updateMany isPaid:false` count match `payroll.ts:211-217` | **да** для этого path | SAFE (app) / WEAK schema — [DI-014](01-data-integrity-findings.md#di-014) |
 | Freeze откатывается вместе с Payment если freeze throw | — | B: тот же I | C: maybeFreeze внутри | да | SAFE |
 | Сумма выплаты = ставки на операциях | нет snapshot rate на Op | — | C: current Employee rates до TX | ставки могут смениться между read и claim (окно) | WEAK / EXPECTED — [DI-015](01-data-integrity-findings.md#di-015) |
 | Unpaid ЗП пересчитывается live-ставками | — | — | C | sequential: смена ставки меняет начисление задним числом | EXPECTED / NEEDS DECISION — DI-015 |
-| Freeze только если closedAt и unpaid TORCOVKA=0 | — | B: maybeFreeze в caller TX | C: `canFreezeBatch` | concurrent freeze: last FINAL wins (обычно идентичен) | EXPECTED vs v2:701-702 |
+| Freeze только если closedAt и unpaid TORCOVKA=0 | — | B: maybeFreeze в caller TX | C: `canFreezeBatch`; count unpaid **без** Batch FOR UPDATE | два last TORCOVKA payment оба видят чужой unpaid → freeze skip навсегда | WEAK — [DI-018](01-data-integrity-findings.md#di-018); TORCOVKA-only vs v2 — EXPECTED |
 | FINAL BatchCost не перезаписывается recalc | — | recalc не в TX | C: recalc пишет только PRELIMINARY; skip `frozenAt` на **стартовом** findMany | late recalc может **добавить** PRELIMINARY рядом с FINAL | WEAK — [DI-006](01-data-integrity-findings.md#di-006) |
-| Один PRELIMINARY на batch | нет unique (batchId, status) `@@index(batchId)` only | **нет** TX на delete+create | C | **нет** | WEAK — DI-006 |
-| `Batch.totalCost` = purchase + confirmed deal extras | — | **нет** общей TX с Deal/CF | C: `syncBatchTotalCostInternal` full recompute | skip frozen только на read; update без WHERE frozenAt | WEAK — [DI-001](01-data-integrity-findings.md#di-001) [DI-005](01-data-integrity-findings.md#di-005) |
+| Один PRELIMINARY на batch | нет unique (batchId, status) `@@index(batchId)` only | **нет** TX на delete+create | C: UI **не** читает PRELIMINARY (`loadCostContext` только FINAL) | **нет** (не SoT) | WEAK cache — DI-006; не автобаг пока cache |
+| FINAL считается под тем же lock, что `frozenAt` | нет | freeze I, но `findUnique` до `UPDATE frozenAt` | C | concurrent sync FOR UPDATE пишет C=B, FINAL из A | WEAK — [DI-005](01-data-integrity-findings.md#di-005) |
+| `Batch.totalCost` не пишется после committed `frozenAt` | — | B у finance writers после P1 | C: FOR UPDATE + `updateMany frozenAt:null` `finance-operations.ts:157-186` | да против write-after-freeze; нет против stale FINAL (DI-005) | SAFE sequential after freeze / WEAK during freeze compute |
 | `updateBatch(purchaseCost)` обновляет `totalCost` | — | — | **нет** | sequential stale C | UNSAFE — DI-001 |
 | Подтверждение счёта пересчитывает Deal/Batch totals | — | — | **нет** (`setAccountConfirmed` только flag) | sequential stale C | UNSAFE — [DI-002](01-data-integrity-findings.md#di-002) |
 | Unconfirmed CF не в ДДС/KPI/overhead/deal extras | — | — | C: `account.confirmed:true` в getFinanceData, getPeriodOverhead, sumConfirmedExpense | да для этих read path | SAFE |
@@ -94,13 +98,14 @@ Evidence: schema + named migration или `file:function`. Findings — `audit/0
 | Index | Migration | Следствие |
 | --- | --- | --- |
 | CashFlow (accountId, importKey) | `20260630164144` | дедуп только app |
-| BatchCost.batchId | schema | несколько PRELIMINARY/FINAL |
+| BatchCost.batchId | schema / init | несколько PRELIMINARY/FINAL; нет unique status |
 | ProductCost (productId, periodStart, periodEnd) | schema | не unique; writers нет |
 | Detail (materialId, detailNumber) | `20260713190000` | не unique |
 
 ### Нет в БД
 
 - CHECK на неотрицательные qty
+- UNIQUE (BatchCost.batchId) / partial unique FINAL / PRELIMINARY
 - UNIQUE PaymentBatchItem.operationId
 - UNIQUE Product.skuOzon / skuWb
 - UNIQUE Account.accountNumber

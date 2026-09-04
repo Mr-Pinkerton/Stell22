@@ -6,6 +6,8 @@ import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
+import { lockBatches, lockProductionOperations } from "@/server/internal/finance-operations";
+import { maybeFreezeBatch } from "@/server/internal/cost";
 import {
   applyPrisadkaPick,
   applyUpakovkaPick,
@@ -207,43 +209,46 @@ export async function updateProductionLineQuantity(
   await requireAdmin();
   if (!(newQty > 0)) throw new Error("Количество должно быть положительным");
 
-  const op = await prisma.productionOperation.findUnique({
-    where: { id },
-    include: { lines: { orderBy: { id: "asc" } } },
-  });
-  if (!op) throw new Error("Операция не найдена");
-  if (op.isPaid) throw new Error("Нельзя изменить — операция уже выплачена");
+  let enqueueBatchId: string | null = null;
+  let revalidateReports = false;
 
-  if (op.type === "HOURS") {
-    const old = num(op.hours);
-    await prisma.productionOperation.update({ where: { id }, data: { hours: newQty } });
-    await writeChangeLog({
-      entity: "ProductionOperation",
-      entityId: id,
-      newValues: { field: "Количество", oldValue: old, newValue: newQty },
+  await prisma.$transaction(async (tx) => {
+    await lockProductionOperations(tx, [id]);
+    const op = await tx.productionOperation.findUnique({
+      where: { id },
+      include: { lines: { orderBy: { id: "asc" } } },
     });
-    revalidatePath(PATH);
-    return reloadRow(id);
-  }
+    if (!op) throw new Error("Операция не найдена");
+    if (op.isPaid) throw new Error("Нельзя изменить — операция уже выплачена");
 
-  if (op.type === "UPAKOVKA") {
-    const newQtyInt = Math.round(newQty);
-    const oldQty = op.productQty ?? 0;
-    if (!op.productId) throw new Error("У операции не указано изделие");
-    if (newQtyInt === oldQty) return reloadRow(id);
+    if (op.type === "HOURS") {
+      const old = num(op.hours);
+      await tx.productionOperation.update({ where: { id }, data: { hours: newQty } });
+      await writeChangeLog(
+        {
+          entity: "ProductionOperation",
+          entityId: id,
+          newValues: { field: "Количество", oldValue: old, newValue: newQty },
+        },
+        tx,
+      );
+      return;
+    }
 
-    await prisma.$transaction(async (tx) => {
+    if (op.type === "UPAKOVKA") {
+      const newQtyInt = Math.round(newQty);
+      const oldQty = op.productQty ?? 0;
+      if (!op.productId) throw new Error("У операции не указано изделие");
+      if (newQtyInt === oldQty) return;
+
       const [detailLines, nomenclatureLines] = await Promise.all([
         tx.operationDetailLine.findMany({ where: { operationId: id } }),
         tx.operationNomenclatureLine.findMany({ where: { operationId: id } }),
       ]);
-      // Полная обратная разноска старого количества, затем чистое повторное
-      // списание под новое — проще и надёжнее частичного дельта-пересчёта,
-      // и симметрично удалению.
-      await reverseUpakovkaOperation(tx, op.productId!, oldQty, detailLines, nomenclatureLines);
+      await reverseUpakovkaOperation(tx, op.productId, oldQty, detailLines, nomenclatureLines);
       await tx.operationDetailLine.deleteMany({ where: { operationId: id } });
       await tx.operationNomenclatureLine.deleteMany({ where: { operationId: id } });
-      await applyUpakovkaPick(tx, id, op.productId!, newQtyInt);
+      await applyUpakovkaPick(tx, id, op.productId, newQtyInt);
       await tx.productionOperation.update({ where: { id }, data: { productQty: newQtyInt } });
       await writeChangeLog(
         {
@@ -253,23 +258,18 @@ export async function updateProductionLineQuantity(
         },
         tx,
       );
-    });
+      revalidateReports = true;
+      return;
+    }
 
-    revalidatePath(PATH);
-    revalidatePath("/reports");
-    return reloadRow(id);
-  }
-
-  if (op.type === "PRISADKA") {
-    const line = op.lines[lineIndex];
-    if (!line) throw new Error("Строка не найдена");
-    const newQtyInt = Math.round(newQty);
-    if (newQtyInt === line.quantity) return reloadRow(id);
-    const kind: "torcev" | "plosk" = line.prisadkaTorcevaya ? "torcev" : "plosk";
-
-    if (!line.detailId) throw new Error("Строка присадки без детали");
-    const detailId = line.detailId;
-    await prisma.$transaction(async (tx) => {
+    if (op.type === "PRISADKA") {
+      const line = op.lines[lineIndex];
+      if (!line) throw new Error("Строка не найдена");
+      const newQtyInt = Math.round(newQty);
+      if (newQtyInt === line.quantity) return;
+      const kind: "torcev" | "plosk" = line.prisadkaTorcevaya ? "torcev" : "plosk";
+      if (!line.detailId) throw new Error("Строка присадки без детали");
+      const detailId = line.detailId;
       await reversePrisadkaLine(tx, line);
       await tx.operationDetailLine.delete({ where: { id: line.id } });
       await applyPrisadkaPick(tx, id, detailId, kind, newQtyInt);
@@ -281,31 +281,26 @@ export async function updateProductionLineQuantity(
         },
         tx,
       );
-    });
+      revalidateReports = true;
+      return;
+    }
 
-    revalidatePath(PATH);
-    revalidatePath("/reports");
-    return reloadRow(id);
-  }
+    if (op.type !== "TORCOVKA") {
+      throw new Error("Редактирование этого типа операции пока недоступно");
+    }
 
-  if (op.type !== "TORCOVKA") {
-    throw new Error("Редактирование этого типа операции пока недоступно");
-  }
+    const line = op.lines[lineIndex];
+    if (!line) throw new Error("Строка не найдена");
+    const { blankLengthM, blankType, blankSort, blankMaterialId } = line;
+    if (blankLengthM == null || blankType == null || blankSort == null || blankMaterialId == null) {
+      throw new Error("Строка торцовки без спецификации заготовки");
+    }
+    const lineId = line.id;
+    const oldQty = line.quantity;
+    const delta = newQty - oldQty;
+    if (delta === 0) return;
 
-  const line = op.lines[lineIndex];
-  if (!line) throw new Error("Строка не найдена");
-  const { blankLengthM, blankType, blankSort, blankMaterialId } = line;
-  if (blankLengthM == null || blankType == null || blankSort == null || blankMaterialId == null) {
-    throw new Error("Строка торцовки без спецификации заготовки");
-  }
-  const lineId = line.id;
-  const oldQty = line.quantity;
-  const delta = newQty - oldQty;
-  if (delta === 0) return reloadRow(id);
-
-  await prisma.$transaction(async (tx) => {
     if (delta < 0) {
-      // Уменьшаем — снимаем разницу со склада заготовок (нельзя в минус).
       const dec = await tx.blankStock.updateMany({
         where: {
           materialId: blankMaterialId,
@@ -318,8 +313,6 @@ export async function updateProductionLineQuantity(
       });
       if (dec.count === 0) throw new Error("Нельзя уменьшить: заготовки уже прошли присадку/упаковку");
     } else {
-      // Увеличение не должно вывести суммарную длину заготовок за длину взятых
-      // реек (A8): иначе — заготовки «из воздуха», искажение отхода и цены м³.
       if (op.railLotId && op.railsTaken) {
         const lot = await tx.railLot.findUnique({ where: { id: op.railLotId } });
         const takenLengthM = op.railsTaken * (lot ? num(lot.lengthM) : 0);
@@ -359,13 +352,14 @@ export async function updateProductionLineQuantity(
       },
       tx,
     );
+    enqueueBatchId = op.batchId;
+    revalidateReports = true;
   });
 
-  // Изменился объём произведённого по партии — пересчёт её себестоимости.
-  if (op.batchId) await enqueueRecalcBatchCosts(op.batchId);
+  if (enqueueBatchId) await enqueueRecalcBatchCosts(enqueueBatchId);
 
   revalidatePath(PATH);
-  revalidatePath("/reports");
+  if (revalidateReports) revalidatePath("/reports");
   return reloadRow(id);
 }
 
@@ -387,16 +381,23 @@ export async function updateProductionLineQuantity(
  */
 export async function deleteProductionOperation(id: string): Promise<void> {
   await requireAdmin();
-  const op = await prisma.productionOperation.findUnique({
-    where: { id },
-    include: { lines: true, nomenclatureLines: true },
-  });
-  if (!op) throw new Error("Операция не найдена");
-  if (op.isPaid) throw new Error("Нельзя удалить — операция уже выплачена");
+
+  let enqueueBatchId: string | null = null;
 
   await prisma.$transaction(async (tx) => {
+    await lockProductionOperations(tx, [id]);
+    const op = await tx.productionOperation.findUnique({
+      where: { id },
+      include: { lines: true, nomenclatureLines: true },
+    });
+    if (!op) throw new Error("Операция не найдена");
+    if (op.isPaid) throw new Error("Нельзя удалить — операция уже выплачена");
+
+    if (op.type === "TORCOVKA" && op.batchId) {
+      await lockBatches(tx, [op.batchId]);
+    }
+
     if (op.type === "TORCOVKA") {
-      // Снимаем произведённые заготовки со склада заготовок (нельзя в минус).
       for (const l of op.lines) {
         if (
           l.blankLengthM == null ||
@@ -420,8 +421,6 @@ export async function deleteProductionOperation(id: string): Promise<void> {
           throw new Error("Нельзя удалить: заготовки уже прошли присадку/упаковку");
         }
       }
-      // Рейки НЕ возвращаем — они уже распилены. Взятое сверх произведённого
-      // станет отходом партии (см. JSDoc функции).
     } else if (op.type === "PRISADKA") {
       for (const l of op.lines) {
         await reversePrisadkaLine(tx, l);
@@ -438,10 +437,13 @@ export async function deleteProductionOperation(id: string): Promise<void> {
       { entity: "ProductionOperation", entityId: id, oldValues: { type: op.type, deleted: true } },
       tx,
     );
+    if (op.type === "TORCOVKA" && op.batchId) {
+      await maybeFreezeBatch(tx, op.batchId, { batchAlreadyLocked: true });
+    }
+    enqueueBatchId = op.batchId;
   });
 
-  // Возврат произведённого по партии — пересчёт её себестоимости.
-  if (op.batchId) await enqueueRecalcBatchCosts(op.batchId);
+  if (enqueueBatchId) await enqueueRecalcBatchCosts(enqueueBatchId);
 
   revalidatePath(PATH);
   revalidatePath("/reports");

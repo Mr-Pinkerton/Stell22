@@ -717,6 +717,8 @@ model BatchCost {
   calculatedAt  DateTime   @default(now())
 
   @@index([batchId])
+  // Partial UNIQUE FINAL: BatchCost_batchId_final_key WHERE status = 'FINAL'
+  // (raw SQL migration). PRELIMINARY stays a disposable cache (no UNIQUE).
 }
 
 // Себестоимость изделия за период (снапшот).

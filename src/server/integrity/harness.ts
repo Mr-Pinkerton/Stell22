@@ -85,3 +85,28 @@ export async function resetIntegrityFinance(db: PrismaClient): Promise<void> {
     RESTART IDENTITY CASCADE
   `);
 }
+
+/** Cost-freeze fixtures: Employee, payments, operations, stock, BatchCost, lots. */
+export async function resetIntegrityCostFreeze(db: PrismaClient): Promise<void> {
+  await db.$executeRawUnsafe(`
+    TRUNCATE TABLE
+      "PaymentBatchItem",
+      "Payment",
+      "OperationNomenclatureLine",
+      "OperationDetailLine",
+      "ProductionOperation",
+      "BlankStock",
+      "BatchCost",
+      "RailLot",
+      "DealItem",
+      "Deal",
+      "CashFlow",
+      "Account",
+      "Notification",
+      "ChangeLog",
+      "Employee",
+      "Batch",
+      "Material"
+    RESTART IDENTITY CASCADE
+  `);
+}

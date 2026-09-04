@@ -583,3 +583,26 @@ Question:
 
 P1 к следующему fix-pass (порядок): DI-001, DI-002, DI-003, DI-004. Application/Prisma/tests в этом этапе не менялись.
 
+---
+
+## Data Integrity phase 1.2 — freeze/recalc (audit-only)
+
+HEAD `9b5ed66` (код freeze/recalc тот же, что на фазе 1; P1 `199fe2f` закрыл write `totalCost` после committed `frozenAt`, но не `maybeFreezeBatch` / `recalcBatchCosts`).
+
+Полный отчёт: `audit/01.2-cost-freeze-review.md`. Код не менялся.
+
+| ID | Verdict 01.2 |
+| --- | --- |
+| DI-005 | **CONFIRMED RACE остаётся.** Механизм: FINAL из stale A до Batch lock; concurrent sync пишет C=B; затем frozenAt. Write-after-freeze P1 закрыл. |
+| DI-006 | **CONFIRMED RACE остаётся.** Recalc без TX/recheck. PRELIMINARY не SoT UI — несколько PRELIMINARY у открытой партии не автобаг. Orphan PRELIMINARY+FINAL после freeze — да. |
+| DI-018 | **новый CONFIRMED RACE.** Два last TORCOVKA `markEmployeePaid` → freeze skip навсегда. |
+| DI-019 | **новый CONFIRMED RACE.** UPDATE TORCOVKA qty после/во время pay+freeze → FINAL stale. DELETE после Payment **не** проходит (PBI RESTRICT). |
+| ProductCost | writers нет — не в remediation. |
+| `recalcBatchCostsInternal` | не существует. |
+
+Owner BD-1..4 зафиксированы в `01.2` §7 (cache / no auto-fix mismatch / section frozen / freeze must happen).
+
+REVIEW-005 / REVIEW-010 / REVIEW-018: см. 01.2, не закрыты кодом.
+
+Не commit/push этого pass.
+

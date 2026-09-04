@@ -201,6 +201,8 @@ describe.skipIf(!enabled)("P1 review concurrency", () => {
   });
 
   it("freeze || updateBatch money: frozen batch keeps original money", async () => {
+    // Synthetic Batch FOR UPDATE + frozenAt write — P1 write-after-freeze only.
+    // Not proof of production maybeFreezeBatch. Real freeze races: cost-freeze.integrity.test.ts.
     const seeded = await seedBatch(`fz-${Date.now()}`, 10_000);
     let updateError: unknown;
     const freeze = prismaA.$transaction(async (tx) => {

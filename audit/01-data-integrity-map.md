@@ -4,7 +4,8 @@
 
 | | |
 | --- | --- |
-| HEAD | `5479580bdb1a33f53dec8005a2354456537ec8d4` |
+| HEAD | `9b5ed66da36543c3a58d7ab8e392fcd19e78b9c1` (P1 `199fe2f`; фаза 1 карта кроме freeze — `5479580`) |
+| Freeze/recalc | `audit/01.2-cost-freeze-review.md` |
 | Stack | Prisma **6.19.3**, PostgreSQL **17**, Next.js 16 |
 | Prod topology | `docker-compose.prod.yml`: **один** контейнер `stell22-app` (не replicas) |
 | Application code | не менялся |
@@ -94,20 +95,24 @@ WHERE id = $id AND "remainingQuantity" >= $n;
 | ENTRY | Auth | TX | Writes | After | RCW? |
 | --- | --- | --- | --- | --- | --- |
 | `createBatch` `purchases.ts:237` | admin | nested create | Batch (`totalCost=purchaseCost`) + RailLots | changelog | changelog after |
-| `updateBatch` `:292` | admin | none | scalars: purchaseCost, prices, section; **не** `totalCost`; **нет** `frozenAt` check | changelog; `enqueueRecalc` | да |
+| `updateBatch` `:292` | admin | I + Deal→Batch FOR UPDATE (P1) | scalars; money запрещён если `frozenAt` уже set; sync C в той же TX | changelog; `enqueueRecalc` | C в TX; freeze compute всё ещё без lock (DI-005) |
 | `deleteBatch` `:369` | admin | A | BatchCost, RailLots, Batch | changelog | guards вне TX (count ops/deals) |
 
 ### 1.3 Cost / freeze / archive
 
-| ENTRY | Auth | TX | Reads | Writes | After | RCW? |
-| --- | --- | --- | --- | --- | --- | --- |
-| `enqueueRecalcBatchCosts` `cost-queue.ts:19` | n/a | process Map | — | вызывает `recalcBatchCosts` | — | in-memory only |
-| `recalcBatchCosts` `internal/cost.ts:340` | via queue / direct | **none** | batches `frozenAt:null`; TORCOVKA ops | per batch: `deleteMany PRELIMINARY` затем `create PRELIMINARY` — **два statement** | — | **да** |
-| `freezeBatch` `:364` | via maybeFreeze | **caller I** | TORCOVKA ops | `frozenAt`; `deleteMany` all BatchCost; `create FINAL` | notify | нет |
-| `maybeFreezeBatch` `:396` | payroll / archive | caller I | batch; unpaid TORCOVKA count | freezeBatch | — | нет |
-| `archiveBatchIfDepleted` `:412` | terminal / write-off | caller I | lots remaining | ARCHIVED+closedAt; maybe freeze | notify | нет |
+Актуальная детальная карта: `audit/01.2-cost-freeze-review.md`. `recalcBatchCostsInternal` нет.
 
-`ProductCost`: writers **нет** (A17).
+| ENTRY | Auth | TX | Reads | Locks | Writes | After | RCW? |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `enqueueRecalcBatchCosts` `cost-queue.ts:19` | n/a | process Map | — | in-memory key | вызывает `recalcBatchCosts` | — | in-memory only |
+| `recalcBatchCosts` `internal/cost.ts:340` | queue only (prod) | **none** | batches `frozenAt:null`; TORCOVKA ops | нет | per batch: `deleteMany PRELIMINARY` затем `create PRELIMINARY` | — | **да** |
+| `freezeBatch` `:364` | via maybeFreeze | **caller I** | TORCOVKA ops; in-memory Batch (C/prices/section) | первая блокировка Batch = `UPDATE frozenAt` **после** compute | `frozenAt`; `deleteMany` all BatchCost; `create FINAL` | notify (в TX) | compute до lock |
+| `maybeFreezeBatch` `:396` | payroll / archive | caller I | batch findUnique; unpaid TORCOVKA count | нет FOR UPDATE | freezeBatch | — | нет |
+| `archiveBatchIfDepleted` `:412` | terminal / write-off | caller I | lots remaining | нет | ARCHIVED+closedAt; maybe freeze | notify | нет |
+
+`ProductCost`: writers **нет** (A17) — не в remediation freeze.
+
+CLI recalc нет. IMAP: `statement-mail.ts` enqueue после `importStatementInternal` (тот же `recalcBatchCosts` через очередь).
 
 ### 1.4 Finance
 
@@ -124,7 +129,7 @@ WHERE id = $id AND "remainingQuantity" >= $n;
 | `deleteDeal` `:1193` | admin | I | null CF.dealId; delete items+deal | `syncBatchTotalCostInternal` per batch | **да** |
 | `setDealStatus` `:1185` | admin | none | status only | **нет** sync | n/a |
 | `syncDealInternal` `finance-operations.ts:96` | internal | **none** | Deal.total; loop `syncBatchTotalCostInternal` | revalidate | **да** |
-| `syncBatchTotalCostInternal` `:66` | internal | **none** | skip if `frozenAt` **на первом чтении**; `batch.update totalCost`; enqueue recalc | — | **да** (нет WHERE frozenAt на update) |
+| `syncBatchTotalCostInternal` `:153` | internal | inherit caller | skip if `frozenAt` после FOR UPDATE; `updateMany where frozenAt:null` | enqueue в caller after commit | **нет WHERE-дыры после P1**; stale FINAL — [DI-005](01.2-cost-freeze-review.md) |
 | `importStatementInternal` `statement-import.ts:170` | admin / IMAP | **I** | Account find/create (`confirmed:false` если новый); Statement; CF create if `findFirst(importKey)` miss; maybe advance openingBalance | changelog; **`syncDealInternal` after TX** | derived after; idempotency check-then-insert **внутри** TX, но **без UNIQUE** |
 | `deleteStatement` `finance.ts:1282` | admin | I | delete CFs+stmt; maybe restore account anchor | sync deals | derived after |
 | `setAccountConfirmed` `:370` | admin | none | `confirmed` | **нет** syncDeal / syncBatch | **да — derived не пишется** |
@@ -137,7 +142,7 @@ IMAP: `POST /api/cron/fetch-statements` → `runMailIntakeAndLog` → тот ж�
 
 | ENTRY | Auth | TX | Flow |
 | --- | --- | --- | --- |
-| `markEmployeePaid` `payroll.ts:185` | admin | **I** | READ unpaid ops + **текущие** Employee rates → compute amount **до** TX → TX: `updateMany isPaid:false` claim, `count === opIds.length` или throw; Payment+items; changelog; `maybeFreezeBatch` per torcovka batch; notify. Freeze throw **откатывает** Payment. |
+| `markEmployeePaid` `payroll.ts:185` | admin | **I** | claim isPaid; Payment; `maybeFreezeBatch` per torcovka batch (**без** Batch FOR UPDATE). Freeze throw откатывает Payment. After: revalidate, **нет** recalc. DI-005/018. |
 | `updateEmployee` `employees.ts:123` | admin | none | rates live; **не** трогает ops/Payment |
 
 ### 1.6 Marketplace
@@ -203,19 +208,9 @@ deleteProductionOperation
 
 ### 2.4 Deal → Batch.totalCost
 
-```
-CashFlow/Deal mutation (часто свой TX или без TX)
-→ commit источника
-→ syncDealInternal: READ confirmed expenses + purchaseCosts
-→ WRITE Deal.total
-→ per batch syncBatchTotalCostInternal:
-     READ batch (abort if frozenAt)
-     compute C = purchaseCost + delivery share
-     WRITE Batch.totalCost          // без повторной проверки frozenAt
-     enqueueRecalcBatchCosts
-```
+После P1 source+derived в одной TX с Account/Deal/Batch FOR UPDATE (не пересобиралось в 01.2). Recalc — **после** commit. Freeze не в этой TX.
 
-Полный recompute, не increment → один CF не «добавляется дважды» при повторном sync. Риск: crash между commit Deal и sync; race freeze; `updateBatch`/`setAccountConfirmed` **не** вызывают этот путь.
+Риск 01.2: sync может закоммитить новый `totalCost` пока `freezeBatch` уже посчитал FINAL из старого in-memory Batch (ещё не `UPDATE frozenAt`). См. `01.2` Race F1 / DI-005. Запись C **после committed freeze** P1 закрыл.
 
 ### 2.5 Выплата + freeze
 
@@ -225,10 +220,29 @@ markEmployeePaid
 → TX:
      claim updateMany isPaid false
      Payment + PaymentBatchItem
-     maybeFreezeBatch (тот же tx)
+     maybeFreezeBatch (тот же tx):
+       findUnique Batch           // нет FOR UPDATE
+       count unpaid TORCOVKA
+       compute FINAL from in-memory Batch
+       UPDATE frozenAt            // первый lock Batch
+       deleteMany BatchCost; create FINAL
+→ after: revalidate; нет enqueueRecalc
 ```
 
-Нет отдельного «freeze after commit».
+Нет отдельного «freeze after commit». Throw freeze откатывает Payment — SAFE.
+Два параллельных last TORCOVKA payment — DI-018 (freeze может не произойти).
+
+### 2.7 Recalc vs freeze (01.2)
+
+```
+enqueueRecalc (after writer commit)
+→ in-memory coalesce per key
+→ recalcBatchCosts: findMany frozenAt null
+     deleteMany PRELIMINARY
+     create PRELIMINARY          // без recheck frozenAt
+```
+
+Параллельный freeze между delete и create → PRELIMINARY+FINAL (DI-006). UI читает только FINAL.
 
 ### 2.6 Marketplace deduct
 
@@ -259,7 +273,7 @@ sync (fetch APIs)
 | `*Stock.quantity` | terminal apply/reverse; simple purchase; conductInventory **absolute**; MP deduct/restore | live DB (пулы, не слои партий) |
 | `Batch.purchaseCost` | createBatch, updateBatch | purchases UI / mismatch vs P·V |
 | `Batch.totalCost` | createBatch init; **только** `syncBatchTotalCostInternal` дальше | **C для distribute** (`lib/cost.ts`, live report); purchases «Общая» |
-| `BatchCost PRELIMINARY` | recalc delete+create | **нет читателя в отчёте** |
+| `BatchCost PRELIMINARY` | recalc delete+create | **нет читателя** (cache; не SoT) |
 | `BatchCost FINAL` | freezeBatch | `loadCostContext` frozen map → cost report вместо live distribute |
 | `ProductCost` | нет | — |
 | `Deal.total` | syncDealInternal | finance deals |

@@ -60,6 +60,7 @@ const TABLE_IDENT = {
   Account: Prisma.raw(`"Account"`),
   Deal: Prisma.raw(`"Deal"`),
   Batch: Prisma.raw(`"Batch"`),
+  ProductionOperation: Prisma.raw(`"ProductionOperation"`),
 } as const;
 
 export function sortedUniqueIds(ids: Iterable<string | null | undefined>): string[] {
@@ -113,6 +114,20 @@ async function lockTableIds(
   );
 }
 
+export async function lockBatches(
+  db: FinanceDb,
+  ids: Iterable<string | null | undefined>,
+): Promise<void> {
+  await lockTableIds(db, "Batch", ids);
+}
+
+export async function lockProductionOperations(
+  db: FinanceDb,
+  ids: Iterable<string | null | undefined>,
+): Promise<void> {
+  await lockTableIds(db, "ProductionOperation", ids);
+}
+
 export async function lockDealsThenBatches(
   db: FinanceDb,
   dealIds: Iterable<string | null | undefined>,
@@ -127,7 +142,7 @@ export async function lockDealsThenBatches(
           select: { batchId: true },
         })
       : [];
-  await lockTableIds(db, "Batch", [
+  await lockBatches(db, [
     ...items.map((i) => i.batchId),
     ...extraBatchIds,
   ]);
@@ -154,7 +169,7 @@ export async function syncBatchTotalCostInternal(
   batchId: string,
   db: FinanceDb = prisma,
 ): Promise<string | null> {
-  await lockTableIds(db, "Batch", [batchId]);
+  await lockBatches(db, [batchId]);
   const batch = await db.batch.findUnique({ where: { id: batchId } });
   if (!batch || batch.frozenAt) return null;
 

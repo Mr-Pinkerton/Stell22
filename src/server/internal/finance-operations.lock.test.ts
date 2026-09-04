@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import { Prisma } from "@prisma/client";
 import {
   lockAccountsThenDealsThenBatches,
+  lockBatches,
   lockDealsThenBatches,
+  lockProductionOperations,
   LockSetChangedError,
   retryOnLockSetChange,
   sameSortedIds,
@@ -94,6 +96,38 @@ describe("lock order", () => {
     await lockAccountsThenDealsThenBatches(db as never, [], []);
     expect(db.$queryRaw).not.toHaveBeenCalled();
     expect(db.dealItem.findMany).not.toHaveBeenCalled();
+  });
+
+  it("lockBatches locks Batch ORDER BY id FOR UPDATE and skips empty", async () => {
+    const sqls: string[] = [];
+    const db = {
+      $queryRaw: vi.fn(async (query: Prisma.Sql) => {
+        sqls.push(query.strings.join("?"));
+        return [];
+      }),
+    };
+    await lockBatches(db as never, ["batch-z", "batch-a", "batch-a"]);
+    expect(sqls).toHaveLength(1);
+    expect(sqls[0]).toContain('"Batch"');
+    expect(sqls[0]).toContain("ORDER BY id FOR UPDATE");
+    await lockBatches(db as never, []);
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+  });
+
+  it("lockProductionOperations locks ProductionOperation ORDER BY id FOR UPDATE and skips empty", async () => {
+    const sqls: string[] = [];
+    const db = {
+      $queryRaw: vi.fn(async (query: Prisma.Sql) => {
+        sqls.push(query.strings.join("?"));
+        return [];
+      }),
+    };
+    await lockProductionOperations(db as never, ["op-b", "op-a"]);
+    expect(sqls).toHaveLength(1);
+    expect(sqls[0]).toContain('"ProductionOperation"');
+    expect(sqls[0]).toContain("ORDER BY id FOR UPDATE");
+    await lockProductionOperations(db as never, [null, ""]);
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
   });
 });
 
