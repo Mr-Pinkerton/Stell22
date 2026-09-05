@@ -16,25 +16,30 @@ interface HoursScreenProps {
 }
 
 export function HoursScreen({ employee, onDone }: HoursScreenProps) {
-  const draft = useTerminalDraft({ employeeId: employee.id });
+  const {
+    draft: storedDraft,
+    clientRequestId,
+    save: saveDraft,
+    clear: clearDraft,
+  } = useTerminalDraft({ employeeId: employee.id });
   const [value, setValue] = useState(() =>
-    draft.draft?.operationType === "HOURS" ? draft.draft.payload.hoursInput : "",
+    storedDraft?.operationType === "HOURS" ? storedDraft.payload.hoursInput : "",
   );
   const [submitting, setSubmitting] = useState(false);
   const hours = Number(value || 0);
   const rate = employee.hourlyRate ?? 0;
 
   useEffect(() => {
-    draft.save({ operationType: "HOURS", payload: { hoursInput: value } });
-  }, [value, draft.save]);
+    saveDraft({ operationType: "HOURS", payload: { hoursInput: value } });
+  }, [value, saveDraft]);
 
   const submit = async () => {
     if (hours <= 0 || submitting) return;
     setSubmitting(true);
     try {
-      await submitHours(employee.id, hours, draft.clientRequestId);
+      await submitHours(employee.id, hours, clientRequestId);
       toast.success(`Внесено ${hours} ч`);
-      draft.clear();
+      clearDraft();
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");

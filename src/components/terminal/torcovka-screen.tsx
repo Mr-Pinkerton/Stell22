@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "@/components/terminal/toast";
 import { Boxes, Layers } from "lucide-react";
 import { useTerminalDraft } from "@/components/terminal/use-terminal-draft";
 import type { TorcovkaAckUiPhase } from "@/lib/terminal-draft-storage";
+import { restorePendingAck, type RestoredPendingAck } from "@/lib/restore-pending-ack";
 import { cn } from "@/lib/utils";
 import { OperationTile, OperationTileGrid, OperationTileRow } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
@@ -19,7 +20,6 @@ import {
   computeTorcovkaWasteMetrics,
   TORCOVKA_WASTE_REASON_LABEL,
   TORCOVKA_WASTE_REASONS,
-  type SubmitTorcovkaResult,
   type TorcovkaWasteReason,
 } from "@/lib/torcovka-plausibility";
 import { submitTorcovka } from "@/server/terminal";
@@ -39,12 +39,7 @@ interface TorcovkaScreenProps {
 
 type Dialog = { kind: "rails" } | { kind: "length"; lengthM: number; sort: Sort } | null;
 
-type PendingAck = Extract<SubmitTorcovkaResult, { status: "ACK_REQUIRED" }> & {
-  picks: TorcovkaPick[];
-  clientRequestId: string;
-  batchId: string;
-  railLotId: string;
-};
+type PendingAck = RestoredPendingAck;
 
 function wasteBandClass(band: "NORMAL" | "SUSPICIOUS" | "EXTREME"): string {
   if (band === "NORMAL") return "text-muted-foreground";
@@ -63,8 +58,13 @@ const RAIL_LENGTH_LIMIT_MESSAGE = "Длина заготовок превыша�
 const pickKey = (lengthM: number, sort: Sort) => `${lengthM}|${sort}`;
 
 export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) {
-  const draft = useTerminalDraft({ employeeId: employee.id });
-  const initial = draft.draft?.operationType === "TORCOVKA" ? draft.draft.payload : null;
+  const {
+    draft: storedDraft,
+    clientRequestId,
+    save: saveDraft,
+    clear: clearDraft,
+  } = useTerminalDraft({ employeeId: employee.id });
+  const initial = storedDraft?.operationType === "TORCOVKA" ? storedDraft.payload : null;
   const [batchId, setBatchId] = useState<string | null>(initial?.batchId ?? null);
   const [lotId, setLotId] = useState<string | null>(initial?.lotId ?? null);
   const [railsTaken, setRailsTaken] = useState(initial?.railsTaken ?? 0);
@@ -79,12 +79,16 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
   const [activeSort, setActiveSort] = useState<Sort>(initial?.activeSort ?? "SORT1");
   const [dialog, setDialog] = useState<Dialog>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [pendingAck, setPendingAck] = useState<PendingAck | null>(null);
+  const [pendingAck, setPendingAck] = useState<PendingAck | null>(() =>
+    restorePendingAck({
+      draft: storedDraft,
+      railLots: data.railLots,
+    }),
+  );
   const [highWasteReason, setHighWasteReason] = useState<TorcovkaWasteReason | null>(
     initial?.ackUi.highWasteReason ?? null,
   );
   const [highWasteNote, setHighWasteNote] = useState(initial?.ackUi.highWasteNote ?? "");
-  const ackHydratedRef = useRef(false);
 
   const materialById = useMemo(
     () => new Map(data.materials.map((m) => [m.id, m])),
@@ -135,12 +139,12 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         : "none";
 
   useEffect(() => {
-    const picks = torcovkaPicks.map((p) => ({
-      lengthM: p.lengthM,
-      sort: p.sort,
-      quantity: p.quantity,
-    }));
-    draft.save({
+    const picks = Object.entries(picked).flatMap(([key, quantity]) => {
+      if (quantity <= 0) return [];
+      const [len, sort] = key.split("|");
+      return [{ lengthM: Number(len), sort: sort as Sort, quantity }];
+    });
+    saveDraft({
       operationType: "TORCOVKA",
       payload: {
         batchId,
@@ -164,29 +168,8 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
     ackPhase,
     highWasteReason,
     highWasteNote,
-    draft.save,
+    saveDraft,
   ]);
-
-  useEffect(() => {
-    if (ackHydratedRef.current) return;
-    const phase = initial?.ackUi.phase ?? "none";
-    if (phase === "none" || !lot || !batchId || !wasteMetrics) return;
-    if (wasteMetrics.band === "NORMAL") return;
-    ackHydratedRef.current = true;
-    const band = wasteMetrics.band === "EXTREME" ? "EXTREME" : "SUSPICIOUS";
-    setPendingAck({
-      status: "ACK_REQUIRED",
-      band,
-      railsTaken,
-      takenM: wasteMetrics.canon.takenM,
-      producedM: wasteMetrics.canon.producedM,
-      wastePct: wasteMetrics.canon.wastePct,
-      picks: torcovkaPicks,
-      clientRequestId: draft.clientRequestId,
-      batchId,
-      railLotId: lot.id,
-    });
-  }, [initial, lot, batchId, wasteMetrics, railsTaken, torcovkaPicks, draft.clientRequestId]);
 
   const resetLot = () => {
     setLotId(null);
@@ -223,7 +206,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
     try {
       const result = await submitTorcovka({
         employeeId: employee.id,
-        clientRequestId: draft.clientRequestId,
+        clientRequestId,
         batchId,
         railLotId: lotId,
         railsTaken,
@@ -233,7 +216,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         setPendingAck({
           ...result,
           picks,
-          clientRequestId: draft.clientRequestId,
+          clientRequestId,
           batchId,
           railLotId: lotId,
         });
@@ -244,7 +227,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         ? formatLength(wasteMetrics.wasteM.toNumber())
         : formatLength(0);
       toast.success(`Торцовка внесена: ${pickedCount} заг., отход ${wasteLabel}`);
-      draft.clear();
+      clearDraft();
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
@@ -283,7 +266,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       }
       toast.success(`Торцовка внесена: ${pendingAck.picks.reduce((s, p) => s + p.quantity, 0)} заг.`);
       setPendingAck(null);
-      draft.clear();
+      clearDraft();
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");

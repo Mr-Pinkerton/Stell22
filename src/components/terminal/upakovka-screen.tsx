@@ -42,7 +42,12 @@ function canAssemble(product: TerminalProduct, data: TerminalData): number {
 }
 
 export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) {
-  const draft = useTerminalDraft({ employeeId: employee.id });
+  const {
+    draft: storedDraft,
+    clientRequestId,
+    save: saveDraft,
+    clear: clearDraft,
+  } = useTerminalDraft({ employeeId: employee.id });
   const liveProducts = useMemo(
     () => data.products.filter((p) => p.status === "ACTIVE"),
     [data.products],
@@ -56,9 +61,9 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
     [data.materials],
   );
   const [picked, setPicked] = useState<Record<string, number>>(() => {
-    if (draft.draft?.operationType !== "UPAKOVKA") return {};
+    if (storedDraft?.operationType !== "UPAKOVKA") return {};
     const next: Record<string, number> = {};
-    for (const p of draft.draft.payload.picks) {
+    for (const p of storedDraft.payload.picks) {
       if (p.quantity > 0) next[p.productId] = p.quantity;
     }
     return next;
@@ -108,8 +113,8 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
     const picks = Object.entries(picked)
       .filter(([, quantity]) => quantity > 0)
       .map(([productId, quantity]) => ({ productId, quantity }));
-    draft.save({ operationType: "UPAKOVKA", payload: { picks } });
-  }, [picked, draft.save]);
+    saveDraft({ operationType: "UPAKOVKA", payload: { picks } });
+  }, [picked, saveDraft]);
 
   const confirm = async () => {
     if (pickedCount === 0 || submitting) return;
@@ -120,11 +125,11 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
     try {
       await submitUpakovka({
         employeeId: employee.id,
-        clientRequestId: draft.clientRequestId,
+        clientRequestId,
         picks,
       });
       toast.success(`Упаковано: ${pickedCount} шт`);
-      draft.clear();
+      clearDraft();
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");

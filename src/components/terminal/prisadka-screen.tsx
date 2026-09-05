@@ -77,7 +77,12 @@ function buildTiles(data: TerminalData): Tile[] {
 }
 
 export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) {
-  const draft = useTerminalDraft({ employeeId: employee.id });
+  const {
+    draft: storedDraft,
+    clientRequestId,
+    save: saveDraft,
+    clear: clearDraft,
+  } = useTerminalDraft({ employeeId: employee.id });
   const liveTiles = useMemo(() => buildTiles(data), [data]);
   const materialById = useMemo(
     () => new Map(data.materials.map((m) => [m.id, m])),
@@ -88,9 +93,9 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
     [data.details],
   );
   const [picked, setPicked] = useState<Record<string, number>>(() => {
-    if (draft.draft?.operationType !== "PRISADKA") return {};
+    if (storedDraft?.operationType !== "PRISADKA") return {};
     const next: Record<string, number> = {};
-    for (const p of draft.draft.payload.picks) {
+    for (const p of storedDraft.payload.picks) {
       if (p.quantity > 0) next[tileKey(p.detailId, p.kind)] = p.quantity;
     }
     return next;
@@ -154,8 +159,8 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
       if (!parsed || quantity <= 0) return [];
       return [{ detailId: parsed.detailId, kind: parsed.kind, quantity }];
     });
-    draft.save({ operationType: "PRISADKA", payload: { picks } });
-  }, [picked, draft.save]);
+    saveDraft({ operationType: "PRISADKA", payload: { picks } });
+  }, [picked, saveDraft]);
 
   const confirm = async () => {
     if (pickedCount === 0 || submitting) return;
@@ -168,11 +173,11 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
     try {
       await submitPrisadka({
         employeeId: employee.id,
-        clientRequestId: draft.clientRequestId,
+        clientRequestId,
         picks,
       });
       toast.success(`Присадка внесена: ${pickedCount} шт`);
-      draft.clear();
+      clearDraft();
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
