@@ -46,6 +46,10 @@ export interface InventoryLineRow {
   actualQty: number;
   /** Условная себестоимость единицы для расчёта суммы отклонения (прототип). */
   unitCost: number;
+  /** DRAFT: actual − accounted; CONDUCTED: from DB. */
+  deviation: number;
+  /** DRAFT: live preview; CONDUCTED: Number(DB). */
+  deviationSum: number;
 }
 
 export interface InventoryDocRow {
@@ -101,7 +105,9 @@ function line(
   actualQty: number,
   unitCost: number,
 ): InventoryLineRow {
-  return { id, refType, refId, name, accountedQty, actualQty, unitCost };
+  const deviation = actualQty - accountedQty;
+  const deviationSum = deviation * unitCost;
+  return { id, refType, refId, name, accountedQty, actualQty, unitCost, deviation, deviationSum };
 }
 
 /** Текущая инвентаризация + архив проведённых. */

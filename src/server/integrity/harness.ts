@@ -110,3 +110,40 @@ export async function resetIntegrityCostFreeze(db: PrismaClient): Promise<void> 
     RESTART IDENTITY CASCADE
   `);
 }
+
+/** Inventory integrity fixtures: documents, stock, production, catalog. */
+export async function resetIntegrityInventory(db: PrismaClient): Promise<void> {
+  await db.$executeRawUnsafe(`
+    TRUNCATE TABLE
+      "InventoryLine",
+      "Inventory",
+      "PaymentBatchItem",
+      "Payment",
+      "OperationNomenclatureLine",
+      "OperationDetailLine",
+      "ProductionOperation",
+      "ProductStock",
+      "DetailStock",
+      "BlankStock",
+      "NomenclatureStock",
+      "ProductFastener",
+      "ProductExtra",
+      "ProductDetail",
+      "SimplePurchase",
+      "Product",
+      "Detail",
+      "NomenclatureItem",
+      "BatchCost",
+      "RailLot",
+      "DealItem",
+      "Deal",
+      "CashFlow",
+      "Account",
+      "Notification",
+      "ChangeLog",
+      "Employee",
+      "Batch",
+      "Material"
+    RESTART IDENTITY CASCADE
+  `);
+}

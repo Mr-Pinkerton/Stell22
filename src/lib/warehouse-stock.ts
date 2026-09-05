@@ -6,6 +6,7 @@ import {
 } from "@/mocks/fixtures";
 import { productStock } from "@/mocks/warehouse-fixtures";
 import { formatProductSku } from "@/lib/format";
+import { D } from "@/lib/cost";
 import type { NomenclatureType, StockSnapshot } from "@/types/domain";
 
 export interface ProductionStockRow {
@@ -28,7 +29,7 @@ export function inventoryDeviation(accountedQty: number, actualQty: number): num
 
 /** Сумма отклонения (материал + ЗП — в прототипе unitCost × отклонение). */
 export function inventoryDeviationSum(deviation: number, unitCost: number): number {
-  return Math.round(deviation * unitCost * 100) / 100;
+  return D(deviation).times(D(unitCost)).toDecimalPlaces(2).toNumber();
 }
 
 export function buildProductStockRows(

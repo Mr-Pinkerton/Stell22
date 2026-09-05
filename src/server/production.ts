@@ -11,10 +11,17 @@ import { D } from "@/lib/cost";
 import { maybeFreezeBatch } from "@/server/internal/cost";
 import {
   applyPrisadkaPick,
-  applyUpakovkaPick,
+  applyUpakovkaPrepared,
   reversePrisadkaLine,
   reverseUpakovkaOperation,
 } from "@/server/internal/production-reversal";
+import {
+  blankSpecSortKey,
+  preparePrisadkaEdit,
+  preparePrisadkaReverse,
+  prepareTorcovkaBlankMutation,
+  prepareUpakovkaEdit,
+} from "@/server/internal/inventory-integrity";
 import { operationEarning } from "@/lib/payroll";
 import { isOverRailLength } from "@/lib/torcovka";
 import { dayKey } from "@/lib/entries";
@@ -260,10 +267,24 @@ export async function updateProductionLineQuantity(
         tx.operationDetailLine.findMany({ where: { operationId: id } }),
         tx.operationNomenclatureLine.findMany({ where: { operationId: id } }),
       ]);
-      await reverseUpakovkaOperation(tx, op.productId, oldQty, detailLines, nomenclatureLines);
+      const prepared = await prepareUpakovkaEdit(
+        tx,
+        op.createdAt,
+        op.productId,
+        detailLines,
+        nomenclatureLines,
+      );
+      await reverseUpakovkaOperation(
+        tx,
+        op.productId,
+        oldQty,
+        detailLines,
+        nomenclatureLines,
+        op.createdAt,
+      );
       await tx.operationDetailLine.deleteMany({ where: { operationId: id } });
       await tx.operationNomenclatureLine.deleteMany({ where: { operationId: id } });
-      await applyUpakovkaPick(tx, id, op.productId, newQtyInt);
+      await applyUpakovkaPrepared(tx, id, newQtyInt, prepared);
       await tx.productionOperation.update({ where: { id }, data: { productQty: newQtyInt } });
       await writeChangeLog(
         {
@@ -285,6 +306,7 @@ export async function updateProductionLineQuantity(
       const kind: "torcev" | "plosk" = line.prisadkaTorcevaya ? "torcev" : "plosk";
       if (!line.detailId) throw new Error("Строка присадки без детали");
       const detailId = line.detailId;
+      await preparePrisadkaEdit(tx, op.createdAt, line, newQtyInt);
       await reversePrisadkaLine(tx, line);
       await tx.operationDetailLine.delete({ where: { id: line.id } });
       await applyPrisadkaPick(tx, id, detailId, kind, newQtyInt);
@@ -314,6 +336,15 @@ export async function updateProductionLineQuantity(
     const oldQty = line.quantity;
     const delta = newQty - oldQty;
     if (delta === 0) return;
+
+    await prepareTorcovkaBlankMutation(tx, op.createdAt, [
+      {
+        materialId: blankMaterialId,
+        lengthM: blankLengthM,
+        detailType: blankType,
+        sort: blankSort,
+      },
+    ]);
 
     if (delta < 0) {
       const dec = await tx.blankStock.updateMany({
@@ -413,6 +444,7 @@ export async function deleteProductionOperation(id: string): Promise<void> {
     }
 
     if (op.type === "TORCOVKA") {
+      const specs = [];
       for (const l of op.lines) {
         if (
           l.blankLengthM == null ||
@@ -422,12 +454,36 @@ export async function deleteProductionOperation(id: string): Promise<void> {
         ) {
           throw new Error("Строка торцовки без спецификации заготовки");
         }
+        specs.push({
+          materialId: l.blankMaterialId,
+          lengthM: l.blankLengthM,
+          detailType: l.blankType,
+          sort: l.blankSort,
+        });
+      }
+      await prepareTorcovkaBlankMutation(tx, op.createdAt, specs);
+      const sortedLines = [...op.lines].sort((a, b) =>
+        blankSpecSortKey({
+          materialId: a.blankMaterialId!,
+          lengthM: a.blankLengthM!,
+          detailType: a.blankType!,
+          sort: a.blankSort!,
+        }).localeCompare(
+          blankSpecSortKey({
+            materialId: b.blankMaterialId!,
+            lengthM: b.blankLengthM!,
+            detailType: b.blankType!,
+            sort: b.blankSort!,
+          }),
+        ),
+      );
+      for (const l of sortedLines) {
         const dec = await tx.blankStock.updateMany({
           where: {
-            materialId: l.blankMaterialId,
-            lengthM: l.blankLengthM,
-            detailType: l.blankType,
-            sort: l.blankSort,
+            materialId: l.blankMaterialId!,
+            lengthM: l.blankLengthM!,
+            detailType: l.blankType!,
+            sort: l.blankSort!,
             quantity: { gte: l.quantity },
           },
           data: { quantity: { decrement: l.quantity } },
@@ -437,12 +493,20 @@ export async function deleteProductionOperation(id: string): Promise<void> {
         }
       }
     } else if (op.type === "PRISADKA") {
+      await preparePrisadkaReverse(tx, op.createdAt, op.lines);
       for (const l of op.lines) {
         await reversePrisadkaLine(tx, l);
       }
     } else if (op.type === "UPAKOVKA") {
       if (!op.productId) throw new Error("У операции не указано изделие");
-      await reverseUpakovkaOperation(tx, op.productId, op.productQty ?? 0, op.lines, op.nomenclatureLines);
+      await reverseUpakovkaOperation(
+        tx,
+        op.productId,
+        op.productQty ?? 0,
+        op.lines,
+        op.nomenclatureLines,
+        op.createdAt,
+      );
     }
 
     await tx.operationDetailLine.deleteMany({ where: { operationId: id } });

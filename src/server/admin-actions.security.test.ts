@@ -44,6 +44,7 @@ vi.mock("@/server/internal/notification-event", () => ({ notifyEvent: vi.fn() })
 vi.mock("@/server/internal/production-reversal", () => ({
   applyPrisadkaPick: vi.fn(),
   applyUpakovkaPick: vi.fn(),
+  applyUpakovkaPrepared: vi.fn(),
   reversePrisadkaLine: vi.fn(),
   reverseUpakovkaOperation: vi.fn(),
 }));

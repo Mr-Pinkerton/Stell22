@@ -1,5 +1,11 @@
 import type { Prisma } from "@prisma/client";
 import { allocate, isReady, requiredPrisadki } from "@/lib/detail-stock";
+import {
+  lockDetails,
+  prepareUpakovkaReverse,
+  snapshotUpakovkaApply,
+  type PreparedUpakovkaApply,
+} from "@/server/internal/inventory-integrity";
 import type { RailType, Sort } from "@/types/domain";
 
 export async function applyPrisadkaPick(
@@ -9,6 +15,7 @@ export async function applyPrisadkaPick(
   kind: "torcev" | "plosk",
   quantity: number,
 ): Promise<void> {
+  await lockDetails(tx, [detailId]);
   const detail = await tx.detail.findUniqueOrThrow({ where: { id: detailId } });
   let left = quantity;
 
@@ -107,6 +114,7 @@ export async function reversePrisadkaLine(
 ): Promise<void> {
   if (!line.detailId) throw new Error("Строка присадки без детали");
   const detailId = line.detailId;
+  await lockDetails(tx, [detailId]);
   const kind: "torcev" | "plosk" = line.prisadkaTorcevaya ? "torcev" : "plosk";
   const destTorcev = line.sourceIsBlank
     ? kind === "torcev"
@@ -186,21 +194,31 @@ export async function applyUpakovkaPick(
   productId: string,
   quantity: number,
 ): Promise<void> {
-  const product = await tx.product.findUnique({
-    where: { id: productId },
-    include: { details: true, fasteners: true, extras: true },
-  });
-  if (!product) throw new Error("Изделие не найдено");
+  const prepared = await snapshotUpakovkaApply(tx, productId);
+  await applyUpakovkaPrepared(tx, operationId, quantity, prepared);
+}
 
+export async function applyUpakovkaPrepared(
+  tx: Prisma.TransactionClient,
+  operationId: string,
+  quantity: number,
+  prepared: PreparedUpakovkaApply,
+): Promise<void> {
   const neededByDetail = new Map<string, number>();
-  for (const pd of product.details) {
+  const byId = new Map(prepared.details.map((d) => [d.detailId, d]));
+  for (const pd of prepared.details) {
     if (pd.quantity <= 0) continue;
     neededByDetail.set(pd.detailId, (neededByDetail.get(pd.detailId) ?? 0) + pd.quantity * quantity);
   }
 
-  for (const [detailId, needed] of neededByDetail) {
+  const detailIds = [...neededByDetail.keys()].sort();
+  await lockDetails(tx, detailIds);
+
+  for (const detailId of detailIds) {
+    const needed = neededByDetail.get(detailId) ?? 0;
     if (needed <= 0) continue;
-    const detail = await tx.detail.findUniqueOrThrow({ where: { id: detailId } });
+    const detail = byId.get(detailId);
+    if (!detail) throw new Error("Деталь не найдена");
     const req = requiredPrisadki(detail);
 
     if (!req.torcev && !req.plosk) {
@@ -261,44 +279,39 @@ export async function applyUpakovkaPick(
     }
   }
 
-  for (const f of product.fasteners) {
+  const nomNeeds: { nomenclatureId: string; quantity: number; kind: "fastener" | "packaging" | "extra" }[] =
+    [];
+  for (const f of prepared.fasteners) {
     const needed = f.quantity * quantity;
     if (needed <= 0) continue;
-    const dec = await tx.nomenclatureStock.updateMany({
-      where: { nomenclatureId: f.nomenclatureId, quantity: { gte: needed } },
-      data: { quantity: { decrement: needed } },
-    });
-    if (dec.count === 0) throw new Error("Недостаточно крепежа на складе");
-    await tx.operationNomenclatureLine.create({
-      data: { operationId, nomenclatureId: f.nomenclatureId, quantity: needed },
-    });
+    nomNeeds.push({ nomenclatureId: f.nomenclatureId, quantity: needed, kind: "fastener" });
   }
-
-  if (product.packagingId) {
-    const dec = await tx.nomenclatureStock.updateMany({
-      where: { nomenclatureId: product.packagingId, quantity: { gte: quantity } },
-      data: { quantity: { decrement: quantity } },
-    });
-    if (dec.count === 0) throw new Error("Недостаточно упаковки на складе");
-    await tx.operationNomenclatureLine.create({
-      data: { operationId, nomenclatureId: product.packagingId, quantity },
-    });
+  if (prepared.packagingId) {
+    nomNeeds.push({ nomenclatureId: prepared.packagingId, quantity, kind: "packaging" });
   }
+  for (const ex of prepared.extras) {
+    nomNeeds.push({ nomenclatureId: ex.nomenclatureId, quantity, kind: "extra" });
+  }
+  nomNeeds.sort((a, b) => a.nomenclatureId.localeCompare(b.nomenclatureId));
 
-  for (const ex of product.extras) {
+  for (const need of nomNeeds) {
     const dec = await tx.nomenclatureStock.updateMany({
-      where: { nomenclatureId: ex.nomenclatureId, quantity: { gte: quantity } },
-      data: { quantity: { decrement: quantity } },
+      where: { nomenclatureId: need.nomenclatureId, quantity: { gte: need.quantity } },
+      data: { quantity: { decrement: need.quantity } },
     });
-    if (dec.count === 0) throw new Error("Недостаточно доп. комплектующих на складе");
+    if (dec.count === 0) {
+      if (need.kind === "fastener") throw new Error("Недостаточно крепежа на складе");
+      if (need.kind === "packaging") throw new Error("Недостаточно упаковки на складе");
+      throw new Error("Недостаточно доп. комплектующих на складе");
+    }
     await tx.operationNomenclatureLine.create({
-      data: { operationId, nomenclatureId: ex.nomenclatureId, quantity },
+      data: { operationId, nomenclatureId: need.nomenclatureId, quantity: need.quantity },
     });
   }
 
   await tx.productStock.upsert({
-    where: { productId },
-    create: { productId, quantity },
+    where: { productId: prepared.productId },
+    create: { productId: prepared.productId, quantity },
     update: { quantity: { increment: quantity } },
   });
 }
@@ -319,7 +332,13 @@ export async function reverseUpakovkaOperation(
     blankMaterialId: string | null;
   }[],
   nomenclatureLines: { nomenclatureId: string; quantity: number }[],
+  occurredAt: Date,
 ): Promise<void> {
+  await prepareUpakovkaReverse(tx, occurredAt, productId, detailLines, nomenclatureLines);
+  await lockDetails(
+    tx,
+    detailLines.map((l) => l.detailId),
+  );
   const dec = await tx.productStock.updateMany({
     where: { productId, quantity: { gte: productQty } },
     data: { quantity: { decrement: productQty } },

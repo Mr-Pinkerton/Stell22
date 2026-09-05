@@ -17,6 +17,14 @@ import type { UnitCostSnapshot } from "@/server/cost";
 import { getUnitCostSnapshot } from "@/server/internal/cost";
 import type { Detail } from "@/types/domain";
 import type { ProductionStockRow, DetailStockRow } from "@/lib/warehouse-stock";
+import { inventoryDeviation, inventoryDeviationSum } from "@/lib/warehouse-stock";
+import {
+  ALREADY_CONDUCTED,
+  assertLiveEqualsAccounted,
+  inventoryDeviationSumDecimal,
+  lockInventoryForUpdate,
+  lockInventoryStockRows,
+} from "@/server/internal/inventory-integrity";
 import type {
   InventoryDocRow,
   InventoryLineRow,
@@ -188,6 +196,12 @@ async function serializeDoc(
         const n = await prisma.nomenclatureItem.findUnique({ where: { id: l.refId } });
         name = n?.name ?? l.refId;
       }
+      const unitCost = unitCostFromSnapshot(valuation, l.refType, l.refId);
+      const frozen = doc.status === "CONDUCTED" || doc.status === "CLOSED";
+      const deviation = frozen ? l.deviation : inventoryDeviation(l.accountedQty, l.actualQty);
+      const deviationSum = frozen
+        ? num(l.deviationSum)
+        : inventoryDeviationSum(deviation, unitCost);
       return {
         id: l.id,
         refType: l.refType as InventoryRefType,
@@ -195,7 +209,9 @@ async function serializeDoc(
         name,
         accountedQty: l.accountedQty,
         actualQty: l.actualQty,
-        unitCost: unitCostFromSnapshot(valuation, l.refType, l.refId),
+        unitCost: frozen ? 0 : unitCost,
+        deviation,
+        deviationSum,
       };
     }),
   );
@@ -288,20 +304,33 @@ export async function updateInventoryLineActual(
 ): Promise<void> {
   await requireAdmin();
   if (!(actualQty >= 0)) throw new Error("Некорректное количество");
-  const line = await prisma.inventoryLine.findUnique({
-    where: { id: lineId },
-    include: { inventory: true },
-  });
-  if (!line) throw new Error("Строка не найдена");
-  if (line.inventory.status !== "DRAFT") throw new Error("Инвентаризация уже проведена");
 
-  await prisma.inventoryLine.update({ where: { id: lineId }, data: { actualQty } });
-  await writeChangeLog({
-    entity: "InventoryLine",
-    entityId: lineId,
-    oldValues: { actualQty: line.actualQty },
-    newValues: { actualQty },
+  await prisma.$transaction(async (tx) => {
+    const existing = await tx.inventoryLine.findUnique({
+      where: { id: lineId },
+      select: { inventoryId: true },
+    });
+    if (!existing) throw new Error("Строка не найдена");
+
+    const locked = await lockInventoryForUpdate(tx, existing.inventoryId);
+    if (!locked) throw new Error("Инвентаризация не найдена");
+    if (locked.status !== "DRAFT") throw new Error(ALREADY_CONDUCTED);
+
+    const line = await tx.inventoryLine.findUnique({ where: { id: lineId } });
+    if (!line) throw new Error("Строка не найдена");
+
+    await tx.inventoryLine.update({ where: { id: lineId }, data: { actualQty } });
+    await writeChangeLog(
+      {
+        entity: "InventoryLine",
+        entityId: lineId,
+        oldValues: { actualQty: line.actualQty },
+        newValues: { actualQty },
+      },
+      tx,
+    );
   });
+
   revalidatePath(PATH);
 }
 
@@ -312,111 +341,142 @@ export async function updateInventoryLineActual(
  */
 export async function conductInventory(docId: string): Promise<InventoryDocRow> {
   await requireAdmin();
-  const doc = await prisma.inventory.findUnique({ where: { id: docId }, include: { lines: true } });
-  if (!doc) throw new Error("Инвентаризация не найдена");
-  if (doc.status !== "DRAFT") throw new Error("Инвентаризация уже проведена");
 
-  // Оценка отклонения по себестоимости на момент проведения (A10, «Потеря ГП»).
-  // Недостача (deviation<0) → отрицательный deviationSum = убыток; в отход партий
-  // НЕ попадает (сырьё здесь не участвует). Излишек — положит. справочно.
-  const valuation = await getUnitCostSnapshot();
+  const updated = await prisma.$transaction(
+    async (tx) => {
+      const locked = await lockInventoryForUpdate(tx, docId);
+      if (!locked) throw new Error("Инвентаризация не найдена");
+      if (locked.status !== "DRAFT") throw new Error(ALREADY_CONDUCTED);
 
-  const updated = await prisma.$transaction(async (tx) => {
-    for (const line of doc.lines) {
-      const deviation = line.actualQty - line.accountedQty;
-      const deviationSum =
-        Math.round(deviation * unitCostFromSnapshot(valuation, line.refType, line.refId) * 100) /
-        100;
+      const doc = await tx.inventory.findUnique({
+        where: { id: docId },
+        include: { lines: true },
+      });
+      if (!doc) throw new Error("Инвентаризация не найдена");
 
-      if (line.refType === "PRODUCT") {
-        await tx.productStock.upsert({
-          where: { productId: line.refId },
-          create: { productId: line.refId, quantity: line.actualQty },
-          update: { quantity: line.actualQty },
-        });
-      } else if (line.refType === "NOMENCLATURE") {
-        await tx.nomenclatureStock.upsert({
-          where: { nomenclatureId: line.refId },
-          create: { nomenclatureId: line.refId, quantity: line.actualQty },
-          update: { quantity: line.actualQty },
-        });
-      } else {
-        // DETAIL: корректируем строку «готово» (все требуемые присадки выполнены).
-        const detail = await tx.detail.findUniqueOrThrow({ where: { id: line.refId } });
-        if (!detail.prisadkaTorcevaya && !detail.prisadkaPloskost) {
-          // Деталь без присадок — годна из заготовки, правим склад заготовок.
-          await tx.blankStock.upsert({
-            where: {
-              materialId_lengthM_detailType_sort: {
+      await lockInventoryStockRows(tx, doc.lines);
+      await assertLiveEqualsAccounted(tx, doc.lines);
+
+      const valuation = await getUnitCostSnapshot();
+
+      for (const line of doc.lines) {
+        const deviation = line.actualQty - line.accountedQty;
+        const deviationSum = inventoryDeviationSumDecimal(
+          deviation,
+          unitCostFromSnapshot(valuation, line.refType, line.refId),
+        );
+
+        if (line.refType === "PRODUCT") {
+          await tx.productStock.upsert({
+            where: { productId: line.refId },
+            create: { productId: line.refId, quantity: line.actualQty },
+            update: { quantity: line.actualQty },
+          });
+        } else if (line.refType === "NOMENCLATURE") {
+          await tx.nomenclatureStock.upsert({
+            where: { nomenclatureId: line.refId },
+            create: { nomenclatureId: line.refId, quantity: line.actualQty },
+            update: { quantity: line.actualQty },
+          });
+        } else {
+          const detail = await tx.detail.findUniqueOrThrow({ where: { id: line.refId } });
+          if (!detail.prisadkaTorcevaya && !detail.prisadkaPloskost) {
+            await tx.blankStock.upsert({
+              where: {
+                materialId_lengthM_detailType_sort: {
+                  materialId: detail.materialId,
+                  lengthM: detail.lengthM,
+                  detailType: detail.detailType,
+                  sort: detail.sort,
+                },
+              },
+              create: {
                 materialId: detail.materialId,
                 lengthM: detail.lengthM,
                 detailType: detail.detailType,
                 sort: detail.sort,
+                quantity: line.actualQty,
               },
-            },
-            create: {
-              materialId: detail.materialId,
-              lengthM: detail.lengthM,
-              detailType: detail.detailType,
-              sort: detail.sort,
-              quantity: line.actualQty,
-            },
-            update: { quantity: line.actualQty },
-          });
-        } else {
-          // Деталь с присадками: «готово» может быть распределено по нескольким
-          // корзинам (когда нужна лишь одна присадка). Сводим ВСЕ ready-корзины
-          // к факту — канон = actualQty, прочие ready → 0 (A9). НЗП-корзины и
-          // общий пул заготовок не трогаем.
-          const existing = await tx.detailStock.findMany({
-            where: { detailId: line.refId },
-            select: { torcevayaDone: true, ploskostDone: true },
-          });
-          for (const w of normalizeReadyBuckets(detail, existing, line.actualQty)) {
-            await tx.detailStock.upsert({
-              where: {
-                detailId_torcevayaDone_ploskostDone: {
+              update: { quantity: line.actualQty },
+            });
+          } else {
+            const existing = await tx.detailStock.findMany({
+              where: { detailId: line.refId },
+              select: { torcevayaDone: true, ploskostDone: true },
+            });
+            for (const w of normalizeReadyBuckets(detail, existing, line.actualQty)) {
+              await tx.detailStock.upsert({
+                where: {
+                  detailId_torcevayaDone_ploskostDone: {
+                    detailId: line.refId,
+                    torcevayaDone: w.torcevayaDone,
+                    ploskostDone: w.ploskostDone,
+                  },
+                },
+                create: {
                   detailId: line.refId,
                   torcevayaDone: w.torcevayaDone,
                   ploskostDone: w.ploskostDone,
+                  quantity: w.quantity,
                 },
-              },
-              create: {
-                detailId: line.refId,
-                torcevayaDone: w.torcevayaDone,
-                ploskostDone: w.ploskostDone,
-                quantity: w.quantity,
-              },
-              update: { quantity: w.quantity },
-            });
+                update: { quantity: w.quantity },
+              });
+            }
           }
         }
+
+        await tx.inventoryLine.update({
+          where: { id: line.id },
+          data: { deviation, deviationSum },
+        });
       }
 
-      await tx.inventoryLine.update({
-        where: { id: line.id },
-        data: { deviation, deviationSum },
+      const flipped = await tx.inventory.updateMany({
+        where: { id: docId, status: "DRAFT" },
+        data: { status: "CONDUCTED", date: new Date() },
       });
-    }
+      if (flipped.count !== 1) throw new Error(ALREADY_CONDUCTED);
 
-    const result = await tx.inventory.update({
-      where: { id: docId },
-      data: { status: "CONDUCTED" },
-      include: { lines: true },
-    });
-    // Лог внутри транзакции — аудит атомарен с коррекцией остатков.
-    await writeChangeLog(
-      {
-        entity: "Inventory",
-        entityId: docId,
-        oldValues: { status: "DRAFT" },
-        newValues: { status: "CONDUCTED", lines: doc.lines.length },
-      },
-      tx,
-    );
-    return result;
-  });
+      await writeChangeLog(
+        {
+          entity: "Inventory",
+          entityId: docId,
+          oldValues: { status: "DRAFT" },
+          newValues: { status: "CONDUCTED", lines: doc.lines.length },
+        },
+        tx,
+      );
+      for (const line of doc.lines) {
+        await writeChangeLog(
+          {
+            entity: "InventoryLine",
+            entityId: line.id,
+            oldValues: {
+              inventoryId: docId,
+              refType: line.refType,
+              refId: line.refId,
+              before: line.accountedQty,
+            },
+            newValues: {
+              inventoryId: docId,
+              refType: line.refType,
+              refId: line.refId,
+              after: line.actualQty,
+              delta: line.actualQty - line.accountedQty,
+            },
+          },
+          tx,
+        );
+      }
+
+      return tx.inventory.findUniqueOrThrow({
+        where: { id: docId },
+        include: { lines: true },
+      });
+    },
+    { timeout: 20_000, maxWait: 20_000 },
+  );
 
   revalidatePath(PATH);
-  return serializeDoc(updated, valuation);
+  return serializeDoc(updated, await getUnitCostSnapshot());
 }

@@ -12,6 +12,10 @@ HEAD `9b5ed66da36543c3a58d7ab8e392fcd19e78b9c1` (после P1 `199fe2f`). Ка�
 
 **Pass 01.4:** добавлен DI-020. Production SELECT read-only 2026-09-04. Карточка в этом файле; разбор `audit/01.4-torcovka-input-safety-review.md`.
 
+**Pass 01.6:** переоценен DI-009 (HEAD `931efe8`, production SELECT read-only 2026-09-04). Разбор `audit/01.6-inventory-provenance-review.md`. Гипотеза «ломает provenance» **не подтверждена**.
+
+**Pass 01.6 owner lock (2026-09-04):** BD-9.1=C, BD-9.2 граница, BD-9.5 immutable CONDUCTED, BD-9.6 freeze deviationSum. Не CONFIRMED RACE штатного concurrent conduct. Plan: `audit/01.7-inventory-integrity-remediation-plan.md` (не реализован). Код/schema/tests не менялись.
+
 ---
 
 ## Сводка
@@ -26,7 +30,7 @@ HEAD `9b5ed66da36543c3a58d7ab8e392fcd19e78b9c1` (после P1 `199fe2f`). Ка�
 | DI-006 | P2 | REMEDIATING | Cost | recalc без TX/lock: orphan PRELIMINARY рядом с FINAL |
 | DI-007 | P2 | INVARIANT WEAKNESS | Production | Torcovka: decrement реек до unique insert; retry может вернуть ошибку |
 | DI-008 | P2 | INVARIANT WEAKNESS | Production | `clientRequestId` nullable UNIQUE |
-| DI-009 | P2 | DESIGN RISK | Inventory | `conductInventory` ставит qty=X, ломает reverse/provenance |
+| DI-009 | P1 | CONFIRMED BUG | Inventory | устаревший DRAFT: deviation vs live; historical deviationSum не frozen |
 | DI-010 | P2 | DESIGN RISK | Marketplace | skuOzon/skuWb не unique |
 | DI-011 | P2 | DESIGN RISK | Marketplace | SHIPPED→PENDING не возвращает ГП (кроме Ozon cancel) |
 | DI-012 | P3 | DESIGN RISK | Cost | cost-queue in-memory; CLI recalc/sync в обход |
@@ -479,48 +483,83 @@ Confidence: HIGH
 
 ## DI-009
 
+**Pass 01.6 evidence:** `audit/01.6-inventory-provenance-review.md`. **Owner lock 2026-09-04.** Plan (не код): `audit/01.7-inventory-integrity-remediation-plan.md`.
+
 ```
 ID: DI-009
-Severity: P2
-Status: DESIGN RISK
+Severity: P1
+Status: CONFIRMED BUG
 Domain: Inventory / Production
 
-Invariant:
-Остаток *Stock согласован с историей ProductionOperation / SimplePurchase /
-Supply. Reverse должен вернуть исходные пулы.
+MAIN INVARIANT:
+После успешного conductInventory:
+  live quantity каждой покрытой позиции == accountedQty на момент guard
+    (иначе TX abort, ноль writes);
+  stock.quantity = actualQty (абсолютный SET);
+  InventoryLine.deviation = actualQty - accountedQty;
+  InventoryLine.deviationSum заморожен (Decimal);
+  Inventory.date = время проведения;
+  документ CONDUCTED immutable;
+  reverse/delete операции с createdAt < Inventory.date
+    не меняет stock, если CONDUCTED InventoryLine покрывала этот ref.
 
-Evidence:
-warehouse.ts:conductInventory L331-391 upsert update: { quantity: line.actualQty }
-(абсолют, не delta). Valuation читается вне TX L322.
-InventoryStatus.CLOSED без writer. Нет связи document ↔ movement lines.
+НЕ штатный процесс: conduct || production/purchase/marketplace.
+Не классифицировать как CONFIRMED RACE этого потока.
+Приложение обязано защищать snapshot guard'ом.
 
-Current behavior:
-Проведение ставит учётный остаток в факт. Ops/provenance не меняются.
-Если факт < того, что reverse хочет вернуть — delete/edit упаковки падает на gte
-(защита от минуса). Если факт > учёта, reverse старой упаковки может
-«вернуть» детали, которые инвентаризация уже зачла → раздувание пула.
+CONFIRMED BUG:
+- deviation/deviationSum считаются от accountedQty черновика без сверки live
+  (warehouse.ts:326 vs абсолютный SET :335/341/364/390).
+- serializeDoc не отдаёт сохранённый deviationSum; UI истории считает
+  live unitCost текущего месяца (warehouse-inventory-tab.tsx:320-323).
 
-Concurrency:
-Не обязательна. Concurrent packing во время conduct: lost update qty.
+INVARIANT WEAKNESS:
+- нет live == accountedQty внутри TX;
+- устаревший DRAFT проводится;
+- status DRAFT проверяется вне TX; update by id без status (warehouse.ts:317, :402);
+- reverse старой операции может пересечь CONDUCTED boundary (75+20=95);
+- Inventory.date = создание DRAFT, не conduct.
 
-Business impact:
-Склад расходится с журналом производства; возможные «лишние» детали после
-цепочки submit → inventory up → reverse → submit.
+EXPECTED / INTENTIONAL:
+- absolute SET к физическому факту;
+- depersonalized ProductStock / NomenclatureStock / DetailStock / BlankStock;
+- нет lot/FIFO provenance;
+- RailLot вне инвентаризации.
 
-Detection:
-Сумма движений vs *Stock; gte-ошибки при удалении ops.
+SPEC DRIFT:
+- Math.round(deviation * unitCost * 100) / 100 вместо Decimal.
 
-Recovery:
-Повторная инвентаризация; не удалять ops после ручной коррекции без сверки.
+DEFERRED:
+- DI-016 два DRAFT (не в scope);
+- BD-9.3 НЗП/заготовки;
+- BD-9.7 CashFlow «Потеря ГП»;
+- explicit counted-line UX (prefill actual=accounted).
 
-Minimal fix direction:
-Проводить delta-движения с документом; или запретить reverse ops,
-пересекающихся с проведённой инвентаризацией. Не set qty=X без движения.
+OWNER:
+- BD-9.1 = C (abort если live != accountedQty);
+- BD-9.2 = граница, точечный блок reverse по покрытому ref;
+- BD-9.5 = CONDUCTED не undo;
+- BD-9.6 = freeze deviationSum, Decimal;
+- date at conduct = now(); historical prod не переписывать.
+
+Evidence (код, HEAD 931efe8):
+warehouse.ts:228-283 createInventoryDraft accountedQty = live at t0
+warehouse.ts:313-422 conduct: valuation и status вне TX; SET actualQty;
+  ChangeLog только {status, lines:N}
+production-reversal.ts reverse: gte вниз, increment вверх, без inventory
+schema: нет UNIQUE DRAFT; нет applied* колонок; InventoryLine.refId без FK
+
+Production (SELECT 2026-09-04): 1 Inventory CONDUCTED, 0 InventoryLine.
+Exposure = 0. Историческую corruption НЕ утверждать.
+
+Minimal fix: 01.7 — без schema/migration.
 
 Confidence: HIGH
 ```
 
-NEEDS BUSINESS DECISION: инвентаризация как «обнулить учёт под факт» — осознанный инструмент первичного ввода (`includeAllActive`). Тогда это EXPECTED с оговоркой «не reverse после». Решение: нужна ли блокировка unpaid ops.
+Не открывать ledger/FIFO/event sourcing. Не реализовывать, пока нет «implement».
+
+Смежное, карточка не открыта (01.6 §9.5): `InventoryLine.refId` без FK + `deleteDetail`.
 
 ---
 

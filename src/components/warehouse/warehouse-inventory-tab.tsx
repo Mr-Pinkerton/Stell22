@@ -314,15 +314,7 @@ function HistoryRowGroup({
   striped: boolean;
   onToggle: () => void;
 }) {
-  const totalDeviation = doc.lines.reduce(
-    (sum, line) =>
-      sum +
-      inventoryDeviationSum(
-        inventoryDeviation(line.accountedQty, line.actualQty),
-        line.unitCost,
-      ),
-    0,
-  );
+  const totalDeviation = doc.lines.reduce((sum, line) => sum + line.deviationSum, 0);
 
   return (
     <Fragment>
@@ -376,8 +368,8 @@ function HistoryRowGroup({
               empty="Пусто"
             >
               {doc.lines.map((line) => {
-                const deviation = inventoryDeviation(line.accountedQty, line.actualQty);
-                const deviationSum = inventoryDeviationSum(deviation, line.unitCost);
+                const deviation = line.deviation;
+                const deviationSum = line.deviationSum;
                 return (
                   <TableRow key={line.id}>
                     <NestedTableCell className="font-medium">{line.name}</NestedTableCell>

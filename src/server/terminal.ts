@@ -25,6 +25,7 @@ import {
 } from "@/lib/detail-stock";
 import { D } from "@/lib/cost";
 import { lockRailLots } from "@/server/internal/finance-operations";
+import { blankSpecSortKey, lockDetails } from "@/server/internal/inventory-integrity";
 import {
   computeTorcovkaWasteMetrics,
   decideTorcovkaSubmit,
@@ -414,7 +415,22 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
       },
     });
 
-    for (const p of picks) {
+    const sortedBlankPicks = [...picks].sort((a, b) =>
+      blankSpecSortKey({
+        materialId,
+        lengthM: a.lengthM,
+        detailType: lot.railType,
+        sort: a.sort,
+      }).localeCompare(
+        blankSpecSortKey({
+          materialId,
+          lengthM: b.lengthM,
+          detailType: lot.railType,
+          sort: b.sort,
+        }),
+      ),
+    );
+    for (const p of sortedBlankPicks) {
       await tx.blankStock.upsert({
         where: {
           materialId_lengthM_detailType_sort: {
@@ -687,6 +703,10 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
 
   await prisma
     .$transaction(async (tx) => {
+      await lockDetails(
+        tx,
+        picks.map((p) => p.detailId),
+      );
       const op = await tx.productionOperation.create({
         data: {
           type: "PRISADKA",
@@ -704,7 +724,7 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
         { entity: "ProductionOperation", entityId: op.id, newValues: { type: "PRISADKA", picks } },
         tx,
       );
-    })
+    }, { timeout: 20_000, maxWait: 20_000 })
     .catch((e) => {
       if (isDuplicateClientRequest(e)) return; // A21: повтор уже обработан
       throw e;
@@ -992,7 +1012,7 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
           tx,
         );
       }
-    })
+    }, { timeout: 20_000, maxWait: 20_000 })
     .catch((e) => {
       if (isDuplicateClientRequest(e)) return; // A21: повтор уже обработан
       throw e;
