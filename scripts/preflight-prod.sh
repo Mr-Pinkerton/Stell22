@@ -322,6 +322,40 @@ SQL
   )" >&2
 fi
 
+# --- DI-014: duplicate PaymentBatchItem.operationId ---
+dup_pbi_op_groups="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*)
+FROM (
+  SELECT "operationId"
+  FROM "PaymentBatchItem"
+  GROUP BY "operationId"
+  HAVING COUNT(*) > 1
+) d;
+SQL
+)" | tr -d '[:space:]')"
+
+if ! [[ "$dup_pbi_op_groups" =~ ^[0-9]+$ ]]; then
+  echo "PRECHECK FAILED" >&2
+  echo "Could not read duplicate PaymentBatchItem.operationId group count" >&2
+  exit 1
+fi
+
+if [[ "$dup_pbi_op_groups" -gt 0 ]]; then
+  failed=1
+  echo "DI-014: duplicate PaymentBatchItem.operationId: ${dup_pbi_op_groups} group(s). STOP. Do not migrate/delete/dedup." >&2
+  echo "operationId / count:" >&2
+  psql_q "$(
+    cat <<'SQL'
+SELECT "operationId" || ' / ' || COUNT(*)::text
+FROM "PaymentBatchItem"
+GROUP BY "operationId"
+HAVING COUNT(*) > 1
+ORDER BY "operationId";
+SQL
+  )" >&2
+fi
+
 # --- DI-008: NULL ProductionOperation.clientRequestId ---
 null_req_n="$(psql_q "$(
   cat <<'SQL'

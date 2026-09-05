@@ -381,7 +381,7 @@ model ProductionOperation {
 
   lines             OperationDetailLine[]
   nomenclatureLines OperationNomenclatureLine[]
-  payment           PaymentBatchItem[]
+  payment           PaymentBatchItem?
 
   @@index([workDate])
   @@index([employeeId, workDate])
@@ -730,7 +730,7 @@ model PaymentBatchItem {
   id          String              @id @default(cuid())
   paymentId   String
   payment     Payment             @relation(fields: [paymentId], references: [id])
-  operationId String
+  operationId String              @unique
   operation   ProductionOperation @relation(fields: [operationId], references: [id])
 }
 
