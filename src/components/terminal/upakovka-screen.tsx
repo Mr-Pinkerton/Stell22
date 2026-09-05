@@ -1,12 +1,12 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { newRequestId } from "@/lib/request-id";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "@/components/terminal/toast";
 import { Package } from "lucide-react";
 import { OperationTile, OperationTileGrid } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
+import { useTerminalDraft } from "@/components/terminal/use-terminal-draft";
 import { submitUpakovka } from "@/server/terminal";
 import { formatProductSku } from "@/lib/format";
 import { sectionLabel } from "@/lib/material";
@@ -22,7 +22,6 @@ interface UpakovkaScreenProps {
   onDone: () => void;
 }
 
-/** Сколько изделий можно собрать = минимум по всем компонентам. */
 function canAssemble(product: TerminalProduct, data: TerminalData): number {
   const limits: number[] = [];
   for (const d of product.details) {
@@ -36,7 +35,6 @@ function canAssemble(product: TerminalProduct, data: TerminalData): number {
   if (product.packagingId) {
     limits.push(data.stock.nomenclature[product.packagingId] ?? 0);
   }
-  // Доп. комплектующие («Разное») — по 1 шт на изделие (A16): тоже ограничивают.
   for (const nomenclatureId of product.extraIds) {
     limits.push(data.stock.nomenclature[nomenclatureId] ?? 0);
   }
@@ -44,22 +42,74 @@ function canAssemble(product: TerminalProduct, data: TerminalData): number {
 }
 
 export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) {
-  const products = useMemo(
+  const draft = useTerminalDraft({ employeeId: employee.id });
+  const liveProducts = useMemo(
     () => data.products.filter((p) => p.status === "ACTIVE"),
+    [data.products],
+  );
+  const productById = useMemo(
+    () => new Map(data.products.map((p) => [p.id, p])),
     [data.products],
   );
   const materialById = useMemo(
     () => new Map(data.materials.map((m) => [m.id, m])),
     [data.materials],
   );
-  const [picked, setPicked] = useState<Record<string, number>>({});
+  const [picked, setPicked] = useState<Record<string, number>>(() => {
+    if (draft.draft?.operationType !== "UPAKOVKA") return {};
+    const next: Record<string, number> = {};
+    for (const p of draft.draft.payload.picks) {
+      if (p.quantity > 0) next[p.productId] = p.quantity;
+    }
+    return next;
+  });
   const [dialogProduct, setDialogProduct] = useState<TerminalProduct | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const requestId = useRef(newRequestId()); // ключ идемпотентности (A21)
 
-  const dialogMax = dialogProduct ? canAssemble(dialogProduct, data) : 0;
+  const products = useMemo(() => {
+    const seen = new Set(liveProducts.map((p) => p.id));
+    const extra = Object.entries(picked)
+      .filter(([id, qty]) => qty > 0 && !seen.has(id))
+      .map(([id]) => {
+        const existing = productById.get(id);
+        return (
+          existing ?? {
+            id,
+            name: "Изделие недоступно",
+            materialId: "",
+            skuOzon: "",
+            skuWb: "",
+            packagingId: null,
+            status: "ARCHIVED" as const,
+            details: [],
+            fastenerIds: [],
+            extraIds: [],
+          }
+        );
+      });
+    return [...liveProducts, ...extra];
+  }, [liveProducts, picked, productById]);
+
+  const dialogMax = dialogProduct
+    ? Math.max(canAssemble(dialogProduct, data), picked[dialogProduct.id] ?? 0)
+    : 0;
   const pickedCount = Object.values(picked).reduce((a, b) => a + b, 0);
   const pickedLines = Object.keys(picked).filter((k) => (picked[k] ?? 0) > 0).length;
+  const stockWarning = Object.entries(picked).some(([id, qty]) => {
+    if (qty <= 0) return false;
+    const product = productById.get(id);
+    if (!product || product.status !== "ACTIVE") return true;
+    return qty > canAssemble(product, data);
+  })
+    ? "Текущий остаток меньше сохранённого количества. Если операция уже прошла, повтор будет идемпотентным."
+    : null;
+
+  useEffect(() => {
+    const picks = Object.entries(picked)
+      .filter(([, quantity]) => quantity > 0)
+      .map(([productId, quantity]) => ({ productId, quantity }));
+    draft.save({ operationType: "UPAKOVKA", payload: { picks } });
+  }, [picked, draft.save]);
 
   const confirm = async () => {
     if (pickedCount === 0 || submitting) return;
@@ -68,9 +118,13 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
       .map(([productId, quantity]) => ({ productId, quantity }));
     setSubmitting(true);
     try {
-      await submitUpakovka({ employeeId: employee.id, clientRequestId: requestId.current, picks });
+      await submitUpakovka({
+        employeeId: employee.id,
+        clientRequestId: draft.clientRequestId,
+        picks,
+      });
       toast.success(`Упаковано: ${pickedCount} шт`);
-      requestId.current = newRequestId();
+      draft.clear();
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
@@ -87,8 +141,8 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
       <OperationTileGrid>
         {products.map((p) => {
           const max = canAssemble(p, data);
-          const disabled = max === 0;
           const qty = picked[p.id] ?? 0;
+          const disabled = max === 0 && qty === 0;
           const material = materialById.get(p.materialId);
           const sku = formatProductSku(p.skuOzon, p.skuWb);
           return (
@@ -119,6 +173,8 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
         })}
       </OperationTileGrid>
 
+      {stockWarning && <p className="text-amber-800 text-sm leading-relaxed">{stockWarning}</p>}
+
       <TerminalConfirmBar
         summary={
           <>
@@ -137,7 +193,7 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
         title={dialogProduct?.name ?? ""}
         hint={dialogProduct ? `Можно собрать: ${dialogMax} шт` : ""}
         initial={dialogProduct ? (picked[dialogProduct.id] ?? 0) : 0}
-        max={dialogMax}
+        max={dialogMax > 0 ? dialogMax : undefined}
         onConfirm={(v) => {
           if (dialogProduct) {
             setPicked((p) => ({ ...p, [dialogProduct.id]: v }));

@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "@/components/terminal/toast";
-import { newRequestId } from "@/lib/request-id";
 import { Boxes, Layers } from "lucide-react";
+import { useTerminalDraft } from "@/components/terminal/use-terminal-draft";
+import type { TorcovkaAckUiPhase } from "@/lib/terminal-draft-storage";
 import { cn } from "@/lib/utils";
 import { OperationTile, OperationTileGrid, OperationTileRow } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
@@ -62,29 +63,42 @@ const RAIL_LENGTH_LIMIT_MESSAGE = "Длина заготовок превыша�
 const pickKey = (lengthM: number, sort: Sort) => `${lengthM}|${sort}`;
 
 export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) {
-  const [batchId, setBatchId] = useState<string | null>(null);
-  const [lotId, setLotId] = useState<string | null>(null);
-  const [railsTaken, setRailsTaken] = useState(0);
-  const [picked, setPicked] = useState<Record<string, number>>({});
-  const [activeSort, setActiveSort] = useState<Sort>("SORT1");
+  const draft = useTerminalDraft({ employeeId: employee.id });
+  const initial = draft.draft?.operationType === "TORCOVKA" ? draft.draft.payload : null;
+  const [batchId, setBatchId] = useState<string | null>(initial?.batchId ?? null);
+  const [lotId, setLotId] = useState<string | null>(initial?.lotId ?? null);
+  const [railsTaken, setRailsTaken] = useState(initial?.railsTaken ?? 0);
+  const [picked, setPicked] = useState<Record<string, number>>(() => {
+    if (!initial) return {};
+    const next: Record<string, number> = {};
+    for (const p of initial.picks) {
+      if (p.quantity > 0) next[pickKey(p.lengthM, p.sort)] = p.quantity;
+    }
+    return next;
+  });
+  const [activeSort, setActiveSort] = useState<Sort>(initial?.activeSort ?? "SORT1");
   const [dialog, setDialog] = useState<Dialog>(null);
   const [submitting, setSubmitting] = useState(false);
   const [pendingAck, setPendingAck] = useState<PendingAck | null>(null);
-  const [highWasteReason, setHighWasteReason] = useState<TorcovkaWasteReason | null>(null);
-  const [highWasteNote, setHighWasteNote] = useState("");
-  // Ключ идемпотентности одной попытки внесения (A21): один на двойной тап/реплей.
-  const requestId = useRef(newRequestId());
+  const [highWasteReason, setHighWasteReason] = useState<TorcovkaWasteReason | null>(
+    initial?.ackUi.highWasteReason ?? null,
+  );
+  const [highWasteNote, setHighWasteNote] = useState(initial?.ackUi.highWasteNote ?? "");
+  const ackHydratedRef = useRef(false);
 
   const materialById = useMemo(
     () => new Map(data.materials.map((m) => [m.id, m])),
     [data.materials],
   );
-  const batches = data.batches.filter((b) => b.status === "IN_WORK");
-  const lots = useMemo(
-    () => data.railLots.filter((l) => l.batchId === batchId && l.remainingQuantity > 0),
-    [data.railLots, batchId],
-  );
-  const lot = lots.find((l) => l.id === lotId) ?? null;
+  const batches = data.batches.filter((b) => b.status === "IN_WORK" || b.id === batchId);
+  const lots = useMemo(() => {
+    return data.railLots.filter(
+      (l) => l.batchId === batchId && (l.remainingQuantity > 0 || l.id === lotId),
+    );
+  }, [data.railLots, batchId, lotId]);
+  const lot = data.railLots.find((l) => l.id === lotId) ?? null;
+  const lotMissing = Boolean(lotId) && !lot;
+  const stockLow = Boolean(lot && railsTaken > lot.remainingQuantity);
 
   // Заготовки нарезаются по длине; конкретная деталь определяется на присадке.
   // Доступные длины — из каталога деталей соответствующего типа рейки.
@@ -113,6 +127,67 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
   const overLength = wasteMetrics ? wasteMetrics.producedM.gt(wasteMetrics.takenM) : false;
   const pickedCount = Object.values(picked).reduce((a, b) => a + b, 0);
 
+  const ackPhase: TorcovkaAckUiPhase =
+    pendingAck?.band === "EXTREME"
+      ? "extreme"
+      : pendingAck?.band === "SUSPICIOUS"
+        ? "suspicious"
+        : "none";
+
+  useEffect(() => {
+    const picks = torcovkaPicks.map((p) => ({
+      lengthM: p.lengthM,
+      sort: p.sort,
+      quantity: p.quantity,
+    }));
+    draft.save({
+      operationType: "TORCOVKA",
+      payload: {
+        batchId,
+        lotId,
+        railsTaken,
+        picks,
+        activeSort,
+        ackUi: {
+          phase: ackPhase,
+          highWasteReason,
+          highWasteNote,
+        },
+      },
+    });
+  }, [
+    batchId,
+    lotId,
+    railsTaken,
+    picked,
+    activeSort,
+    ackPhase,
+    highWasteReason,
+    highWasteNote,
+    draft.save,
+  ]);
+
+  useEffect(() => {
+    if (ackHydratedRef.current) return;
+    const phase = initial?.ackUi.phase ?? "none";
+    if (phase === "none" || !lot || !batchId || !wasteMetrics) return;
+    if (wasteMetrics.band === "NORMAL") return;
+    ackHydratedRef.current = true;
+    const band = wasteMetrics.band === "EXTREME" ? "EXTREME" : "SUSPICIOUS";
+    setPendingAck({
+      status: "ACK_REQUIRED",
+      band,
+      railsTaken,
+      takenM: wasteMetrics.canon.takenM,
+      producedM: wasteMetrics.canon.producedM,
+      wastePct: wasteMetrics.canon.wastePct,
+      picks: torcovkaPicks,
+      clientRequestId: draft.clientRequestId,
+      batchId,
+      railLotId: lot.id,
+    });
+  }, [initial, lot, batchId, wasteMetrics, railsTaken, torcovkaPicks, draft.clientRequestId]);
+
   const resetLot = () => {
     setLotId(null);
     setRailsTaken(0);
@@ -138,7 +213,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
   };
 
   const confirm = async () => {
-    if (!lot || !batchId || railsTaken <= 0 || pickedCount === 0 || overLength || submitting) return;
+    if (!lotId || !batchId || railsTaken <= 0 || pickedCount === 0 || overLength || submitting) return;
     setSubmitting(true);
     const picks = torcovkaPicks.map((p) => ({
       lengthM: p.lengthM,
@@ -148,9 +223,9 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
     try {
       const result = await submitTorcovka({
         employeeId: employee.id,
-        clientRequestId: requestId.current,
+        clientRequestId: draft.clientRequestId,
         batchId,
-        railLotId: lot.id,
+        railLotId: lotId,
         railsTaken,
         picks,
       });
@@ -158,12 +233,10 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         setPendingAck({
           ...result,
           picks,
-          clientRequestId: requestId.current,
+          clientRequestId: draft.clientRequestId,
           batchId,
-          railLotId: lot.id,
+          railLotId: lotId,
         });
-        setHighWasteReason(null);
-        setHighWasteNote("");
         setSubmitting(false);
         return;
       }
@@ -171,7 +244,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         ? formatLength(wasteMetrics.wasteM.toNumber())
         : formatLength(0);
       toast.success(`Торцовка внесена: ${pickedCount} заг., отход ${wasteLabel}`);
-      requestId.current = newRequestId();
+      draft.clear();
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
@@ -210,7 +283,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       }
       toast.success(`Торцовка внесена: ${pendingAck.picks.reduce((s, p) => s + p.quantity, 0)} заг.`);
       setPendingAck(null);
-      requestId.current = newRequestId();
+      draft.clear();
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
@@ -327,9 +400,18 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         </Section>
       )}
 
-      {lot && wasteMetrics && (
+      {(wasteMetrics || (lotMissing && railsTaken > 0 && pickedCount > 0)) && (
+        <>
+          {(lotMissing || stockLow) && (
+            <p className="text-amber-800 text-sm leading-relaxed">
+              {lotMissing
+                ? "Пакет больше недоступен в каталоге. Если операция уже прошла, повтор будет идемпотентным."
+                : "В пакете сейчас меньше реек, чем во вводе. Если операция уже прошла, повтор будет идемпотентным."}
+            </p>
+          )}
         <TerminalConfirmBar
           summary={
+            wasteMetrics ? (
             <div className="space-y-0.5">
               <div>Фактически взято реек: {railsTaken}</div>
               <div>Общая длина: {formatLength(wasteMetrics.takenM.toNumber())}</div>
@@ -340,10 +422,16 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
                 {wasteMetrics.canon.wastePct.replace(".", ",")}%
               </div>
             </div>
+            ) : (
+              <div>
+                Черновик: {railsTaken} реек, {pickedCount} заг.
+              </div>
+            )
           }
           disabled={railsTaken <= 0 || pickedCount === 0 || overLength || submitting}
           onConfirm={confirm}
         />
+        </>
       )}
 
       <QuantityDialog
@@ -360,7 +448,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
           )
         }
         initial={railsTaken}
-        max={lot?.remainingQuantity}
+        max={lot ? Math.max(lot.remainingQuantity, railsTaken) : undefined}
         onConfirm={(v) => {
           setRailsTaken(v);
           setDialog(null);

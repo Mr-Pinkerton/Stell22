@@ -1,11 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { newRequestId } from "@/lib/request-id";
+import { useEffect, useState } from "react";
 import { toast } from "@/components/terminal/toast";
 import { Button } from "@/components/ui/button";
 import { KeypadDisplay, KEYPAD_PANEL } from "@/components/terminal/keypad-panel";
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
+import { useTerminalDraft } from "@/components/terminal/use-terminal-draft";
 import { formatMoney, formatMoneyDecimal } from "@/lib/format";
 import { submitHours } from "@/server/terminal";
 import type { TerminalEmployee } from "@/components/terminal/types";
@@ -16,19 +16,25 @@ interface HoursScreenProps {
 }
 
 export function HoursScreen({ employee, onDone }: HoursScreenProps) {
-  const [value, setValue] = useState("");
+  const draft = useTerminalDraft({ employeeId: employee.id });
+  const [value, setValue] = useState(() =>
+    draft.draft?.operationType === "HOURS" ? draft.draft.payload.hoursInput : "",
+  );
   const [submitting, setSubmitting] = useState(false);
-  const requestId = useRef(newRequestId()); // ключ идемпотентности (A21)
   const hours = Number(value || 0);
   const rate = employee.hourlyRate ?? 0;
+
+  useEffect(() => {
+    draft.save({ operationType: "HOURS", payload: { hoursInput: value } });
+  }, [value, draft.save]);
 
   const submit = async () => {
     if (hours <= 0 || submitting) return;
     setSubmitting(true);
     try {
-      await submitHours(employee.id, hours, requestId.current);
+      await submitHours(employee.id, hours, draft.clientRequestId);
       toast.success(`Внесено ${hours} ч`);
-      requestId.current = newRequestId();
+      draft.clear();
       onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
