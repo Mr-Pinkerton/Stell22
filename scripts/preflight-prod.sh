@@ -294,6 +294,34 @@ SQL
   )" >&2
 fi
 
+# --- DI-016: more than one DRAFT inventory ---
+draft_n="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*) FROM "Inventory" WHERE status = 'DRAFT';
+SQL
+)" | tr -d '[:space:]')"
+
+if ! [[ "$draft_n" =~ ^[0-9]+$ ]]; then
+  echo "PRECHECK FAILED" >&2
+  echo "Could not read DRAFT inventory count" >&2
+  exit 1
+fi
+
+if [[ "$draft_n" -gt 1 ]]; then
+  failed=1
+  echo "DI-016: ${draft_n} DRAFT inventories (expected <= 1). STOP. Do not migrate/delete/conduct." >&2
+  echo "id / status / createdAt / date / line count:" >&2
+  psql_q "$(
+    cat <<'SQL'
+SELECT i.id || ' / ' || i.status || ' / ' || i."createdAt"::text || ' / ' || i.date::text || ' / ' ||
+       (SELECT COUNT(*) FROM "InventoryLine" l WHERE l."inventoryId" = i.id)::text
+FROM "Inventory" i
+WHERE i.status = 'DRAFT'
+ORDER BY i."createdAt", i.id;
+SQL
+  )" >&2
+fi
+
 if [[ "$failed" -ne 0 ]]; then
   echo "PRECHECK FAILED" >&2
   exit 1

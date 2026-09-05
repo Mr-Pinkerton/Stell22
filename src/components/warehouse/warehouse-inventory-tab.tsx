@@ -14,6 +14,7 @@ import {
 import {
   conductInventory,
   createInventoryDraft,
+  deleteInventoryDraft,
   updateInventoryLineActual,
 } from "@/server/warehouse";
 import { formatIsoDate, formatMoney } from "@/lib/format";
@@ -35,6 +36,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { FormDialog } from "@/components/form-dialog-shared";
 import {
   TableBody,
   TableCell,
@@ -70,6 +72,7 @@ export function WarehouseInventoryTab({
   onDocsChange: setDocs,
 }: WarehouseInventoryTabProps) {
   const [pending, startTransition] = useTransition();
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const draft = useMemo(() => docs.find((d) => d.status === "DRAFT"), [docs]);
   const history = useMemo(
@@ -128,6 +131,20 @@ export function WarehouseInventoryTab({
     });
   };
 
+  const handleDeleteDraft = () => {
+    if (!draft) return;
+    startTransition(async () => {
+      try {
+        await deleteInventoryDraft(draft.id);
+        setDocs(docs.filter((d) => d.id !== draft.id));
+        setConfirmOpen(false);
+        toast.success("Черновик инвентаризации удалён");
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Ошибка удаления");
+      }
+    });
+  };
+
   return (
     <div className="space-y-6">
       {draft ? (
@@ -139,15 +156,26 @@ export function WarehouseInventoryTab({
                 {formatIsoDate(draft.date)} · {INVENTORY_STATUS_LABEL[draft.status]}
               </p>
             </div>
-            <Button
-              type="button"
-              variant="brand"
-              className="h-10 rounded-xl px-5"
-              disabled={pending}
-              onClick={conductDraft}
-            >
-              Провести
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 rounded-xl px-5"
+                disabled={pending}
+                onClick={() => setConfirmOpen(true)}
+              >
+                Удалить черновик
+              </Button>
+              <Button
+                type="button"
+                variant="brand"
+                className="h-10 rounded-xl px-5"
+                disabled={pending}
+                onClick={conductDraft}
+              >
+                Провести
+              </Button>
+            </div>
           </div>
 
           <Card className="surface-card ring-0">
@@ -246,6 +274,20 @@ export function WarehouseInventoryTab({
           </Card>
         </section>
       )}
+
+      <FormDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Удалить черновик инвентаризации?"
+        maxWidth="sm:max-w-md"
+        submitLabel="Удалить черновик"
+        submitDisabled={pending}
+        onSubmit={handleDeleteDraft}
+      >
+        <p className="text-muted-foreground text-sm">
+          Складские остатки не изменятся. После удаления можно создать новую инвентаризацию.
+        </p>
+      </FormDialog>
     </div>
   );
 }

@@ -56,7 +56,7 @@ import { markEmployeePaid } from "@/server/payroll";
 import { createBatch } from "@/server/purchases";
 import { deleteProductionOperation, correctTorcovkaRailsTaken } from "@/server/production";
 import { getApiCredentials } from "@/server/settings";
-import { conductInventory } from "@/server/warehouse";
+import { conductInventory, deleteInventoryDraft } from "@/server/warehouse";
 
 const unauthorized = new Error("Требуется сессия администратора");
 
@@ -75,6 +75,7 @@ describe("representative admin action boundaries", () => {
       correctTorcovkaRailsTaken({ operationId: "operation-1", newRailsTaken: 1, reason: "test" }),
     ],
     ["warehouse", () => conductInventory("inventory-1")],
+    ["warehouse-delete-draft", () => deleteInventoryDraft("inventory-1")],
     ["settings", () => getApiCredentials()],
   ])("rejects %s before any database access", async (_domain, invoke) => {
     await expect(invoke()).rejects.toThrow(unauthorized.message);

@@ -107,6 +107,7 @@ export const actionPolicy = {
     "settings.verifyApiCredentialsPassword",
     "warehouse.conductInventory",
     "warehouse.createInventoryDraft",
+    "warehouse.deleteInventoryDraft",
     "warehouse.getInventoryDocs",
     "warehouse.getWarehouseStock",
     "warehouse.updateInventoryLineActual",

@@ -530,6 +530,9 @@ model MpStock {
 model Inventory {
   id     String          @id @default(cuid())
   date   DateTime
+  // BD-16.1: at most one global DRAFT. Enforced by SQL partial UNIQUE
+  // Inventory_status_draft_key WHERE status = 'DRAFT' (Prisma schema cannot
+  // express a partial unique condition). CONDUCTED/CLOSED are unconstrained.
   status InventoryStatus @default(DRAFT)
   lines  InventoryLine[]
   createdAt DateTime @default(now())

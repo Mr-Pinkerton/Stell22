@@ -229,8 +229,8 @@ for (const key of expectedPublic) {
   if (!sourceActions.has(key)) failures.push(`${key}: classified public action is missing`);
 }
 
-if (entries.length !== 126) {
-  failures.push(`policy must classify the original 126 exports, got ${entries.length}`);
+if (entries.length !== 127) {
+  failures.push(`policy must classify all 127 exports, got ${entries.length}`);
 }
 
 if (failures.length > 0) {

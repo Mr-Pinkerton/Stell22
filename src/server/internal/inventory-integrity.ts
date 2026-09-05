@@ -7,6 +7,19 @@ export const STALE_SNAPSHOT =
 export const ALREADY_CONDUCTED = "Инвентаризация уже проведена";
 export const INVENTORY_BOUNDARY =
   "Нельзя изменить/удалить: после этой операции проведена инвентаризация по затронутому остатку.";
+export const DRAFT_ALREADY_EXISTS = "Черновик инвентаризации уже существует";
+
+/**
+ * BD-16.2: violation of partial UNIQUE Inventory_status_draft_key.
+ * PostgreSQL 17 / Prisma 6: meta = { modelName: "Inventory", target: ["status"] }.
+ */
+export function isDraftUniqueViolation(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) return false;
+  if (err.code !== "P2002") return false;
+  const meta = err.meta as { modelName?: unknown; target?: unknown } | undefined;
+  if (meta?.modelName !== "Inventory") return false;
+  return Array.isArray(meta.target) && meta.target.includes("status");
+}
 
 export type InventoryRef = { refType: "PRODUCT" | "DETAIL" | "NOMENCLATURE"; refId: string };
 

@@ -826,36 +826,161 @@ Confidence: HIGH
 
 ```
 ID: DI-016
-Severity: P3
-Status: INVARIANT WEAKNESS
+Severity: P2  (повышено с P3 — audit/01.8, 2026-09-05)
+Status: CONFIRMED RACE + INVARIANT WEAKNESS + CONFIRMED BUG (узкий)
 Domain: Inventory
 
+Полный разбор: audit/01.8-inventory-draft-uniqueness-review.md
+План ремедиации: audit/01.9-inventory-draft-uniqueness-remediation-plan.md
+Базовый commit: 1f411e5e0f8018069e9f91d69439ff306fdc2572 (DI-009 deployed)
+
 Invariant:
-Только один Inventory в статусе DRAFT (warehouse.ts:230-231).
+INV-068 — одновременно существует максимум один Inventory со status=DRAFT.
+Scope: GLOBAL (в модели Inventory нет ни одного scope-поля).
+Подтверждён как намеренный: явный отказ createInventoryDraft:246-247,
+UI рендерит ровно один DRAFT (find/filter, warehouse-inventory-tab.tsx:74,76),
+решение владельца «инвентаризация = единая физическая сверка склада».
 
 Evidence:
-Нет unique/partial unique на status. createInventoryDraft: findFirst DRAFT
-затем create — не в TX с conduct.
+DB-гарантии нет. createInventoryDraft (warehouse.ts:244-299):
+findFirst({status:"DRAFT"}) :246 и inventory.create :275 — два запроса
+в РАЗНЫХ транзакциях, без lock, без advisory lock, без DB-unique.
+Окно гонки = время getWarehouseStock() :249 (десятки–сотни мс).
+Production (SELECT read-only 2026-09-05): индексы только Inventory_pkey /
+InventoryLine_pkey — partial UNIQUE отсутствует.
+
+Локальное воспроизведение (PostgreSQL 17, stell22_integrity, фикстура удалена):
+  A) обычный Promise.all двух createInventoryDraft → DRAFT count = 2,
+     обе TX success, ошибок PostgreSQL нет. Барьер НЕ требуется.
+  B) два PrismaClient + барьер: оба видят NONE, оба INSERT → 2 DRAFT.
+  C) conduct A с отклонением (100→95), затем conduct B → STALE_SNAPSHOT,
+     zero writes, склад 95, B остаётся DRAFT. DI-009 остаток защищает.
+  D) conduct A БЕЗ отклонения (100→100), затем conduct B (actual 60) →
+     B ПРОВОДИТСЯ, склад 60. DI-009 этот путь НЕ перекрывает.
+  E) после C: createInventoryDraft → «Черновик инвентаризации уже
+     существует». Итог CONDUCTED 1 / DRAFT 1 — lockout.
+  F,G) partial UNIQUE ON "Inventory" (status) WHERE status='DRAFT'
+     создаётся; второй INSERT → P2002 target=status; под индексом
+     конкурентная вставка с двух соединений → ровно 1 DRAFT.
 
 Current behavior:
 Sequential второй create бросает. Два параллельных create → два DRAFT.
-conduct каждого выставит qty=actual дважды (обычно тот же actual).
+Второй DRAFT после проведения первого почти всегда непроводим
+(STALE_SNAPSHOT), и исправить его нельзя: accountedQty пишется только
+в createInventoryDraft:283; updateInventoryLineActual меняет только
+actualQty; writer'ов delete/cancel/close/refresh DRAFT НЕ существует.
 
 Concurrency:
-Два параллельных «создать черновик».
+createInventoryDraft || createInventoryDraft. Достижимо штатным UI:
+два входа (warehouse-view.tsx:181, warehouse-inventory-tab.tsx:122)
+защищены только клиентским pending, т.е. в пределах одной вкладки.
 
 Business impact:
-Путаница UI; двойное проведение одних actualQty относительно безопасно
-(идемпотентный set). Низкий.
+ПЕРЕСМОТРЕНО. Не «низкий» и не идемпотентный повтор.
+1) Основное — denial of function: застрявший DRAFT навсегда блокирует
+   создание новых инвентаризаций, выхода из UI нет (SQL на проде).
+2) Узкая порча: при нулевом отклонении первого документа второй делает
+   независимый абсолютный SET того же физического факта (опыт D).
+3) Потеря черновика из UI: второй DRAFT не попадает ни в один список.
+НЕ затронуто: inventory boundary DI-009 (фильтрует status='CONDUCTED'),
+отрицательные остатки, freeze deviationSum.
+
+Production exposure: 0.
+1 Inventory всего (CONDUCTED, 0 строк), 0 DRAFT, 0 InventoryLine.
+ChangeLog: 1 create-event DRAFT, 1 conduct, 1 distinct entityId.
+Дубликатов DRAFT не существовало никогда. Историческую порчу не утверждать.
 
 Detection:
-COUNT(*) WHERE status=DRAFT > 1.
+SELECT count(*) FROM "Inventory" WHERE status = 'DRAFT';  -- > 1
 
 Recovery:
-Удалить лишний черновик (delete API нет — через SQL/studio).
+Ручной SQL/Studio: сначала InventoryLine (FK onDelete не задан →
+Restrict), затем Inventory. Application-пути нет.
 
-Minimal fix direction:
-Partial UNIQUE WHERE status='DRAFT' или create в TX с lock.
+Owner decisions — ФИНАЛЬНЫ (2026-09-05):
+  BD-16.1  Максимум одна ГЛОБАЛЬНАЯ Inventory со status=DRAFT.
+  BD-16.2  Инвариант — на уровне БД (partial UNIQUE). findFirst остаётся
+           только дружелюбной предпроверкой. Проигравший в гонке получает
+           существующее доменное сообщение, не сырой P2002.
+  BD-16.3  Админ может УДАЛИТЬ DRAFT. Удаление трогает только Inventory +
+           её InventoryLine. НЕ мутирует ProductStock / DetailStock /
+           BlankStock / NomenclatureStock / RailLot, НЕ создаёт корректировку,
+           НЕ трогает production-операции и исторические CONDUCTED.
+  BD-16.4  CONDUCTED immutable: нельзя удалить/отменить/переоткрыть/
+           обновить/превратить в DRAFT.
+  BD-16.5  STALE_SNAPSHOT DRAFT НЕ обновляется. accountedQty не
+           перезаписывается. Пользователь удаляет устаревший DRAFT и
+           создаёт новую инвентаризацию.
+           Вариант «refresh accountedQty» ОТКЛОНЁН.
+  Owner decisions открытых НЕТ.
+
+Minimal fix direction (утверждено, план — audit/01.9):
+1) Миграция: partial UNIQUE
+     CREATE UNIQUE INDEX "Inventory_status_draft_key"
+       ON "Inventory" ("status") WHERE "status" = 'DRAFT';
+   в стиле DI-003/DI-005/DI-010: BEGIN + LOCK TABLE "Inventory" IN ACCESS
+   EXCLUSIVE MODE + DO/RAISE при count(DRAFT)>1 (печать id/status/createdAt/
+   date/line count) + CREATE INDEX + COMMIT. Без CONCURRENTLY, без
+   auto-delete, без auto-conduct, без выбора «победителя».
+   Prisma @@unique НЕ добавляется (частичное условие не выражается) —
+   только комментарий в schema.prisma, как у Account.accountNumber.
+   PostgreSQL нормализует предикат до
+     WHERE (status = 'DRAFT'::"InventoryStatus")   [проверено, PG 17]
+2) createInventoryDraft: findFirst-предпроверку оставить; try/catch ровно
+   вокруг ОДНОЙ вставки inventory.create; матчер
+     code==="P2002" && meta.modelName==="Inventory"
+       && Array.isArray(meta.target) && meta.target.includes("status")
+   [проверено: meta = {"modelName":"Inventory","target":["status"]};
+    посторонний P2002 DI-010 = {"modelName":"Product","target":["skuOzon"]}
+    → не совпадает] → бросить существующее
+   «Черновик инвентаризации уже существует» (константа DRAFT_ALREADY_EXISTS
+   в inventory-integrity.ts, аддитивно).
+3) deleteInventoryDraft (новое ADMIN_ACTION): requireAdmin первым
+   statement → $transaction → lockInventoryForUpdate (тот же мьютекс, что у
+   conduct/updateActual) → not found «Инвентаризация не найдена» →
+   status!==DRAFT → ALREADY_CONDUCTED → inventoryLine.deleteMany →
+   inventory.delete → writeChangeLog в TX → commit → revalidatePath.
+   Явный deleteMany ОБЯЗАТЕЛЕН: FK ON DELETE RESTRICT
+   [pg_constraint.confdeltype='r' проверено; inventory.delete при живых
+   строках даёт P2003 InventoryLine_inventoryId_fkey]. Stock-локи не нужны.
+   ChangeLog: entity Inventory, oldValues {status:"DRAFT", lines:N},
+   newValues отсутствует (=null) — конвенция deleteBatch. Без per-line логов,
+   без фиктивной записи корректировки склада.
+4) Preflight scripts/preflight-prod.sh: count DRAFT > 1 → STOP,
+   печать id/status/createdAt/date/line count. NO auto delete/conduct.
+   0 или 1 → PASS.
+5) Security: +1 в ADMIN_ACTION (102→103) и обязательная правка захардкоженного
+   export freeze в check-server-action-source.mjs (126→127) — иначе
+   npm run security:actions падает. Terminal/public доступа нет.
+
+Отклонены: app-level TX/lock (без LOCK TABLE некорректно — конфликтующей
+строки не существует, SERIALIZABLE не даёт predicate-конфликта),
+advisory/sentinel lock (новый примитив, риск deadlock с conduct),
+DB-unique без обработки P2002 (сырая техническая ошибка в UI).
+
+Конкурентные исходы (доказаны, audit/01.9 §6):
+  create||create      → ровно один DRAFT, проигравший — доменное сообщение
+  delete||conduct     → один мьютекс Inventory; либо CONDUCTED + delete
+                        ALREADY_CONDUCTED, либо документа нет + conduct
+                        «не найдена». Частичных записей в stock нет
+  delete||updateActual→ либо update, затем полное удаление; либо delete,
+                        затем reject. Осиротевших InventoryLine нет
+  delete||create      → INSERT ждёт xid удаляющей TX; deleter commit →
+                        insert успешен; deleter rollback → insert P2002 →
+                        доменное сообщение. В обоих случаях DRAFT <= 1
+                        [проверено на PG 17]
+
+Остаётся вне DI-016 (отдельная возможная карточка, fix не проектируется):
+getWarehouseStock() в createInventoryDraft читает вне TX → conduct,
+закоммиченный посреди этого чтения, даёт порванный snapshot →
+гарантированный STALE_SNAPSHOT. Partial UNIQUE это не закрывает, НО
+BD-16.3/16.5 устраняют последствие: такой черновик удаляется из UI и
+создаётся заново. Тупик «нет выхода из UI» закрыт.
+
+Security: проблем нет. requireAdmin первым statement во всех четырёх
+существующих inventory-действиях; все в ADMIN_ACTION; terminal/public write
+paths нет. Новое deleteInventoryDraft — тоже ADMIN_ACTION с requireAdmin
+первым statement (ADMIN_ACTION 102→103, export freeze 126→127).
 
 Confidence: HIGH
 ```

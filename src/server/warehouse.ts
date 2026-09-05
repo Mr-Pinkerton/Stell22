@@ -20,8 +20,10 @@ import type { ProductionStockRow, DetailStockRow } from "@/lib/warehouse-stock";
 import { inventoryDeviation, inventoryDeviationSum } from "@/lib/warehouse-stock";
 import {
   ALREADY_CONDUCTED,
+  DRAFT_ALREADY_EXISTS,
   assertLiveEqualsAccounted,
   inventoryDeviationSumDecimal,
+  isDraftUniqueViolation,
   lockInventoryForUpdate,
   lockInventoryStockRows,
 } from "@/server/internal/inventory-integrity";
@@ -244,7 +246,7 @@ export async function getInventoryDocs(): Promise<InventoryDocRow[]> {
 export async function createInventoryDraft(includeAllActive = false): Promise<InventoryDocRow> {
   await requireAdmin();
   const existing = await prisma.inventory.findFirst({ where: { status: "DRAFT" } });
-  if (existing) throw new Error("Черновик инвентаризации уже существует");
+  if (existing) throw new Error(DRAFT_ALREADY_EXISTS);
 
   const stock = await getWarehouseStock();
   type Line = { refType: InventoryRefType; refId: string; accounted: number };
@@ -272,23 +274,29 @@ export async function createInventoryDraft(includeAllActive = false): Promise<In
     if (includeAllActive || n.quantity > 0)
       lines.push({ refType: "NOMENCLATURE", refId: n.id, accounted: n.quantity });
 
-  const doc = await prisma.inventory.create({
-    data: {
-      date: new Date(),
-      status: "DRAFT",
-      lines: {
-        create: lines.map((l) => ({
-          refType: l.refType,
-          refId: l.refId,
-          accountedQty: l.accounted,
-          actualQty: l.accounted,
-          deviation: 0,
-          deviationSum: 0,
-        })),
+  let doc;
+  try {
+    doc = await prisma.inventory.create({
+      data: {
+        date: new Date(),
+        status: "DRAFT",
+        lines: {
+          create: lines.map((l) => ({
+            refType: l.refType,
+            refId: l.refId,
+            accountedQty: l.accounted,
+            actualQty: l.accounted,
+            deviation: 0,
+            deviationSum: 0,
+          })),
+        },
       },
-    },
-    include: { lines: true },
-  });
+      include: { lines: true },
+    });
+  } catch (err) {
+    if (isDraftUniqueViolation(err)) throw new Error(DRAFT_ALREADY_EXISTS);
+    throw err;
+  }
   await writeChangeLog({
     entity: "Inventory",
     entityId: doc.id,
@@ -479,4 +487,35 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
 
   revalidatePath(PATH);
   return serializeDoc(updated, await getUnitCostSnapshot());
+}
+
+/**
+ * BD-16.3: удаление черновика. Остатки не меняются — DRAFT ничего не применял.
+ * CONDUCTED удалить нельзя (BD-16.4). Устаревший DRAFT удаляют и создают заново
+ * (BD-16.5); accountedQty не перезаписывается.
+ */
+export async function deleteInventoryDraft(docId: string): Promise<void> {
+  await requireAdmin();
+
+  await prisma.$transaction(async (tx) => {
+    const locked = await lockInventoryForUpdate(tx, docId);
+    if (!locked) throw new Error("Инвентаризация не найдена");
+    if (locked.status !== "DRAFT") throw new Error(ALREADY_CONDUCTED);
+
+    const lineCount = await tx.inventoryLine.count({ where: { inventoryId: docId } });
+
+    await tx.inventoryLine.deleteMany({ where: { inventoryId: docId } });
+    await tx.inventory.delete({ where: { id: docId } });
+
+    await writeChangeLog(
+      {
+        entity: "Inventory",
+        entityId: docId,
+        oldValues: { status: "DRAFT", lines: lineCount, action: "delete" },
+      },
+      tx,
+    );
+  });
+
+  revalidatePath(PATH);
 }
