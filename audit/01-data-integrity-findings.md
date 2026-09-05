@@ -16,6 +16,10 @@ HEAD `9b5ed66da36543c3a58d7ab8e392fcd19e78b9c1` (после P1 `199fe2f`). Ка�
 
 **Pass 01.6 owner lock (2026-09-04):** BD-9.1=C, BD-9.2 граница, BD-9.5 immutable CONDUCTED, BD-9.6 freeze deviationSum. Не CONFIRMED RACE штатного concurrent conduct. Plan: `audit/01.7-inventory-integrity-remediation-plan.md` (не реализован). Код/schema/tests не менялись.
 
+**Pass 01.18 (2026-09-05):** DI-014 **CLOSED IN PRODUCTION** @ `060629eaeb91dafdd2b0484d165ea695a949f6f4`. Разбор `audit/01.18-payment-operation-uniqueness-review.md`. Deploy `33992508139`. Migration `20260905220000_payment_batch_item_operation_unique`.
+
+**Marketplace (owner, 2026-09-05):** DI-011 / DI-017 **DEFERRED BY OWNER** — marketplace subsystem is currently low priority and may be redesigned rather than incrementally hardened. Not FIXED, not CLOSED. DI-004 / DI-010 не менялись (owner deferred только эти две карточки).
+
 ---
 
 ## Сводка
@@ -32,13 +36,13 @@ HEAD `9b5ed66da36543c3a58d7ab8e392fcd19e78b9c1` (после P1 `199fe2f`). Ка�
 | DI-008 | P2 | IMPLEMENTED (working tree) | Production | `clientRequestId` nullable UNIQUE |
 | DI-009 | P1 | CONFIRMED BUG | Inventory | устаревший DRAFT: deviation vs live; historical deviationSum не frozen |
 | DI-010 | P2 | DESIGN RISK | Marketplace | skuOzon/skuWb не unique |
-| DI-011 | P2 | DESIGN RISK | Marketplace | SHIPPED→PENDING не возвращает ГП (кроме Ozon cancel) |
+| DI-011 | P2 | DEFERRED BY OWNER | Marketplace | SHIPPED→PENDING не возвращает ГП (кроме Ozon cancel) |
 | DI-012 | P3 | DESIGN RISK | Cost | cost-queue in-memory; CLI recalc/sync в обход |
 | DI-013 | P2 | DESIGN RISK | Finance | Deal/CF commit без derived `totalCost` в той же TX |
-| DI-014 | P3 | INVARIANT WEAKNESS | Payroll | нет UNIQUE PaymentBatchItem.operationId |
+| DI-014 | P3 | CLOSED IN PRODUCTION | Payroll | UNIQUE PaymentBatchItem.operationId (was: нет UNIQUE) |
 | DI-015 | P3 | NEEDS BUSINESS DECISION | Payroll | ставки live, не snapshot на операции |
 | DI-016 | P3 | INVARIANT WEAKNESS | Inventory | два DRAFT при concurrent create |
-| DI-017 | P3 | INVARIANT WEAKNESS | Marketplace | MpStock без unique (marketplace,sku) |
+| DI-017 | P3 | DEFERRED BY OWNER | Marketplace | MpStock без unique (marketplace,sku) |
 | DI-018 | P2 | REMEDIATING | Cost/Payroll | два last TORCOVKA payment → freeze не ставится |
 | DI-019 | P2 | REMEDIATING | Cost/Production | update TORCOVKA qty после pay/freeze; FINAL stale |
 | DI-020 | P1 | INVARIANT WEAKNESS | Production/Terminal | TORCOVKA принимает неправдоподобный расход без guard |
@@ -725,10 +729,12 @@ Confidence: HIGH
 
 ## DI-011
 
+**Owner (2026-09-05):** **DEFERRED BY OWNER.** Marketplace currently low priority; may be redesigned rather than incrementally hardened. Not FIXED, not CLOSED. Код marketplace в этом pass не аудировался и не менялся.
+
 ```
 ID: DI-011
 Severity: P2
-Status: DESIGN RISK
+Status: DEFERRED BY OWNER
 Domain: Marketplace
 
 Invariant:
@@ -858,37 +864,73 @@ Confidence: HIGH
 
 ## DI-014
 
+**Pass 01.18 (2026-09-05):** CLOSED IN PRODUCTION @ `060629eaeb91dafdd2b0484d165ea695a949f6f4`.
+Разбор: `audit/01.18-payment-operation-uniqueness-review.md`. Deploy `33992508139`.
+Классификация до hardening: **INVARIANT WEAKNESS / DB HARDENING**. Гипотеза live
+double-pay **не подтверждена**. Исторической порчи выплат нет (на verify:
+0 Payment, 0 PaymentBatchItem, 0 ProductionOperation). DI-015 **не** менялся.
+
 ```
 ID: DI-014
-Severity: P3
-Status: INVARIANT WEAKNESS
+Severity: P3 (historical)
+Status: CLOSED IN PRODUCTION
 Domain: Payroll
+Reviewed: 01.18 @ HEAD 060629eaeb91dafdd2b0484d165ea695a949f6f4
 
 Invariant:
-Одна ProductionOperation входит не более чем в один Payment.
+Одна ProductionOperation входит не более чем в один PaymentBatchItem
+(атомарно целиком). Partial payment и payment reversal не поддерживаются.
 
-Evidence:
+Original finding (фаза 1, сохранившаяся причина карточки):
 init PaymentBatchItem: PK id, FK operationId Restrict, без UNIQUE operationId.
-Защита только claim isPaid в markEmployeePaid L211-217.
+Тогда защита только claim isPaid в markEmployeePaid.
 
-Current behavior:
-Текущий path двойную выплату не создаёт. Нет DB-запрета на ручной/будущий
-второй insert PaymentBatchItem с тем же operationId, если isPaid обойти.
+Re-audit 01.18 (не live race):
+App-path уже был безопасен после позднего payroll/freeze locking (cc571f5):
+  ProductionOperation ORDER BY id FOR UPDATE
+  → post-lock isPaid re-read
+  → authoritative amount recalculation
+  → updateMany WHERE isPaid=false claim
+  → Payment
+  → PaymentBatchItem
+Оставшаяся слабость — только DB: Prisma 1:N, нет UNIQUE(operationId).
+Двойной insert тем же operationId был возможен лишь в обход app-path
+(Studio / будущий writer / test harness), не штатной выплатой.
+
+Current behavior (production):
+UNIQUE("PaymentBatchItem"."operationId") + прежние app locks/claim.
+ProductionOperation.payment: PaymentBatchItem? (Prisma 1:1).
+PaymentBatchItem.amount нет; сумма — Payment.amount.
+
+Implemented:
+schema: operationId String @unique
+migration: 20260905220000_payment_batch_item_operation_unique
+  LOCK ACCESS EXCLUSIVE; duplicate groups RAISE; CREATE UNIQUE INDEX only.
+  No UPDATE / DELETE / DROP / backfill / dedup.
+index: PaymentBatchItem_operationId_key
+FK: operationId → ProductionOperation.id ON DELETE RESTRICT (unchanged)
+
+Production:
+release SHA 060629eaeb91dafdd2b0484d165ea695a949f6f4
+deploy run 33992508139 SUCCESS
+migration applied YES (1 row, finished_at 2026-09-05 21:21:43 UTC)
+duplicate operationId before: 0
+duplicate operationId after:  0
 
 Concurrency:
-Claim делает race безопасным для markEmployeePaid.
+App serializes markEmployeePaid via FOR UPDATE; UNIQUE — backstop.
 
 Business impact:
-Сейчас нет. Страховка схемы отсутствует.
+Сейчас нет. Страховка схемы **есть** в production.
 
 Detection:
-GROUP BY operationId HAVING count>1 на PaymentBatchItem.
+GROUP BY operationId HAVING count>1 на PaymentBatchItem — ожидается 0.
 
 Recovery:
-n/a пока claim держится.
+n/a. Preflight STOP, если дубли появятся до migrate (на проде не было).
 
-Minimal fix direction:
-UNIQUE(operationId) на PaymentBatchItem.
+DI-015:
+UNCHANGED / separate issue (live Employee rates at payment time).
 
 Confidence: HIGH
 ```
@@ -1108,10 +1150,12 @@ Confidence: HIGH
 
 ## DI-017
 
+**Owner (2026-09-05):** **DEFERRED BY OWNER.** Marketplace currently low priority; may be redesigned rather than incrementally hardened. Not FIXED, not CLOSED. Код marketplace в этом pass не аудировался и не менялся.
+
 ```
 ID: DI-017
 Severity: P3
-Status: INVARIANT WEAKNESS
+Status: DEFERRED BY OWNER
 Domain: Marketplace
 
 Invariant:
