@@ -28,8 +28,8 @@ HEAD `9b5ed66da36543c3a58d7ab8e392fcd19e78b9c1` (после P1 `199fe2f`). Ка�
 | DI-004 | P1 | CONFIRMED RACE | Marketplace | Два sync могут дважды списать ProductStock (в минус) |
 | DI-005 | P2 | REMEDIATING | Cost | freeze считает FINAL без Batch lock; concurrent sync пишет C=B |
 | DI-006 | P2 | REMEDIATING | Cost | recalc без TX/lock: orphan PRELIMINARY рядом с FINAL |
-| DI-007 | P2 | INVARIANT WEAKNESS | Production | Torcovka: decrement реек до unique insert; retry может вернуть ошибку |
-| DI-008 | P2 | INVARIANT WEAKNESS | Production | `clientRequestId` nullable UNIQUE |
+| DI-007 | P2 | IMPLEMENTED (working tree) | Production | Torcovka: decrement реек до unique insert; retry может вернуть ошибку |
+| DI-008 | P2 | IMPLEMENTED (working tree) | Production | `clientRequestId` nullable UNIQUE |
 | DI-009 | P1 | CONFIRMED BUG | Inventory | устаревший DRAFT: deviation vs live; historical deviationSum не frozen |
 | DI-010 | P2 | DESIGN RISK | Marketplace | skuOzon/skuWb не unique |
 | DI-011 | P2 | DESIGN RISK | Marketplace | SHIPPED→PENDING не возвращает ГП (кроме Ozon cancel) |
@@ -394,44 +394,88 @@ Confidence: HIGH
 
 ## DI-007
 
+**Pass 01.10 (2026-09-05):** переоценен на HEAD `16015d5` (после DI-020).
+Разбор и полное воспроизведение: `audit/01.10-terminal-idempotency-review.md`.
+Production SELECT read-only 2026-09-05. **НЕ fixed, НЕ stale** — DI-020
+порядок decrement→create не менял и добавил второй канал нарушения.
+
+**Pass 01.13 (2026-09-05):** owner lock. План `audit/01.13-terminal-idempotency-remediation-plan.md`.
+Простой `findUnique` до `lockRailLots` **отклонён** как недостаточный под
+concurrent same-id при `remaining === railsTaken`.
+
+**Implementation (working tree, 2026-09-05):** алгоритм 01.13 в `submitTorcovka`
+(fast `findUnique` → `lockRailLots` → post-lock `findUnique` → физика;
+replay = `IDEMPOTENT_REPLAY`, без enqueue). **Не CLOSED в production:**
+миграции на прод не применялись, commit/push/deploy нет.
+
 ```
 ID: DI-007
 Severity: P2
-Status: INVARIANT WEAKNESS
-Domain: Production
+Status: IMPLEMENTED (working tree, not shipped)
+Domain: Production / Terminal
+Reviewed: 01.10 @ HEAD 16015d5; plan 01.13
 
 Invariant:
-Повтор того же clientRequestId после успеха = success, без побочных эффектов
-(комментарий terminal.ts:59-62, A21).
+Повтор того же clientRequestId после закоммиченного успеха = success, без
+побочных эффектов и без повторного запроса подтверждения
+(JSDoc terminal.ts:67-71, :339, A21).
 
-Evidence:
-submitTorcovka L367 decrement реек, L373 create с clientRequestId.
-.catch isDuplicateClientRequest только на P2002.
-Если TX уже закоммичена, retry: remaining может не пройти gte → throw
-«Недостаточно реек», это не P2002 → клиент видит ошибку, хотя первая
-операция есть. Prisadka/Upakovka создают Op сначала — P2002 до списания.
+Evidence (код, HEAD 16015d5, submitTorcovka terminal.ts:353-479):
+Порядок внутри TX:
+  :364 lockRailLots FOR UPDATE
+  :370-374 длина заготовки <= длины рейки
+  :376-379 INV-008 producedM <= takenM
+  :381-386 DI-020 decideTorcovkaSubmit → ACK_REQUIRED = ранний return из TX
+  :388-392 railLot.updateMany gte → throw «Недостаточно реек в пакете»
+  :394-416 productionOperation.create ← ЕДИНСТВЕННОЕ место, где сработает UNIQUE
+  :434-451 blankStock.upsert; :454-461 writeChangeLog; :463 archiveBatchIfDepleted
+  :465-468 .catch isDuplicateClientRequest (только P2002) → {status:"CREATED"}
+Дубль детектируется ПОСЛЕ отказа по остатку (шаг 6) и ПОСЛЕ ack-гейта (шаг 5).
+Prisadka :710 / Upakovka :992 создают Op ПЕРВЫМ → P2002 до списания.
 
-Current behavior:
-Данные не двоятся (неуспешный retry откатывается). Идемпотентный контракт
-для торцовки нарушен при depleted lot.
+Current behavior (воспроизведено локально, PG 17, prod-код без правок):
+S1a лот исчерпан: A={status:CREATED} remaining 10→0 ops=1;
+    B (тот же id) = ОШИБКА «Недостаточно реек в пакете», ops=1.
+S1b лот не исчерпан: A CREATED, B CREATED, ops=1, remaining=20
+    (decrement откатан) — идемпотентно.
+S1c SUSPICIOUS + валидный ack, лот исчерпан: та же ошибка. Ack не помогает.
+S1d НОВЫЙ КАНАЛ (от DI-020): после успеха с ack тот же id БЕЗ ack →
+    {status:"ACK_REQUIRED"}, не success. Возврат до шагов 6-7.
+S7 истинная гонка одного id (остаток есть): [CREATED, CREATED], ops=1,
+    remaining=20, blankQty=19, logs=1 — контракт держится.
+Порчи данных нет НИ В ОДНОМ пути: ops/lines/BlankStock/ChangeLog по одному разу.
+Двойной ChangeLog НЕТ (writeChangeLog в TX, откат).
+Двойной enqueue себестоимости ДА на идемпотентном пути (:472 выполняется) —
+  безвреден, cost-queue коалесцирует по ключу партии, FINAL не трогается.
+Двойной close/freeze НЕТ: archiveBatchIfDepleted в TX + идемпотентен
+  (internal/cost.ts:436 if (preBatch.closedAt) return false).
 
 Concurrency:
-Retry после успеха (сеть/двойной тап) на том же id. Не нужны два терминала.
+Не нужна. Sequential retry после committed success на том же id.
 
 Business impact:
-Оператор думает, что торцовка не прошла, открывает новую вкладку (новый id)
-и пытается ещё раз — если реек уже 0, вторая не пройдёт. Путаница, не
-silent double stock.
+Оператор видит «Недостаточно реек» для успешно записанной операции. Реакция —
+новая вкладка (новый id) и повтор: либо снова отказ, либо лишняя операция по
+другому лоту. Тот же класс путаницы, что инцидент DI-020. Silent double stock
+НЕТ.
+
+Production exposure:
+0 живых ProductionOperation. Но лот ПАК-40-1280-01-7 remainingQuantity=0 при
+quantity=1280 — ровно конфигурация S1a, т.е. путь реально достижим.
 
 Detection:
-Op существует, клиент получил 500 на retry.
+Op с этим clientRequestId существует, клиент получил ошибку остатка или
+повторный ACK_REQUIRED.
 
 Recovery:
-Не требуется для qty.
+Не требуется (qty и деньги корректны).
 
-Minimal fix direction:
-Как prisadka: create+unique сначала, затем decrement; или на gte-fail
-проверить существующую Op с этим clientRequestId → success.
+Implemented fix (working tree, not shipped):
+В TX: fast findUnique(clientRequestId) → lockRailLots (канон) →
+findUnique ЕЩЁ РАЗ под локом → только потом физика / INV-008 / DI-020 /
+stock / create. Replay → IDEMPOTENT_REPLAY: без склада, ChangeLog,
+archive, enqueue. Публичный UI-контракт остаётся {status:"CREATED"}.
+UNIQUE — финальная страховка. Пороги DI-020 и порядок RailLot-лока не менять.
 
 Confidence: HIGH
 ```
@@ -440,41 +484,116 @@ Confidence: HIGH
 
 ## DI-008
 
+**Pass 01.10 (2026-09-05):** переоценен на HEAD `16015d5`. Разбор:
+`audit/01.10-terminal-idempotency-review.md`. Production SELECT read-only
+2026-09-05. **НЕ fixed, НЕ stale.** Достижимо прямым вызовом Server Action и
+internal-вызовами; штатным терминальным UI — НЕТ (трассировка всех 4 экранов).
+
+**Pass 01.13 (2026-09-05):** owner = **C** (app required + DB NOT NULL + UNIQUE).
+План `audit/01.13-terminal-idempotency-remediation-plan.md`. Backfill запрещён.
+NULL перед migrate → STOP.
+
+**Implementation (working tree, 2026-09-05):** app `requireClientRequestId` на
+четырёх submit; schema `String @unique` (NOT NULL); миграция
+`20260905170000_production_operation_client_request_id_not_null` (LOCK +
+recheck + SET NOT NULL, без backfill). **Не CLOSED в production.**
+
 ```
 ID: DI-008
 Severity: P2
-Status: INVARIANT WEAKNESS
-Domain: Production
+Status: IMPLEMENTED (working tree, not shipped)
+Domain: Production / Terminal
+Reviewed: 01.10 @ HEAD 16015d5; plan 01.13 owner C
 
 Invariant:
 Дубль терминальной попытки не создаёт две ProductionOperation.
 
-Evidence:
-schema ProductionOperation.clientRequestId String? @unique
-migration 20260713161800 UNIQUE INDEX.
-PostgreSQL UNIQUE позволяет много NULL.
-submit* принимают optional clientRequestId.
-Hours: create без TX.
+Evidence (HEAD 16015d5):
+schema.prisma:355 clientRequestId String? @unique — nullable.
+migration 20260713161800: ALTER TABLE ADD COLUMN TEXT + CREATE UNIQUE INDEX.
+Production (SELECT 2026-09-05): pg_attribute.attnotnull = 'f';
+  индекс ProductionOperation_clientRequestId_key = полный btree UNIQUE,
+  НЕ partial, БЕЗ NULLS NOT DISTINCT → любое число NULL допустимо.
+Обязательности нет НИ НА ОДНОМ слое:
+  TS-вход: TorcovkaInput:340, PrisadkaInput:486, UpakovkaInput:742 — optional;
+    submitHours:1030 — optional позиционный;
+  validation: схемы нет вообще — ни одной проверки clientRequestId
+    в :355-361, :699-702, :984-987, :1033-1034;
+  Prisma: String? @unique;
+  прямой вызов Server Action: payload контролируется вызывающим.
+Все 4 создателя ProductionOperation — только terminal.ts (:394, :710, :992,
+  :1038). Admin/internal действия операции НЕ создают (production.ts —
+  только update/delete/correct). Публичных HTTP-путей записи нет
+  (src/app/api = cron/fetch-statements + health).
+Hours: create без TX (:1038), writeChangeLog после (:1045).
 
-Current behavior:
-UI шлёт id. Вызов без id (скрипт, старый клиент, забытый аргумент) —
-каждый create проходит. Две вкладки с разными id — две реальные операции
-если хватает остатка (это ключ на попытку, не на «физическое действие»).
+Достижимость (01.10 §4.2):
+A. штатный терминальный UI без ключа — НЕТ. Все 4 экрана: useRef(newRequestId())
+   при монтировании и передача в каждом вызове (torcovka-screen:76/:151/:190,
+   prisadka-screen:81/:93, upakovka-screen:58/:71, hours-screen:21/:29).
+   Ротация id только при success → ключ = попытка.
+B. прямой вызов Server Action — ДА (нужна валидная терминальная cookie).
+C. старый/устаревший клиент — практически нет: в деплое HEAD такого пути нет,
+   Server Action ID в Next 16 привязан к билду. Гипотетический канал.
+D. скрипты/тесты/internal — ДА, уже опускают: prisma/seed.ts:319,354,429,493
+   (dev seed, на prod не запускается); di-009.integrity.test.ts:371,392,436,
+   497,842,879.
+E. иного публичного/терминального API записи НЕТ.
+
+Current behavior (воспроизведено локально, PG 17, prod-код без правок):
+S4a TORCOVKA 2× без id  → ops=2, remaining 30→20→10, blankQty 19→38, logs=2
+S4b PRISADKA 2× без id  → ops=2, blank 10→6→2, detail 0→4→8, logs=2
+S4c UPAKOVKA 2× без id  → ops=2, blank 10→6→2, ГП 0→2→4, logs=2
+S4d HOURS 2× без id     → ops=2; затем 2× с одним id → +1 (идемпотентно)
+S5a TORCOVKA конкурентно без id → ops=2, blankQty=38
+S5b HOURS конкурентно: без id ops=2; с одним id +1
+Реальные последствия по типам:
+  дубль Op         — TORCOVKA/PRISADKA/UPAKOVKA/HOURS: ДА
+  дубль склада     — TORCOVKA/PRISADKA/UPAKOVKA: ДА; HOURS: n/a
+  дубль ЗП         — все четыре: ДА
+  дубль Batch state— TORCOVKA косвенно (второй decrement → archiveBatchIfDepleted)
+  безвредный no-op — нигде
+В минус не уходит: везде updateMany … gte; двойное списание только когда
+остатка физически хватает.
+
+Побочно (карточка НЕ открывается, закрывается в 01.13 вместе с DI-008):
+submitUpakovka с ключом и ДВУМЯ picks одного productId → success, но ops=0
+и склад не изменён. Из UI недостижимо. План: валидация уникальных productId
+до TX, не UNIQUE `${id}:${productId}`.
 
 Concurrency:
-Без id — даже sequential double submit.
+Не нужна. Без id достаточно sequential double submit.
 
 Business impact:
-Двойные ops → двойная ЗП и двойной расход склада, если остаток позволяет.
+Двойные ops → двойная ЗП и двойной расход склада при достаточном остатке.
+Для штатного UI недостижимо; контракт «дубль попытки не создаёт две операции»
+не обеспечен для любого не-UI вызова.
+
+Production exposure: 0.
+0 живых ProductionOperation; NULL clientRequestId = 0; дублей non-null = 0;
+UNIQUE-индекс здоров. Исторические 3 TORCOVKA (2026-09-01/02/04) удалены
+физически; наличие ключа по ChangeLog не восстанавливается (ключ там не
+пишется), но все три созданы штатным UI много позже миграции 2026-07-13.
+Исторические NULL как corruption НЕ утверждать — таких строк нет.
 
 Detection:
-Ops без clientRequestId в одно время/схожим qty.
+SELECT ... WHERE "clientRequestId" IS NULL — сейчас 0;
+ops без ключа в одно время со схожим qty.
 
 Recovery:
 Админ delete до выплаты (если gte reverse проходит).
 
-Minimal fix direction:
-Требовать clientRequestId на всех submit; NOT NULL для новых строк.
+Implemented fix (working tree, not shipped):
+Приложение: requireClientRequestId после auth на всех 4 submit
+(string, trim не пустой, ≤128). БД: ALTER COLUMN SET NOT NULL, UNIQUE
+индекс ProductionOperation_clientRequestId_key не пересоздавать.
+Миграция: LOCK TABLE + recheck NULL + RAISE (печать id/type/employeeId/
+workDate/createdAt). NO UPDATE, NO backfill, NO delete.
+Preflight: NULL count > 0 → STOP.
+Seed/integrity callers получают детерминированные seed:/test: id.
+UPakovka dup productId — отдельная валидация до TX.
+
+Owner decision: C. Открытых нет.
 
 Confidence: HIGH
 ```

@@ -31,7 +31,9 @@ import {
   decideTorcovkaSubmit,
   type SubmitTorcovkaResult,
   type TorcovkaPlausibilityAck,
+  type TorcovkaSubmitDecision,
 } from "@/lib/torcovka-plausibility";
+import { requireClientRequestId } from "@/lib/request-id";
 import { resolvePinLookup } from "@/lib/terminal-auth";
 import { RateLimiter, retryAfterSeconds } from "@/lib/rate-limit";
 import {
@@ -66,8 +68,9 @@ function round2(n: number): number {
 
 /**
  * Дубль по ключу идемпотентности терминала (A21): unique-конфликт P2002 на
- * `clientRequestId`. Такой повтор (двойной тап/реплей/две вкладки) считаем
- * успешно обработанным — операция уже создана первым запросом.
+ * `clientRequestId`. Такой повтор одной попытки (двойной тап / сетевой retry /
+ * replay того же id) считаем успешно обработанным — операция уже создана
+ * первым запросом. Две вкладки обычно дают два разных id — это две попытки.
  */
 function isDuplicateClientRequest(e: unknown): boolean {
   if (typeof e !== "object" || e === null) return false;
@@ -334,10 +337,15 @@ export async function terminalLogout(): Promise<void> {
 
 export type { SubmitTorcovkaResult, TorcovkaPlausibilityAck };
 
+type TorcovkaTxResult =
+  | { status: "CREATED_NEW" }
+  | { status: "IDEMPOTENT_REPLAY" }
+  | Extract<TorcovkaSubmitDecision, { status: "ACK_REQUIRED" }>;
+
 export interface TorcovkaInput {
   employeeId: string;
   /** Ключ идемпотентности с клиента (A21): один на попытку операции. */
-  clientRequestId?: string;
+  clientRequestId: string;
   batchId: string;
   railLotId: string;
   railsTaken: number;
@@ -352,6 +360,7 @@ export interface TorcovkaInput {
 
 export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcovkaResult> {
   await requireTerminalEmployee(input?.employeeId);
+  const clientRequestId = requireClientRequestId(input.clientRequestId);
   const { employeeId, batchId, railLotId, railsTaken } = input;
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
@@ -360,8 +369,19 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
   }
   if (picks.length === 0) throw new Error("Не выбраны длины заготовок");
 
-  const txResult = await prisma.$transaction(async (tx) => {
+  const txResult: TorcovkaTxResult = await prisma.$transaction(async (tx) => {
+    const existingBeforeLock = await tx.productionOperation.findUnique({
+      where: { clientRequestId },
+      select: { id: true },
+    });
+    if (existingBeforeLock) return { status: "IDEMPOTENT_REPLAY" as const };
+
     await lockRailLots(tx, [railLotId]);
+    const existingAfterLock = await tx.productionOperation.findUnique({
+      where: { clientRequestId },
+      select: { id: true },
+    });
+    if (existingAfterLock) return { status: "IDEMPOTENT_REPLAY" as const };
     const lot = await tx.railLot.findUnique({ where: { id: railLotId } });
     if (!lot || lot.batchId !== batchId) throw new Error("Пакет реек не найден");
     const batch = await tx.batch.findUniqueOrThrow({ where: { id: batchId } });
@@ -395,7 +415,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
       data: {
         type: "TORCOVKA",
         employeeId,
-        clientRequestId: input.clientRequestId,
+        clientRequestId,
         batchId,
         railLotId,
         railsTaken,
@@ -461,15 +481,16 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
     );
 
     await archiveBatchIfDepleted(tx, batchId);
-    return { status: "CREATED" as const };
+    return { status: "CREATED_NEW" as const };
   }).catch((e) => {
-    if (isDuplicateClientRequest(e)) return { status: "CREATED" as const };
+    if (isDuplicateClientRequest(e)) return { status: "IDEMPOTENT_REPLAY" as const };
     throw e;
   });
 
   if (txResult.status === "ACK_REQUIRED") return txResult;
-
-  await enqueueRecalcBatchCosts(batchId);
+  if (txResult.status === "CREATED_NEW") {
+    await enqueueRecalcBatchCosts(batchId);
+  }
 
   revalidatePath("/production");
   revalidatePath("/terminal");
@@ -483,7 +504,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
 export interface PrisadkaInput {
   employeeId: string;
   /** Ключ идемпотентности с клиента (A21). */
-  clientRequestId?: string;
+  clientRequestId: string;
   picks: { detailId: string; kind: "torcev" | "plosk"; quantity: number }[];
 }
 
@@ -696,6 +717,7 @@ async function movedReversePrisadkaLine(
 
 export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
   await requireTerminalEmployee(input?.employeeId);
+  const clientRequestId = requireClientRequestId(input.clientRequestId);
   const { employeeId } = input;
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
@@ -711,7 +733,7 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
         data: {
           type: "PRISADKA",
           employeeId,
-          clientRequestId: input.clientRequestId,
+          clientRequestId,
           workDate: new Date(),
         },
       });
@@ -739,7 +761,7 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
 export interface UpakovkaInput {
   employeeId: string;
   /** Ключ идемпотентности с клиента (A21). */
-  clientRequestId?: string;
+  clientRequestId: string;
   picks: { productId: string; quantity: number }[];
 }
 
@@ -981,10 +1003,15 @@ async function movedReverseUpakovkaOperation(
 
 export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
   await requireTerminalEmployee(input?.employeeId);
+  const clientRequestId = requireClientRequestId(input.clientRequestId);
   const { employeeId } = input;
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
   if (picks.length === 0) throw new Error("Не выбраны изделия");
+  const productIds = picks.map((p) => p.productId);
+  if (new Set(productIds).size !== productIds.length) {
+    throw new Error("В списке упаковки изделие указано дважды");
+  }
 
   await prisma
     .$transaction(async (tx) => {
@@ -994,9 +1021,7 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
             type: "UPAKOVKA",
             employeeId,
             // Одна операция на изделие → ключ на попытку уточняем изделием (A21).
-            clientRequestId: input.clientRequestId
-              ? `${input.clientRequestId}:${pick.productId}`
-              : undefined,
+            clientRequestId: `${clientRequestId}:${pick.productId}`,
             workDate: new Date(),
             productId: pick.productId,
             productQty: pick.quantity,
@@ -1027,16 +1052,17 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
 export async function submitHours(
   employeeId: string,
   hours: number,
-  clientRequestId?: string,
+  clientRequestId: string,
 ): Promise<void> {
   await requireTerminalEmployee(employeeId || undefined);
+  const requestId = requireClientRequestId(clientRequestId);
   if (!employeeId) throw new Error("Не выбран работник");
   if (!(hours > 0)) throw new Error("Укажите количество часов");
 
   let op: { id: string } | null = null;
   try {
     op = await prisma.productionOperation.create({
-      data: { type: "HOURS", employeeId, clientRequestId, hours, workDate: new Date() },
+      data: { type: "HOURS", employeeId, clientRequestId: requestId, hours, workDate: new Date() },
     });
   } catch (e) {
     if (isDuplicateClientRequest(e)) return; // A21: повтор уже обработан

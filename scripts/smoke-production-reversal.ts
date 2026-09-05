@@ -112,6 +112,7 @@ async function testPrisadkaRoundtrip() {
   await withTerminalSession(employee.id, () =>
     submitPrisadka({
       employeeId: employee.id,
+      clientRequestId: `smoke:prisadka:torcev:${employee.id}:${detail.id}`,
       picks: [{ detailId: detail.id, kind: "torcev", quantity: 10 }],
     }),
   );
@@ -194,7 +195,11 @@ async function testUpakovkaRoundtrip() {
   const productStockBefore = await snapshotProductStock(product.id);
 
   await withTerminalSession(employee.id, () =>
-    submitUpakovka({ employeeId: employee.id, picks: [{ productId: product.id, quantity: 5 }] }),
+    submitUpakovka({
+      employeeId: employee.id,
+      clientRequestId: `smoke:upakovka:${employee.id}:${product.id}`,
+      picks: [{ productId: product.id, quantity: 5 }],
+    }),
   );
   const productStockAfterSubmit = await snapshotProductStock(product.id);
   assertEqual(productStockAfterSubmit, productStockBefore + 5, "приход 5 изделий на склад");
@@ -242,6 +247,7 @@ async function testTorcovkaDeleteDoesNotReturnRails() {
 
   const submitInput = {
     employeeId: employee.id,
+    clientRequestId: `smoke:torcovka:${employee.id}:${lot.id}`,
     batchId: lot.batchId,
     railLotId: lot.id,
     railsTaken: 5,
@@ -315,7 +321,11 @@ async function testPrisadkaDeleteBlockedWhenConsumedFurther() {
   });
 
   await withTerminalSession(employee.id, () =>
-    submitPrisadka({ employeeId: employee.id, picks: [{ detailId: detail.id, kind: "torcev", quantity: 10 }] }),
+    submitPrisadka({
+      employeeId: employee.id,
+      clientRequestId: `smoke:prisadka:chain-torcev:${employee.id}:${detail.id}`,
+      picks: [{ detailId: detail.id, kind: "torcev", quantity: 10 }],
+    }),
   );
   const opTorcev = await prisma.productionOperation.findFirstOrThrow({
     where: { type: "PRISADKA", employeeId: employee.id },
@@ -324,7 +334,11 @@ async function testPrisadkaDeleteBlockedWhenConsumedFurther() {
 
   // Вторая присадка переводит эти же 10 шт (единственный источник — raw) в (true, true).
   await withTerminalSession(employee.id, () =>
-    submitPrisadka({ employeeId: employee.id, picks: [{ detailId: detail.id, kind: "plosk", quantity: 10 }] }),
+    submitPrisadka({
+      employeeId: employee.id,
+      clientRequestId: `smoke:prisadka:chain-plosk:${employee.id}:${detail.id}`,
+      picks: [{ detailId: detail.id, kind: "plosk", quantity: 10 }],
+    }),
   );
 
   const rawBefore =

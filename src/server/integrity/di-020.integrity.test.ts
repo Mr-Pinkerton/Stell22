@@ -138,6 +138,7 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
       data: {
         type: "TORCOVKA",
         employeeId: world.emp.id,
+        clientRequestId: `test:di020:seed:${opts.suffix}`,
         batchId: world.batch.id,
         railLotId: world.lot.id,
         railsTaken: opts.railsTaken,
@@ -715,6 +716,7 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
       data: {
         type: "TORCOVKA",
         employeeId: world.emp.id,
+        clientRequestId: `test:di020:13c:${suffix}`,
         batchId: world.batch.id,
         railLotId: lotB.id,
         railsTaken: 20,
@@ -790,6 +792,7 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
       data: {
         type: "TORCOVKA",
         employeeId: world.emp.id,
+        clientRequestId: `test:di020:13d:${suffix}`,
         batchId: world.batch.id,
         railLotId: lotB.id,
         railsTaken: 20,

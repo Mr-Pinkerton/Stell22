@@ -322,6 +322,33 @@ SQL
   )" >&2
 fi
 
+# --- DI-008: NULL ProductionOperation.clientRequestId ---
+null_req_n="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*) FROM "ProductionOperation" WHERE "clientRequestId" IS NULL;
+SQL
+)" | tr -d '[:space:]')"
+
+if ! [[ "$null_req_n" =~ ^[0-9]+$ ]]; then
+  echo "PRECHECK FAILED" >&2
+  echo "Could not read NULL clientRequestId count" >&2
+  exit 1
+fi
+
+if [[ "$null_req_n" -gt 0 ]]; then
+  failed=1
+  echo "DI-008: ${null_req_n} ProductionOperation row(s) have NULL clientRequestId. STOP. Do not migrate/backfill/delete." >&2
+  echo "id / type / employeeId / workDate / createdAt:" >&2
+  psql_q "$(
+    cat <<'SQL'
+SELECT id || ' / ' || type || ' / ' || "employeeId" || ' / ' || "workDate"::text || ' / ' || "createdAt"::text
+FROM "ProductionOperation"
+WHERE "clientRequestId" IS NULL
+ORDER BY "createdAt", id;
+SQL
+  )" >&2
+fi
+
 if [[ "$failed" -ne 0 ]]; then
   echo "PRECHECK FAILED" >&2
   exit 1

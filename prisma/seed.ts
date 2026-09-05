@@ -320,6 +320,7 @@ async function main() {
       data: {
         type: "TORCOVKA",
         employeeId: o.employeeId,
+        clientRequestId: `seed:torcovka:${o.date}:${o.employeeId}:${o.railLotId}`,
         batchId: o.batchId,
         railLotId: o.railLotId,
         railsTaken: o.railsTaken,
@@ -355,6 +356,7 @@ async function main() {
       data: {
         type: "PRISADKA",
         employeeId: o.employeeId,
+        clientRequestId: `seed:prisadka:${o.date}:${o.employeeId}:${o.detailId}:${o.kind}`,
         workDate: new Date(o.date),
         lines: {
           create: [
@@ -430,6 +432,7 @@ async function main() {
       data: {
         type: "UPAKOVKA",
         employeeId: o.employeeId,
+        clientRequestId: `seed:upakovka:${o.date}:${o.employeeId}:${o.productId}`,
         productId: o.productId,
         productQty: o.quantity,
         workDate: new Date(o.date),
@@ -491,9 +494,10 @@ async function main() {
     { employeeId: "emp-3", date: "2026-06-26", hours: 8 },
   ];
   await prisma.productionOperation.createMany({
-    data: hourLogs.map((h) => ({
+    data: hourLogs.map((h, i) => ({
       type: "HOURS" as const,
       employeeId: h.employeeId,
+      clientRequestId: `seed:hours:${h.employeeId}:${h.date}:${i}`,
       workDate: new Date(h.date),
       hours: h.hours,
       isPaid: false,

@@ -69,6 +69,12 @@ function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+let di009Req = 0;
+function testReq(label: string): string {
+  di009Req += 1;
+  return `test:di009:${label}:${di009Req}`;
+}
+
 describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
   let prismaA: ReturnType<typeof createIntegrityClients>["prismaA"];
   let prismaB: ReturnType<typeof createIntegrityClients>["prismaB"];
@@ -368,7 +374,11 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     await prismaA.detailStock.create({
       data: { detailId: d.id, torcevayaDone: true, ploskostDone: true, quantity: 5 },
     });
-    await submitUpakovka({ employeeId: emp.id, picks: [{ productId: p.id, quantity: 2 }] });
+    await submitUpakovka({
+      employeeId: emp.id,
+      clientRequestId: testReq("u371"),
+      picks: [{ productId: p.id, quantity: 2 }],
+    });
     const op = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "UPAKOVKA" } });
 
     await deleteProductionOperation(op.id);
@@ -389,7 +399,11 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     await prismaA.detailStock.create({
       data: { detailId: d.id, torcevayaDone: true, ploskostDone: true, quantity: 20 },
     });
-    await submitUpakovka({ employeeId: emp.id, picks: [{ productId: p.id, quantity: 20 }] });
+    await submitUpakovka({
+      employeeId: emp.id,
+      clientRequestId: testReq("u392"),
+      picks: [{ productId: p.id, quantity: 20 }],
+    });
     const op = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "UPAKOVKA" } });
     await delay(30);
 
@@ -433,7 +447,11 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
       data: { detailId: d.id, torcevayaDone: true, ploskostDone: true, quantity: 3 },
     });
     await prismaA.productStock.create({ data: { productId: pB.id, quantity: 4 } });
-    await submitUpakovka({ employeeId: emp.id, picks: [{ productId: pA.id, quantity: 1 }] });
+    await submitUpakovka({
+      employeeId: emp.id,
+      clientRequestId: testReq("u436"),
+      picks: [{ productId: pA.id, quantity: 1 }],
+    });
     const op = await prismaA.productionOperation.findFirstOrThrow({
       where: { type: "UPAKOVKA", productId: pA.id },
     });
@@ -494,7 +512,11 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     await prismaA.detailStock.create({
       data: { detailId: d.id, torcevayaDone: true, ploskostDone: true, quantity: 2 },
     });
-    await submitUpakovka({ employeeId: emp.id, picks: [{ productId: p.id, quantity: 1 }] });
+    await submitUpakovka({
+      employeeId: emp.id,
+      clientRequestId: testReq("u497"),
+      picks: [{ productId: p.id, quantity: 1 }],
+    });
     const op = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "UPAKOVKA" } });
 
     await deleteProductionOperation(op.id);
@@ -535,6 +557,7 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
       data: {
         type: "TORCOVKA",
         employeeId: emp.id,
+        clientRequestId: testReq("t534"),
         batchId: batch.id,
         railLotId: lot.id,
         railsTaken: 2,
@@ -679,7 +702,12 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
       prismaB.$transaction(
         async (tx) => {
           const op = await tx.productionOperation.create({
-            data: { type: "PRISADKA", employeeId: emp.id, workDate: new Date() },
+            data: {
+              type: "PRISADKA",
+              employeeId: emp.id,
+              clientRequestId: testReq("t681"),
+              workDate: new Date(),
+            },
           });
           await applyPrisadkaPick(tx, op.id, d.id, "torcev", 3);
         },
@@ -781,7 +809,11 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     const packResults = await Promise.allSettled([
       withTimeout(conductInventory(docU.id), "conduct-upakovka"),
       withTimeout(
-        submitUpakovka({ employeeId: emp.id, picks: [{ productId: p.id, quantity: 1 }] }),
+        submitUpakovka({
+          employeeId: emp.id,
+          clientRequestId: testReq("u784"),
+          picks: [{ productId: p.id, quantity: 1 }],
+        }),
         "submit-upakovka",
       ),
     ]);
@@ -841,6 +873,7 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
       withTimeout(
         submitPrisadka({
           employeeId: empP.id,
+          clientRequestId: testReq("p842"),
           picks: [{ detailId: dP.id, kind: "torcev", quantity: 2 }],
         }),
         "submit-prisadka",
@@ -878,6 +911,7 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     });
     await submitPrisadka({
       employeeId: emp.id,
+      clientRequestId: testReq("p879"),
       picks: [{ detailId: d.id, kind: "torcev", quantity: 2 }],
     });
     const op = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "PRISADKA" } });
@@ -923,6 +957,7 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     });
     await submitPrisadka({
       employeeId: emp.id,
+      clientRequestId: testReq("p924"),
       picks: [{ detailId: d.id, kind: "plosk", quantity: 5 }],
     });
     const op = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "PRISADKA" } });
@@ -1044,7 +1079,11 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     await prismaA.detailStock.create({
       data: { detailId: dB.id, torcevayaDone: true, ploskostDone: true, quantity: 10 },
     });
-    await submitUpakovka({ employeeId: emp.id, picks: [{ productId: p.id, quantity: 1 }] });
+    await submitUpakovka({
+      employeeId: emp.id,
+      clientRequestId: testReq("u-pack"),
+      picks: [{ productId: p.id, quantity: 1 }],
+    });
     const op = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "UPAKOVKA" } });
     await prismaA.productDetail.deleteMany({ where: { productId: p.id } });
     await prismaA.productDetail.create({ data: { productId: p.id, detailId: dB.id, quantity: 1 } });
@@ -1112,7 +1151,11 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     await prismaA.detailStock.create({
       data: { detailId: dB.id, torcevayaDone: true, ploskostDone: true, quantity: 10 },
     });
-    await submitUpakovka({ employeeId: emp.id, picks: [{ productId: p.id, quantity: 1 }] });
+    await submitUpakovka({
+      employeeId: emp.id,
+      clientRequestId: testReq("u-pack"),
+      picks: [{ productId: p.id, quantity: 1 }],
+    });
     const op = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "UPAKOVKA" } });
     await prismaA.productDetail.deleteMany({ where: { productId: p.id } });
     await prismaA.productDetail.create({ data: { productId: p.id, detailId: dB.id, quantity: 1 } });
@@ -1203,6 +1246,7 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     });
     await submitPrisadka({
       employeeId: emp.id,
+      clientRequestId: testReq("p1204"),
       picks: [{ detailId: d.id, kind: "torcev", quantity: 2 }],
     });
     const tOp = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "PRISADKA" } });
@@ -1307,7 +1351,11 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     await prismaA.detailStock.create({
       data: { detailId: dC.id, torcevayaDone: true, ploskostDone: true, quantity: 10 },
     });
-    await submitUpakovka({ employeeId: emp.id, picks: [{ productId: p.id, quantity: 1 }] });
+    await submitUpakovka({
+      employeeId: emp.id,
+      clientRequestId: testReq("u-pack"),
+      picks: [{ productId: p.id, quantity: 1 }],
+    });
     const op = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "UPAKOVKA" } });
     await prismaA.productDetail.deleteMany({ where: { productId: p.id } });
     await prismaA.productDetail.create({ data: { productId: p.id, detailId: dB.id, quantity: 1 } });

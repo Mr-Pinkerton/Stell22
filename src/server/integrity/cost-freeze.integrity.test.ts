@@ -174,6 +174,7 @@ describe.skipIf(!enabled)("cost-freeze integrity (DI-005/006/018/019/BD-3)", () 
       data: {
         type: "TORCOVKA",
         employeeId: opts.employeeId,
+        clientRequestId: `test:cost-freeze:${opts.batchId}:${opts.qty}:${opts.paid ? "p" : "u"}:${Date.now()}-${Math.random().toString(36).slice(2)}`,
         workDate: new Date("2026-09-01T00:00:00.000Z"),
         batchId: opts.batchId,
         isPaid: opts.paid ?? false,
