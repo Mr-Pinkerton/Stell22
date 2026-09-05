@@ -1,24 +1,23 @@
 # Этап 1: Data Integrity findings
 
-HEAD `9b5ed66da36543c3a58d7ab8e392fcd19e78b9c1` (после P1 `199fe2f`). Карта: `audit/01-data-integrity-map.md`. Инварианты: `audit/01-data-integrity-invariants.md`. Freeze/recalc: `audit/01.2-cost-freeze-review.md`.
+**Normalization base:** `4809c0cfdce11ada8563d6c6d8cb7f7069c90c85`.
+**Production runtime verified during normalization:** `060629eaeb91dafdd2b0484d165ea695a949f6f4`.
+
+Карта: `audit/01-data-integrity-map.md`. Инварианты: `audit/01-data-integrity-invariants.md`. Freeze/recalc: `audit/01.2-cost-freeze-review.md`.
 
 Только подтверждённые находки с evidence. Не баги: двойное списание реек/деталей на gte-путях; «торцовка не возвращает рейки»; sequential retry импорта/supply; payroll claim; freeze в той же TX что Payment.
 
-**Remediation in progress (code not yet shipped):** DI-005 / DI-006 / DI-018 / DI-019 + BD-3 frozen section/`materialId` + partial UNIQUE FINAL. Historical FINAL vs `totalCost` is **not** auto-rewritten (BD-2). See `audit/01.3-cost-freeze-remediation-plan.md`.
+**Production status verified 2026-09-06.** Remaining not closed: DI-011 / DI-017 **DEFERRED BY OWNER**; DI-012 **DESIGN RISK**; DI-015 **OPEN (OWNER DECISION LOCKED)**. Marketplace was not re-audited in this pass.
 
 Шкала: P0 массовая порча без восстановления; P1 реальный неверный склад/деньги/ЗП/с/с; P2 слабый invariant / редкий race; P3 долг без текущего нарушения.
 
-**Pass 01.2 (этот файл):** пересмотрены DI-005 / DI-006 (+ DI-018, DI-019). Карточки DI-001/002/003/004/010/013 ниже — снимок фазы 1 на `5479580`; production P1 их закрывал, здесь не переоценивались.
+**Pass notes (historical evidence files, not current status):**
+- **01.2:** DI-005 / DI-006 / DI-018 / DI-019 reviewed @ `9b5ed66`; remediation `audit/01.3-cost-freeze-remediation-plan.md`.
+- **01.4:** DI-020 added; `audit/01.4-torcovka-input-safety-review.md`.
+- **01.6:** DI-009 re-audit @ `931efe8`; `audit/01.6-inventory-provenance-review.md`. Plan `audit/01.7-inventory-integrity-remediation-plan.md` later shipped in `1f411e5`.
+- **01.18:** DI-014 **CLOSED IN PRODUCTION** @ `060629e`. Разбор `audit/01.18-payment-operation-uniqueness-review.md`. Deploy `33992508139`. Migration `20260905220000_payment_batch_item_operation_unique`.
 
-**Pass 01.4:** добавлен DI-020. Production SELECT read-only 2026-09-04. Карточка в этом файле; разбор `audit/01.4-torcovka-input-safety-review.md`.
-
-**Pass 01.6:** переоценен DI-009 (HEAD `931efe8`, production SELECT read-only 2026-09-04). Разбор `audit/01.6-inventory-provenance-review.md`. Гипотеза «ломает provenance» **не подтверждена**.
-
-**Pass 01.6 owner lock (2026-09-04):** BD-9.1=C, BD-9.2 граница, BD-9.5 immutable CONDUCTED, BD-9.6 freeze deviationSum. Не CONFIRMED RACE штатного concurrent conduct. Plan: `audit/01.7-inventory-integrity-remediation-plan.md` (не реализован). Код/schema/tests не менялись.
-
-**Pass 01.18 (2026-09-05):** DI-014 **CLOSED IN PRODUCTION** @ `060629eaeb91dafdd2b0484d165ea695a949f6f4`. Разбор `audit/01.18-payment-operation-uniqueness-review.md`. Deploy `33992508139`. Migration `20260905220000_payment_batch_item_operation_unique`.
-
-**Marketplace (owner, 2026-09-05):** DI-011 / DI-017 **DEFERRED BY OWNER** — marketplace subsystem is currently low priority and may be redesigned rather than incrementally hardened. Not FIXED, not CLOSED. DI-004 / DI-010 не менялись (owner deferred только эти две карточки).
+**Marketplace (owner, 2026-09-05):** DI-011 / DI-017 **DEFERRED BY OWNER** — marketplace subsystem is currently low priority and may be redesigned rather than incrementally hardened. Not FIXED, not CLOSED. DI-004 / DI-010 were **not** deferred; P1 closed them in production (see cards).
 
 ---
 
@@ -26,26 +25,26 @@ HEAD `9b5ed66da36543c3a58d7ab8e392fcd19e78b9c1` (после P1 `199fe2f`). Ка�
 
 | ID | Sev | Status | Domain | Title |
 | --- | --- | --- | --- | --- |
-| DI-001 | P1 | CONFIRMED BUG | Cost/Purchases | `updateBatch` меняет `purchaseCost`, не `totalCost` |
-| DI-002 | P1 | CONFIRMED BUG | Finance/Cost | `setAccountConfirmed` не пересчитывает Deal/Batch totals |
-| DI-003 | P1 | CONFIRMED RACE | Finance | `importKey` не UNIQUE — concurrent import дублирует CashFlow |
-| DI-004 | P1 | CONFIRMED RACE | Marketplace | Два sync могут дважды списать ProductStock (в минус) |
-| DI-005 | P2 | REMEDIATING | Cost | freeze считает FINAL без Batch lock; concurrent sync пишет C=B |
-| DI-006 | P2 | REMEDIATING | Cost | recalc без TX/lock: orphan PRELIMINARY рядом с FINAL |
-| DI-007 | P2 | IMPLEMENTED (working tree) | Production | Torcovka: decrement реек до unique insert; retry может вернуть ошибку |
-| DI-008 | P2 | IMPLEMENTED (working tree) | Production | `clientRequestId` nullable UNIQUE |
-| DI-009 | P1 | CONFIRMED BUG | Inventory | устаревший DRAFT: deviation vs live; historical deviationSum не frozen |
-| DI-010 | P2 | DESIGN RISK | Marketplace | skuOzon/skuWb не unique |
+| DI-001 | P1 | CLOSED IN PRODUCTION | Cost/Purchases | `updateBatch` меняет `purchaseCost`, не `totalCost` |
+| DI-002 | P1 | CLOSED IN PRODUCTION | Finance/Cost | `setAccountConfirmed` не пересчитывает Deal/Batch totals |
+| DI-003 | P1 | CLOSED IN PRODUCTION | Finance | `importKey` не UNIQUE — concurrent import дублирует CashFlow |
+| DI-004 | P1 | CLOSED IN PRODUCTION | Marketplace | Два sync могут дважды списать ProductStock (в минус) |
+| DI-005 | P2 | CLOSED IN PRODUCTION | Cost | freeze считает FINAL без Batch lock; concurrent sync пишет C=B |
+| DI-006 | P2 | CLOSED IN PRODUCTION | Cost | recalc без TX/lock: orphan PRELIMINARY рядом с FINAL |
+| DI-007 | P2 | CLOSED IN PRODUCTION | Production | Torcovka: decrement реек до unique insert; retry может вернуть ошибку |
+| DI-008 | P2 | CLOSED IN PRODUCTION | Production | `clientRequestId` nullable UNIQUE |
+| DI-009 | P1 | CLOSED IN PRODUCTION | Inventory | устаревший DRAFT: deviation vs live; historical deviationSum не frozen |
+| DI-010 | P2 | CLOSED IN PRODUCTION | Marketplace | skuOzon/skuWb не unique |
 | DI-011 | P2 | DEFERRED BY OWNER | Marketplace | SHIPPED→PENDING не возвращает ГП (кроме Ozon cancel) |
 | DI-012 | P3 | DESIGN RISK | Cost | cost-queue in-memory; CLI recalc/sync в обход |
-| DI-013 | P2 | DESIGN RISK | Finance | Deal/CF commit без derived `totalCost` в той же TX |
+| DI-013 | P2 | CLOSED IN PRODUCTION | Finance | Deal/CF commit без derived `totalCost` в той же TX |
 | DI-014 | P3 | CLOSED IN PRODUCTION | Payroll | UNIQUE PaymentBatchItem.operationId (was: нет UNIQUE) |
-| DI-015 | P3 | NEEDS BUSINESS DECISION | Payroll | ставки live, не snapshot на операции |
-| DI-016 | P3 | INVARIANT WEAKNESS | Inventory | два DRAFT при concurrent create |
+| DI-015 | P3 | OPEN (OWNER DECISION LOCKED) | Payroll | ставки live, не snapshot на операции |
+| DI-016 | P2 | CLOSED IN PRODUCTION | Inventory | два DRAFT при concurrent create |
 | DI-017 | P3 | DEFERRED BY OWNER | Marketplace | MpStock без unique (marketplace,sku) |
-| DI-018 | P2 | REMEDIATING | Cost/Payroll | два last TORCOVKA payment → freeze не ставится |
-| DI-019 | P2 | REMEDIATING | Cost/Production | update TORCOVKA qty после pay/freeze; FINAL stale |
-| DI-020 | P1 | INVARIANT WEAKNESS | Production/Terminal | TORCOVKA принимает неправдоподобный расход без guard |
+| DI-018 | P2 | CLOSED IN PRODUCTION | Cost/Payroll | два last TORCOVKA payment → freeze не ставится |
+| DI-019 | P2 | CLOSED IN PRODUCTION | Cost/Production | update TORCOVKA qty после pay/freeze; FINAL stale |
+| DI-020 | P1 | CLOSED IN PRODUCTION | Production/Terminal | TORCOVKA принимает неправдоподобный расход без guard |
 
 Pass 01.4: `audit/01.4-torcovka-input-safety-review.md`. DI-021 (per-rail bin-packing) **не открывать**.
 
@@ -53,17 +52,26 @@ Pass 01.4: `audit/01.4-torcovka-input-safety-review.md`. DI-021 (per-rail bin-pa
 
 ## DI-001
 
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `199fe2f283a9685bce889e71c95fd32faedc61f6` (`fix: harden P1 data integrity`)
+- Migration: none
+- Deploy evidence: GitHub Actions run `33875705448` SUCCESS (2026-09-04), SHA `199fe2f`. Still present in production `060629e`.
+- What changed: `updateBatch` locks Deal→Batch, forbids frozen money/section/`materialId` edits, then `syncDealInternal` / `syncBatchTotalCostInternal` in the same TX so `totalCost` follows `purchaseCost`.
+- Historical corruption: none observed / not asserted.
+
 ```
 ID: DI-001
 Severity: P1
-Status: CONFIRMED BUG
+Status: CLOSED IN PRODUCTION
 Domain: Cost / Purchases
+Reviewed: phase 1 @ 5479580; closed P1 199fe2f / prod 060629e
 
 Invariant:
 Batch.totalCost = purchaseCost + доля доставки из подтверждённых ДДС сделок
 (v2: C = закупка + доставка). createBatch выставляет totalCost = purchaseCost.
 
-Evidence:
+Historical evidence (фаза 1 @ 5479580; line numbers of that SHA):
 src/server/purchases.ts:createBatch L253 (init totalCost)
 src/server/purchases.ts:updateBatch L301-324 — пишет purchaseCost, prices, section;
   НЕ пишет totalCost; НЕ вызывает syncBatchTotalCostInternal; нет проверки frozenAt.
@@ -71,7 +79,7 @@ src/lib/cost.ts distribute использует totalCost как C
 src/lib/cost-report.ts:210
 src/server/internal/finance-operations.ts:syncBatchTotalCostInternal L66-92
 
-Current behavior:
+Historical behavior (pre-P1):
 Правка закупочной стоимости партии обновляет purchaseCost и ставит recalc.
 Recalc/live report берут C из totalCost. Пока никто не вызовет sync сделки,
 C остаётся старым. Если сделок нет — totalCost навсегда расходится с purchaseCost.
@@ -101,6 +109,7 @@ Recovery:
 Minimal fix direction:
 В updateBatch: пересчитать totalCost тем же syncBatchTotalCostInternal
 (и не менять финансы замороженной партии / или запретить правка C после freeze).
+Shipped in P1 as described in Production resolution.
 
 Confidence: HIGH
 ```
@@ -109,18 +118,27 @@ Confidence: HIGH
 
 ## DI-002
 
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `199fe2f283a9685bce889e71c95fd32faedc61f6`
+- Migration: none
+- Deploy evidence: GitHub Actions run `33875705448` SUCCESS (2026-09-04), SHA `199fe2f`. Still present in production `060629e`.
+- What changed: `setAccountConfirmed` locks Account→Deal→Batch, updates `confirmed`, then `syncDealInternal` in the same TX. Totals follow quarantine on/off without waiting for a later Deal mutation.
+- Historical corruption: none observed / not asserted.
+
 ```
 ID: DI-002
 Severity: P1
-Status: CONFIRMED BUG
+Status: CLOSED IN PRODUCTION
 Domain: Finance / Cost
+Reviewed: phase 1 @ 5479580; closed P1 199fe2f / prod 060629e
 
 Invariant:
 После подтверждения карантинного счёта его ДДС участвуют в Deal.total и
 Batch.totalCost. Комментарий setAccountConfirmed finance.ts:365-368 это обещает
 для «себестоимости сделок».
 
-Evidence:
+Historical evidence (фаза 1 @ 5479580):
 src/server/finance.ts:setAccountConfirmed L370-376 — только account.confirmed.
 Нет syncDealInternal / syncBatchTotalCostInternal.
 Import: statement-import.ts создаёт confirmed:false, затем после TX
@@ -129,7 +147,7 @@ syncDealInternal по auto-assigned deals — в этот момент sumConfir
 getFinanceData / getPeriodOverhead фильтруют confirmed=true — live ДДС ок,
 derived Batch.totalCost нет.
 
-Current behavior:
+Historical behavior (pre-P1):
 Типовой поток: импорт → автоправило привязало CF к сделке → sync посчитал
 доставку = 0 (карантин) → админ подтверждает счёт в Настройках → totals
 остаются без доставки до следующей мутации Deal/CF.
@@ -157,6 +175,7 @@ Recovery:
 Minimal fix direction:
 После setAccountConfirmed собрать dealId по CF этого счёта и вызвать
 syncDealInternal.
+Shipped in P1 as described in Production resolution.
 
 Confidence: HIGH
 ```
@@ -165,17 +184,26 @@ Confidence: HIGH
 
 ## DI-003
 
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `199fe2f283a9685bce889e71c95fd32faedc61f6`
+- Migration: `20260904150000_di003_account_number_import_key_unique` (applied 2026-09-04 13:07:42 UTC)
+- Deploy evidence: GitHub Actions run `33875705448` SUCCESS (2026-09-04), SHA `199fe2f`. Production catalog 2026-09-06: `CashFlow_accountId_importKey_key` and `Account_accountNumber_key` present; dup importKey groups = 0.
+- What changed: partial UNIQUE `(accountId, importKey)` where importKey NOT NULL; partial UNIQUE `Account.accountNumber`; import wraps in `retryOnceOnImportUnique` (P2002 → retry once as skip).
+- Historical corruption: none observed / not asserted (dup groups 0 at verify).
+
 ```
 ID: DI-003
 Severity: P1
-Status: CONFIRMED RACE
+Status: CLOSED IN PRODUCTION
 Domain: Finance
+Reviewed: phase 1 @ 5479580; closed P1 199fe2f / prod 060629e
 
 Invariant:
 Одна банковская операция (тот же importKey на счёте) = одна строка CashFlow.
 Комментарий lib/statement-import.ts:13-16 и INV-035.
 
-Evidence:
+Historical evidence (фаза 1 @ 5479580):
 prisma/schema.prisma CashFlow L643-648 @@index([accountId, importKey]) — не @unique.
 prisma/migrations/20260630164144_cashflow_import_key/migration.sql:
   CREATE INDEX ... (не UNIQUE).
@@ -183,7 +211,7 @@ src/server/internal/statement-import.ts:256-299 findFirst then create внутр
 Два входа: importStatement (admin) и POST /api/cron/fetch-statements +
 scripts/fetch-statements.ts.
 
-Current behavior:
+Historical behavior (pre-P1):
 Последовательный повтор того же файла: findFirst видит ключ → skip. Безопасно.
 Два одновременных import (IMAP cron + ручная загрузка, или два cron overlap
 пока первый TX ещё открыт): оба findFirst не видят незакоммиченный insert
@@ -214,6 +242,7 @@ Recovery:
 Minimal fix direction:
 UNIQUE (accountId, importKey) где importKey NOT NULL; ловить unique violation
 как skip. Не полагаться на findFirst.
+Shipped in P1 as described in Production resolution.
 
 Confidence: HIGH
 ```
@@ -222,17 +251,26 @@ Confidence: HIGH
 
 ## DI-004
 
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `199fe2f283a9685bce889e71c95fd32faedc61f6`
+- Migration: none
+- Deploy evidence: GitHub Actions run `33875705448` SUCCESS (2026-09-04), SHA `199fe2f`. Still present in production `060629e`. Owner deferred only DI-011 / DI-017, not this card.
+- What changed: `lockSuppliesInOrder` + ProductStock `FOR UPDATE`, then `computeSupplyDeduction` from locked live qty and `updateMany` gte (CAS). Concurrent overlapping sync cannot double-decrement below available.
+- Historical corruption: none observed / not asserted. Marketplace behavior was not re-audited in this pass beyond shipped P1 evidence.
+
 ```
 ID: DI-004
 Severity: P1
-Status: CONFIRMED RACE
+Status: CLOSED IN PRODUCTION
 Domain: Marketplace / Warehouse
+Reviewed: phase 1 @ 5479580; closed P1 199fe2f / prod 060629e
 
 Invariant:
 Отгрузка поставки списывает ProductStock один раз на (delta). Нельзя уйти в минус
 (computeSupplyDeduction + комментарий marketplace-sync.ts:535).
 
-Evidence:
+Historical evidence (фаза 1 @ 5479580):
 src/lib/supply-stock.ts:computeSupplyDeduction — cap по переданному available.
 src/server/internal/marketplace-sync.ts:504-567:
   READ existing deductedQty/shortfallQty
@@ -244,7 +282,7 @@ src/server/internal/marketplace-sync.ts:504-567:
 Входы: syncMarketplaces (admin) и scripts/run-mp-sync.ts (тот же internal).
 Prod: один app-контейнер, но два запроса = две PG TX.
 
-Current behavior:
+Historical behavior (pre-P1):
 Последовательный повтор: alreadyDeducted+short ≥ target → delta<=0, не списывает.
 Два overlapping sync: оба читают alreadyDeducted=0 и available=N, оба decrement
 toRemove. Stock может стать отрицательным. Оба пишут deductedQty≈toRemove
@@ -276,6 +314,7 @@ Minimal fix direction:
 Как production: updateMany WHERE quantity >= toRemove; условный update
 Supply WHERE deductedQty = alreadyDeducted; либо advisory lock на sync.
 Не decrement без CAS.
+Shipped in P1 as described in Production resolution.
 
 Confidence: HIGH
 ```
@@ -284,19 +323,27 @@ Confidence: HIGH
 
 ## DI-005
 
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `cc571f5075b873b3f0ded733eedc438792562b40` (`fix: harden cost freeze integrity`)
+- Migration: `20260904170000_batchcost_final_unique` (applied 2026-09-04 15:18:51 UTC)
+- Deploy evidence: GitHub Actions run `33888149932` SUCCESS (2026-09-04), SHA `cc571f5`. Production catalog 2026-09-06: `BatchCost_batchId_final_key` present; duplicate FINAL groups = 0. Still in production `060629e`.
+- What changed: `maybeFreezeBatch` `SELECT Batch FOR UPDATE` (unless already locked), re-read C/prices/ops, then FINAL + `frozenAt`. `syncBatchTotalCostInternal` still skips frozen via `updateMany where frozenAt: null`. Partial UNIQUE one FINAL per batch.
+- Historical corruption: none observed / not asserted. BD-2: existing FINAL vs `totalCost` is not auto-rewritten.
+
 ```
 ID: DI-005
 Severity: P2
-Status: CONFIRMED RACE
+Status: CLOSED IN PRODUCTION
 Domain: Cost / Finance
-Reviewed: 01.2 @ HEAD 9b5ed66 (после P1 199fe2f)
+Reviewed: 01.2 @ HEAD 9b5ed66 (после P1 199fe2f); closed cc571f5 / prod 060629e
 
 Invariant:
 После freeze Batch.totalCost и FINAL — одна замороженная C
 (finance-operations.ts:151 «Замороженные партии не трогаем»; P1:
 money-поля updateBatch запрещены если frozenAt уже set).
 
-Evidence:
+Historical evidence (01.2 @ 9b5ed66):
 P1 закрыл запись C ПОСЛЕ committed frozenAt:
   syncBatchTotalCostInternal L157 FOR UPDATE Batch;
   L159 skip if frozenAt; L182-186 updateMany where { id, frozenAt: null }.
@@ -307,7 +354,7 @@ P1 НЕ менял freeze path (internal/cost.ts, payroll.ts нет в 199fe2f):
 Тест p1-review-concurrency «freeze || updateBatch» сам делает
 SELECT Batch FOR UPDATE — это не maybeFreezeBatch.
 
-Current behavior:
+Historical behavior (pre-cc571f5):
 Sequential: sync/updateBatch после freeze не меняют C / money — OK.
 Race F1 (01.2): TX F считает FINAL из A до lock строки; TX S (sync /
 updateBatch / confirm / import) держит FOR UPDATE, пишет totalCost=B,
@@ -334,6 +381,7 @@ Minimal fix direction:
 В maybeFreezeBatch: SELECT Batch FOR UPDATE, затем перечитать C/prices
 и ops, затем compute FINAL, затем frozenAt. Не считать из объекта
 до lock. Починить тест P1, чтобы звал реальный freeze.
+Shipped in cc571f5 as described in Production resolution.
 
 Confidence: HIGH
 ```
@@ -342,18 +390,26 @@ Confidence: HIGH
 
 ## DI-006
 
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `cc571f5075b873b3f0ded733eedc438792562b40`
+- Migration: `20260904170000_batchcost_final_unique` (same as DI-005; UNIQUE FINAL only)
+- Deploy evidence: GitHub Actions run `33888149932` SUCCESS (2026-09-04), SHA `cc571f5`. Production catalog 2026-09-06: unique FINAL index present. Still in production `060629e`.
+- What changed: `recalcBatchCosts` runs per-batch in a TX with Batch `FOR UPDATE`; skips create if frozen (deletes orphan PRELIMINARY); freeze deletes PRELIMINARY then inserts at most one FINAL. UNIQUE PRELIMINARY was not added (BD-1: cache, not SoT).
+- Historical corruption: none observed / not asserted.
+
 ```
 ID: DI-006
 Severity: P2
-Status: CONFIRMED RACE
+Status: CLOSED IN PRODUCTION
 Domain: Cost
-Reviewed: 01.2 @ HEAD 9b5ed66
+Reviewed: 01.2 @ HEAD 9b5ed66; closed cc571f5 / prod 060629e
 
 Invariant (намерение freezeBatch, не UI SoT):
 После freeze в BatchCost остаётся FINAL; recalc не пишет.
 PRELIMINARY — cache, не SoT текущего отчёта.
 
-Evidence:
+Historical evidence (01.2 @ 9b5ed66):
 recalcBatchCosts L340-361: нет $transaction, нет lock, нет recheck
 frozenAt на create. deleteMany PRELIMINARY затем create — два statement.
 Schema: @@index(batchId) only; unique (batchId,status) нет; FK RESTRICT.
@@ -363,7 +419,7 @@ loadCostContext L181: findMany { status: FINAL } only.
 cost-queue in-memory; recalcBatchCostsInternal нет; CLI recalc нет.
 P1 cost.ts не трогал.
 
-Current behavior:
+Historical behavior (pre-cc571f5):
 Несколько PRELIMINARY у открытой партии: queue 1 процесса коалесцирует
 один ключ. Не автобаг — UI cache не читает.
 Race F2: freeze между findMany/deleteMany и create → PRELIMINARY рядом
@@ -390,6 +446,8 @@ Minimal fix direction:
 delete+create в TX с Batch FOR UPDATE или where frozenAt null на write;
 не create если уже frozen. UNIQUE FINAL. UNIQUE PRELIMINARY — только
 после BD-1.
+Shipped in cc571f5 (UNIQUE FINAL + locked recalc). UNIQUE PRELIMINARY still
+not added (BD-1).
 
 Confidence: HIGH
 ```
@@ -400,31 +458,33 @@ Confidence: HIGH
 
 **Pass 01.10 (2026-09-05):** переоценен на HEAD `16015d5` (после DI-020).
 Разбор и полное воспроизведение: `audit/01.10-terminal-idempotency-review.md`.
-Production SELECT read-only 2026-09-05. **НЕ fixed, НЕ stale** — DI-020
-порядок decrement→create не менял и добавил второй канал нарушения.
+Production SELECT read-only 2026-09-05. **На тот момент НЕ fixed.**
 
 **Pass 01.13 (2026-09-05):** owner lock. План `audit/01.13-terminal-idempotency-remediation-plan.md`.
 Простой `findUnique` до `lockRailLots` **отклонён** как недостаточный под
 concurrent same-id при `remaining === railsTaken`.
 
-**Implementation (working tree, 2026-09-05):** алгоритм 01.13 в `submitTorcovka`
-(fast `findUnique` → `lockRailLots` → post-lock `findUnique` → физика;
-replay = `IDEMPOTENT_REPLAY`, без enqueue). **Не CLOSED в production:**
-миграции на прод не применялись, commit/push/deploy нет.
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `327b4ae6e54c15b37314d93b2b0c33563274d877` (`fix: harden terminal operation idempotency`)
+- Migration: none for DI-007 (app-path). Companion DI-008 migration `20260905170000_production_operation_client_request_id_not_null` applied 2026-09-05 16:17:30 UTC.
+- Deploy evidence: GitHub Actions run `33977066876` SUCCESS (2026-09-05), SHA `327b4ae`. Still present in production `060629e` (later `8240f4d` EXTREME admin-code did not reopen replay-before-ack).
+- What changed: `submitTorcovka` fast `findUnique` → `lockRailLots` → post-lock `findUnique` → physics. Replay = `IDEMPOTENT_REPLAY` (no stock / ChangeLog / archive / enqueue). UNIQUE remains the backstop.
+- Historical corruption: none observed. Ops/lines/BlankStock/ChangeLog were never doubled in 01.10 reproduction; the bug was a false error to the operator.
 
 ```
 ID: DI-007
 Severity: P2
-Status: IMPLEMENTED (working tree, not shipped)
+Status: CLOSED IN PRODUCTION
 Domain: Production / Terminal
-Reviewed: 01.10 @ HEAD 16015d5; plan 01.13
+Reviewed: 01.10 @ HEAD 16015d5; plan 01.13; closed 327b4ae / prod 060629e
 
 Invariant:
 Повтор того же clientRequestId после закоммиченного успеха = success, без
 побочных эффектов и без повторного запроса подтверждения
 (JSDoc terminal.ts:67-71, :339, A21).
 
-Evidence (код, HEAD 16015d5, submitTorcovka terminal.ts:353-479):
+Historical evidence (код, HEAD 16015d5, submitTorcovka terminal.ts:353-479):
 Порядок внутри TX:
   :364 lockRailLots FOR UPDATE
   :370-374 длина заготовки <= длины рейки
@@ -437,7 +497,7 @@ Evidence (код, HEAD 16015d5, submitTorcovka terminal.ts:353-479):
 Дубль детектируется ПОСЛЕ отказа по остатку (шаг 6) и ПОСЛЕ ack-гейта (шаг 5).
 Prisadka :710 / Upakovka :992 создают Op ПЕРВЫМ → P2002 до списания.
 
-Current behavior (воспроизведено локально, PG 17, prod-код без правок):
+Historical behavior (воспроизведено локально, PG 17, prod-код без правок @ 16015d5):
 S1a лот исчерпан: A={status:CREATED} remaining 10→0 ops=1;
     B (тот же id) = ОШИБКА «Недостаточно реек в пакете», ops=1.
 S1b лот не исчерпан: A CREATED, B CREATED, ops=1, remaining=20
@@ -463,7 +523,7 @@ Business impact:
 другому лоту. Тот же класс путаницы, что инцидент DI-020. Silent double stock
 НЕТ.
 
-Production exposure:
+Production exposure (01.10):
 0 живых ProductionOperation. Но лот ПАК-40-1280-01-7 remainingQuantity=0 при
 quantity=1280 — ровно конфигурация S1a, т.е. путь реально достижим.
 
@@ -474,7 +534,7 @@ Op с этим clientRequestId существует, клиент получил
 Recovery:
 Не требуется (qty и деньги корректны).
 
-Implemented fix (working tree, not shipped):
+Implemented fix (shipped 327b4ae):
 В TX: fast findUnique(clientRequestId) → lockRailLots (канон) →
 findUnique ЕЩЁ РАЗ под локом → только потом физика / INV-008 / DI-020 /
 stock / create. Replay → IDEMPOTENT_REPLAY: без склада, ChangeLog,
@@ -490,32 +550,35 @@ Confidence: HIGH
 
 **Pass 01.10 (2026-09-05):** переоценен на HEAD `16015d5`. Разбор:
 `audit/01.10-terminal-idempotency-review.md`. Production SELECT read-only
-2026-09-05. **НЕ fixed, НЕ stale.** Достижимо прямым вызовом Server Action и
+2026-09-05. **На тот момент НЕ fixed.** Достижимо прямым вызовом Server Action и
 internal-вызовами; штатным терминальным UI — НЕТ (трассировка всех 4 экранов).
 
 **Pass 01.13 (2026-09-05):** owner = **C** (app required + DB NOT NULL + UNIQUE).
 План `audit/01.13-terminal-idempotency-remediation-plan.md`. Backfill запрещён.
 NULL перед migrate → STOP.
 
-**Implementation (working tree, 2026-09-05):** app `requireClientRequestId` на
-четырёх submit; schema `String @unique` (NOT NULL); миграция
-`20260905170000_production_operation_client_request_id_not_null` (LOCK +
-recheck + SET NOT NULL, без backfill). **Не CLOSED в production.**
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `327b4ae6e54c15b37314d93b2b0c33563274d877`
+- Migration: `20260905170000_production_operation_client_request_id_not_null` (applied 2026-09-05 16:17:30 UTC)
+- Deploy evidence: GitHub Actions run `33977066876` SUCCESS (2026-09-05), SHA `327b4ae`. Production catalog 2026-09-06: `clientRequestId` `attnotnull = t`; UNIQUE `ProductionOperation_clientRequestId_key` present; NULL rows = 0.
+- What changed: `requireClientRequestId` on all four submit paths; column SET NOT NULL (no backfill); existing UNIQUE kept. Upakovka duplicate productId validation shipped in the same release.
+- Historical corruption: none observed / not asserted. NULL count was 0 before migrate.
 
 ```
 ID: DI-008
 Severity: P2
-Status: IMPLEMENTED (working tree, not shipped)
+Status: CLOSED IN PRODUCTION
 Domain: Production / Terminal
-Reviewed: 01.10 @ HEAD 16015d5; plan 01.13 owner C
+Reviewed: 01.10 @ HEAD 16015d5; plan 01.13 owner C; closed 327b4ae / prod 060629e
 
 Invariant:
 Дубль терминальной попытки не создаёт две ProductionOperation.
 
-Evidence (HEAD 16015d5):
+Historical evidence (HEAD 16015d5):
 schema.prisma:355 clientRequestId String? @unique — nullable.
 migration 20260713161800: ALTER TABLE ADD COLUMN TEXT + CREATE UNIQUE INDEX.
-Production (SELECT 2026-09-05): pg_attribute.attnotnull = 'f';
+Production (SELECT 2026-09-05, pre-327b4ae): pg_attribute.attnotnull = 'f';
   индекс ProductionOperation_clientRequestId_key = полный btree UNIQUE,
   НЕ partial, БЕЗ NULLS NOT DISTINCT → любое число NULL допустимо.
 Обязательности нет НИ НА ОДНОМ слое:
@@ -544,7 +607,7 @@ D. скрипты/тесты/internal — ДА, уже опускают: prisma/
    497,842,879.
 E. иного публичного/терминального API записи НЕТ.
 
-Current behavior (воспроизведено локально, PG 17, prod-код без правок):
+Historical behavior (воспроизведено локально, PG 17, prod-код без правок @ 16015d5):
 S4a TORCOVKA 2× без id  → ops=2, remaining 30→20→10, blankQty 19→38, logs=2
 S4b PRISADKA 2× без id  → ops=2, blank 10→6→2, detail 0→4→8, logs=2
 S4c UPAKOVKA 2× без id  → ops=2, blank 10→6→2, ГП 0→2→4, logs=2
@@ -587,7 +650,7 @@ ops без ключа в одно время со схожим qty.
 Recovery:
 Админ delete до выплаты (если gte reverse проходит).
 
-Implemented fix (working tree, not shipped):
+Implemented fix (shipped 327b4ae):
 Приложение: requireClientRequestId после auth на всех 4 submit
 (string, trim не пустой, ≤128). БД: ALTER COLUMN SET NOT NULL, UNIQUE
 индекс ProductionOperation_clientRequestId_key не пересоздавать.
@@ -606,13 +669,22 @@ Confidence: HIGH
 
 ## DI-009
 
-**Pass 01.6 evidence:** `audit/01.6-inventory-provenance-review.md`. **Owner lock 2026-09-04.** Plan (не код): `audit/01.7-inventory-integrity-remediation-plan.md`.
+**Pass 01.6 evidence:** `audit/01.6-inventory-provenance-review.md`. **Owner lock 2026-09-04.** Plan: `audit/01.7-inventory-integrity-remediation-plan.md`.
+
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `1f411e5e0f8018069e9f91d69439ff306fdc2572` (`fix: enforce inventory integrity boundary`)
+- Migration: none (app-path; DI-016 later added draft UNIQUE)
+- Deploy evidence: GitHub Actions run `33952967617` SUCCESS (2026-09-05), SHA `1f411e5`. Still present in production `060629e`. Later DI-016 (`16015d5`) did not reopen these guards.
+- What changed: live == accountedQty guard (`STALE_SNAPSHOT`) inside TX; `deviationSum` frozen Decimal; `Inventory.date` at conduct; CONDUCTED `updateMany` CAS; reverse blocked when CONDUCTED line covers the ref (`assertInventoryBoundary`); serializeDoc returns stored deviationSum.
+- Historical corruption: none observed / not asserted. Production 2026-09-06: 1 CONDUCTED, 0 DRAFT, 0 InventoryLine (same as 01.6 exposure 0).
 
 ```
 ID: DI-009
 Severity: P1
-Status: CONFIRMED BUG
+Status: CLOSED IN PRODUCTION
 Domain: Inventory / Production
+Reviewed: 01.6 @ HEAD 931efe8; closed 1f411e5 / prod 060629e
 
 MAIN INVARIANT:
 После успешного conductInventory:
@@ -630,13 +702,13 @@ MAIN INVARIANT:
 Не классифицировать как CONFIRMED RACE этого потока.
 Приложение обязано защищать snapshot guard'ом.
 
-CONFIRMED BUG:
+CONFIRMED BUG (historical, pre-1f411e5):
 - deviation/deviationSum считаются от accountedQty черновика без сверки live
-  (warehouse.ts:326 vs абсолютный SET :335/341/364/390).
+  (warehouse.ts:326 vs абсолютный SET :335/341/364/390 @ 931efe8).
 - serializeDoc не отдаёт сохранённый deviationSum; UI истории считает
   live unitCost текущего месяца (warehouse-inventory-tab.tsx:320-323).
 
-INVARIANT WEAKNESS:
+INVARIANT WEAKNESS (historical, pre-1f411e5):
 - нет live == accountedQty внутри TX;
 - устаревший DRAFT проводится;
 - status DRAFT проверяется вне TX; update by id без status (warehouse.ts:317, :402);
@@ -653,7 +725,7 @@ SPEC DRIFT:
 - Math.round(deviation * unitCost * 100) / 100 вместо Decimal.
 
 DEFERRED:
-- DI-016 два DRAFT (не в scope);
+- DI-016 два DRAFT (later closed separately);
 - BD-9.3 НЗП/заготовки;
 - BD-9.7 CashFlow «Потеря ГП»;
 - explicit counted-line UX (prefill actual=accounted).
@@ -665,7 +737,7 @@ OWNER:
 - BD-9.6 = freeze deviationSum, Decimal;
 - date at conduct = now(); historical prod не переписывать.
 
-Evidence (код, HEAD 931efe8):
+Historical evidence (код, HEAD 931efe8):
 warehouse.ts:228-283 createInventoryDraft accountedQty = live at t0
 warehouse.ts:313-422 conduct: valuation и status вне TX; SET actualQty;
   ChangeLog только {status, lines:N}
@@ -675,12 +747,12 @@ schema: нет UNIQUE DRAFT; нет applied* колонок; InventoryLine.refId
 Production (SELECT 2026-09-04): 1 Inventory CONDUCTED, 0 InventoryLine.
 Exposure = 0. Историческую corruption НЕ утверждать.
 
-Minimal fix: 01.7 — без schema/migration.
+Minimal fix: 01.7 — без schema/migration. Shipped in 1f411e5.
 
 Confidence: HIGH
 ```
 
-Не открывать ledger/FIFO/event sourcing. Не реализовывать, пока нет «implement».
+Не открывать ledger/FIFO/event sourcing. 01.7 shipped in `1f411e5`; do not reopen as FIFO.
 
 Смежное, карточка не открыта (01.6 §9.5): `InventoryLine.refId` без FK + `deleteDetail`.
 
@@ -688,22 +760,32 @@ Confidence: HIGH
 
 ## DI-010
 
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `199fe2f283a9685bce889e71c95fd32faedc61f6`
+- Migration: `20260904151000_di010_active_sku_unique` (applied 2026-09-04 13:07:42 UTC)
+- Deploy evidence: GitHub Actions run `33875705448` SUCCESS (2026-09-04), SHA `199fe2f`. Production catalog 2026-09-06: `Product_skuOzon_active_key` / `Product_skuWb_active_key` present. Owner deferred only DI-011 / DI-017, not this card.
+- What changed: partial UNIQUE skuOzon / skuWb among ACTIVE products; `assertUniqueActiveSkus` on create/update/unarchive; ARCHIVED may keep historical SKUs (owner lock 2026-09-04).
+- Historical corruption: none observed / not asserted. Marketplace matching was not re-audited in this pass beyond shipped P1 evidence.
+
 ```
 ID: DI-010
 Severity: P2
-Status: DESIGN RISK
+Status: CLOSED IN PRODUCTION
 Domain: Marketplace / Nomenclature
+Reviewed: phase 1 @ 5479580; closed P1 199fe2f / prod 060629e
 
 Invariant:
 Один skuOzon / skuWb соответствует одному Product (матчинг продаж и списания ГП).
+Owner (P1): uniqueness among ACTIVE only.
 
-Evidence:
+Historical evidence (фаза 1 @ 5479580):
 schema Product L281-282 String NOT NULL, без @unique.
 nomenclature.ts:371-372 только non-empty trim.
 marketplace-sync.ts:424-425 Map sku→id, last-wins при дублях.
 marketplace.ts:buildNameBySku last-wins для UI имён.
 
-Current behavior:
+Historical behavior (pre-P1):
 Два изделия с одним Ozon offer_id: sync привяжет продажи/поставки к
 последнему в findMany; списание ProductStock может пойти не на тот GP.
 
@@ -721,6 +803,7 @@ Recovery:
 
 Minimal fix direction:
 UNIQUE skuOzon, UNIQUE skuWb (или уникальность среди ACTIVE) + server clash check.
+Shipped in P1 as ACTIVE-only partial UNIQUE.
 
 Confidence: HIGH
 ```
@@ -775,6 +858,8 @@ Confidence: HIGH
 
 ## DI-012
 
+Re-checked 2026-09-06: still **DESIGN RISK**. Cost-queue remains in-memory; production still one app container (`DEPLOY-STATUS.md`). Not closed.
+
 ```
 ID: DI-012
 Severity: P3
@@ -817,17 +902,26 @@ Confidence: HIGH
 
 ## DI-013
 
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `199fe2f283a9685bce889e71c95fd32faedc61f6`
+- Migration: none
+- Deploy evidence: GitHub Actions run `33875705448` SUCCESS (2026-09-04), SHA `199fe2f`. Still present in production `060629e`. Guarded by `finance-writers.lock.test.ts` (sync inside the same `$transaction` as CF/Deal/Account writers).
+- What changed: `syncDealInternal` / `syncBatchTotalCostInternal` accept the TX client; create/update/delete CashFlow, Deal, import, and account confirm all write derived totals in the same TX as the source. Recalc queue stays after commit.
+- Historical corruption: none observed / not asserted.
+
 ```
 ID: DI-013
 Severity: P2
-Status: DESIGN RISK
+Status: CLOSED IN PRODUCTION
 Domain: Finance / Cost
+Reviewed: phase 1 @ 5479580; closed P1 199fe2f / prod 060629e
 
 Invariant:
 Источник (Deal/CashFlow) и derived (Deal.total, Batch.totalCost) согласованы
 после успешной мутации.
 
-Evidence:
+Historical evidence (фаза 1 @ 5479580):
 createCashFlow L846-864: create затем syncDealInternal.
 createDeal L1134-1147: nested create затем sync.
 deleteDeal L1198-1205: TX unlink+delete затем sync batches.
@@ -835,7 +929,7 @@ updateDeal: TX items затем sync.
 import: TX затем sync deals.
 Нет общей TX источник+derived.
 
-Current behavior:
+Historical behavior (pre-P1):
 Full recompute не двойнит C при повторном sync. Crash/kill после commit CF
 и до sync → stale totals до следующей мутации той же сделки.
 То же, что REVIEW-010/021, но подтверждено по HEAD после split internal.
@@ -856,6 +950,7 @@ Recovery:
 
 Minimal fix direction:
 sync внутри той же TX что CF/Deal (передать tx в sync*Internal).
+Shipped in P1 as described in Production resolution.
 
 Confidence: HIGH
 ```
@@ -939,16 +1034,28 @@ Confidence: HIGH
 
 ## DI-015
 
+Owner decision (2026-09-06):
+- rate snapshot at operation performance
+- later Employee rate changes affect future operations only
+- fact correction keeps historical rate
+- implementation pending
+- detailed re-audit/remediation is separate DI-015 workstream
+
 ```
 ID: DI-015
 Severity: P3
-Status: NEEDS BUSINESS DECISION
+Status: OPEN (OWNER DECISION LOCKED)
 Domain: Payroll / Cost
 
-Invariant:
-(не зафиксирован в коде как snapshot). v2: сдельщина по расценкам работника.
+Invariant (owner, 2026-09-06; not yet implemented):
+Rate is determined when the ProductionOperation is performed / created.
+Later Employee rate changes affect FUTURE operations only.
+Existing operations retain the historical applicable rate.
+Unpaid fact correction (qty/hours) uses corrected fact × historical
+snapshotted rate, not the current Employee rate.
+Payment and historical labor cost must eventually use operation snapshot rates.
 
-Evidence:
+Evidence (current production code — implementation pending):
 Нет полей rate на ProductionOperation / Payment кроме Payment.amount.
 payroll.ts:185-194 amount из buildRefMaps() = текущие Employee.*Rate.
 getSalaryReport: unpaid — live rates; paid — p.amount.
@@ -972,11 +1079,11 @@ Detection:
 Сравнить Payment.amount с пересчётом тех же ops текущими ставками.
 
 Recovery:
-n/a — это семантика.
+n/a — это семантика до реализации snapshot.
 
 Minimal fix direction:
-Только после решения: snapshot ставки на Op в момент submit, или на Payment
-для отчёта; ProductCost closeMonth (A17) если нужна заморозка labor.
+Implementation pending. Dedicated DI-015 audit/remediation will determine
+storage and writers. Do not invent schema in this master file.
 
 Confidence: HIGH
 ```
@@ -985,10 +1092,18 @@ Confidence: HIGH
 
 ## DI-016
 
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `16015d5ece9af8514a0ec3dc9c0fb913c15ced48` (`fix: enforce single inventory draft`)
+- Migration: `20260905160000_di016_inventory_single_draft` (applied 2026-09-05 14:28:50 UTC)
+- Deploy evidence: GitHub Actions run `33971627473` SUCCESS (2026-09-05), SHA `16015d5`. Production catalog 2026-09-06: `Inventory_status_draft_key` present (`WHERE status = 'DRAFT'`); DRAFT count = 0.
+- What changed: partial UNIQUE one global DRAFT; `createInventoryDraft` maps P2002 (Inventory/status) to `DRAFT_ALREADY_EXISTS`; admin `deleteInventoryDraft` (DRAFT only, stock untouched); CONDUCTED remains immutable.
+- Historical corruption: none observed / not asserted. Duplicates never existed on prod.
+
 ```
 ID: DI-016
 Severity: P2  (повышено с P3 — audit/01.8, 2026-09-05)
-Status: CONFIRMED RACE + INVARIANT WEAKNESS + CONFIRMED BUG (узкий)
+Status: CLOSED IN PRODUCTION
 Domain: Inventory
 
 Полный разбор: audit/01.8-inventory-draft-uniqueness-review.md
@@ -1002,12 +1117,12 @@ Scope: GLOBAL (в модели Inventory нет ни одного scope-поля
 UI рендерит ровно один DRAFT (find/filter, warehouse-inventory-tab.tsx:74,76),
 решение владельца «инвентаризация = единая физическая сверка склада».
 
-Evidence:
+Historical evidence (pre-16015d5):
 DB-гарантии нет. createInventoryDraft (warehouse.ts:244-299):
 findFirst({status:"DRAFT"}) :246 и inventory.create :275 — два запроса
 в РАЗНЫХ транзакциях, без lock, без advisory lock, без DB-unique.
 Окно гонки = время getWarehouseStock() :249 (десятки–сотни мс).
-Production (SELECT read-only 2026-09-05): индексы только Inventory_pkey /
+Production (SELECT read-only 2026-09-05, pre-16015d5): индексы только Inventory_pkey /
 InventoryLine_pkey — partial UNIQUE отсутствует.
 
 Локальное воспроизведение (PostgreSQL 17, stell22_integrity, фикстура удалена):
@@ -1024,7 +1139,7 @@ InventoryLine_pkey — partial UNIQUE отсутствует.
      создаётся; второй INSERT → P2002 target=status; под индексом
      конкурентная вставка с двух соединений → ровно 1 DRAFT.
 
-Current behavior:
+Historical behavior (pre-16015d5):
 Sequential второй create бросает. Два параллельных create → два DRAFT.
 Второй DRAFT после проведения первого почти всегда непроводим
 (STALE_SNAPSHOT), и исправить его нельзя: accountedQty пишется только
@@ -1191,18 +1306,26 @@ Confidence: HIGH
 
 ## DI-018
 
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `cc571f5075b873b3f0ded733eedc438792562b40`
+- Migration: none (app lock; UNIQUE FINAL is DI-005/006)
+- Deploy evidence: GitHub Actions run `33888149932` SUCCESS (2026-09-04), SHA `cc571f5`. Still present in production `060629e`.
+- What changed: `markEmployeePaid` locks TORCOVKA batches after claim, then `maybeFreezeBatch(..., { batchAlreadyLocked: true })`. Concurrent last-T payments serialize on Batch `FOR UPDATE`; the second count sees unpaid=0 or already frozen.
+- Historical corruption: none observed / not asserted.
+
 ```
 ID: DI-018
 Severity: P2
-Status: CONFIRMED RACE
+Status: CLOSED IN PRODUCTION
 Domain: Cost / Payroll
-Reviewed: 01.2 @ HEAD 9b5ed66
+Reviewed: 01.2 @ HEAD 9b5ed66; closed cc571f5 / prod 060629e
 
 Invariant:
 Закрытая партия (closedAt) с unpaid TORCOVKA = 0 должна получить
 frozenAt + FINAL (canFreezeBatch; payroll.ts:234-237).
 
-Evidence:
+Historical evidence (01.2 @ 9b5ed66):
 maybeFreezeBatch L402-404: count isPaid:false TORCOVKA без lock всех
 ops партии и без Batch FOR UPDATE.
 markEmployeePaid вызывает maybeFreeze только для batchId TORCOVKA
@@ -1210,7 +1333,7 @@ markEmployeePaid вызывает maybeFreeze только для batchId TORCOV
 archiveBatchIfDepleted L417: если closedAt уже set → return, freeze нет.
 Других callers maybeFreezeBatch нет.
 
-Current behavior:
+Historical behavior (pre-cc571f5):
 Sequential: последняя выплата TORCOVKA видит count=0 → freeze. OK.
 Race F3: две параллельные выплаты последних T1 и T2. Каждая claim
 свои ops; каждая count ещё видит чужие unpaid (RC) → обе skip freeze.
@@ -1233,6 +1356,7 @@ Recovery:
 
 Minimal fix direction:
 Тот же Batch FOR UPDATE до count unpaid (сериализация выплат по партии).
+Shipped in cc571f5 as described in Production resolution.
 
 Confidence: HIGH
 ```
@@ -1241,18 +1365,26 @@ Confidence: HIGH
 
 ## DI-019
 
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `cc571f5075b873b3f0ded733eedc438792562b40`
+- Migration: none
+- Deploy evidence: GitHub Actions run `33888149932` SUCCESS (2026-09-04), SHA `cc571f5`. Still present in production `060629e`.
+- What changed: `updateProductionLineQuantity` / delete lock `ProductionOperation` `FOR UPDATE` first, then reject if `isPaid`. Same lock order on `correctTorcovkaRailsTaken` (later DI-020). Payment FK RESTRICT still blocks delete of paid ops.
+- Historical corruption: none observed / not asserted.
+
 ```
 ID: DI-019
 Severity: P2
-Status: CONFIRMED RACE
+Status: CLOSED IN PRODUCTION
 Domain: Cost / Production
-Reviewed: 01.2b @ HEAD 9b5ed66
+Reviewed: 01.2b @ HEAD 9b5ed66; closed cc571f5 / prod 060629e
 
 Invariant:
 После выплаты TORCOVKA (и freeze FINAL) факт lines не меняется.
 FINAL считается из TORCOVKA lines (freezeBatch / distribute).
 
-Evidence:
+Historical evidence (01.2b @ 9b5ed66):
 updateProductionLineQuantity L210-215 isPaid check ВНЕ TX.
 TORCOVKA TX L306-362: BlankStock ±; operationDetailLine.update qty.
 Нет lock ProductionOperation. Нет where isPaid=false.
@@ -1262,7 +1394,7 @@ OperationDetailLine.operationId ON DELETE RESTRICT (init L555) —
 lines удаляют до Op, это не про Payment.
 Parent UPDATE isPaid не блокирует child quantity UPDATE.
 
-Current behavior:
+Historical behavior (pre-cc571f5):
 UPDATE: sequential isPaid=true → throw до TX. Concurrent pay+freeze
 затем (или во время) update qty → COMMIT. Recalc skip frozen.
 DELETE: после committed Payment delete Op → P2003 RESTRICT → rollback
@@ -1288,6 +1420,7 @@ Minimal fix direction:
 В TX: lock ProductionOperation WHERE id AND isPaid=false FIRST,
 потом stock/line. Тот же каркас на delete (defense; FK уже стопит).
 Lock order: Op → (optional Batch) → stock. Не Batch затем Op.
+Shipped in cc571f5 as described in Production resolution.
 
 Confidence: HIGH
 ```
@@ -1296,26 +1429,35 @@ Confidence: HIGH
 
 ## DI-020
 
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `a5f901add5825bd37bdd18ffee476b060c13e138` (`feat: protect torcovka input and add rail correction`); security classify `931efe87f98431e8fb27dd11f4e3dd7e61738a03`
+- Migration: `20260904180000_torcovka_waste_ack` (applied 2026-09-04 18:00:14 UTC)
+- Deploy evidence: GitHub Actions run `33903011976` SUCCESS (2026-09-04), SHA `931efe8`. Still present in production `060629e`.
+- What changed: NORMAL / SUSPICIOUS / EXTREME waste bands; SUSPICIOUS requires worker confirm; EXTREME blocked without explicit high-waste ack; admin `correctTorcovkaRailsTaken` returns remaining rails (decrease only). Later `8240f4d` replaced EXTREME reason UX with admin 4-digit approval (`20260905210000_torcovka_approval`, deploy `33989414542`) — **did not reopen** the plausibility invariant.
+- Historical corruption: not asserted as DB corruption. Incident-like op existed (72.98% waste on ПАК-40-1280-01-7) and was deleted; remaining stayed 0.
+
 ```
 ID: DI-020
 Severity: P1
-Status: INVARIANT WEAKNESS
-         (+ DESIGN RISK по UX копи; + NEEDS BUSINESS DECISION по порогам
-            и correction workflow)
+Status: CLOSED IN PRODUCTION
 Domain: Production / Terminal / Cost / Inventory
-Reviewed: 01.4 @ HEAD cc571f5, production SELECT 2026-09-04 read-only
+Reviewed: 01.4 @ HEAD cc571f5, production SELECT 2026-09-04 read-only;
+  closed a5f901a / 931efe8 / prod 060629e
 
-Invariant (отсутствует):
-Система не отличает физически правдоподобный расход реек от очевидной
-ошибки ввода. Нет верхней границы wastePct на submit. Нет сценария
-«исправить ошибочный railsTaken» с возвратом remainingQuantity.
+Invariant (historical absence; now enforced):
+Система отличает физически правдоподобный расход реек от очевидной
+ошибки ввода. Guard: NORMAL < 20%; SUSPICIOUS 20–50% (повторный confirm);
+EXTREME ≥ 50% (explicit high-control path). Correction workflow exists
+to lower railsTaken and return remainingQuantity. Ordinary delete TORCOVKA
+still does not return rails (INV-047, unchanged).
 
 Waste model (owner 2026-09-04):
 Агрегат операции: railsTaken × lengthM vs Σ длин заготовок.
 Не раскрой каждой рейки. DI-021 / bin-packing не открывать.
 Минимум физики: заготовка ≤ длина рейки лота; Σ выход ≤ Σ взятых (INV-008).
 
-Evidence (code):
+Historical evidence (code @ cc571f5, before a5f901a):
 torcovka-screen.tsx: «Сколько реек взято?», hint «Доступно N шт»,
   confirm bar без %; destructive только при overLength
 terminal.ts:submitTorcovka — INV-008, gte remaining, нет max waste
@@ -1323,7 +1465,7 @@ production.ts:update — railsTaken immutable
 production.ts:delete TORCOVKA — remaining не возвращается (INV-047)
 src/ нет increment remainingQuantity
 
-Evidence (production, READ ONLY, 2026-09-04):
+Historical evidence (production, READ ONLY, 2026-09-04):
 Live ProductionOperation TORCOVKA N=0 (все 3 ops deleted).
 ChangeLog reconstruction N=3, all later_deleted:
   5.21% (410/1280 пакета), 6.95% (420/1280), 72.98% (1280/1280 весь пакет).
@@ -1333,7 +1475,7 @@ Incident-like: cmtmj4dpi000srp29ek0iw37f ПАК-40-1280-01-7
 Память «~97%» с этой строкой не совпадает; класс тот же.
 P75/P90/P95 на N=3 непригодны (квантиль = инцидент).
 
-Current behavior:
+Historical behavior (pre-a5f901a):
 Любая пара (railsTaken ≤ remaining, producedM ≤ takenM, producedM > 0)
 принимается. 73% и 97% внутренне согласованы с вводом.
 
@@ -1354,17 +1496,19 @@ wastePct операции ≫ нормы; railsTaken = lot.quantity при ма�
 remaining=0 при физическом наличии реек.
 
 Recovery:
-Штатного пути нет. Delete не возвращает рейки. Нужен отдельный
-corrective workflow (01.4 §8 CASE A). Ops в этом pass не чинить.
+Штатного пути не было. Delete не возвращает рейки. Нужен отдельный
+corrective workflow (01.4 §8 CASE A). Ops в том pass не чинить.
+Correction workflow shipped in a5f901a.
 
-Proposed guard bands (01.4 §7.5, не wasteThresholdPct=30):
+Proposed guard bands (01.4 §7.5, не wasteThresholdPct=30) — shipped:
 NORMAL < 20%; SUSPICIOUS 20–50% (повторный confirm); EXTREME ≥ 50%
-(только поток высокого отхода / брак).
+(высокий контроль; later admin 4-digit instead of reason picker).
 
 Minimal fix direction:
 1) plausibility guard терминал+сервер (агрегат %, не bin-pack);
 2) «исправить ошибочный ввод» (снизить railsTaken, вернуть remaining);
 3) не менять обычный delete TORCOVKA.
+Shipped in a5f901a / 931efe8 as described in Production resolution.
 
 Confidence: HIGH
 ```
