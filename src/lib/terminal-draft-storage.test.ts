@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { restorePendingAck } from "./restore-pending-ack";
 import {
   clearDraft,
   draftStorageKey,
@@ -48,8 +49,7 @@ function throwingStorage(method: "getItem" | "setItem" | "removeItem"): Storage 
 
 const emptyAck = {
   phase: "none" as const,
-  highWasteReason: null,
-  highWasteNote: "",
+  approvalCode: "",
 };
 
 function torcovkaDraft(over: Partial<TerminalDraftV1> & { employeeId?: string } = {}): TerminalDraftV1 {
@@ -144,9 +144,8 @@ describe("terminal-draft-storage", () => {
     const draft = torcovkaDraft();
     if (draft.operationType !== "TORCOVKA") throw new Error("setup");
     draft.payload.ackUi = {
-      phase: "extreme",
-      highWasteReason: "KNOTS",
-      highWasteNote: "",
+      phase: "approval",
+      approvalCode: "0427",
     };
     writeDraft(storage, draft);
     expect(readDraft(storage, "emp-a").status).toBe("ok");
@@ -221,24 +220,59 @@ describe("terminal-draft-storage", () => {
     expect(read.status === "ok" && read.draft.operationType === "UPAKOVKA").toBe(true);
   });
 
-  it("16 HIGH_WASTE reason/note/phase round-trip", () => {
+  it("16 legacy extreme reason/note parse safely and keep approvalCode empty", () => {
+    const parsed = parseTerminalDraft({
+      version: 1,
+      employeeId: "emp-a",
+      clientRequestId: "id-abc",
+      createdAt: "2026-09-05T11:32:00.000Z",
+      updatedAt: "2026-09-05T11:33:00.000Z",
+      operationType: "TORCOVKA",
+      payload: {
+        batchId: "batch-1",
+        lotId: "lot-1",
+        railsTaken: 10,
+        picks: [{ lengthM: 1.2, sort: "SORT1", quantity: 19 }],
+        activeSort: "SORT1",
+        ackUi: {
+          phase: "extreme",
+          highWasteReason: "OTHER",
+          highWasteNote: "скол",
+        },
+      },
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || parsed.draft.operationType !== "TORCOVKA") throw new Error("setup");
+    expect(parsed.draft.payload.ackUi).toEqual({
+      phase: "none",
+      approvalCode: "",
+    });
+    expect(parsed.draft.clientRequestId).toBe("id-abc");
+    expect(parsed.draft.payload.batchId).toBe("batch-1");
+    expect(parsed.draft.payload.lotId).toBe("lot-1");
+    expect(parsed.draft.payload.railsTaken).toBe(10);
+    expect(
+      restorePendingAck({
+        draft: parsed.draft,
+        railLots: [{ id: "lot-1", lengthM: 10 }],
+      }),
+    ).toBeNull();
+  });
+
+  it("16b approval code round-trip keeps leading zeros", () => {
     const storage = memoryStorage();
     const draft = torcovkaDraft();
     if (draft.operationType !== "TORCOVKA") throw new Error("setup");
-    draft.payload.ackUi = {
-      phase: "extreme",
-      highWasteReason: "OTHER",
-      highWasteNote: "скол",
-    };
+    draft.payload.ackUi = { phase: "approval", approvalCode: "0007" };
     writeDraft(storage, draft);
     const read = readDraft(storage, "emp-a");
     expect(read.status === "ok" && read.draft.operationType === "TORCOVKA").toBe(true);
     if (read.status === "ok" && read.draft.operationType === "TORCOVKA") {
       expect(read.draft.payload.ackUi).toEqual({
-        phase: "extreme",
-        highWasteReason: "OTHER",
-        highWasteNote: "скол",
+        phase: "approval",
+        approvalCode: "0007",
       });
+      expect(read.draft.clientRequestId).toBe("id-abc");
     }
   });
 

@@ -163,25 +163,33 @@ describe("§13 matrix 1–6", () => {
     ).toThrow();
   });
 
-  it("5: waste 73% + HIGH_WASTE + KNOTS + echo → CREATED HIGH_WASTE reason persisted", () => {
+  it("5: leftover HIGH_WASTE ack fails; approvalVerified persists HIGH_WASTE with null reason/note", () => {
     const m = waste73();
-    const decision = decideTorcovkaSubmit({
+    expect(() =>
+      decideTorcovkaSubmit({
+        railsTaken: 10,
+        metrics: m,
+        ack: {
+          kind: "HIGH_WASTE",
+          railsTaken: 10,
+          takenM: m.canon.takenM,
+          producedM: m.canon.producedM,
+          wastePct: m.canon.wastePct,
+          reason: "KNOTS",
+        },
+      }),
+    ).toThrow("Неверный тип подтверждения отхода");
+
+    const verified = decideTorcovkaSubmit({
       railsTaken: 10,
       metrics: m,
-      ack: {
-        kind: "HIGH_WASTE",
-        railsTaken: 10,
-        takenM: m.canon.takenM,
-        producedM: m.canon.producedM,
-        wastePct: m.canon.wastePct,
-        reason: "KNOTS",
-      },
+      approvalVerified: true,
     });
-    expect(decision).toEqual({
+    expect(verified).toEqual({
       status: "CREATED",
       persist: {
         torcovkaSubmitAckBand: "HIGH_WASTE",
-        torcovkaSubmitWasteReason: "KNOTS",
+        torcovkaSubmitWasteReason: null,
         torcovkaSubmitWasteNote: null,
       },
     });
@@ -231,37 +239,23 @@ describe("§13 matrix 1–6", () => {
     expect(noAck.status).toBe("ACK_REQUIRED");
   });
 
-  it("OTHER requires nonempty trimmed note", () => {
+  it("leftover OTHER HIGH_WASTE ack cannot bypass admin approval", () => {
     const m = waste73();
-    const base = {
-      kind: "HIGH_WASTE" as const,
-      railsTaken: 10,
-      takenM: m.canon.takenM,
-      producedM: m.canon.producedM,
-      wastePct: m.canon.wastePct,
-      reason: "OTHER" as const,
-    };
-    expect(() => decideTorcovkaSubmit({ railsTaken: 10, metrics: m, ack: base })).toThrow();
     expect(() =>
       decideTorcovkaSubmit({
         railsTaken: 10,
         metrics: m,
-        ack: { ...base, reasonNote: "   " },
+        ack: {
+          kind: "HIGH_WASTE",
+          railsTaken: 10,
+          takenM: m.canon.takenM,
+          producedM: m.canon.producedM,
+          wastePct: m.canon.wastePct,
+          reason: "OTHER",
+          reasonNote: "кривая партия",
+        },
       }),
-    ).toThrow();
-    const ok = decideTorcovkaSubmit({
-      railsTaken: 10,
-      metrics: m,
-      ack: { ...base, reasonNote: "  кривая партия  " },
-    });
-    expect(ok).toEqual({
-      status: "CREATED",
-      persist: {
-        torcovkaSubmitAckBand: "HIGH_WASTE",
-        torcovkaSubmitWasteReason: "OTHER",
-        torcovkaSubmitWasteNote: "кривая партия",
-      },
-    });
+    ).toThrow("Неверный тип подтверждения отхода");
   });
 
   it("NORMAL with ack present throws", () => {

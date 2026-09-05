@@ -10,18 +10,14 @@ import { cn } from "@/lib/utils";
 import { OperationTile, OperationTileGrid, OperationTileRow } from "@/components/terminal/operation-tile";
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
+import { NumericKeypad } from "@/components/terminal/numeric-keypad";
+import { KeypadDisplay } from "@/components/terminal/keypad-panel";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatLength } from "@/lib/format";
 import { maxDetailQuantity, type TorcovkaPick } from "@/lib/torcovka";
-import {
-  computeTorcovkaWasteMetrics,
-  TORCOVKA_WASTE_REASON_LABEL,
-  TORCOVKA_WASTE_REASONS,
-  type TorcovkaWasteReason,
-} from "@/lib/torcovka-plausibility";
+import { computeTorcovkaWasteMetrics } from "@/lib/torcovka-plausibility";
 import { submitTorcovka } from "@/server/terminal";
 import type { RailType, Sort } from "@/types/domain";
 import type {
@@ -50,6 +46,9 @@ function wasteBandClass(band: "NORMAL" | "SUSPICIOUS" | "EXTREME"): string {
 const SORT_LABEL: Record<Sort, string> = { SORT1: "1 сорт", SORT2: "2 сорт" };
 const RAIL_TYPE_LABEL: Record<RailType, string> = { POLKA: "Полка", KANAVKA: "Канавка" };
 const SORT_TABS: Sort[] = ["SORT1", "SORT2"];
+const APPROVAL_CODE_LENGTH = 4;
+const CODE_ROTATED_MESSAGE =
+  "Старый код больше не действует. Запросите новый код у администратора.";
 
 const RAIL_LENGTH_LIMIT_MESSAGE = "Длина заготовок превышает длину взятых реек";
 
@@ -85,10 +84,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       railLots: data.railLots,
     }),
   );
-  const [highWasteReason, setHighWasteReason] = useState<TorcovkaWasteReason | null>(
-    initial?.ackUi.highWasteReason ?? null,
-  );
-  const [highWasteNote, setHighWasteNote] = useState(initial?.ackUi.highWasteNote ?? "");
+  const [approvalCode, setApprovalCode] = useState(initial?.ackUi.approvalCode ?? "");
 
   const materialById = useMemo(
     () => new Map(data.materials.map((m) => [m.id, m])),
@@ -132,8 +128,8 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
   const pickedCount = Object.values(picked).reduce((a, b) => a + b, 0);
 
   const ackPhase: TorcovkaAckUiPhase =
-    pendingAck?.band === "EXTREME"
-      ? "extreme"
+    pendingAck?.status === "APPROVAL_REQUIRED" || pendingAck?.band === "EXTREME"
+      ? "approval"
       : pendingAck?.band === "SUSPICIOUS"
         ? "suspicious"
         : "none";
@@ -154,8 +150,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         activeSort,
         ackUi: {
           phase: ackPhase,
-          highWasteReason,
-          highWasteNote,
+          approvalCode,
         },
       },
     });
@@ -166,8 +161,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
     picked,
     activeSort,
     ackPhase,
-    highWasteReason,
-    highWasteNote,
+    approvalCode,
     saveDraft,
   ]);
 
@@ -212,7 +206,10 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         railsTaken,
         picks,
       });
-      if (result.status === "ACK_REQUIRED") {
+      if (result.status === "ACK_REQUIRED" || result.status === "APPROVAL_REQUIRED") {
+        if (result.status === "APPROVAL_REQUIRED") {
+          setApprovalCode("");
+        }
         setPendingAck({
           ...result,
           picks,
@@ -235,10 +232,9 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
     }
   };
 
-  const retryWithAck = async (ackKind: "SUSPICIOUS" | "HIGH_WASTE") => {
+  const retryWithAck = async (ackKind: "SUSPICIOUS") => {
     if (!pendingAck || submitting) return;
-    if (ackKind === "HIGH_WASTE" && !highWasteReason) return;
-    if (ackKind === "HIGH_WASTE" && highWasteReason === "OTHER" && !highWasteNote.trim()) return;
+    if (pendingAck.status !== "ACK_REQUIRED") return;
     setSubmitting(true);
     try {
       const result = await submitTorcovka({
@@ -254,11 +250,48 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
           takenM: pendingAck.takenM,
           producedM: pendingAck.producedM,
           wastePct: pendingAck.wastePct,
-          ...(ackKind === "HIGH_WASTE"
-            ? { reason: highWasteReason!, reasonNote: highWasteNote }
-            : {}),
         },
       });
+      if (result.status === "ACK_REQUIRED" || result.status === "APPROVAL_REQUIRED") {
+        if (result.status === "APPROVAL_REQUIRED") {
+          setApprovalCode("");
+        }
+        setPendingAck((prev) => (prev ? { ...prev, ...result } : prev));
+        setSubmitting(false);
+        return;
+      }
+      toast.success(`Торцовка внесена: ${pendingAck.picks.reduce((s, p) => s + p.quantity, 0)} заг.`);
+      setPendingAck(null);
+      clearDraft();
+      onDone();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Ошибка внесения");
+      setSubmitting(false);
+    }
+  };
+
+  const retryWithApprovalCode = async () => {
+    if (!pendingAck || submitting) return;
+    if (pendingAck.status !== "APPROVAL_REQUIRED") return;
+    if (approvalCode.length !== APPROVAL_CODE_LENGTH) return;
+    setSubmitting(true);
+    try {
+      const result = await submitTorcovka({
+        employeeId: employee.id,
+        clientRequestId: pendingAck.clientRequestId,
+        batchId: pendingAck.batchId,
+        railLotId: pendingAck.railLotId,
+        railsTaken: pendingAck.railsTaken,
+        picks: pendingAck.picks,
+        approvalCode,
+      });
+      if (result.status === "APPROVAL_REQUIRED") {
+        setApprovalCode("");
+        setPendingAck((prev) => (prev ? { ...prev, ...result } : prev));
+        toast.error(CODE_ROTATED_MESSAGE);
+        setSubmitting(false);
+        return;
+      }
       if (result.status === "ACK_REQUIRED") {
         setPendingAck((prev) => (prev ? { ...prev, ...result } : prev));
         setSubmitting(false);
@@ -266,6 +299,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       }
       toast.success(`Торцовка внесена: ${pendingAck.picks.reduce((s, p) => s + p.quantity, 0)} заг.`);
       setPendingAck(null);
+      setApprovalCode("");
       clearDraft();
       onDone();
     } catch (err) {
@@ -505,68 +539,59 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       </Dialog>
 
       <Dialog
-        open={pendingAck?.band === "EXTREME"}
+        open={pendingAck?.status === "APPROVAL_REQUIRED"}
         onOpenChange={(o) => {
           if (!o) setPendingAck(null);
         }}
       >
-        {pendingAck?.band === "EXTREME" && (
+        {pendingAck?.status === "APPROVAL_REQUIRED" && (
           <DialogContent
             className="scrollbar-thin-y max-h-[min(90vh,40rem)] gap-5 overflow-y-auto px-8 py-6 sm:max-w-[32rem]"
             showCloseButton={false}
           >
             <DialogHeader>
-              <DialogTitle className="text-xl">Высокий отход / брак</DialogTitle>
+              <DialogTitle className="text-xl">Высокий процент брака</DialogTitle>
             </DialogHeader>
-            <p className={cn("text-base font-semibold", wasteBandClass("EXTREME"))}>
-              Отход {pendingAck.wastePct.replace(".", ",")}%
+            <p className="text-base leading-relaxed">
+              Для проведения операции требуется подтверждение администратора.
             </p>
             <p className="text-muted-foreground text-base leading-relaxed">
-              Фактически взято реек: {pendingAck.railsTaken}
+              Взято реек: {pendingAck.railsTaken}
               <br />
-              Общая длина: {pendingAck.takenM.replace(".", ",")} м
+              Входные метры: {pendingAck.takenM.replace(".", ",")} м
               <br />
-              Полезный выход: {pendingAck.producedM.replace(".", ",")} м
+              Выходные метры: {pendingAck.producedM.replace(".", ",")} м
+              <br />
+              Отход: {pendingAck.wasteM.replace(".", ",")} м
+              <br />
+              <span className={cn("font-semibold", wasteBandClass("EXTREME"))}>
+                Отход {pendingAck.wastePct.replace(".", ",")}%
+              </span>
             </p>
-            <div className="grid grid-cols-2 gap-2">
-              {TORCOVKA_WASTE_REASONS.map((reason) => (
-                <Button
-                  key={reason}
-                  type="button"
-                  variant={highWasteReason === reason ? "brand" : "outline"}
-                  className="h-12 rounded-xl text-base capitalize"
-                  onClick={() => setHighWasteReason(reason)}
-                >
-                  {TORCOVKA_WASTE_REASON_LABEL[reason]}
-                </Button>
-              ))}
-            </div>
-            {highWasteReason === "OTHER" && (
-              <Input
-                value={highWasteNote}
-                onChange={(e) => setHighWasteNote(e.target.value)}
-                placeholder="Укажите причину"
-                className="h-12 rounded-xl text-base"
-              />
-            )}
+            <p className="text-muted-foreground text-sm">Ожидайте код у администратора.</p>
+            <KeypadDisplay>
+              {approvalCode.length > 0 ? approvalCode : "••••"}
+            </KeypadDisplay>
+            <NumericKeypad
+              value={approvalCode}
+              onChange={setApprovalCode}
+              maxLength={APPROVAL_CODE_LENGTH}
+              allowLeadingZeros
+            />
             <div className="grid grid-cols-2 gap-2">
               <Button
                 variant="outline"
                 className="h-14 rounded-xl text-lg"
                 onClick={() => setPendingAck(null)}
               >
-                Отмена
+                Назад
               </Button>
               <Button
                 className="h-14 rounded-xl text-lg"
-                disabled={
-                  submitting ||
-                  !highWasteReason ||
-                  (highWasteReason === "OTHER" && !highWasteNote.trim())
-                }
-                onClick={() => void retryWithAck("HIGH_WASTE")}
+                disabled={submitting || approvalCode.length !== APPROVAL_CODE_LENGTH}
+                onClick={() => void retryWithApprovalCode()}
               >
-                Подтвердить брак
+                Подтвердить
               </Button>
             </div>
           </DialogContent>

@@ -387,6 +387,30 @@ model ProductionOperation {
   @@index([employeeId, workDate])
 }
 
+// One-time EXTREME TORCOVKA admin code (HMAC). UNIQUE(clientRequestId).
+// No FK to ProductionOperation: the Op does not exist until the code is consumed.
+model TorcovkaApproval {
+  id              String    @id @default(cuid())
+  clientRequestId String    @unique
+  generation      Int       @default(1)
+  employeeId      String
+  batchId         String
+  railLotId       String
+  railsTaken      Int
+  takenM          String
+  producedM       String
+  wasteM          String
+  wastePct        String
+  codeHash        String
+  failedAttempts  Int       @default(0)
+  createdAt       DateTime  @default(now())
+  expiresAt       DateTime
+  consumedAt      DateTime?
+  notificationKey String
+
+  @@index([expiresAt])
+}
+
 // Строки деталей в операции:
 //  - TORCOVKA: произведённые детали (qty) — выход, не списание со склада
 //  - PRISADKA: обработанные детали + какой тип присадки сделан (списание

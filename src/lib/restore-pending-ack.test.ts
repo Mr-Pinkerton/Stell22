@@ -5,11 +5,12 @@ import type { TerminalDraftV1 } from "./terminal-draft-storage";
 const lot = { id: "lot-1", lengthM: 2 };
 
 function torcovka(over: {
-  phase: "none" | "suspicious" | "extreme";
+  phase: "none" | "suspicious" | "approval" | "extreme";
   railsTaken?: number;
   producedQty?: number;
   lotId?: string | null;
   batchId?: string | null;
+  approvalCode?: string;
 }): TerminalDraftV1 {
   const producedQty = over.producedQty ?? 7;
   return {
@@ -25,7 +26,10 @@ function torcovka(over: {
       railsTaken: over.railsTaken ?? 5,
       picks: [{ lengthM: 1, sort: "SORT1", quantity: producedQty }],
       activeSort: "SORT1",
-      ackUi: { phase: over.phase, highWasteReason: null, highWasteNote: "" },
+      ackUi: {
+        phase: over.phase === "extreme" ? "none" : over.phase,
+        approvalCode: over.approvalCode ?? "",
+      },
     },
   };
 }
@@ -73,6 +77,12 @@ describe("restorePendingAck", () => {
         railLots: [lot],
       }),
     ).toBeNull();
+    expect(
+      restorePendingAck({
+        draft: torcovka({ phase: "approval", producedQty: 9 }),
+        railLots: [lot],
+      }),
+    ).toBeNull();
   });
 
   it("restores current SUSPICIOUS and draft.clientRequestId", () => {
@@ -87,30 +97,42 @@ describe("restorePendingAck", () => {
     expect(restored?.batchId).toBe("batch-1");
   });
 
-  it("restores EXTREME when current band is EXTREME", () => {
+  it("saved approval + current EXTREME restores APPROVAL_REQUIRED", () => {
+    const draft = torcovka({ phase: "approval", producedQty: 2 });
     const restored = restorePendingAck({
-      draft: torcovka({ phase: "extreme", producedQty: 2 }),
+      draft,
       railLots: [lot],
     });
+    expect(restored?.status).toBe("APPROVAL_REQUIRED");
     expect(restored?.band).toBe("EXTREME");
+    expect(restored?.clientRequestId).toBe(draft.clientRequestId);
     expect(restored?.clientRequestId).toBe("req-keep");
   });
 
-  it("saved EXTREME + current SUSPICIOUS restores SUSPICIOUS", () => {
+  it("saved approval + current SUSPICIOUS restores SUSPICIOUS", () => {
     const restored = restorePendingAck({
-      draft: torcovka({ phase: "extreme", producedQty: 7 }),
+      draft: torcovka({ phase: "approval", producedQty: 7 }),
       railLots: [lot],
     });
+    expect(restored?.status).toBe("ACK_REQUIRED");
     expect(restored?.band).toBe("SUSPICIOUS");
     expect(restored?.clientRequestId).toBe("req-keep");
   });
 
-  it("saved SUSPICIOUS + current EXTREME restores EXTREME", () => {
+  it("saved SUSPICIOUS + current EXTREME does not restore approval dialog", () => {
     const restored = restorePendingAck({
       draft: torcovka({ phase: "suspicious", producedQty: 2 }),
       railLots: [lot],
     });
-    expect(restored?.band).toBe("EXTREME");
-    expect(restored?.clientRequestId).toBe("req-keep");
+    expect(restored).toBeNull();
+  });
+
+  it("legacy extreme parsed to none does not restore a dialog", () => {
+    expect(
+      restorePendingAck({
+        draft: torcovka({ phase: "extreme", producedQty: 2 }),
+        railLots: [lot],
+      }),
+    ).toBeNull();
   });
 });

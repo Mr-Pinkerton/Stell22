@@ -3,6 +3,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
 
+if (!process.env.SESSION_SECRET) {
+  process.env.SESSION_SECRET = "stell22-integrity-test-session-secret";
+}
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 export const INTEGRITY_DATABASE_NAME = "stell22_integrity";
@@ -94,6 +98,7 @@ export async function resetIntegrityCostFreeze(db: PrismaClient): Promise<void> 
       "Payment",
       "OperationNomenclatureLine",
       "OperationDetailLine",
+      "TorcovkaApproval",
       "ProductionOperation",
       "BlankStock",
       "BatchCost",
@@ -121,6 +126,7 @@ export async function resetIntegrityInventory(db: PrismaClient): Promise<void> {
       "Payment",
       "OperationNomenclatureLine",
       "OperationDetailLine",
+      "TorcovkaApproval",
       "ProductionOperation",
       "ProductStock",
       "DetailStock",

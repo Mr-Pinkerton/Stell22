@@ -58,13 +58,24 @@ export interface TorcovkaWasteMetrics {
   canon: {
     takenM: string;
     producedM: string;
+    wasteM: string;
     wastePct: string;
   };
 }
 
 export type SubmitTorcovkaResult =
   | { status: "CREATED" }
-  | Extract<TorcovkaSubmitDecision, { status: "ACK_REQUIRED" }>;
+  | Extract<TorcovkaSubmitDecision, { status: "ACK_REQUIRED" }>
+  | {
+      status: "APPROVAL_REQUIRED";
+      band: "EXTREME";
+      railsTaken: number;
+      takenM: string;
+      producedM: string;
+      wasteM: string;
+      wastePct: string;
+      expiresAt: string;
+    };
 
 export type TorcovkaSubmitDecision =
   | {
@@ -96,6 +107,10 @@ export function canonicalWastePct(wastePct: Num): string {
   return D(wastePct).toFixed(2);
 }
 
+export function canonicalWasteM(wasteM: Num): string {
+  return D(wasteM).toFixed(4);
+}
+
 export function bandFromWastePct(wastePct: Num): TorcovkaWasteBand {
   const rounded = D(canonicalWastePct(wastePct));
   if (rounded.lt(TORCOVKA_WASTE_SUSPICIOUS_PCT)) return "NORMAL";
@@ -118,6 +133,7 @@ export function computeTorcovkaWasteMetrics(
   const canon = {
     takenM: canonicalTakenM(takenM),
     producedM: canonicalProducedM(producedM),
+    wasteM: canonicalWasteM(wasteM),
     wastePct: canonicalWastePct(wastePct),
   };
   return {
@@ -132,13 +148,7 @@ export function computeTorcovkaWasteMetrics(
 
 const ACK_MISMATCH = "Подтверждение отхода не совпадает с пересчитанными метриками";
 const ACK_WRONG_KIND = "Неверный тип подтверждения отхода";
-const ACK_REASON_REQUIRED = "Укажите причину высокого отхода";
-const ACK_NOTE_REQUIRED = "Укажите примечание для причины «другое»";
 const ACK_NOT_NEEDED = "Подтверждение отхода не требуется";
-
-function isWasteReason(value: unknown): value is TorcovkaWasteReason {
-  return typeof value === "string" && (TORCOVKA_WASTE_REASONS as readonly string[]).includes(value);
-}
 
 function assertCanonicalEcho(
   ack: TorcovkaPlausibilityAck,
@@ -159,6 +169,7 @@ export function decideTorcovkaSubmit(input: {
   railsTaken: number;
   metrics: TorcovkaWasteMetrics;
   ack?: TorcovkaPlausibilityAck | null;
+  approvalVerified?: boolean;
 }): TorcovkaSubmitDecision {
   const { railsTaken, metrics, ack } = input;
   const { band, canon } = metrics;
@@ -175,10 +186,32 @@ export function decideTorcovkaSubmit(input: {
     };
   }
 
+  if (band === "EXTREME") {
+    if (ack) throw new Error(ACK_WRONG_KIND);
+    if (!input.approvalVerified) {
+      return {
+        status: "ACK_REQUIRED",
+        band: "EXTREME",
+        railsTaken,
+        takenM: canon.takenM,
+        producedM: canon.producedM,
+        wastePct: canon.wastePct,
+      };
+    }
+    return {
+      status: "CREATED",
+      persist: {
+        torcovkaSubmitAckBand: "HIGH_WASTE",
+        torcovkaSubmitWasteReason: null,
+        torcovkaSubmitWasteNote: null,
+      },
+    };
+  }
+
   if (!ack || typeof ack !== "object") {
     return {
       status: "ACK_REQUIRED",
-      band,
+      band: "SUSPICIOUS",
       railsTaken,
       takenM: canon.takenM,
       producedM: canon.producedM,
@@ -186,34 +219,14 @@ export function decideTorcovkaSubmit(input: {
     };
   }
 
-  if (band === "SUSPICIOUS") {
-    if (ack.kind !== "SUSPICIOUS") throw new Error(ACK_WRONG_KIND);
-    assertCanonicalEcho(ack, railsTaken, canon);
-    return {
-      status: "CREATED",
-      persist: {
-        torcovkaSubmitAckBand: "SUSPICIOUS",
-        torcovkaSubmitWasteReason: null,
-        torcovkaSubmitWasteNote: null,
-      },
-    };
-  }
-
-  if (ack.kind !== "HIGH_WASTE") throw new Error(ACK_WRONG_KIND);
+  if (ack.kind !== "SUSPICIOUS") throw new Error(ACK_WRONG_KIND);
   assertCanonicalEcho(ack, railsTaken, canon);
-  if (!isWasteReason(ack.reason)) throw new Error(ACK_REASON_REQUIRED);
-  let note: string | null = null;
-  if (ack.reason === "OTHER") {
-    const trimmed = ack.reasonNote?.trim() ?? "";
-    if (!trimmed) throw new Error(ACK_NOTE_REQUIRED);
-    note = trimmed;
-  }
   return {
     status: "CREATED",
     persist: {
-      torcovkaSubmitAckBand: "HIGH_WASTE",
-      torcovkaSubmitWasteReason: ack.reason,
-      torcovkaSubmitWasteNote: note,
+      torcovkaSubmitAckBand: "SUSPICIOUS",
+      torcovkaSubmitWasteReason: null,
+      torcovkaSubmitWasteNote: null,
     },
   };
 }

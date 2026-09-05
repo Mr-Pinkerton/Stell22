@@ -1,4 +1,3 @@
-import { TORCOVKA_WASTE_REASONS, type TorcovkaWasteReason } from "@/lib/torcovka-plausibility";
 import type { Sort } from "@/types/domain";
 
 export const TERMINAL_DRAFT_VERSION = 1 as const;
@@ -7,7 +6,7 @@ export const TERMINAL_DRAFT_STALE_AGE_MS = 24 * 60 * 60 * 1000;
 
 export type TerminalDraftOperation = "TORCOVKA" | "PRISADKA" | "UPAKOVKA" | "HOURS";
 
-export type TorcovkaAckUiPhase = "none" | "suspicious" | "extreme";
+export type TorcovkaAckUiPhase = "none" | "suspicious" | "approval";
 
 export interface TorcovkaDraftPayload {
   batchId: string | null;
@@ -17,8 +16,7 @@ export interface TorcovkaDraftPayload {
   activeSort: Sort;
   ackUi: {
     phase: TorcovkaAckUiPhase;
-    highWasteReason: TorcovkaWasteReason | null;
-    highWasteNote: string;
+    approvalCode: string;
   };
 }
 
@@ -66,7 +64,7 @@ const OPERATIONS: readonly TerminalDraftOperation[] = [
   "HOURS",
 ];
 const SORTS: readonly Sort[] = ["SORT1", "SORT2"];
-const ACK_PHASES: readonly TorcovkaAckUiPhase[] = ["none", "suspicious", "extreme"];
+const ACK_PHASES: readonly TorcovkaAckUiPhase[] = ["none", "suspicious", "approval"];
 const PRISADKA_KINDS = ["torcev", "plosk"] as const;
 
 export const OPERATION_LABEL: Record<TerminalDraftOperation, string> = {
@@ -214,8 +212,7 @@ export function serializeDraft(draft: TerminalDraftV1): TerminalDraftV1 {
           activeSort: draft.payload.activeSort,
           ackUi: {
             phase: draft.payload.ackUi.phase,
-            highWasteReason: draft.payload.ackUi.highWasteReason,
-            highWasteNote: draft.payload.ackUi.highWasteNote,
+            approvalCode: draft.payload.ackUi.approvalCode,
           },
         },
       };
@@ -277,10 +274,6 @@ function isPositiveLength(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function isWasteReason(value: unknown): value is TorcovkaWasteReason {
-  return typeof value === "string" && (TORCOVKA_WASTE_REASONS as readonly string[]).includes(value);
-}
-
 function parsePayload(
   operationType: TerminalDraftOperation,
   payload: unknown,
@@ -338,16 +331,25 @@ function parseTorcovkaPicks(
 function parseAckUi(value: unknown): TorcovkaDraftPayload["ackUi"] | null {
   if (value == null || typeof value !== "object" || Array.isArray(value)) return null;
   const rec = value as Record<string, unknown>;
-  if (typeof rec.phase !== "string" || !(ACK_PHASES as readonly string[]).includes(rec.phase)) {
-    return null;
-  }
-  if (rec.highWasteReason !== null && !isWasteReason(rec.highWasteReason)) return null;
-  if (typeof rec.highWasteNote !== "string") return null;
+  const phase = normalizeAckPhase(rec.phase);
+  if (!phase) return null;
   return {
-    phase: rec.phase as TorcovkaAckUiPhase,
-    highWasteReason: rec.highWasteReason,
-    highWasteNote: rec.highWasteNote,
+    phase,
+    approvalCode: parseDraftApprovalCode(rec.approvalCode),
   };
+}
+
+function normalizeAckPhase(value: unknown): TorcovkaAckUiPhase | null {
+  if (value === "extreme") return "none";
+  if (typeof value === "string" && (ACK_PHASES as readonly string[]).includes(value)) {
+    return value as TorcovkaAckUiPhase;
+  }
+  return null;
+}
+
+function parseDraftApprovalCode(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return /^\d{0,4}$/.test(value) ? value : "";
 }
 
 function parsePrisadkaPicks(value: unknown): PrisadkaDraftPayload["picks"] | null {

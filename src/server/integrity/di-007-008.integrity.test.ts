@@ -342,7 +342,7 @@ describe.skipIf(!enabled)("DI-007/DI-008 terminal idempotency", () => {
     expect(await prismaA.productionOperation.count({ where: { type: "TORCOVKA" } })).toBe(1);
   });
 
-  it("5 EXTREME HIGH_WASTE, same id without ack → replay success", async () => {
+  it("5 EXTREME approval code, same id without code → replay success", async () => {
     const w = await seedTorcovka(`s5-${Date.now()}`, 30);
     const requestId = `test:di007:s5-${Date.now()}`;
     const base = {
@@ -354,19 +354,14 @@ describe.skipIf(!enabled)("DI-007/DI-008 terminal idempotency", () => {
       picks: [{ lengthM: 1, sort: "SORT1" as const, quantity: 4 }],
     };
     const first = await submitTorcovka(base);
-    expect(first.status).toBe("ACK_REQUIRED");
-    if (first.status !== "ACK_REQUIRED") return;
-    await submitTorcovka({
-      ...base,
-      plausibilityAck: {
-        kind: "HIGH_WASTE",
-        railsTaken: first.railsTaken,
-        takenM: first.takenM,
-        producedM: first.producedM,
-        wastePct: first.wastePct,
-        reason: "KNOTS",
-      },
+    expect(first.status).toBe("APPROVAL_REQUIRED");
+    if (first.status !== "APPROVAL_REQUIRED") return;
+    const note = await prismaA.notification.findFirstOrThrow({
+      where: { key: { startsWith: `event:torcovka-approval:${requestId}:` } },
     });
+    const code = note.message.match(/Код подтверждения: (\d{4})/)?.[1];
+    expect(code).toMatch(/^\d{4}$/);
+    expect(await submitTorcovka({ ...base, approvalCode: code })).toEqual({ status: "CREATED" });
     expect(await submitTorcovka(base)).toEqual({ status: "CREATED" });
     expect(await prismaA.productionOperation.count({ where: { type: "TORCOVKA" } })).toBe(1);
   });

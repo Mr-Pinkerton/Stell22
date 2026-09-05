@@ -27,12 +27,28 @@ import { D } from "@/lib/cost";
 import { lockRailLots } from "@/server/internal/finance-operations";
 import { blankSpecSortKey, lockDetails } from "@/server/internal/inventory-integrity";
 import {
+  approvalCodeMatches,
+  approvalHmacSecret,
+  parseApprovalCode,
+  TORCOVKA_APPROVAL_CONSUMED_ORPHAN,
+  TORCOVKA_APPROVAL_MAX_ATTEMPTS,
+  TORCOVKA_WRONG_CODE_MESSAGE,
+} from "@/lib/torcovka-approval";
+import {
   computeTorcovkaWasteMetrics,
   decideTorcovkaSubmit,
   type SubmitTorcovkaResult,
   type TorcovkaPlausibilityAck,
-  type TorcovkaSubmitDecision,
 } from "@/lib/torcovka-plausibility";
+import { updateEventMessage } from "@/server/internal/notification-event";
+import {
+  approvalSnapshotDiffers,
+  ensurePendingApproval,
+  invalidateTorcovkaApprovalIfNotNeeded,
+  lockTorcovkaApprovalByClientRequestId,
+  TORCOVKA_APPROVAL_REDACT_USED,
+  type TorcovkaApprovalSnapshot,
+} from "@/server/internal/torcovka-approval";
 import { requireClientRequestId } from "@/lib/request-id";
 import { resolvePinLookup } from "@/lib/terminal-auth";
 import { RateLimiter, retryAfterSeconds } from "@/lib/rate-limit";
@@ -340,7 +356,18 @@ export type { SubmitTorcovkaResult, TorcovkaPlausibilityAck };
 type TorcovkaTxResult =
   | { status: "CREATED_NEW" }
   | { status: "IDEMPOTENT_REPLAY" }
-  | Extract<TorcovkaSubmitDecision, { status: "ACK_REQUIRED" }>;
+  | {
+      status: "ACK_REQUIRED";
+      band: "SUSPICIOUS";
+      railsTaken: number;
+      takenM: string;
+      producedM: string;
+      wastePct: string;
+    }
+  | { status: "APPROVAL_NEEDED"; snapshot: TorcovkaApprovalSnapshot }
+  | { status: "WRONG_CODE"; failedAttempts: number; snapshot: TorcovkaApprovalSnapshot }
+  | { status: "EXPIRED"; snapshot: TorcovkaApprovalSnapshot }
+  | { status: "METRICS_CHANGED"; snapshot: TorcovkaApprovalSnapshot };
 
 export interface TorcovkaInput {
   employeeId: string;
@@ -356,6 +383,75 @@ export interface TorcovkaInput {
    */
   picks: { lengthM: number; sort: Sort; quantity: number }[];
   plausibilityAck?: TorcovkaPlausibilityAck;
+  /** Worker-entered 4-digit admin code for EXTREME. Never logged. */
+  approvalCode?: string;
+}
+
+function approvalSnapshotFromMetrics(
+  clientRequestId: string,
+  employeeId: string,
+  batchId: string,
+  railLotId: string,
+  railsTaken: number,
+  metrics: ReturnType<typeof computeTorcovkaWasteMetrics>,
+): TorcovkaApprovalSnapshot {
+  return {
+    clientRequestId,
+    employeeId,
+    batchId,
+    railLotId,
+    railsTaken,
+    takenM: metrics.canon.takenM,
+    producedM: metrics.canon.producedM,
+    wasteM: metrics.canon.wasteM,
+    wastePct: metrics.canon.wastePct,
+  };
+}
+
+function publicApprovalRequired(
+  snapshot: TorcovkaApprovalSnapshot,
+  expiresAt: Date,
+): Extract<SubmitTorcovkaResult, { status: "APPROVAL_REQUIRED" }> {
+  return {
+    status: "APPROVAL_REQUIRED",
+    band: "EXTREME",
+    railsTaken: snapshot.railsTaken,
+    takenM: snapshot.takenM,
+    producedM: snapshot.producedM,
+    wasteM: snapshot.wasteM,
+    wastePct: snapshot.wastePct,
+    expiresAt: expiresAt.toISOString(),
+  };
+}
+
+async function finishApprovalGate(
+  snapshot: TorcovkaApprovalSnapshot,
+): Promise<SubmitTorcovkaResult> {
+  const ensure = await ensurePendingApproval(snapshot);
+  const opNow = await prisma.productionOperation.findUnique({
+    where: { clientRequestId: snapshot.clientRequestId },
+    select: { id: true },
+  });
+  if (opNow) {
+    await prisma.$transaction(async (tx) => {
+      await invalidateTorcovkaApprovalIfNotNeeded(
+        tx,
+        snapshot.clientRequestId,
+        snapshot.employeeId,
+        { committedOpExists: true },
+      );
+    });
+    revalidatePath("/production");
+    revalidatePath("/terminal");
+    revalidatePath("/reports");
+    revalidatePath("/", "layout");
+    return { status: "CREATED" };
+  }
+  if (ensure.kind === "CONSUMED") {
+    throw new Error(TORCOVKA_APPROVAL_CONSUMED_ORPHAN);
+  }
+  revalidatePath("/", "layout");
+  return publicApprovalRequired(snapshot, ensure.expiresAt);
 }
 
 export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcovkaResult> {
@@ -368,20 +464,31 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
     throw new Error("Укажите количество взятых реек");
   }
   if (picks.length === 0) throw new Error("Не выбраны длины заготовок");
+  const code = parseApprovalCode(input.approvalCode);
 
-  const txResult: TorcovkaTxResult = await prisma.$transaction(async (tx) => {
+  const txResult: TorcovkaTxResult = await prisma.$transaction(async (tx): Promise<TorcovkaTxResult> => {
     const existingBeforeLock = await tx.productionOperation.findUnique({
       where: { clientRequestId },
-      select: { id: true },
+      select: { id: true, employeeId: true },
     });
-    if (existingBeforeLock) return { status: "IDEMPOTENT_REPLAY" as const };
+    if (existingBeforeLock) {
+      await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, existingBeforeLock.employeeId, {
+        committedOpExists: true,
+      });
+      return { status: "IDEMPOTENT_REPLAY" as const };
+    }
 
     await lockRailLots(tx, [railLotId]);
     const existingAfterLock = await tx.productionOperation.findUnique({
       where: { clientRequestId },
-      select: { id: true },
+      select: { id: true, employeeId: true },
     });
-    if (existingAfterLock) return { status: "IDEMPOTENT_REPLAY" as const };
+    if (existingAfterLock) {
+      await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, existingAfterLock.employeeId, {
+        committedOpExists: true,
+      });
+      return { status: "IDEMPOTENT_REPLAY" as const };
+    }
     const lot = await tx.railLot.findUnique({ where: { id: railLotId } });
     if (!lot || lot.batchId !== batchId) throw new Error("Пакет реек не найден");
     const batch = await tx.batch.findUniqueOrThrow({ where: { id: batchId } });
@@ -398,12 +505,108 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
       throw new Error("Суммарная длина заготовок превышает длину взятых реек");
     }
 
+    const snapshot = approvalSnapshotFromMetrics(
+      clientRequestId,
+      employeeId,
+      batchId,
+      railLotId,
+      railsTaken,
+      metrics,
+    );
+
     const decision = decideTorcovkaSubmit({
       railsTaken,
       metrics,
       ack: input.plausibilityAck,
     });
-    if (decision.status === "ACK_REQUIRED") return decision;
+
+    if (decision.status === "ACK_REQUIRED" && decision.band === "SUSPICIOUS") {
+      return {
+        status: "ACK_REQUIRED" as const,
+        band: "SUSPICIOUS" as const,
+        railsTaken: decision.railsTaken,
+        takenM: decision.takenM,
+        producedM: decision.producedM,
+        wastePct: decision.wastePct,
+      };
+    }
+
+    let persist = decision.status === "CREATED" ? decision.persist : null;
+    let approvalMeta: {
+      approvalId: string;
+      generation: number;
+      consumedAt: Date;
+    } | null = null;
+
+    if (decision.status === "ACK_REQUIRED" && decision.band === "EXTREME") {
+      if (code === null) {
+        return { status: "APPROVAL_NEEDED" as const, snapshot };
+      }
+
+      await lockTorcovkaApprovalByClientRequestId(tx, clientRequestId);
+      const approval = await tx.torcovkaApproval.findUnique({
+        where: { clientRequestId },
+      });
+      if (!approval) {
+        return { status: "EXPIRED" as const, snapshot };
+      }
+      if (approval.consumedAt) {
+        throw new Error(TORCOVKA_APPROVAL_CONSUMED_ORPHAN);
+      }
+      if (approval.employeeId !== employeeId) {
+        throw new Error(TORCOVKA_WRONG_CODE_MESSAGE);
+      }
+      const now = new Date();
+      if (approval.expiresAt <= now) {
+        return { status: "EXPIRED" as const, snapshot };
+      }
+      if (approval.failedAttempts >= TORCOVKA_APPROVAL_MAX_ATTEMPTS) {
+        return { status: "EXPIRED" as const, snapshot };
+      }
+      if (approvalSnapshotDiffers(approval, snapshot)) {
+        return { status: "METRICS_CHANGED" as const, snapshot };
+      }
+      if (!approvalCodeMatches(code, approval.codeHash, approvalHmacSecret())) {
+        const updated = await tx.torcovkaApproval.update({
+          where: { clientRequestId },
+          data: { failedAttempts: { increment: 1 } },
+        });
+        return {
+          status: "WRONG_CODE" as const,
+          failedAttempts: updated.failedAttempts,
+          snapshot,
+        };
+      }
+
+      const verified = decideTorcovkaSubmit({
+        railsTaken,
+        metrics,
+        approvalVerified: true,
+      });
+      if (verified.status !== "CREATED") {
+        throw new Error("Не удалось подтвердить высокий отход");
+      }
+      persist = verified.persist;
+      const consumedAt = now;
+      await tx.torcovkaApproval.update({
+        where: { clientRequestId },
+        data: { consumedAt },
+      });
+      await updateEventMessage(approval.notificationKey, TORCOVKA_APPROVAL_REDACT_USED, tx);
+      approvalMeta = {
+        approvalId: approval.id,
+        generation: approval.generation,
+        consumedAt,
+      };
+    }
+
+    if (!persist) {
+      throw new Error("Неверный тип подтверждения отхода");
+    }
+
+    if (!approvalMeta) {
+      await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, employeeId);
+    }
 
     const dec = await tx.railLot.updateMany({
       where: { id: railLotId, batchId, remainingQuantity: { gte: railsTaken } },
@@ -419,9 +622,9 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
         batchId,
         railLotId,
         railsTaken,
-        torcovkaSubmitAckBand: decision.persist.torcovkaSubmitAckBand,
-        torcovkaSubmitWasteReason: decision.persist.torcovkaSubmitWasteReason,
-        torcovkaSubmitWasteNote: decision.persist.torcovkaSubmitWasteNote,
+        torcovkaSubmitAckBand: persist.torcovkaSubmitAckBand,
+        torcovkaSubmitWasteReason: persist.torcovkaSubmitWasteReason,
+        torcovkaSubmitWasteNote: persist.torcovkaSubmitWasteNote,
         workDate: new Date(),
         lines: {
           create: picks.map((p) => ({
@@ -471,14 +674,36 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
       });
     }
 
+    const changeLogValues: Record<string, unknown> = {
+      type: "TORCOVKA",
+      batchId,
+      railLotId,
+      railsTaken,
+      picks,
+    };
+    if (approvalMeta) {
+      changeLogValues.approvalRequired = true;
+      changeLogValues.approvalId = approvalMeta.approvalId;
+      changeLogValues.generation = approvalMeta.generation;
+      changeLogValues.consumedAt = approvalMeta.consumedAt.toISOString();
+      changeLogValues.takenM = snapshot.takenM;
+      changeLogValues.producedM = snapshot.producedM;
+      changeLogValues.wasteM = snapshot.wasteM;
+      changeLogValues.wastePct = snapshot.wastePct;
+    }
+
     await writeChangeLog(
       {
         entity: "ProductionOperation",
         entityId: op.id,
-        newValues: { type: "TORCOVKA", batchId, railLotId, railsTaken, picks },
+        newValues: changeLogValues,
       },
       tx,
     );
+
+    if (!approvalMeta) {
+      await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, employeeId);
+    }
 
     await archiveBatchIfDepleted(tx, batchId);
     return { status: "CREATED_NEW" as const };
@@ -488,6 +713,18 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
   });
 
   if (txResult.status === "ACK_REQUIRED") return txResult;
+  if (txResult.status === "APPROVAL_NEEDED") {
+    return finishApprovalGate(txResult.snapshot);
+  }
+  if (txResult.status === "WRONG_CODE") {
+    if (txResult.failedAttempts < TORCOVKA_APPROVAL_MAX_ATTEMPTS) {
+      throw new Error(TORCOVKA_WRONG_CODE_MESSAGE);
+    }
+    return finishApprovalGate(txResult.snapshot);
+  }
+  if (txResult.status === "EXPIRED" || txResult.status === "METRICS_CHANGED") {
+    return finishApprovalGate(txResult.snapshot);
+  }
   if (txResult.status === "CREATED_NEW") {
     await enqueueRecalcBatchCosts(batchId);
   }

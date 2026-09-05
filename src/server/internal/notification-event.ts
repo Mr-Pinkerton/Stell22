@@ -30,3 +30,11 @@ export async function notifyEvent(
     },
   });
 }
+
+export async function updateEventMessage(
+  key: string,
+  message: string,
+  db: Db = prisma,
+): Promise<void> {
+  await db.notification.updateMany({ where: { key, isSystem: false }, data: { message } });
+}
