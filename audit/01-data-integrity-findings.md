@@ -7,7 +7,7 @@
 
 Только подтверждённые находки с evidence. Не баги: двойное списание реек/деталей на gte-путях; «торцовка не возвращает рейки»; sequential retry импорта/supply; payroll claim; freeze в той же TX что Payment.
 
-**Production status verified 2026-09-06.** Remaining not closed: DI-011 / DI-017 **DEFERRED BY OWNER**; DI-012 **DESIGN RISK**; DI-015 **OPEN (OWNER DECISION LOCKED)**. Marketplace was not re-audited in this pass.
+**Production status verified 2026-09-06.** Remaining not closed: DI-011 / DI-017 **DEFERRED BY OWNER**; DI-012 **DESIGN RISK**. Marketplace was not re-audited in this pass.
 
 Шкала: P0 массовая порча без восстановления; P1 реальный неверный склад/деньги/ЗП/с/с; P2 слабый invariant / редкий race; P3 долг без текущего нарушения.
 
@@ -39,7 +39,7 @@
 | DI-012 | P3 | DESIGN RISK | Cost | cost-queue in-memory; CLI recalc/sync в обход |
 | DI-013 | P2 | CLOSED IN PRODUCTION | Finance | Deal/CF commit без derived `totalCost` в той же TX |
 | DI-014 | P3 | CLOSED IN PRODUCTION | Payroll | UNIQUE PaymentBatchItem.operationId (was: нет UNIQUE) |
-| DI-015 | P3 | OPEN (OWNER DECISION LOCKED) | Payroll | ставки live, не snapshot на операции |
+| DI-015 | P3 | CLOSED IN PRODUCTION | Payroll | ставки live, не snapshot на операции |
 | DI-016 | P2 | CLOSED IN PRODUCTION | Inventory | два DRAFT при concurrent create |
 | DI-017 | P3 | DEFERRED BY OWNER | Marketplace | MpStock без unique (marketplace,sku) |
 | DI-018 | P2 | CLOSED IN PRODUCTION | Cost/Payroll | два last TORCOVKA payment → freeze не ставится |
@@ -1034,56 +1034,102 @@ Confidence: HIGH
 
 ## DI-015
 
-Owner decision (2026-09-06):
-- rate snapshot at operation performance
-- later Employee rate changes affect future operations only
-- fact correction keeps historical rate
-- implementation pending
-- detailed re-audit/remediation is separate DI-015 workstream
+Production resolution:
+- Status: CLOSED IN PRODUCTION
+- Release SHA: `13eaceaf079941bcf9efeb13bd08f8845ae68f40`
+- Migration: `20260906013000_operation_rate_snapshots`
+- Deploy evidence: GitHub Actions run `34030735264` SUCCESS
+- Migration finished: `2026-09-06 11:43:33.229016+00`
+- Rollback: none
+- What changed: ProductionOperation now stores the Employee rate snapshot at operation performance/create time; later Employee rate changes affect future operations only.
+- Snapshot model: six nullable Decimal(14,2) rate fields + required `rateSnapshotVersion=1`
+- Readers: payroll / payment / day breakdown / production journal / terminal journal / cost use operation snapshots, not live Employee rates
+- Fact correction: corrected fact × historical snapshot rate
+- Historical reconstruction: not required because ProductionOperation count was 0 immediately before migration
+- Production verification: runtime exact SHA `13eaceaf079941bcf9efeb13bd08f8845ae68f40`; schema 6 nullable rate columns + `rateSnapshotVersion` NOT NULL / no default; ProductionOperation count after deploy = 0; health/pages PASS; no production functional write test performed
+- Historical payroll corruption: not asserted / not claimed
+
+Historical owner decision (2026-09-06, before implementation):
+Card was previously OPEN / NEEDS BUSINESS DECISION, then OPEN (OWNER DECISION LOCKED).
+Owner chose: snapshot rate at operation performance; later Employee rate
+changes affect future operations only; unpaid fact correction keeps the
+historical rate (corrected fact × snapshot). That decision is now
+implemented and shipped in production (see resolution). Dedicated
+audit/remediation lived in the DI-015 workstream until this deploy.
 
 ```
 ID: DI-015
 Severity: P3
-Status: OPEN (OWNER DECISION LOCKED)
+Status: CLOSED IN PRODUCTION
 Domain: Payroll / Cost
+Reviewed: owner decision 2026-09-06; closed in production 13eacea / deploy 34030735264
 
-Invariant (owner, 2026-09-06; not yet implemented):
+Invariant (owner, 2026-09-06; now implemented in production):
 Rate is determined when the ProductionOperation is performed / created.
 Later Employee rate changes affect FUTURE operations only.
 Existing operations retain the historical applicable rate.
 Unpaid fact correction (qty/hours) uses corrected fact × historical
 snapshotted rate, not the current Employee rate.
-Payment and historical labor cost must eventually use operation snapshot rates.
+Payment and historical labor cost use operation snapshot rates.
 
-Evidence (current production code — implementation pending):
+Historical status (pre-13eacea):
+OPEN / NEEDS BUSINESS DECISION, then OPEN (OWNER DECISION LOCKED).
+Implementation was pending until release SHA 13eacea.
+
+Historical evidence (pre-13eacea / pre-migration):
 Нет полей rate на ProductionOperation / Payment кроме Payment.amount.
 payroll.ts:185-194 amount из buildRefMaps() = текущие Employee.*Rate.
 getSalaryReport: unpaid — live rates; paid — p.amount.
 loadCostContext L198-226: labor в с/с изделия тоже текущие ставки,
 включая оплаченные ops. FINAL BatchCost — только материал партии.
 
-Current behavior:
+Historical behavior (pre-snapshot):
 Смена ставки после работы:
 - невыплаченное начисление в отчёте ЗП меняется;
 - уже созданный Payment.amount нет;
 - вклад работы в live cost report меняется даже для прошлого.
 
+Current behavior (production):
+Writers snapshot Employee rates onto ProductionOperation at successful
+submit (rateSnapshotVersion=1). Readers use snapshots only; null rate
+→ earning 0; no live Employee fallback. Later Employee rate edits do
+not rewrite existing ops.
+
 Concurrency:
-Не нужна.
+Operation submit vs Employee rate update is serialized.
 
-Business impact:
-Историческая «начисленная, но не выплаченная» сумма нестабильна.
-Полная с/с изделия за период не замораживается вместе с партией.
+Submit lock order:
+existing operation/stock locks
+→ Employee FOR UPDATE
+→ read Employee rate vector
+→ INSERT ProductionOperation with snapshot
 
-Detection:
+`updateEmployee` waits on the same Employee row lock.
+
+If submit acquires the Employee lock first:
+the operation stores the old rate snapshot.
+
+If the Employee rate update commits first:
+the operation stores the new rate snapshot.
+
+This prevents a successfully committed operation from capturing a stale
+rate across a concurrent Employee rate change.
+
+Business impact (historical, pre-snapshot):
+Историческая «начисленная, но не выплаченная» сумма была нестабильна.
+Полная с/с изделия за период не замораживалась вместе с партией.
+На проде до migrate ops=0 — реконструкция истории не требовалась;
+порчу исторических выплат не утверждать.
+
+Detection (historical):
 Сравнить Payment.amount с пересчётом тех же ops текущими ставками.
 
 Recovery:
-n/a — это семантика до реализации snapshot.
+n/a — snapshot semantics shipped; historical reconstruction not required
+(ProductionOperation count was 0 immediately before migration).
 
 Minimal fix direction:
-Implementation pending. Dedicated DI-015 audit/remediation will determine
-storage and writers. Do not invent schema in this master file.
+Shipped as described in Production resolution.
 
 Confidence: HIGH
 ```
