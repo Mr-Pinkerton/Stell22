@@ -16,6 +16,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatLength } from "@/lib/format";
+import { TerminalDialogScrollBody } from "@/components/terminal/terminal-dialog-scroll-body";
+import { terminalDialogShellClass } from "@/lib/scroll-classes";
 import { maxDetailQuantity, type TorcovkaPick } from "@/lib/torcovka";
 import { computeTorcovkaWasteMetrics } from "@/lib/torcovka-plausibility";
 import { submitTorcovka } from "@/server/terminal";
@@ -507,7 +509,11 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         }}
       >
         {pendingAck?.band === "SUSPICIOUS" && (
-          <DialogContent className="gap-5 px-8 py-6 sm:max-w-[28rem]" showCloseButton={false}>
+          <DialogContent
+            className={cn(terminalDialogShellClass, "px-8 py-6 sm:max-w-[28rem]")}
+            showCloseButton={false}
+          >
+            <TerminalDialogScrollBody>
             <DialogHeader>
               <DialogTitle className="text-xl">Отход {pendingAck.wastePct.replace(".", ",")}% — это верно?</DialogTitle>
             </DialogHeader>
@@ -534,6 +540,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
                 Подтвердить
               </Button>
             </div>
+            </TerminalDialogScrollBody>
           </DialogContent>
         )}
       </Dialog>
@@ -546,9 +553,10 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       >
         {pendingAck?.status === "APPROVAL_REQUIRED" && (
           <DialogContent
-            className="scrollbar-thin-y max-h-[min(90vh,40rem)] gap-5 overflow-y-auto px-8 py-6 sm:max-w-[32rem]"
+            className={cn(terminalDialogShellClass, "px-8 py-6 sm:max-w-[32rem]")}
             showCloseButton={false}
           >
+            <TerminalDialogScrollBody>
             <DialogHeader>
               <DialogTitle className="text-xl">Высокий процент брака</DialogTitle>
             </DialogHeader>
@@ -594,6 +602,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
                 Подтвердить
               </Button>
             </div>
+            </TerminalDialogScrollBody>
           </DialogContent>
         )}
       </Dialog>
