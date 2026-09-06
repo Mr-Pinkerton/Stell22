@@ -375,6 +375,17 @@ model ProductionOperation {
   productId    String?
   productQty   Int?
 
+  // Rate snapshot at successful submit (DI-015). Rate columns nullable like Employee.
+  // Copied server-side; never trusted from the client. No SQL default.
+  // rateSnapshotVersion is the capture marker: old writers fail closed (NOT NULL, no default).
+  hourlyRateSnapshot          Decimal? @db.Decimal(14, 2)
+  rateTorcovkaSort1Snapshot   Decimal? @db.Decimal(14, 2)
+  rateTorcovkaSort2Snapshot   Decimal? @db.Decimal(14, 2)
+  ratePrisadkaTorcevSnapshot  Decimal? @db.Decimal(14, 2)
+  ratePrisadkaPlosktSnapshot  Decimal? @db.Decimal(14, 2)
+  rateUpakovkaSnapshot        Decimal? @db.Decimal(14, 2)
+  rateSnapshotVersion         Int
+
   // Выплата
   isPaid Boolean   @default(false)
   paidAt DateTime?

@@ -114,6 +114,96 @@ export interface OperationRates {
   upakovka: number;
 }
 
+/** Live Employee rate vector copied onto ProductionOperation at submit. */
+export interface EmployeeRateSource {
+  hourlyRate: Num | null;
+  rateTorcovkaSort1: Num | null;
+  rateTorcovkaSort2: Num | null;
+  ratePrisadkaTorcev: Num | null;
+  ratePrisadkaPloskt: Num | null;
+  rateUpakovka: Num | null;
+}
+
+export interface OperationRateSnapshots {
+  hourlyRateSnapshot: Num | null;
+  rateTorcovkaSort1Snapshot: Num | null;
+  rateTorcovkaSort2Snapshot: Num | null;
+  ratePrisadkaTorcevSnapshot: Num | null;
+  ratePrisadkaPlosktSnapshot: Num | null;
+  rateUpakovkaSnapshot: Num | null;
+}
+
+/** Capture marker written by DI-015 writers. Not a rate. No SQL default. */
+export const RATE_SNAPSHOT_VERSION = 1;
+
+export const DI_015_RATE_SNAPSHOT_COLUMNS = [
+  "hourlyRateSnapshot",
+  "rateTorcovkaSort1Snapshot",
+  "rateTorcovkaSort2Snapshot",
+  "ratePrisadkaTorcevSnapshot",
+  "ratePrisadkaPlosktSnapshot",
+  "rateUpakovkaSnapshot",
+  "rateSnapshotVersion",
+] as const;
+
+export type Di015PreflightVerdict = "ok" | "stop-ops-before-migrate" | "stop-inconsistent-schema";
+
+/** Catalog-state preflight: 0 columns = pre-migrate; 7 = landed; else inconsistent. */
+export function evaluateDi015Preflight(
+  snapshotColumnCount: number,
+  operationCount: number,
+): Di015PreflightVerdict {
+  if (snapshotColumnCount === 0) {
+    return operationCount > 0 ? "stop-ops-before-migrate" : "ok";
+  }
+  if (snapshotColumnCount === DI_015_RATE_SNAPSHOT_COLUMNS.length) return "ok";
+  return "stop-inconsistent-schema";
+}
+
+/** Write-shape: copy all six Decimal|null values as-is. Do not coerce null to 0. */
+export function employeeRateSnapshots(emp: EmployeeRateSource): OperationRateSnapshots {
+  return {
+    hourlyRateSnapshot: emp.hourlyRate,
+    rateTorcovkaSort1Snapshot: emp.rateTorcovkaSort1,
+    rateTorcovkaSort2Snapshot: emp.rateTorcovkaSort2,
+    ratePrisadkaTorcevSnapshot: emp.ratePrisadkaTorcev,
+    ratePrisadkaPlosktSnapshot: emp.ratePrisadkaPloskt,
+    rateUpakovkaSnapshot: emp.rateUpakovka,
+  };
+}
+
+export interface OperationRateSnapshotWrite extends OperationRateSnapshots {
+  rateSnapshotVersion: typeof RATE_SNAPSHOT_VERSION;
+}
+
+/** Write-shape for ProductionOperation.create: six rates as-is plus capture marker. */
+export function operationRateSnapshotWrite(emp: EmployeeRateSource): OperationRateSnapshotWrite {
+  return {
+    ...employeeRateSnapshots(emp),
+    rateSnapshotVersion: RATE_SNAPSHOT_VERSION,
+  };
+}
+
+function snapshotToNumber(value: Num | null | undefined): number {
+  if (value == null) return 0;
+  if (typeof value === "object" && value !== null && "toNumber" in value) {
+    return (value as { toNumber: () => number }).toNumber();
+  }
+  return Number(value);
+}
+
+/** Read-shape: existing OperationRates numbers; null snapshot → 0. */
+export function operationRatesFromSnapshots(op: OperationRateSnapshots): OperationRates {
+  return {
+    hourly: snapshotToNumber(op.hourlyRateSnapshot),
+    torcovkaSort1: snapshotToNumber(op.rateTorcovkaSort1Snapshot),
+    torcovkaSort2: snapshotToNumber(op.rateTorcovkaSort2Snapshot),
+    prisadkaTorcev: snapshotToNumber(op.ratePrisadkaTorcevSnapshot),
+    prisadkaPlosk: snapshotToNumber(op.ratePrisadkaPlosktSnapshot),
+    upakovka: snapshotToNumber(op.rateUpakovkaSnapshot),
+  };
+}
+
 /** Строка операции: кол-во и признаки (сорт детали / виды присадки). */
 export interface OperationLineInput {
   quantity: number;

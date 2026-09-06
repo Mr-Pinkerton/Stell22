@@ -292,6 +292,7 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
         railLotId: world.lot.id,
         railsTaken: opts.railsTaken,
         workDate: new Date("2026-09-01T00:00:00.000Z"),
+        rateSnapshotVersion: 1,
         isPaid: opts.paid ?? false,
         paidAt: opts.paid ? new Date("2026-09-02T00:00:00.000Z") : null,
         torcovkaSubmitAckBand: "HIGH_WASTE",
@@ -1003,6 +1004,7 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
         railLotId: lotB.id,
         railsTaken: 20,
         workDate: new Date("2026-09-01T00:00:00.000Z"),
+        rateSnapshotVersion: 1,
         lines: {
           create: [
             {
@@ -1079,6 +1081,7 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
         railLotId: lotB.id,
         railsTaken: 20,
         workDate: new Date("2026-09-01T00:00:00.000Z"),
+        rateSnapshotVersion: 1,
         lines: {
           create: [
             {

@@ -22,7 +22,7 @@ import {
   prepareTorcovkaBlankMutation,
   prepareUpakovkaEdit,
 } from "@/server/internal/inventory-integrity";
-import { operationEarning } from "@/lib/payroll";
+import { operationEarning, operationRatesFromSnapshots } from "@/lib/payroll";
 import { isOverRailLength } from "@/lib/torcovka";
 import { dayKey } from "@/lib/entries";
 import type {
@@ -46,17 +46,6 @@ type OpFull = Prisma.ProductionOperationGetPayload<{ include: { lines: true } }>
 
 interface RefMaps {
   employeeName: Map<string, string>;
-  empRates: Map<
-    string,
-    {
-      hourly: number;
-      t1: number;
-      t2: number;
-      pt: number;
-      pp: number;
-      up: number;
-    }
-  >;
   batchName: Map<string, string>;
   batchFrozenAt: Map<string, string | null>;
   lotLength: Map<string, number>;
@@ -67,19 +56,9 @@ interface RefMaps {
 }
 
 function computeAmount(op: OpFull, maps: RefMaps): { quantity: number; amount: number } {
-  const r = maps.empRates.get(op.employeeId);
-  if (!r) return { quantity: 0, amount: 0 };
-
   return operationEarning({
     type: op.type,
-    rates: {
-      hourly: r.hourly,
-      torcovkaSort1: r.t1,
-      torcovkaSort2: r.t2,
-      prisadkaTorcev: r.pt,
-      prisadkaPlosk: r.pp,
-      upakovka: r.up,
-    },
+    rates: operationRatesFromSnapshots(op),
     hours: num(op.hours),
     productQty: op.productQty ?? 0,
     lines: op.lines.map((l) => ({
@@ -169,19 +148,6 @@ async function buildMaps(ops: OpFull[]): Promise<RefMaps> {
 
   return {
     employeeName: new Map(employees.map((e) => [e.id, e.fullName])),
-    empRates: new Map(
-      employees.map((e) => [
-        e.id,
-        {
-          hourly: num(e.hourlyRate),
-          t1: num(e.rateTorcovkaSort1),
-          t2: num(e.rateTorcovkaSort2),
-          pt: num(e.ratePrisadkaTorcev),
-          pp: num(e.ratePrisadkaPloskt),
-          up: num(e.rateUpakovka),
-        },
-      ]),
-    ),
     batchName: new Map(batches.map((b) => [b.id, b.name])),
     batchFrozenAt: new Map(
       batches.map((b) => [b.id, b.frozenAt ? b.frozenAt.toISOString() : null]),

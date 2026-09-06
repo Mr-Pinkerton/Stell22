@@ -383,6 +383,102 @@ SQL
   )" >&2
 fi
 
+# --- DI-015: schema-state-aware rate snapshot preflight ---
+# Catalog is the invariant (not migration filenames). Expected columns:
+# six nullable rate snapshots + rateSnapshotVersion.
+snapshot_column_count="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*)
+FROM pg_attribute a
+JOIN pg_class c ON c.oid = a.attrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public'
+  AND c.relname = 'ProductionOperation'
+  AND a.attnum > 0
+  AND NOT a.attisdropped
+  AND a.attname IN (
+    'hourlyRateSnapshot',
+    'rateTorcovkaSort1Snapshot',
+    'rateTorcovkaSort2Snapshot',
+    'ratePrisadkaTorcevSnapshot',
+    'ratePrisadkaPlosktSnapshot',
+    'rateUpakovkaSnapshot',
+    'rateSnapshotVersion'
+  );
+SQL
+)" | tr -d '[:space:]')"
+
+if ! [[ "$snapshot_column_count" =~ ^[0-9]+$ ]]; then
+  echo "PRECHECK FAILED" >&2
+  echo "Could not read DI-015 snapshot column count" >&2
+  exit 1
+fi
+
+echo "DI-015 snapshot_column_count=${snapshot_column_count}"
+
+op_total="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*) FROM "ProductionOperation";
+SQL
+)" | tr -d '[:space:]')"
+
+if ! [[ "$op_total" =~ ^[0-9]+$ ]]; then
+  echo "PRECHECK FAILED" >&2
+  echo "Could not read ProductionOperation count" >&2
+  exit 1
+fi
+
+op_paid="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*) FROM "ProductionOperation" WHERE "isPaid";
+SQL
+)" | tr -d '[:space:]')"
+op_unpaid="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*) FROM "ProductionOperation" WHERE NOT "isPaid";
+SQL
+)" | tr -d '[:space:]')"
+payment_n="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*) FROM "Payment";
+SQL
+)" | tr -d '[:space:]')"
+pbi_n="$(psql_q "$(
+  cat <<'SQL'
+SELECT count(*) FROM "PaymentBatchItem";
+SQL
+)" | tr -d '[:space:]')"
+
+echo "DI-015 ProductionOperation total=${op_total} paid=${op_paid} unpaid=${op_unpaid}"
+echo "DI-015 Payment count=${payment_n} PaymentBatchItem count=${pbi_n}"
+psql_q "$(
+  cat <<'SQL'
+SELECT type::text || '=' || count(*)::text
+FROM "ProductionOperation"
+GROUP BY type
+ORDER BY type;
+SQL
+)" | while IFS= read -r line; do
+  [[ -n "$line" ]] && echo "DI-015 ProductionOperation by type: ${line}"
+done
+
+if [[ "$snapshot_column_count" -eq 0 ]]; then
+  if [[ "$op_total" -gt 0 ]]; then
+    failed=1
+    echo "DI-015: ProductionOperation count is ${op_total} before rate-snapshot columns. STOP. Rate snapshots cannot be reconstructed automatically." >&2
+  fi
+elif [[ "$snapshot_column_count" -eq 7 ]]; then
+  :
+elif [[ "$snapshot_column_count" -ge 1 && "$snapshot_column_count" -le 6 ]]; then
+  failed=1
+  echo "INCONSISTENT DI-015 SCHEMA" >&2
+  echo "DI-015: ProductionOperation has ${snapshot_column_count} of 7 expected snapshot columns." >&2
+else
+  failed=1
+  echo "INCONSISTENT DI-015 SCHEMA" >&2
+  echo "DI-015: ProductionOperation has ${snapshot_column_count} snapshot columns; expected 0 or 7." >&2
+fi
+
 if [[ "$failed" -ne 0 ]]; then
   echo "PRECHECK FAILED" >&2
   exit 1

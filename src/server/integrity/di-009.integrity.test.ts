@@ -562,6 +562,7 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
         railLotId: lot.id,
         railsTaken: 2,
         workDate: new Date(),
+        rateSnapshotVersion: 1,
         lines: {
           create: [
             {
@@ -707,6 +708,7 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
               employeeId: emp.id,
               clientRequestId: testReq("t681"),
               workDate: new Date(),
+              rateSnapshotVersion: 1,
             },
           });
           await applyPrisadkaPick(tx, op.id, d.id, "torcev", 3);

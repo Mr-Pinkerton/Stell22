@@ -60,6 +60,7 @@ const TABLE_IDENT = {
   Account: Prisma.raw(`"Account"`),
   Deal: Prisma.raw(`"Deal"`),
   Batch: Prisma.raw(`"Batch"`),
+  Employee: Prisma.raw(`"Employee"`),
   ProductionOperation: Prisma.raw(`"ProductionOperation"`),
   RailLot: Prisma.raw(`"RailLot"`),
 } as const;
@@ -134,6 +135,13 @@ export async function lockRailLots(
   ids: Iterable<string | null | undefined>,
 ): Promise<void> {
   await lockTableIds(db, "RailLot", ids);
+}
+
+export async function lockEmployees(
+  db: FinanceDb,
+  ids: Iterable<string | null | undefined>,
+): Promise<void> {
+  await lockTableIds(db, "Employee", ids);
 }
 
 export async function lockDealsThenBatches(

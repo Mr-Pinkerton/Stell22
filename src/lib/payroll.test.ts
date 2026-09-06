@@ -2,10 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   actualProductionRates,
   avgPerUnit,
+  DI_015_RATE_SNAPSHOT_COLUMNS,
+  employeeRateSnapshots,
+  evaluateDi015Preflight,
   hasPieceRates,
   hourlyEarning,
   operationEarning,
+  operationRateSnapshotWrite,
+  operationRatesFromSnapshots,
   pieceworkEarning,
+  RATE_SNAPSHOT_VERSION,
   salaryPerOperation,
   totalSalary,
   type OperationCounts,
@@ -192,5 +198,92 @@ describe("actualProductionRates (A6)", () => {
     expect(res.prisadkaPlosk).toBe(0);
     expect(res.upakovka).toBe(0);
     expect(res.torcovkaSort2).toBe(0);
+  });
+});
+
+describe("employeeRateSnapshots / operationRatesFromSnapshots", () => {
+  const source = {
+    hourlyRate: 300,
+    rateTorcovkaSort1: 5,
+    rateTorcovkaSort2: null as number | null,
+    ratePrisadkaTorcev: 3,
+    ratePrisadkaPloskt: 3,
+    rateUpakovka: 0,
+  };
+
+  it("copies all six values as-is, including null and 0", () => {
+    expect(employeeRateSnapshots(source)).toEqual({
+      hourlyRateSnapshot: 300,
+      rateTorcovkaSort1Snapshot: 5,
+      rateTorcovkaSort2Snapshot: null,
+      ratePrisadkaTorcevSnapshot: 3,
+      ratePrisadkaPlosktSnapshot: 3,
+      rateUpakovkaSnapshot: 0,
+    });
+  });
+
+  it("reads null snapshots as 0 without inventing a live rate", () => {
+    expect(
+      operationRatesFromSnapshots({
+        hourlyRateSnapshot: null,
+        rateTorcovkaSort1Snapshot: null,
+        rateTorcovkaSort2Snapshot: null,
+        ratePrisadkaTorcevSnapshot: null,
+        ratePrisadkaPlosktSnapshot: null,
+        rateUpakovkaSnapshot: null,
+      }),
+    ).toEqual({
+      hourly: 0,
+      torcovkaSort1: 0,
+      torcovkaSort2: 0,
+      prisadkaTorcev: 0,
+      prisadkaPlosk: 0,
+      upakovka: 0,
+    });
+  });
+
+  it("preserves 0 vs null distinction on write and uses 0 on read for both", () => {
+    const written = employeeRateSnapshots({
+      hourlyRate: null,
+      rateTorcovkaSort1: 0,
+      rateTorcovkaSort2: null,
+      ratePrisadkaTorcev: null,
+      ratePrisadkaPloskt: null,
+      rateUpakovka: 0,
+    });
+    expect(written.hourlyRateSnapshot).toBeNull();
+    expect(written.rateTorcovkaSort1Snapshot).toBe(0);
+    expect(operationRatesFromSnapshots(written).hourly).toBe(0);
+    expect(operationRatesFromSnapshots(written).torcovkaSort1).toBe(0);
+    expect(operationRatesFromSnapshots(written).upakovka).toBe(0);
+  });
+
+  it("write helper stamps RATE_SNAPSHOT_VERSION without treating it as a rate", () => {
+    expect(RATE_SNAPSHOT_VERSION).toBe(1);
+    expect(DI_015_RATE_SNAPSHOT_COLUMNS).toHaveLength(7);
+    const written = operationRateSnapshotWrite(source);
+    expect(written.rateSnapshotVersion).toBe(1);
+    expect(written.hourlyRateSnapshot).toBe(300);
+    expect(written.rateTorcovkaSort2Snapshot).toBeNull();
+  });
+});
+
+describe("evaluateDi015Preflight", () => {
+  it("pre-migration 0 columns / 0 ops is allowed", () => {
+    expect(evaluateDi015Preflight(0, 0)).toBe("ok");
+  });
+
+  it("pre-migration 0 columns / ops > 0 fails closed", () => {
+    expect(evaluateDi015Preflight(0, 1)).toBe("stop-ops-before-migrate");
+  });
+
+  it("post-migration 7 columns allows ops", () => {
+    expect(evaluateDi015Preflight(7, 0)).toBe("ok");
+    expect(evaluateDi015Preflight(7, 12)).toBe("ok");
+  });
+
+  it("partial schema 1..6 fails closed", () => {
+    expect(evaluateDi015Preflight(1, 0)).toBe("stop-inconsistent-schema");
+    expect(evaluateDi015Preflight(6, 3)).toBe("stop-inconsistent-schema");
   });
 });

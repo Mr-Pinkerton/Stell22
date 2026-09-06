@@ -623,6 +623,7 @@ describe.skipIf(!enabled)("DI-007/DI-008 terminal idempotency", () => {
         clientRequestId: requestId,
         hours: 1,
         workDate: new Date(),
+        rateSnapshotVersion: 1,
       },
     });
     try {
@@ -633,6 +634,7 @@ describe.skipIf(!enabled)("DI-007/DI-008 terminal idempotency", () => {
           clientRequestId: requestId,
           hours: 2,
           workDate: new Date(),
+          rateSnapshotVersion: 1,
         },
       });
       expect.unreachable("second insert must fail");
@@ -699,6 +701,7 @@ describe.skipIf(!enabled)("DI-007/DI-008 terminal idempotency", () => {
         clientRequestId: `test:di008:s20-a-${Date.now()}`,
         hours: 1,
         workDate: new Date(),
+        rateSnapshotVersion: 1,
       },
     });
     await prismaA.productionOperation.create({
@@ -708,6 +711,7 @@ describe.skipIf(!enabled)("DI-007/DI-008 terminal idempotency", () => {
         clientRequestId: `test:di008:s20-b-${Date.now()}`,
         hours: 2,
         workDate: new Date(),
+        rateSnapshotVersion: 1,
       },
     });
     expect(await prismaA.productionOperation.count()).toBe(2);
@@ -734,8 +738,8 @@ describe.skipIf(!enabled)("DI-007/DI-008 terminal idempotency", () => {
               `ALTER TABLE "ProductionOperation" ALTER COLUMN "clientRequestId" DROP NOT NULL`,
             );
             await tx.$executeRawUnsafe(
-              `INSERT INTO "ProductionOperation" (id, type, "employeeId", "workDate", "clientRequestId")
-               VALUES ($1, 'HOURS', $2, NOW(), NULL)`,
+              `INSERT INTO "ProductionOperation" (id, type, "employeeId", "workDate", "clientRequestId", "rateSnapshotVersion")
+               VALUES ($1, 'HOURS', $2, NOW(), NULL, 1)`,
               fixtureId,
               w.emp.id,
             );

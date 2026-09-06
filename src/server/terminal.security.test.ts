@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   nomenclatureStockFindMany: vi.fn(),
   blankStockFindMany: vi.fn(),
   productionOperationCreate: vi.fn(),
+  productionOperationFindUnique: vi.fn(async () => null),
   writeChangeLog: vi.fn(),
 }));
 
@@ -21,6 +22,19 @@ vi.mock("@/server/session", () => ({
 }));
 vi.mock("@/server/db", () => ({
   prisma: {
+    $transaction: async (fn: (tx: unknown) => unknown) =>
+      fn({
+        employee: {
+          findUnique: mocks.employeeFindUnique,
+          findMany: mocks.employeeFindMany,
+        },
+        productionOperation: {
+          create: mocks.productionOperationCreate,
+          findUnique: mocks.productionOperationFindUnique,
+          findMany: vi.fn(async () => []),
+        },
+        $queryRaw: vi.fn(async () => []),
+      }),
     employee: {
       findUnique: mocks.employeeFindUnique,
       findMany: mocks.employeeFindMany,
@@ -33,7 +47,11 @@ vi.mock("@/server/db", () => ({
     detailStock: { findMany: mocks.detailStockFindMany },
     nomenclatureStock: { findMany: mocks.nomenclatureStockFindMany },
     blankStock: { findMany: mocks.blankStockFindMany },
-    productionOperation: { create: mocks.productionOperationCreate },
+    productionOperation: {
+      create: mocks.productionOperationCreate,
+      findUnique: mocks.productionOperationFindUnique,
+      findMany: vi.fn(async () => []),
+    },
   },
 }));
 vi.mock("@/server/change-log", () => ({ writeChangeLog: mocks.writeChangeLog }));
@@ -42,6 +60,7 @@ vi.mock("@/server/internal/cost", () => ({ archiveBatchIfDepleted: vi.fn() }));
 vi.mock("@/server/internal/production-reversal", () => ({
   applyPrisadkaPick: vi.fn(),
   applyUpakovkaPick: vi.fn(),
+  applyUpakovkaPrepared: vi.fn(),
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("next/headers", () => ({
@@ -214,12 +233,32 @@ describe("terminal action boundary", () => {
       id: "employee-1",
       fullName: "Иван Иванов",
     });
+    mocks.employeeFindUnique.mockResolvedValue({
+      id: "employee-1",
+      fullName: "Иван Иванов",
+      hourlyRate: 500,
+      rateTorcovkaSort1: null,
+      rateTorcovkaSort2: null,
+      ratePrisadkaTorcev: null,
+      ratePrisadkaPloskt: null,
+      rateUpakovka: null,
+    });
     mocks.productionOperationCreate.mockResolvedValue({ id: "operation-1" });
 
     await submitHours("employee-1", 8, "request-1");
 
     expect(mocks.requireTerminalEmployee).toHaveBeenCalledWith("employee-1");
     expect(mocks.productionOperationCreate).toHaveBeenCalledOnce();
+    const created = mocks.productionOperationCreate.mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+    };
+    expect(created?.data).toMatchObject({
+      type: "HOURS",
+      hours: 8,
+      hourlyRateSnapshot: 500,
+      rateSnapshotVersion: 1,
+    });
+    expect(created?.data).not.toHaveProperty("rateSnapshot");
     expect(mocks.writeChangeLog).toHaveBeenCalledOnce();
   });
 });

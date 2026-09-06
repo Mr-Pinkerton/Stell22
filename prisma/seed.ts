@@ -22,6 +22,7 @@ import {
 } from "../src/mocks/finance-fixtures";
 import { MATERIAL_HVOYA_ID } from "../src/mocks/fixtures";
 import { batchExtraShare, batchTotalCost, dealDeliveryExtra } from "../src/lib/deal-cost";
+import { operationRateSnapshotWrite } from "../src/lib/payroll";
 import { hashPassword } from "../src/lib/password";
 
 const prisma = new PrismaClient();
@@ -118,6 +119,16 @@ async function main() {
       rateUpakovka: e.rateUpakovka ?? null,
     })),
   });
+
+  const seededEmployees = await prisma.employee.findMany();
+  const employeeById = new Map(seededEmployees.map((e) => [e.id, e]));
+  function rateSnapshotsFor(employeeId: string) {
+    const emp = employeeById.get(employeeId);
+    if (!emp) {
+      throw new Error(`Seed: employee ${employeeId} not found; cannot write rate snapshots`);
+    }
+    return operationRateSnapshotWrite(emp);
+  }
 
   await prisma.nomenclatureItem.createMany({
     data: nomenclatureItems.map((n) => ({
@@ -325,6 +336,7 @@ async function main() {
         railLotId: o.railLotId,
         railsTaken: o.railsTaken,
         workDate: new Date(o.date),
+        ...rateSnapshotsFor(o.employeeId),
         lines: { create: blankLines },
       },
     });
@@ -358,6 +370,7 @@ async function main() {
         employeeId: o.employeeId,
         clientRequestId: `seed:prisadka:${o.date}:${o.employeeId}:${o.detailId}:${o.kind}`,
         workDate: new Date(o.date),
+        ...rateSnapshotsFor(o.employeeId),
         lines: {
           create: [
             {
@@ -436,6 +449,7 @@ async function main() {
         productId: o.productId,
         productQty: o.quantity,
         workDate: new Date(o.date),
+        ...rateSnapshotsFor(o.employeeId),
         // Провенанс списания — нужен для обратной разноски при правке/
         // удалении (см. src/server/terminal.ts, reverseUpakovkaOperation).
         lines: {
@@ -501,6 +515,7 @@ async function main() {
       workDate: new Date(h.date),
       hours: h.hours,
       isPaid: false,
+      ...rateSnapshotsFor(h.employeeId),
     })),
   });
 

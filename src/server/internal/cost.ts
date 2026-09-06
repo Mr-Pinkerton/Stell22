@@ -24,7 +24,7 @@ import {
   type OperationForCost,
   type ProducedLine,
 } from "@/lib/cost-report";
-import { actualProductionRates, type ProductionRateOp } from "@/lib/payroll";
+import { actualProductionRates, operationRatesFromSnapshots, type ProductionRateOp } from "@/lib/payroll";
 import { dayKey } from "@/lib/entries";
 import { getMonthPeriod, type Period } from "@/lib/dates";
 import type { Batch, Detail, Employee, NomenclatureItem, Product } from "@/types/domain";
@@ -188,33 +188,12 @@ async function loadCostContext(period: Period | null): Promise<CostContext> {
   const periodOpsForCost = periodOps.map(toOperationForCost);
   const periodLines = producedLinesFromOperations(periodOpsForCost);
   const producedProductQty = producedProductQtyFromOperations(periodOpsForCost);
-  const ZERO_RATES = {
-    hourly: 0,
-    torcovkaSort1: 0,
-    torcovkaSort2: 0,
-    prisadkaTorcev: 0,
-    prisadkaPlosk: 0,
-    upakovka: 0,
-  };
-  const ratesByEmp = new Map(
-    employees.map((e) => [
-      e.id,
-      {
-        hourly: num(e.hourlyRate),
-        torcovkaSort1: num(e.rateTorcovkaSort1),
-        torcovkaSort2: num(e.rateTorcovkaSort2),
-        prisadkaTorcev: num(e.ratePrisadkaTorcev),
-        prisadkaPlosk: num(e.ratePrisadkaPloskt),
-        upakovka: num(e.rateUpakovka),
-      },
-    ]),
-  );
   const detailSort = new Map(details.map((d) => [d.id, d.sort]));
   const rateOps: ProductionRateOp[] = periodOps.map((op) => ({
     type: op.type,
     employeeId: op.employeeId,
     dayKey: dayKey(op.workDate),
-    rates: ratesByEmp.get(op.employeeId) ?? ZERO_RATES,
+    rates: operationRatesFromSnapshots(op),
     hours: num(op.hours),
     productQty: op.productQty,
     lines: op.lines.map((l) => ({

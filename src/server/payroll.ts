@@ -13,7 +13,7 @@ import {
   sortedUniqueIds,
 } from "@/server/internal/finance-operations";
 import { formatMoney } from "@/lib/format";
-import { operationEarning } from "@/lib/payroll";
+import { operationEarning, operationRatesFromSnapshots } from "@/lib/payroll";
 import { dayKey } from "@/lib/entries";
 import type { Period } from "@/lib/dates";
 import type { SalaryDayLine, SalaryReportRow } from "@/mocks/report-fixtures";
@@ -35,7 +35,7 @@ interface ComputedOp {
   quantity: number;
 }
 
-/** Карты расценок работников и сортов деталей для расчёта сумм операций. */
+/** Карты имён работников и сортов деталей для расчёта сумм операций. */
 async function buildRefMaps(db: typeof prisma | Prisma.TransactionClient = prisma) {
   const [employees, details] = await Promise.all([
     db.employee.findMany(),
@@ -43,19 +43,6 @@ async function buildRefMaps(db: typeof prisma | Prisma.TransactionClient = prism
   ]);
   return {
     employeeName: new Map(employees.map((e) => [e.id, e.fullName])),
-    empRates: new Map(
-      employees.map((e) => [
-        e.id,
-        {
-          hourly: num(e.hourlyRate),
-          torcovkaSort1: num(e.rateTorcovkaSort1),
-          torcovkaSort2: num(e.rateTorcovkaSort2),
-          prisadkaTorcev: num(e.ratePrisadkaTorcev),
-          prisadkaPlosk: num(e.ratePrisadkaPloskt),
-          upakovka: num(e.rateUpakovka),
-        },
-      ]),
-    ),
     detailSort: new Map(details.map((d) => [d.id, d.sort])),
   };
 }
@@ -63,11 +50,9 @@ async function buildRefMaps(db: typeof prisma | Prisma.TransactionClient = prism
 type RefMaps = Awaited<ReturnType<typeof buildRefMaps>>;
 
 function computeOp(op: OpFull, maps: RefMaps): ComputedOp {
-  const rates = maps.empRates.get(op.employeeId);
-  if (!rates) return { op, amount: 0, quantity: 0 };
   const { quantity, amount } = operationEarning({
     type: op.type,
-    rates,
+    rates: operationRatesFromSnapshots(op),
     hours: num(op.hours),
     productQty: op.productQty ?? 0,
     lines: op.lines.map((l) => ({

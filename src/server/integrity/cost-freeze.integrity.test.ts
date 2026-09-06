@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { D, distributeBatchCost, sectionAreaM2 } from "@/lib/cost";
-import { operationEarning } from "@/lib/payroll";
+import { operationEarning, operationRateSnapshotWrite } from "@/lib/payroll";
 import { prismaUniqueDiscriminator } from "@/lib/prisma-unique-conflict";
 import { maybeFreezeBatch, recalcBatchCosts } from "@/server/internal/cost";
 import { syncBatchTotalCostInternal } from "@/server/internal/finance-operations";
@@ -170,6 +170,7 @@ describe.skipIf(!enabled)("cost-freeze integrity (DI-005/006/018/019/BD-3)", () 
     qty: number;
     paid?: boolean;
   }) {
+    const emp = await prismaA.employee.findUniqueOrThrow({ where: { id: opts.employeeId } });
     const op = await prismaA.productionOperation.create({
       data: {
         type: "TORCOVKA",
@@ -179,6 +180,7 @@ describe.skipIf(!enabled)("cost-freeze integrity (DI-005/006/018/019/BD-3)", () 
         batchId: opts.batchId,
         isPaid: opts.paid ?? false,
         paidAt: opts.paid ? new Date("2026-09-02T00:00:00.000Z") : null,
+        ...operationRateSnapshotWrite(emp),
         lines: {
           create: {
             quantity: opts.qty,

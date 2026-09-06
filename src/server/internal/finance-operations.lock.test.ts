@@ -7,6 +7,7 @@ import {
   lockAccountsThenDealsThenBatches,
   lockBatches,
   lockDealsThenBatches,
+  lockEmployees,
   lockProductionOperations,
   lockRailLots,
   LockSetChangedError,
@@ -128,6 +129,22 @@ describe("lock order", () => {
     expect(sqls[0]).toContain('"ProductionOperation"');
     expect(sqls[0]).toContain("ORDER BY id FOR UPDATE");
     await lockProductionOperations(db as never, [null, ""]);
+    expect(db.$queryRaw).toHaveBeenCalledOnce();
+  });
+
+  it("lockEmployees locks Employee ORDER BY id FOR UPDATE and skips empty", async () => {
+    const sqls: string[] = [];
+    const db = {
+      $queryRaw: vi.fn(async (query: Prisma.Sql) => {
+        sqls.push(query.strings.join("?"));
+        return [];
+      }),
+    };
+    await lockEmployees(db as never, ["emp-z", "emp-a", "emp-a"]);
+    expect(sqls).toHaveLength(1);
+    expect(sqls[0]).toContain('"Employee"');
+    expect(sqls[0]).toContain("ORDER BY id FOR UPDATE");
+    await lockEmployees(db as never, []);
     expect(db.$queryRaw).toHaveBeenCalledOnce();
   });
 

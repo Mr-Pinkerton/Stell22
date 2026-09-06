@@ -5,7 +5,6 @@ import { cookies, headers } from "next/headers";
 import type {
   Batch as PrismaBatch,
   Detail as PrismaDetail,
-  Employee as PrismaEmployee,
   Material as PrismaMaterial,
   Prisma,
   RailLot as PrismaRailLot,
@@ -16,7 +15,7 @@ import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { archiveBatchIfDepleted } from "@/server/internal/cost";
 import {
   applyPrisadkaPick,
-  applyUpakovkaPick,
+  applyUpakovkaPrepared,
 } from "@/server/internal/production-reversal";
 import {
   buildStockSnapshot,
@@ -24,8 +23,8 @@ import {
   type DetailStockRow,
 } from "@/lib/detail-stock";
 import { D } from "@/lib/cost";
-import { lockRailLots } from "@/server/internal/finance-operations";
-import { blankSpecSortKey, lockDetails } from "@/server/internal/inventory-integrity";
+import { lockEmployees, lockRailLots } from "@/server/internal/finance-operations";
+import { blankSpecSortKey, lockDetails, snapshotUpakovkaApply } from "@/server/internal/inventory-integrity";
 import {
   approvalCodeMatches,
   approvalHmacSecret,
@@ -50,6 +49,7 @@ import {
   type TorcovkaApprovalSnapshot,
 } from "@/server/internal/torcovka-approval";
 import { requireClientRequestId } from "@/lib/request-id";
+import { operationEarning, operationRateSnapshotWrite, operationRatesFromSnapshots } from "@/lib/payroll";
 import { resolvePinLookup } from "@/lib/terminal-auth";
 import { RateLimiter, retryAfterSeconds } from "@/lib/rate-limit";
 import {
@@ -78,10 +78,6 @@ function num(value: Prisma.Decimal | number | null): number | null {
   return typeof value === "object" && "toNumber" in value ? value.toNumber() : Number(value);
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
 /**
  * Дубль по ключу идемпотентности терминала (A21): unique-конфликт P2002 на
  * `clientRequestId`. Такой повтор одной попытки (двойной тап / сетевой retry /
@@ -96,6 +92,38 @@ function isDuplicateClientRequest(e: unknown): boolean {
   return Array.isArray(target)
     ? target.includes("clientRequestId")
     : String(target ?? "").includes("clientRequestId");
+}
+
+function snapshotNumber(value: Prisma.Decimal | number | null): number | null {
+  if (value == null) return null;
+  return typeof value === "object" && "toNumber" in value ? value.toNumber() : Number(value);
+}
+
+function snapshotFieldsForLog(s: ReturnType<typeof operationRateSnapshotWrite>) {
+  return {
+    hourlyRateSnapshot: snapshotNumber(s.hourlyRateSnapshot as Prisma.Decimal | number | null),
+    rateTorcovkaSort1Snapshot: snapshotNumber(
+      s.rateTorcovkaSort1Snapshot as Prisma.Decimal | number | null,
+    ),
+    rateTorcovkaSort2Snapshot: snapshotNumber(
+      s.rateTorcovkaSort2Snapshot as Prisma.Decimal | number | null,
+    ),
+    ratePrisadkaTorcevSnapshot: snapshotNumber(
+      s.ratePrisadkaTorcevSnapshot as Prisma.Decimal | number | null,
+    ),
+    ratePrisadkaPlosktSnapshot: snapshotNumber(
+      s.ratePrisadkaPlosktSnapshot as Prisma.Decimal | number | null,
+    ),
+    rateUpakovkaSnapshot: snapshotNumber(s.rateUpakovkaSnapshot as Prisma.Decimal | number | null),
+    rateSnapshotVersion: s.rateSnapshotVersion,
+  };
+}
+
+async function lockAndReadRateSnapshots(tx: Prisma.TransactionClient, employeeId: string) {
+  await lockEmployees(tx, [employeeId]);
+  const emp = await tx.employee.findUnique({ where: { id: employeeId } });
+  if (!emp) throw new Error("Сотрудник не найден");
+  return operationRateSnapshotWrite(emp);
 }
 
 // ============================ СЕРИАЛИЗАЦИЯ =================================
@@ -608,6 +636,8 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
       await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, employeeId);
     }
 
+    const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
+
     const dec = await tx.railLot.updateMany({
       where: { id: railLotId, batchId, remainingQuantity: { gte: railsTaken } },
       data: { remainingQuantity: { decrement: railsTaken } },
@@ -626,6 +656,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
         torcovkaSubmitWasteReason: persist.torcovkaSubmitWasteReason,
         torcovkaSubmitWasteNote: persist.torcovkaSubmitWasteNote,
         workDate: new Date(),
+        ...rateSnapshots,
         lines: {
           create: picks.map((p) => ({
             quantity: p.quantity,
@@ -680,6 +711,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
       railLotId,
       railsTaken,
       picks,
+      ...snapshotFieldsForLog(rateSnapshots),
     };
     if (approvalMeta) {
       changeLogValues.approvalRequired = true;
@@ -962,16 +994,24 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
 
   await prisma
     .$transaction(async (tx) => {
+      const existing = await tx.productionOperation.findUnique({
+        where: { clientRequestId },
+        select: { id: true },
+      });
+      if (existing) return;
+
       await lockDetails(
         tx,
         picks.map((p) => p.detailId),
       );
+      const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
       const op = await tx.productionOperation.create({
         data: {
           type: "PRISADKA",
           employeeId,
           clientRequestId,
           workDate: new Date(),
+          ...rateSnapshots,
         },
       });
 
@@ -980,7 +1020,11 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
       }
 
       await writeChangeLog(
-        { entity: "ProductionOperation", entityId: op.id, newValues: { type: "PRISADKA", picks } },
+        {
+          entity: "ProductionOperation",
+          entityId: op.id,
+          newValues: { type: "PRISADKA", picks, ...snapshotFieldsForLog(rateSnapshots) },
+        },
         tx,
       );
     }, { timeout: 20_000, maxWait: 20_000 })
@@ -1252,24 +1296,53 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
 
   await prisma
     .$transaction(async (tx) => {
+      const expectedIds = picks.map((p) => `${clientRequestId}:${p.productId}`);
+      const existing = await tx.productionOperation.findMany({
+        where: { clientRequestId: { in: expectedIds } },
+        select: { clientRequestId: true },
+      });
+      const found = new Set(existing.map((row) => row.clientRequestId));
+      const missing = expectedIds.filter((id) => !found.has(id));
+      if (missing.length === 0) return;
+      if (found.size > 0) {
+        throw new Error("Несогласованный повтор упаковки");
+      }
+
+      const preparedRows = [];
       for (const pick of picks) {
+        preparedRows.push({
+          pick,
+          prepared: await snapshotUpakovkaApply(tx, pick.productId),
+        });
+      }
+      await lockDetails(
+        tx,
+        preparedRows.flatMap((row) => row.prepared.details.map((d) => d.detailId)),
+      );
+      const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
+      for (const { pick, prepared } of preparedRows) {
         const op = await tx.productionOperation.create({
           data: {
             type: "UPAKOVKA",
             employeeId,
-            // Одна операция на изделие → ключ на попытку уточняем изделием (A21).
             clientRequestId: `${clientRequestId}:${pick.productId}`,
             workDate: new Date(),
             productId: pick.productId,
             productQty: pick.quantity,
+            ...rateSnapshots,
           },
         });
-        await applyUpakovkaPick(tx, op.id, pick.productId, pick.quantity);
+        await applyUpakovkaPrepared(tx, op.id, pick.quantity, prepared);
         await writeChangeLog(
           {
             entity: "ProductionOperation",
             entityId: op.id,
-            newValues: { type: "UPAKOVKA", productId: pick.productId, quantity: pick.quantity },
+            newValues: {
+              type: "UPAKOVKA",
+              productId: pick.productId,
+              quantity: pick.quantity,
+              ...snapshotFieldsForLog(rateSnapshots),
+            },
           },
           tx,
         );
@@ -1296,20 +1369,37 @@ export async function submitHours(
   if (!employeeId) throw new Error("Не выбран работник");
   if (!(hours > 0)) throw new Error("Укажите количество часов");
 
-  let op: { id: string } | null = null;
   try {
-    op = await prisma.productionOperation.create({
-      data: { type: "HOURS", employeeId, clientRequestId: requestId, hours, workDate: new Date() },
+    await prisma.$transaction(async (tx) => {
+      const existing = await tx.productionOperation.findUnique({
+        where: { clientRequestId: requestId },
+        select: { id: true },
+      });
+      if (existing) return;
+      const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
+      const created = await tx.productionOperation.create({
+        data: {
+          type: "HOURS",
+          employeeId,
+          clientRequestId: requestId,
+          hours,
+          workDate: new Date(),
+          ...rateSnapshots,
+        },
+      });
+      await writeChangeLog(
+        {
+          entity: "ProductionOperation",
+          entityId: created.id,
+          newValues: { type: "HOURS", hours, ...snapshotFieldsForLog(rateSnapshots) },
+        },
+        tx,
+      );
     });
   } catch (e) {
     if (isDuplicateClientRequest(e)) return; // A21: повтор уже обработан
     throw e;
   }
-  await writeChangeLog({
-    entity: "ProductionOperation",
-    entityId: op.id,
-    newValues: { type: "HOURS", hours },
-  });
 
   revalidatePath("/production");
   revalidatePath("/terminal");
@@ -1319,33 +1409,19 @@ export async function submitHours(
 
 type OpWithLines = Prisma.ProductionOperationGetPayload<{ include: { lines: true } }>;
 
-function entryFromOperation(op: OpWithLines, emp: PrismaEmployee): TerminalEntry {
-  let quantity = 0;
-  let amount = 0;
-
-  if (op.type === "HOURS") {
-    quantity = num(op.hours) ?? 0;
-    amount = quantity * (num(emp.hourlyRate) ?? 0);
-  } else if (op.type === "UPAKOVKA") {
-    quantity = op.productQty ?? 0;
-    amount = quantity * (num(emp.rateUpakovka) ?? 0);
-  } else if (op.type === "TORCOVKA") {
-    // ЗП торцовки — по сорту произведённой заготовки.
-    const r1 = num(emp.rateTorcovkaSort1) ?? 0;
-    const r2 = num(emp.rateTorcovkaSort2) ?? 0;
-    for (const l of op.lines) {
-      quantity += l.quantity;
-      amount += l.quantity * (l.blankSort === "SORT2" ? r2 : r1);
-    }
-  } else {
-    // PRISADKA
-    const rt = num(emp.ratePrisadkaTorcev) ?? 0;
-    const rp = num(emp.ratePrisadkaPloskt) ?? 0;
-    for (const l of op.lines) {
-      quantity += l.quantity;
-      amount += l.quantity * ((l.prisadkaTorcevaya ? rt : 0) + (l.prisadkaPloskost ? rp : 0));
-    }
-  }
+function entryFromOperation(op: OpWithLines): TerminalEntry {
+  const { quantity, amount } = operationEarning({
+    type: op.type,
+    rates: operationRatesFromSnapshots(op),
+    hours: num(op.hours),
+    productQty: op.productQty ?? 0,
+    lines: op.lines.map((l) => ({
+      quantity: l.quantity,
+      sort: l.blankSort ?? undefined,
+      prisadkaTorcevaya: l.prisadkaTorcevaya,
+      prisadkaPloskost: l.prisadkaPloskost,
+    })),
+  });
 
   return {
     id: op.id,
@@ -1353,7 +1429,7 @@ function entryFromOperation(op: OpWithLines, emp: PrismaEmployee): TerminalEntry
     type: op.type,
     occurredAt: op.createdAt.toISOString(),
     quantity,
-    amount: round2(amount),
+    amount,
   };
 }
 
@@ -1369,5 +1445,5 @@ export async function getEmployeeEntries(employeeId: string): Promise<TerminalEn
   ]);
   if (!emp) return [];
 
-  return ops.map((op) => entryFromOperation(op, emp));
+  return ops.map((op) => entryFromOperation(op));
 }

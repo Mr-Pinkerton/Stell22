@@ -5,6 +5,7 @@ vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Prisma } from "@prisma/client";
 import { prismaUniqueDiscriminator } from "@/lib/prisma-unique-conflict";
+import { operationRateSnapshotWrite } from "@/lib/payroll";
 import { lockProductionOperations } from "@/server/internal/finance-operations";
 import { markEmployeePaid } from "@/server/payroll";
 import {
@@ -65,6 +66,7 @@ describe.skipIf(!enabled)("DI-014 PaymentBatchItem.operationId uniqueness", () =
         workDate: new Date("2026-09-01T00:00:00.000Z"),
         hours: 2,
         isPaid: false,
+        ...operationRateSnapshotWrite(emp),
       },
     });
     return { emp, op };
