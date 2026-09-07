@@ -10,6 +10,7 @@ import {
   OPERATION_SAVED_TITLE,
   refreshAfterSavedOperation,
   shouldShowTorcovkaConfirmBar,
+  shouldShowTorcovkaWastePct,
   shouldSkipTorcovkaDraftPersist,
   TERMINAL_REFRESH_AFTER_SAVE_WARNING,
   torcovkaBlankPrerequisiteHint,
@@ -212,6 +213,16 @@ describe("destructive switch copy", () => {
     expect(TORCOVKA_SWITCH_WARNING).toBe("Введённые данные будут сброшены.");
     expect(TORCOVKA_SWITCH_STAY).toBe("Остаться");
     expect(TORCOVKA_SWITCH_RESET).toBe("Сбросить и сменить");
+  });
+});
+
+describe("shouldShowTorcovkaWastePct", () => {
+  it("hides 100% waste when rails are taken but no blanks are picked", () => {
+    expect(shouldShowTorcovkaWastePct({ producedM: 0 })).toBe(false);
+  });
+
+  it("shows the real waste percentage after at least one blank is picked", () => {
+    expect(shouldShowTorcovkaWastePct({ producedM: 1.2 })).toBe(true);
   });
 });
 

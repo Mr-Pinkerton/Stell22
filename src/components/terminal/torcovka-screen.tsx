@@ -33,6 +33,7 @@ import {
   isTorcovkaDirty,
   nextTorcovkaStateAfterSuccess,
   shouldShowTorcovkaConfirmBar,
+  shouldShowTorcovkaWastePct,
   shouldSkipTorcovkaDraftPersist,
   torcovkaBlankPrerequisiteHint,
   torcovkaSavedDetail,
@@ -41,6 +42,8 @@ import {
   TORCOVKA_SWITCH_WARNING,
 } from "@/lib/torcovka-terminal-flow";
 import { computeTorcovkaWasteMetrics } from "@/lib/torcovka-plausibility";
+import { nextPickedQuantity } from "@/lib/quantity-input";
+import { beginExclusiveSubmit, endExclusiveSubmit } from "@/lib/terminal-submit-guard";
 import { submitTorcovka } from "@/server/terminal";
 import type { RailType, Sort } from "@/types/domain";
 import type {
@@ -103,6 +106,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
   const [activeSort, setActiveSort] = useState<Sort>(initial?.activeSort ?? "SORT1");
   const [dialog, setDialog] = useState<Dialog>(null);
   const [submitting, setSubmitting] = useState(false);
+  const submitLock = useRef(false);
   const [pendingAck, setPendingAck] = useState<PendingAck | null>(() =>
     restorePendingAck({
       draft: storedDraft,
@@ -313,12 +317,17 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
     selectionAfterSuccessRef.current = { batchId, lotId };
     applySelectionAfterRefresh.current = true;
     successAck.show(detail);
-    await onDone();
-    setSubmitting(false);
+    try {
+      await onDone();
+    } finally {
+      endExclusiveSubmit(submitLock);
+      setSubmitting(false);
+    }
   };
 
   const confirm = async () => {
-    if (!lotId || !batchId || railsTaken <= 0 || pickedCount === 0 || overLength || submitting) return;
+    if (!lotId || !batchId || railsTaken <= 0 || pickedCount === 0 || overLength) return;
+    if (!beginExclusiveSubmit(submitLock)) return;
     setSubmitting(true);
     const picks = torcovkaPicks.map((p) => ({
       lengthM: p.lengthM,
@@ -345,6 +354,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
           batchId,
           railLotId: lotId,
         });
+        endExclusiveSubmit(submitLock);
         setSubmitting(false);
         return;
       }
@@ -357,13 +367,15 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
+      endExclusiveSubmit(submitLock);
       setSubmitting(false);
     }
   };
 
   const retryWithAck = async (ackKind: "SUSPICIOUS") => {
-    if (!pendingAck || submitting) return;
+    if (!pendingAck) return;
     if (pendingAck.status !== "ACK_REQUIRED") return;
+    if (!beginExclusiveSubmit(submitLock)) return;
     setSubmitting(true);
     try {
       const result = await submitTorcovka({
@@ -386,6 +398,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
           setApprovalCode("");
         }
         setPendingAck((prev) => (prev ? { ...prev, ...result } : prev));
+        endExclusiveSubmit(submitLock);
         setSubmitting(false);
         return;
       }
@@ -394,14 +407,16 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       await finishCreated(torcovkaSavedDetail(qty), `Торцовка внесена: ${qty} заг.`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
+      endExclusiveSubmit(submitLock);
       setSubmitting(false);
     }
   };
 
   const retryWithApprovalCode = async () => {
-    if (!pendingAck || submitting) return;
+    if (!pendingAck) return;
     if (pendingAck.status !== "APPROVAL_REQUIRED") return;
     if (approvalCode.length !== APPROVAL_CODE_LENGTH) return;
+    if (!beginExclusiveSubmit(submitLock)) return;
     setSubmitting(true);
     try {
       const result = await submitTorcovka({
@@ -417,11 +432,13 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         setApprovalCode("");
         setPendingAck((prev) => (prev ? { ...prev, ...result } : prev));
         toast.error(CODE_ROTATED_MESSAGE);
+        endExclusiveSubmit(submitLock);
         setSubmitting(false);
         return;
       }
       if (result.status === "ACK_REQUIRED") {
         setPendingAck((prev) => (prev ? { ...prev, ...result } : prev));
+        endExclusiveSubmit(submitLock);
         setSubmitting(false);
         return;
       }
@@ -434,6 +451,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       if (err instanceof Error && err.message === WRONG_APPROVAL_CODE_MESSAGE) {
         setApprovalCode("");
       }
+      endExclusiveSubmit(submitLock);
       setSubmitting(false);
     }
   };
@@ -607,6 +625,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
           )}
         <TerminalConfirmBar
           layout="docked"
+          label="Сохранить операцию"
           summary={
             <div className="flex min-w-0 items-center divide-x divide-border">
               <ConfirmMetric
@@ -619,6 +638,9 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
                 label="Использовано"
                 value={`${formatGroupedDecimal(wasteMetrics ? wasteMetrics.producedM.toNumber() : 0, 2)} м`}
               />
+              {shouldShowTorcovkaWastePct({
+                producedM: wasteMetrics ? wasteMetrics.producedM.toNumber() : 0,
+              }) && (
               <ConfirmMetric
                 icon={<Trash2 />}
                 label="Отход"
@@ -629,6 +651,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
                     : undefined
                 }
               />
+              )}
             </div>
           }
           disabled={railsTaken <= 0 || pickedCount === 0 || overLength || submitting}
@@ -696,10 +719,21 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
             : undefined
         }
         limitMessage={RAIL_LENGTH_LIMIT_MESSAGE}
+        allowZero={
+          dialog?.kind === "length" &&
+          (picked[pickKey(dialog.lengthM, dialog.sort)] ?? 0) > 0
+        }
         onConfirm={(v) => {
           if (dialog?.kind === "length") {
             successAck.dismiss();
-            setPicked((p) => ({ ...p, [pickKey(dialog.lengthM, dialog.sort)]: v }));
+            const key = pickKey(dialog.lengthM, dialog.sort);
+            const nextQty = nextPickedQuantity(v);
+            setPicked((p) => {
+              const next = { ...p };
+              if (nextQty == null) delete next[key];
+              else next[key] = nextQty;
+              return next;
+            });
           }
           setDialog(null);
         }}

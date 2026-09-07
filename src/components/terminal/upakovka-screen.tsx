@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "@/components/terminal/toast";
 import { Package } from "lucide-react";
 import { OperationTile, OperationTileGrid } from "@/components/terminal/operation-tile";
@@ -12,6 +12,7 @@ import { submitUpakovka } from "@/server/terminal";
 import { formatProductSku } from "@/lib/format";
 import { sectionLabel } from "@/lib/material";
 import { terminalDialogContentClass, terminalStickyOperationClass } from "@/lib/scroll-classes";
+import { beginExclusiveSubmit, endExclusiveSubmit } from "@/lib/terminal-submit-guard";
 import type { UpakovkaShortage } from "@/lib/upakovka-availability";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -61,6 +62,7 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
   const [dialogProduct, setDialogProduct] = useState<TerminalProduct | null>(null);
   const [reasonProduct, setReasonProduct] = useState<TerminalProduct | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const submitLock = useRef(false);
   const successAck = useTerminalSuccessAck();
 
   const products = useMemo(() => {
@@ -112,7 +114,8 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
   }, [picked, saveDraft]);
 
   const confirm = async () => {
-    if (pickedCount === 0 || submitting) return;
+    if (pickedCount === 0) return;
+    if (!beginExclusiveSubmit(submitLock)) return;
     const picks = Object.entries(picked)
       .filter(([, qty]) => qty > 0)
       .map(([productId, quantity]) => ({ productId, quantity }));
@@ -129,9 +132,10 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
       setDialogProduct(null);
       successAck.show(`Упаковка сохранена: ${pickedCount} шт`);
       await onDone();
-      setSubmitting(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
+    } finally {
+      endExclusiveSubmit(submitLock);
       setSubmitting(false);
     }
   };
@@ -189,6 +193,7 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
       {stockWarning && <p className="text-amber-800 text-sm leading-relaxed">{stockWarning}</p>}
 
       <TerminalConfirmBar
+        label="Сохранить операцию"
         summary={
           <>
             <span className="font-medium">{pickedCount} шт</span>

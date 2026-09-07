@@ -81,6 +81,14 @@ export function buildJournal(
   return groupEntriesByDay(filterEntriesByPeriod(entries, period, now));
 }
 
+/** Единицы в журнале терминала (сжато). TORCOVKA пишет заготовки, не детали. */
+export const JOURNAL_TYPE_UNIT: Record<OperationType, string> = {
+  TORCOVKA: "заг.",
+  PRISADKA: "присадк.",
+  UPAKOVKA: "шт",
+  HOURS: "ч",
+};
+
 /** Сумма заработка по всем дням журнала, ₽. */
 export function journalTotal(groups: DayGroup[]): number {
   return groups.reduce((sum, g) => sum + g.totalAmount, 0);

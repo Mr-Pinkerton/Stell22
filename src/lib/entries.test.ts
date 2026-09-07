@@ -4,6 +4,7 @@ import {
   dayKey,
   filterEntriesByPeriod,
   groupEntriesByDay,
+  JOURNAL_TYPE_UNIT,
   journalTotal,
 } from "./entries";
 import type { TerminalEntry } from "@/types/domain";
@@ -101,5 +102,18 @@ describe("buildJournal + journalTotal", () => {
   it("пустой журнал — пустой массив, итог 0", () => {
     expect(buildJournal([], "week", NOW)).toEqual([]);
     expect(journalTotal([])).toBe(0);
+  });
+});
+
+describe("JOURNAL_TYPE_UNIT", () => {
+  it("labels TORCOVKA output as blanks, not details", () => {
+    expect(JOURNAL_TYPE_UNIT.TORCOVKA).toBe("заг.");
+    expect(JOURNAL_TYPE_UNIT.TORCOVKA).not.toBe("дет");
+  });
+
+  it("does not relabel PRISADKA or UPAKOVKA", () => {
+    expect(JOURNAL_TYPE_UNIT.PRISADKA).toBe("присадк.");
+    expect(JOURNAL_TYPE_UNIT.UPAKOVKA).toBe("шт");
+    expect(JOURNAL_TYPE_UNIT.HOURS).toBe("ч");
   });
 });

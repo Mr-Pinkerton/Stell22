@@ -1,12 +1,16 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { KeypadDisplay } from "@/components/terminal/keypad-panel";
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
 import { terminalDialogContentClass } from "@/lib/scroll-classes";
+import { canConfirmQuantity } from "@/lib/quantity-input";
+import { beginExclusiveSubmit } from "@/lib/terminal-submit-guard";
+
+export const QUANTITY_CONFIRM_LABEL = "Сохранить количество";
 
 interface QuantityDialogProps {
   open: boolean;
@@ -19,6 +23,8 @@ interface QuantityDialogProps {
   /** Текст при превышении max (иначе «Доступно не более N»). */
   limitMessage?: string;
   confirmLabel?: string;
+  /** TORCOVKA: разрешить 0, чтобы снять одну уже выбранную длину. */
+  allowZero?: boolean;
   onConfirm: (value: number) => void;
   onClose: () => void;
 }
@@ -39,15 +45,17 @@ function QuantityDialogBody({
   initial = 0,
   max,
   limitMessage,
-  confirmLabel = "Подтвердить",
+  confirmLabel = QUANTITY_CONFIRM_LABEL,
+  allowZero = false,
   onConfirm,
   onClose,
 }: QuantityDialogProps) {
   const [value, setValue] = useState(initial > 0 ? String(initial) : "");
+  const confirmLock = useRef(false);
 
   const numeric = Number(value || 0);
   const overLimit = max != null && numeric > max;
-  const canConfirm = numeric > 0 && !overLimit;
+  const canConfirm = canConfirmQuantity({ numeric, max, allowZero });
   const limitText = limitMessage ?? (max != null ? `Доступно не более ${max}` : "");
 
   return (
@@ -74,7 +82,10 @@ function QuantityDialogBody({
         <Button
           className="h-14 rounded-xl text-lg"
           disabled={!canConfirm}
-          onClick={() => onConfirm(numeric)}
+          onClick={() => {
+            if (!canConfirm || !beginExclusiveSubmit(confirmLock)) return;
+            onConfirm(numeric);
+          }}
         >
           {confirmLabel}
         </Button>

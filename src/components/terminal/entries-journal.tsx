@@ -8,6 +8,7 @@ import { formatMoney, TIME_ZONE } from "@/lib/format";
 import {
   buildJournal,
   dayKey,
+  JOURNAL_TYPE_UNIT,
   journalTotal,
   type DayGroup,
   type JournalPeriod,
@@ -21,13 +22,6 @@ const TYPE_LABEL: Record<OperationType, string> = {
   PRISADKA: "Присадка",
   UPAKOVKA: "Упаковка",
   HOURS: "Часы",
-};
-
-const TYPE_UNIT: Record<OperationType, string> = {
-  TORCOVKA: "дет",
-  PRISADKA: "присадк.",
-  UPAKOVKA: "шт",
-  HOURS: "ч",
 };
 
 const TYPE_ORDER: OperationType[] = ["TORCOVKA", "PRISADKA", "UPAKOVKA", "HOURS"];
@@ -122,7 +116,7 @@ function DayRow({ group, now }: { group: DayGroup; now: Date }) {
                 <span key={t} className="text-muted-foreground text-sm">
                   {TYPE_LABEL[t]}{" "}
                   <span className="text-foreground font-medium tabular-nums">
-                    {stat.quantity} {TYPE_UNIT[t]}
+                    {stat.quantity} {JOURNAL_TYPE_UNIT[t]}
                   </span>
                 </span>
               );
@@ -149,7 +143,7 @@ function DayRow({ group, now }: { group: DayGroup; now: Date }) {
               </span>
               <span className="flex items-center gap-3">
                 <span className="text-foreground text-sm font-medium tabular-nums">
-                  {e.quantity} {TYPE_UNIT[e.type]}
+                  {e.quantity} {JOURNAL_TYPE_UNIT[e.type]}
                 </span>
                 <span className="text-muted-foreground w-28 text-right text-sm tabular-nums">
                   {formatMoney(e.amount)}

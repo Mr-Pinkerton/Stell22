@@ -90,6 +90,11 @@ export function shouldShowTorcovkaConfirmBar(opts: { pickedCount: number }): boo
   return opts.pickedCount > 0;
 }
 
+/** Только отображение: не показывать 100% отход, пока нет метров заготовок. */
+export function shouldShowTorcovkaWastePct(opts: { producedM: number }): boolean {
+  return opts.producedM > 0;
+}
+
 /** После успеха партия/лот остаются на экране, но cleared draft нельзя сразу перезаписать. */
 export function shouldSkipTorcovkaDraftPersist(opts: {
   suppressPostSuccess: boolean;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "@/components/terminal/toast";
 import { Drill } from "lucide-react";
 import { OperationTile, OperationTileGrid } from "@/components/terminal/operation-tile";
@@ -11,6 +11,7 @@ import { TerminalSuccessAck, useTerminalSuccessAck } from "@/components/terminal
 import { submitPrisadka } from "@/server/terminal";
 import { sectionLabel } from "@/lib/material";
 import { terminalStickyOperationClass } from "@/lib/scroll-classes";
+import { beginExclusiveSubmit, endExclusiveSubmit } from "@/lib/terminal-submit-guard";
 import type {
   TerminalData,
   TerminalDetail,
@@ -104,6 +105,7 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
   });
   const [dialogTile, setDialogTile] = useState<Tile | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const submitLock = useRef(false);
   const successAck = useTerminalSuccessAck();
 
   const tiles = useMemo(() => {
@@ -166,7 +168,8 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
   }, [picked, saveDraft]);
 
   const confirm = async () => {
-    if (pickedCount === 0 || submitting) return;
+    if (pickedCount === 0) return;
+    if (!beginExclusiveSubmit(submitLock)) return;
     const picks = Object.entries(picked).flatMap(([key, quantity]) => {
       const parsed = parseTileKey(key);
       if (!parsed || quantity <= 0) return [];
@@ -185,9 +188,10 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
       setDialogTile(null);
       successAck.show(`Присадка сохранена: ${pickedCount} шт`);
       await onDone();
-      setSubmitting(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
+    } finally {
+      endExclusiveSubmit(submitLock);
       setSubmitting(false);
     }
   };
@@ -251,6 +255,7 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
           )}
 
           <TerminalConfirmBar
+            label="Сохранить операцию"
             summary={
               <>
                 <span className="font-medium">{pickedCount} шт</span>

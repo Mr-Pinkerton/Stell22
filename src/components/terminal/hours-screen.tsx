@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "@/components/terminal/toast";
 import { KeypadDisplay, KEYPAD_PANEL } from "@/components/terminal/keypad-panel";
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
@@ -9,6 +9,7 @@ import { TerminalSuccessAck, useTerminalSuccessAck } from "@/components/terminal
 import { useTerminalDraft } from "@/components/terminal/use-terminal-draft";
 import { cn } from "@/lib/utils";
 import { applyHoursKeypadChange, formatHoursRu, isHourlyRateUnavailable } from "@/lib/hours-input";
+import { beginExclusiveSubmit, endExclusiveSubmit } from "@/lib/terminal-submit-guard";
 import { formatMoney, formatMoneyDecimal } from "@/lib/format";
 import { terminalStickyOperationClass } from "@/lib/scroll-classes";
 import { submitHours } from "@/server/terminal";
@@ -45,6 +46,7 @@ export function HoursScreen({ employee, onDone }: HoursScreenProps) {
   const [whole, setWhole] = useState(initial.whole);
   const [half, setHalf] = useState(initial.half);
   const [submitting, setSubmitting] = useState(false);
+  const submitLock = useRef(false);
   const successAck = useTerminalSuccessAck();
   const hours = whole + (half ? 0.5 : 0);
   const rate = employee.hourlyRate;
@@ -57,7 +59,8 @@ export function HoursScreen({ employee, onDone }: HoursScreenProps) {
   }, [value, saveDraft]);
 
   const submit = async () => {
-    if (hours <= 0 || submitting || rateMissing) return;
+    if (hours <= 0 || rateMissing) return;
+    if (!beginExclusiveSubmit(submitLock)) return;
     setSubmitting(true);
     try {
       await submitHours(employee.id, hours, clientRequestId);
@@ -67,9 +70,10 @@ export function HoursScreen({ employee, onDone }: HoursScreenProps) {
       setHalf(false);
       successAck.show(`Часы сохранены: ${formatHoursRu(hours)} ч`);
       await onDone();
-      setSubmitting(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
+    } finally {
+      endExclusiveSubmit(submitLock);
       setSubmitting(false);
     }
   };
