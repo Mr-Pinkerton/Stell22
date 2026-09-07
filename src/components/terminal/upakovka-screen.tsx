@@ -7,9 +7,11 @@ import { OperationTile, OperationTileGrid } from "@/components/terminal/operatio
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
 import { useTerminalDraft } from "@/components/terminal/use-terminal-draft";
+import { TerminalSuccessAck, useTerminalSuccessAck } from "@/components/terminal/terminal-success-ack";
 import { submitUpakovka } from "@/server/terminal";
 import { formatProductSku } from "@/lib/format";
 import { sectionLabel } from "@/lib/material";
+import { terminalStickyOperationClass } from "@/lib/scroll-classes";
 import type {
   TerminalData,
   TerminalEmployee,
@@ -19,7 +21,7 @@ import type {
 interface UpakovkaScreenProps {
   data: TerminalData;
   employee: TerminalEmployee;
-  onDone: () => void;
+  onDone: () => void | Promise<void>;
 }
 
 function canAssemble(product: TerminalProduct, data: TerminalData): number {
@@ -70,6 +72,7 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
   });
   const [dialogProduct, setDialogProduct] = useState<TerminalProduct | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const successAck = useTerminalSuccessAck();
 
   const products = useMemo(() => {
     const seen = new Set(liveProducts.map((p) => p.id));
@@ -130,7 +133,11 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
       });
       toast.success(`Упаковано: ${pickedCount} шт`);
       clearDraft();
-      onDone();
+      setPicked({});
+      setDialogProduct(null);
+      successAck.show(`Упаковка сохранена: ${pickedCount} шт`);
+      await onDone();
+      setSubmitting(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
       setSubmitting(false);
@@ -138,7 +145,8 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
   };
 
   return (
-    <main className="flex flex-1 flex-col gap-5 p-6">
+    <main className={terminalStickyOperationClass}>
+      <TerminalSuccessAck ack={successAck.ack} />
       <h2 className="text-muted-foreground text-sm font-semibold tracking-wide uppercase">
         Изделия — сколько можно собрать
       </h2>
@@ -162,7 +170,11 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
               subtitle={sku}
               highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
               badge={qty === 0 && !disabled ? `${max} шт` : undefined}
-              onClick={() => !disabled && setDialogProduct(p)}
+              onClick={() => {
+                if (disabled) return;
+                successAck.dismiss();
+                setDialogProduct(p);
+              }}
               onClear={
                 qty > 0
                   ? () =>

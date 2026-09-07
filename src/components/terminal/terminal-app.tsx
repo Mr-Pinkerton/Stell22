@@ -23,6 +23,12 @@ import {
   type TerminalDraftOperation,
   type TerminalDraftV1,
 } from "@/lib/terminal-draft-storage";
+import { terminalAppShellClass } from "@/lib/scroll-classes";
+import { toast } from "@/components/terminal/toast";
+import {
+  refreshAfterSavedOperation,
+  TERMINAL_REFRESH_AFTER_SAVE_WARNING,
+} from "@/lib/torcovka-terminal-flow";
 
 const IDLE_MS = 5 * 60 * 1000; // автовыход после 5 минут бездействия
 
@@ -70,8 +76,10 @@ export function TerminalApp() {
   }, []);
 
   const handleOperationDone = useCallback(async () => {
-    await refresh();
-    setScreen("home");
+    const result = await refreshAfterSavedOperation(refresh);
+    if (result === "refresh-failed") {
+      toast.error(TERMINAL_REFRESH_AFTER_SAVE_WARNING);
+    }
   }, [refresh]);
 
   const logout = useCallback(() => {
@@ -192,7 +200,7 @@ export function TerminalApp() {
   const inOperation = employee != null && screen !== "home";
 
   return (
-    <div className="bg-background flex min-h-screen flex-col touch-manipulation">
+    <div className={terminalAppShellClass}>
       <TerminalHeader
         employee={employee}
         title={!employee ? "Вход в терминал" : TITLES[screen]}

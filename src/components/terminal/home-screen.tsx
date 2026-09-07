@@ -12,6 +12,8 @@ import type {
   TerminalEmployee,
   TerminalScreen,
 } from "@/components/terminal/types";
+import { scrollTouchY } from "@/lib/scroll-classes";
+import { cn } from "@/lib/utils";
 
 const TILES: { screen: TerminalScreen; title: string; icon: typeof Saw }[] = [
   { screen: "torcovka", title: "Торцовка", icon: Saw },
@@ -39,7 +41,7 @@ export function HomeScreen({ birthdaysToday, employee, onSelect }: HomeScreenPro
   }, [employee.id]);
 
   return (
-    <main className="scrollbar-thin-y flex flex-1 flex-col gap-6 overflow-y-auto p-6">
+    <main className={cn(scrollTouchY, "flex min-h-0 flex-1 flex-col gap-6 p-6")}>
       <div className="grid grid-cols-2 gap-4 sm:gap-6 lg:grid-cols-4">
         {TILES.map((t) => {
           const Icon = t.icon;

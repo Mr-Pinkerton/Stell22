@@ -7,8 +7,10 @@ import { OperationTile, OperationTileGrid } from "@/components/terminal/operatio
 import { QuantityDialog } from "@/components/terminal/quantity-dialog";
 import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
 import { useTerminalDraft } from "@/components/terminal/use-terminal-draft";
+import { TerminalSuccessAck, useTerminalSuccessAck } from "@/components/terminal/terminal-success-ack";
 import { submitPrisadka } from "@/server/terminal";
 import { sectionLabel } from "@/lib/material";
+import { terminalStickyOperationClass } from "@/lib/scroll-classes";
 import type {
   TerminalData,
   TerminalDetail,
@@ -18,7 +20,7 @@ import type {
 interface PrisadkaScreenProps {
   data: TerminalData;
   employee: TerminalEmployee;
-  onDone: () => void;
+  onDone: () => void | Promise<void>;
 }
 
 type PrisadkaKind = "torcev" | "plosk";
@@ -102,6 +104,7 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
   });
   const [dialogTile, setDialogTile] = useState<Tile | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const successAck = useTerminalSuccessAck();
 
   const tiles = useMemo(() => {
     const seen = new Set(liveTiles.map((t) => tileKey(t.detail.id, t.kind)));
@@ -178,7 +181,11 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
       });
       toast.success(`Присадка внесена: ${pickedCount} шт`);
       clearDraft();
-      onDone();
+      setPicked({});
+      setDialogTile(null);
+      successAck.show(`Присадка сохранена: ${pickedCount} шт`);
+      await onDone();
+      setSubmitting(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
       setSubmitting(false);
@@ -186,7 +193,8 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
   };
 
   return (
-    <main className="flex flex-1 flex-col gap-5 p-6">
+    <main className={terminalStickyOperationClass}>
+      <TerminalSuccessAck ack={successAck.ack} />
       <h2 className="text-muted-foreground text-sm font-semibold tracking-wide uppercase">
         Требуют присадки
       </h2>
@@ -219,7 +227,10 @@ export function PrisadkaScreen({ data, employee, onDone }: PrisadkaScreenProps) 
                   }
                   highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
                   badge={qty === 0 ? `${t.pending} шт` : undefined}
-                  onClick={() => setDialogTile(t)}
+                  onClick={() => {
+                    successAck.dismiss();
+                    setDialogTile(t);
+                  }}
                   onClear={
                     qty > 0
                       ? () =>

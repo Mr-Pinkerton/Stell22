@@ -22,7 +22,7 @@ export function TerminalHeader({
   onLogout,
 }: TerminalHeaderProps) {
   return (
-    <header className="surface-card mx-4 mt-4 flex h-20 items-center justify-between px-4 md:mx-6 md:px-6">
+    <header className="surface-card mx-4 mt-4 flex h-20 shrink-0 items-center justify-between px-4 md:mx-6 md:px-6">
       <div className="flex min-w-0 items-center gap-3">
         {onBack ? (
           <Button variant="outline" className={actionBtn} onClick={onBack}>

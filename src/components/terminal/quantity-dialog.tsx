@@ -6,9 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { KeypadDisplay } from "@/components/terminal/keypad-panel";
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
-import { TerminalDialogScrollBody } from "@/components/terminal/terminal-dialog-scroll-body";
-import { terminalDialogShellClass } from "@/lib/scroll-classes";
-import { cn } from "@/lib/utils";
+import { terminalDialogContentClass } from "@/lib/scroll-classes";
 
 interface QuantityDialogProps {
   open: boolean;
@@ -53,39 +51,34 @@ function QuantityDialogBody({
   const limitText = limitMessage ?? (max != null ? `Доступно не более ${max}` : "");
 
   return (
-    <DialogContent
-      className={cn(terminalDialogShellClass, "px-8 py-6 sm:max-w-[32rem]")}
-      showCloseButton={false}
-    >
-      <TerminalDialogScrollBody>
-        <DialogHeader>
-          <DialogTitle className="text-xl">{title}</DialogTitle>
-          {hint ? <p className="text-muted-foreground text-base">{hint}</p> : null}
-        </DialogHeader>
+    <DialogContent className={terminalDialogContentClass} showCloseButton={false}>
+      <DialogHeader>
+        <DialogTitle className="text-xl">{title}</DialogTitle>
+        {hint ? <p className="text-muted-foreground text-base">{hint}</p> : null}
+      </DialogHeader>
 
-        <KeypadDisplay
-          footerMessage={max != null ? limitText : undefined}
-          showFooterMessage={overLimit}
-          footerTone="error"
+      <KeypadDisplay
+        footerMessage={max != null ? limitText : undefined}
+        showFooterMessage={overLimit}
+        footerTone="error"
+      >
+        {value || "0"}
+      </KeypadDisplay>
+
+      <NumericKeypad value={value} onChange={setValue} />
+
+      <div className="grid grid-cols-2 gap-2">
+        <Button variant="outline" className="h-14 rounded-xl text-lg" onClick={onClose}>
+          Отмена
+        </Button>
+        <Button
+          className="h-14 rounded-xl text-lg"
+          disabled={!canConfirm}
+          onClick={() => onConfirm(numeric)}
         >
-          {value || "0"}
-        </KeypadDisplay>
-
-        <NumericKeypad value={value} onChange={setValue} />
-
-        <div className="grid grid-cols-2 gap-2">
-          <Button variant="outline" className="h-14 rounded-xl text-lg" onClick={onClose}>
-            Отмена
-          </Button>
-          <Button
-            className="h-14 rounded-xl text-lg"
-            disabled={!canConfirm}
-            onClick={() => onConfirm(numeric)}
-          >
-            {confirmLabel}
-          </Button>
-        </div>
-      </TerminalDialogScrollBody>
+          {confirmLabel}
+        </Button>
+      </div>
     </DialogContent>
   );
 }

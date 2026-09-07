@@ -2,17 +2,20 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "@/components/terminal/toast";
-import { Button } from "@/components/ui/button";
 import { KeypadDisplay, KEYPAD_PANEL } from "@/components/terminal/keypad-panel";
 import { NumericKeypad } from "@/components/terminal/numeric-keypad";
+import { TerminalConfirmBar } from "@/components/terminal/terminal-confirm-bar";
+import { TerminalSuccessAck, useTerminalSuccessAck } from "@/components/terminal/terminal-success-ack";
 import { useTerminalDraft } from "@/components/terminal/use-terminal-draft";
+import { cn } from "@/lib/utils";
 import { formatMoney, formatMoneyDecimal } from "@/lib/format";
+import { terminalStickyOperationClass } from "@/lib/scroll-classes";
 import { submitHours } from "@/server/terminal";
 import type { TerminalEmployee } from "@/components/terminal/types";
 
 interface HoursScreenProps {
   employee: TerminalEmployee;
-  onDone: () => void;
+  onDone: () => void | Promise<void>;
 }
 
 export function HoursScreen({ employee, onDone }: HoursScreenProps) {
@@ -26,6 +29,7 @@ export function HoursScreen({ employee, onDone }: HoursScreenProps) {
     storedDraft?.operationType === "HOURS" ? storedDraft.payload.hoursInput : "",
   );
   const [submitting, setSubmitting] = useState(false);
+  const successAck = useTerminalSuccessAck();
   const hours = Number(value || 0);
   const rate = employee.hourlyRate ?? 0;
 
@@ -40,7 +44,10 @@ export function HoursScreen({ employee, onDone }: HoursScreenProps) {
       await submitHours(employee.id, hours, clientRequestId);
       toast.success(`Внесено ${hours} ч`);
       clearDraft();
-      onDone();
+      setValue("");
+      successAck.show(`Часы сохранены: ${hours} ч`);
+      await onDone();
+      setSubmitting(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
       setSubmitting(false);
@@ -48,8 +55,9 @@ export function HoursScreen({ employee, onDone }: HoursScreenProps) {
   };
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-6 p-6">
-      <div className={KEYPAD_PANEL}>
+    <main className={terminalStickyOperationClass}>
+      <TerminalSuccessAck ack={successAck.ack} />
+      <div className={cn(KEYPAD_PANEL, "flex flex-1 flex-col justify-center")}>
         <div className="space-y-1 text-center">
           <h1 className="text-xl font-semibold tracking-tight">Рабочие часы</h1>
           <p className="text-muted-foreground text-base">
@@ -67,16 +75,28 @@ export function HoursScreen({ employee, onDone }: HoursScreenProps) {
           {value || "0"} <span className="text-muted-foreground ml-2 text-xl">ч</span>
         </KeypadDisplay>
 
-        <NumericKeypad value={value} onChange={setValue} />
-
-        <Button
-          className="h-14 w-full rounded-xl text-lg"
-          disabled={hours <= 0 || submitting}
-          onClick={submit}
-        >
-          Внести
-        </Button>
+        <NumericKeypad
+          value={value}
+          onChange={(next) => {
+            successAck.dismiss();
+            setValue(next);
+          }}
+        />
       </div>
+
+      <TerminalConfirmBar
+        summary={
+          <>
+            <span className="font-medium">{hours > 0 ? `${hours} ч` : "0 ч"}</span>
+            <span className="text-muted-foreground ml-3">
+              {rate > 0 && hours > 0 ? formatMoney(hours * rate) : "укажите часы"}
+            </span>
+          </>
+        }
+        label="Внести"
+        disabled={hours <= 0 || submitting}
+        onConfirm={submit}
+      />
     </main>
   );
 }

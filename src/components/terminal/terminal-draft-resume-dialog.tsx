@@ -3,10 +3,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { TerminalDialogScrollBody } from "@/components/terminal/terminal-dialog-scroll-body";
 import { formatDateTime } from "@/lib/format";
-import { terminalDialogShellClass } from "@/lib/scroll-classes";
-import { cn } from "@/lib/utils";
+import { terminalDialogContentClass } from "@/lib/scroll-classes";
 import {
   isDraftStaleByAge,
   OPERATION_LABEL,
@@ -53,11 +51,7 @@ export function TerminalDraftResumeDialog({
       }}
     >
       {open && (
-        <DialogContent
-          className={cn(terminalDialogShellClass, "px-8 py-6 sm:max-w-[32rem]")}
-          showCloseButton={false}
-        >
-          <TerminalDialogScrollBody>
+        <DialogContent className={terminalDialogContentClass} showCloseButton={false}>
           {confirmDelete ? (
             <>
               <DialogHeader>
@@ -122,7 +116,6 @@ export function TerminalDraftResumeDialog({
               </div>
             </>
           )}
-          </TerminalDialogScrollBody>
         </DialogContent>
       )}
     </Dialog>

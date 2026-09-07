@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 
-/** Общая ширина и боковые отступы панелей с нампадом. */
-export const KEYPAD_PANEL = "mx-auto w-full max-w-[26rem] space-y-5 px-8";
+/** Общая ширина панелей с нампадом — как у модалок терминала. */
+export const KEYPAD_PANEL = "mx-auto w-full max-w-[32rem] space-y-5 px-8";
 
 interface KeypadDisplayProps {
   children: React.ReactNode;
