@@ -104,6 +104,18 @@ enum CostStatus {
   FINAL       // заморожено
 }
 
+// Package 1 foundation: CostEvent types from 03.02. No REVERSAL_VARIANCE.
+enum CostEventType {
+  BOOTSTRAP
+  BOOTSTRAP_RAW_TRANSFER
+  RAW_WRITEOFF
+  PURCHASE_VARIANCE
+  TORCOVKA_ZERO_OUTPUT
+  INVENTORY_LOSS
+  INVENTORY_GAIN
+  MANUAL_ADJUSTMENT
+}
+
 enum NotificationTone {
   ERROR
   SUCCESS
@@ -203,6 +215,7 @@ model Batch {
   operations ProductionOperation[]
   costs      BatchCost[]
   dealItems  DealItem[]
+  costEvents CostEvent[]
 }
 
 // Партия рейки: пакет или поштучная группа. Пакет = одна длина/тип/сорт.
@@ -222,6 +235,10 @@ model RailLot {
 
   quantity          Int // исходное кол-во реек
   remainingQuantity Int // текущий остаток (списывается транзакционно при торцовке)
+
+  // Package 1 foundation — NOT ACTIVE. Null = no monetary opening. Do not treat as 0 ₽.
+  initialValue   Decimal? @db.Decimal(18, 6)
+  remainingValue Decimal? @db.Decimal(18, 6)
 
   createdAt DateTime @default(now())
 
@@ -386,6 +403,16 @@ model ProductionOperation {
   rateUpakovkaSnapshot        Decimal? @db.Decimal(14, 2)
   rateSnapshotVersion         Int
 
+  // Package 1 foundation money snapshots — NULL = PRE-CUTOVER / no cost snapshot.
+  // Writers do not populate these in Package 1. Do not fabricate 0.
+  consumedRawValue           Decimal? @db.Decimal(18, 6) // TORCOVKA: raw value of railsTaken
+  pieceLaborCost             Decimal? @db.Decimal(18, 6)
+  // UPAKOVKA: single ProductStock receipt (one SKU). TORCOVKA/PRISADKA receipts live on lines.
+  receiptMaterialValue       Decimal? @db.Decimal(18, 6)
+  receiptLaborValue          Decimal? @db.Decimal(18, 6)
+  receiptNomenclatureValue   Decimal? @db.Decimal(18, 6)
+  outputCostVersion          Int? // UPAKOVKA: ProductStock.costVersion immediately after receipt
+
   // Выплата
   isPaid Boolean   @default(false)
   paidAt DateTime?
@@ -393,6 +420,7 @@ model ProductionOperation {
   lines             OperationDetailLine[]
   nomenclatureLines OperationNomenclatureLine[]
   payment           PaymentBatchItem?
+  costEvents        CostEvent[]
 
   @@index([workDate])
   @@index([employeeId, workDate])
@@ -459,6 +487,14 @@ model OperationDetailLine {
   sourceIsBlank       Boolean @default(false)
   sourceTorcevayaDone Boolean @default(false)
   sourcePloskostDone  Boolean @default(false)
+
+  // Package 1: exact movement snapshot for future WAC reverse. NULL = pre-cutover.
+  inputMaterialValue   Decimal? @db.Decimal(18, 6)
+  inputLaborValue      Decimal? @db.Decimal(18, 6)
+  receiptMaterialValue Decimal? @db.Decimal(18, 6)
+  receiptLaborValue    Decimal? @db.Decimal(18, 6)
+  pieceLaborCost       Decimal? @db.Decimal(18, 6)
+  outputCostVersion    Int? // pool version immediately after this line's output receipt
 }
 
 // Остаток заготовок (нарезанных реек) до присадки. Ключ — физическая
@@ -475,6 +511,12 @@ model BlankStock {
   sort       Sort
   quantity   Int      @default(0)
 
+  // Package 1: monetary WAC NOT ACTIVE. costVersion=0 ⇒ uninitialized (not factual 0 ₽).
+  materialValue Decimal? @db.Decimal(18, 6)
+  laborValue    Decimal? @db.Decimal(18, 6)
+  totalValue    Decimal? @db.Decimal(18, 6)
+  costVersion   Int      @default(0)
+
   @@unique([materialId, lengthM, detailType, sort])
 }
 
@@ -487,6 +529,9 @@ model OperationNomenclatureLine {
   operation      ProductionOperation @relation(fields: [operationId], references: [id])
   nomenclatureId String
   quantity       Int
+
+  // Package 1: NULL = pre-cutover; no fabricated 0 snapshot.
+  consumedNomenclatureValue Decimal? @db.Decimal(18, 6)
 }
 
 // Журнал изменений (аудит) — производство и финансы.
@@ -537,6 +582,12 @@ model DetailStock {
   ploskostDone      Boolean @default(false)
   quantity          Int     @default(0)
 
+  // Package 1: monetary WAC NOT ACTIVE. costVersion=0 ⇒ uninitialized.
+  materialValue Decimal? @db.Decimal(18, 6)
+  laborValue    Decimal? @db.Decimal(18, 6)
+  totalValue    Decimal? @db.Decimal(18, 6)
+  costVersion   Int      @default(0)
+
   @@unique([detailId, torcevayaDone, ploskostDone])
 }
 
@@ -545,6 +596,13 @@ model ProductStock {
   productId String  @unique
   product   Product @relation(fields: [productId], references: [id])
   quantity  Int     @default(0)
+
+  // Package 1: monetary WAC NOT ACTIVE. costVersion=0 ⇒ uninitialized.
+  materialValue      Decimal? @db.Decimal(18, 6)
+  laborValue         Decimal? @db.Decimal(18, 6)
+  nomenclatureValue  Decimal? @db.Decimal(18, 6)
+  totalValue         Decimal? @db.Decimal(18, 6)
+  costVersion        Int      @default(0)
 }
 
 // Остаток крепежа/упаковки/разного (приход — закупки, расход — упаковка).
@@ -553,6 +611,11 @@ model NomenclatureStock {
   nomenclatureId String           @unique
   nomenclature   NomenclatureItem @relation(fields: [nomenclatureId], references: [id])
   quantity       Int              @default(0)
+
+  // Package 1: monetary WAC NOT ACTIVE. costVersion=0 ⇒ uninitialized.
+  nomenclatureValue Decimal? @db.Decimal(18, 6)
+  totalValue        Decimal? @db.Decimal(18, 6)
+  costVersion       Int      @default(0)
 }
 
 // Остатки на МП (получаются по API; заглушка на старте).
@@ -572,6 +635,7 @@ model Inventory {
   // express a partial unique condition). CONDUCTED/CLOSED are unconstrained.
   status InventoryStatus @default(DRAFT)
   lines  InventoryLine[]
+  costEvents CostEvent[]
   createdAt DateTime @default(now())
 }
 
@@ -586,6 +650,7 @@ model InventoryLine {
   actualQty    Int
   deviation    Int
   deviationSum Decimal   @db.Decimal(14, 2) // материал + ЗП
+  costEvents   CostEvent[]
 }
 
 // ============================= ФИНАНСЫ ======================================
@@ -787,6 +852,9 @@ model BatchCost {
 // есть (BatchCost FINAL). Эта модель зарезервирована под будущий closeMonth —
 // месячную заморозку полной себестоимости (direct+overhead) для неизменности
 // прошлых периодов. Не удалять: удаление = drop-таблицы и повторное добавление.
+//
+// Package 1: legacy Decimal(14,2) columns kept (current unused reader meaning).
+// Target architecture fields are additive/nullable — no rename, no report cutover.
 model ProductCost {
   id            String     @id @default(cuid())
   productId     String
@@ -804,9 +872,74 @@ model ProductCost {
   overhead      Decimal    @db.Decimal(14, 2) // накладные
   full          Decimal    @db.Decimal(14, 2) // полная
 
+  // Target 03.02 fields. Null until closeMonth exists. Do not reuse `work` as pieceLabor
+  // or legacy `material` (Decimal 14,2) as factual month wood — WAC is Decimal(18,6).
+  costPeriodId            String?
+  costPeriod              CostPeriod? @relation(fields: [costPeriodId], references: [id])
+  producedQty             Int?
+  materialTotal           Decimal?    @db.Decimal(18, 6)
+  pieceLabor              Decimal?    @db.Decimal(18, 6)
+  nomenclature            Decimal?    @db.Decimal(18, 6)
+  hourlyProductionLabor   Decimal?    @db.Decimal(18, 6)
+  productionOverhead      Decimal?    @db.Decimal(18, 6)
+  directTotal             Decimal?    @db.Decimal(18, 6)
+  fullTotal               Decimal?    @db.Decimal(18, 6)
+
   calculatedAt  DateTime   @default(now())
 
   @@index([productId, periodStart, periodEnd])
+  @@unique([costPeriodId, productId])
+}
+
+// Authoritative accounting month. Package 1: model only — no closeMonth writer.
+// Month identity: unique(periodStart) PLUS SQL CHECKs
+//   periodStart = date_trunc('month', periodStart)
+//   periodEnd   = periodStart + INTERVAL '1 month'  (exclusive)
+model CostPeriod {
+  id        String     @id @default(cuid())
+  periodStart DateTime @unique
+  periodEnd   DateTime
+  status      CostStatus @default(PRELIMINARY)
+
+  hourlyProductionLaborPool          Decimal @db.Decimal(18, 6)
+  productionOverheadPool             Decimal @db.Decimal(18, 6)
+  unallocatedHourlyProductionLabor   Decimal @db.Decimal(18, 6)
+  unallocatedProductionOverhead      Decimal @db.Decimal(18, 6)
+
+  calculatedAt DateTime?
+  closedAt     DateTime?
+  createdAt    DateTime @default(now())
+
+  productCosts ProductCost[]
+}
+
+// Non-flow monetary events. Component payload is SoT (EVENT-001). No JSON money.
+// Package 1: no runtime/bootstrap rows in business DB.
+model CostEvent {
+  id        String        @id @default(cuid())
+  type      CostEventType
+  materialValue     Decimal @db.Decimal(18, 6)
+  laborValue        Decimal @db.Decimal(18, 6)
+  nomenclatureValue Decimal @db.Decimal(18, 6)
+  totalValue        Decimal @db.Decimal(18, 6)
+  note      String?
+  createdAt DateTime      @default(now())
+
+  batchId         String?
+  batch           Batch?          @relation(fields: [batchId], references: [id])
+  operationId     String?
+  operation       ProductionOperation? @relation(fields: [operationId], references: [id])
+  inventoryId     String?
+  inventory       Inventory?      @relation(fields: [inventoryId], references: [id])
+  inventoryLineId String?
+  inventoryLine   InventoryLine?  @relation(fields: [inventoryLineId], references: [id])
+
+  stockKind String?
+  stockId   String?
+
+  @@index([type, createdAt])
+  @@index([batchId])
+  @@index([operationId])
 }
 
 // ============================= ПРОДАЖИ (МП) =================================
