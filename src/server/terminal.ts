@@ -326,12 +326,16 @@ async function clientKey(): Promise<string> {
  * клиенту не отдаётся). При успехе ставит подписанную терминальную
  * cookie-сессию, которую проверяют все операции. Возвращает сотрудника без PIN.
  */
-export async function terminalLoginByPin(pin: string): Promise<TerminalIdentity> {
+export type TerminalPinLoginResult =
+  | { ok: true; employee: TerminalIdentity }
+  | { ok: false; error: string };
+
+export async function terminalLoginByPin(pin: string): Promise<TerminalPinLoginResult> {
   const key = await clientKey();
   const gate = pinLimiter.check(key);
   if (gate.blocked) {
     const sec = retryAfterSeconds(gate.retryAfterMs);
-    throw new Error(`Слишком много попыток. Повторите через ${sec} с.`);
+    return { ok: false, error: `Слишком много попыток. Повторите через ${sec} с.` };
   }
 
   // take: 2 — одной записи достаточно для входа, вторая доказывает коллизию.
@@ -354,7 +358,7 @@ export async function terminalLoginByPin(pin: string): Promise<TerminalIdentity>
 
   if (lookup.kind !== "ok") {
     pinLimiter.recordFailure(key);
-    throw new Error(PIN_REJECTED);
+    return { ok: false, error: PIN_REJECTED };
   }
 
   const employee = await prisma.employee.findUnique({
@@ -363,13 +367,13 @@ export async function terminalLoginByPin(pin: string): Promise<TerminalIdentity>
   });
   if (!employee) {
     pinLimiter.recordFailure(key);
-    throw new Error(PIN_REJECTED);
+    return { ok: false, error: PIN_REJECTED };
   }
 
   pinLimiter.reset(key);
   const token = await encryptTerminalSession({ employeeId: employee.id });
   (await cookies()).set(TERMINAL_COOKIE, token, terminalCookieOptions);
-  return employee;
+  return { ok: true, employee };
 }
 
 /** Выход из терминала: снимает сессию (клиентский автовыход по бездействию). */

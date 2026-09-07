@@ -29,13 +29,18 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
     checking.current = true;
     void (async () => {
       try {
-        const employee = await terminalLoginByPin(next);
-        await onSuccess(employee);
-        const parts = employee.fullName.split(" ");
+        const result = await terminalLoginByPin(next);
+        if (!result.ok) {
+          toast.error(result.error);
+          setPin("");
+          return;
+        }
+        await onSuccess(result.employee);
+        const parts = result.employee.fullName.split(" ");
         const firstName = parts[1] ?? parts[0];
         toast.success(`Здравствуйте, ${firstName}!`);
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Неверный PIN");
+      } catch {
+        toast.error("Не удалось выполнить вход. Повторите позже.");
         setPin("");
       } finally {
         checking.current = false;
@@ -44,7 +49,7 @@ export function LoginScreen({ onSuccess }: LoginScreenProps) {
   };
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-6 p-6">
+    <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 p-6">
       <div className={KEYPAD_PANEL}>
         <div className="space-y-1 text-center">
           <h1 className="text-xl font-semibold tracking-tight">Введите PIN-код</h1>

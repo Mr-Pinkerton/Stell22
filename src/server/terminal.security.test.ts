@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   productionOperationCreate: vi.fn(),
   productionOperationFindUnique: vi.fn(async () => null),
   writeChangeLog: vi.fn(),
+  cookieSet: vi.fn(),
 }));
 
 vi.mock("@/server/session", () => ({
@@ -64,10 +65,12 @@ vi.mock("@/server/internal/production-reversal", () => ({
 }));
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("next/headers", () => ({
-  cookies: vi.fn(async () => ({ set: vi.fn(), delete: vi.fn() })),
+  cookies: vi.fn(async () => ({ set: mocks.cookieSet, delete: vi.fn() })),
   headers: vi.fn(async () => new Headers()),
 }));
 
+import { headers } from "next/headers";
+import { TERMINAL_COOKIE } from "@/lib/session";
 import {
   getEmployeeEntries,
   getTerminalData,
@@ -75,6 +78,7 @@ import {
   submitPrisadka,
   submitTorcovka,
   submitUpakovka,
+  terminalLoginByPin,
 } from "@/server/terminal";
 
 const noSession = new Error("Нет активной сессии терминала. Войдите по PIN.");
@@ -260,6 +264,77 @@ describe("terminal action boundary", () => {
     });
     expect(created?.data).not.toHaveProperty("rateSnapshot");
     expect(mocks.writeChangeLog).toHaveBeenCalledOnce();
+  });
+});
+
+describe("terminalLoginByPin expected failures", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(headers).mockResolvedValue(new Headers());
+    process.env.SESSION_SECRET ??= "stell22-unit-test-session-secret";
+  });
+
+  it("returns Неверный PIN instead of throwing when nobody matches", async () => {
+    mocks.employeeFindMany.mockResolvedValue([]);
+
+    await expect(terminalLoginByPin("9999")).resolves.toEqual({
+      ok: false,
+      error: "Неверный PIN",
+    });
+    expect(mocks.employeeFindUnique).not.toHaveBeenCalled();
+    expect(mocks.cookieSet).not.toHaveBeenCalled();
+  });
+
+  it("returns a lockout message instead of throwing after 10 failures", async () => {
+    // Отдельный IP: pinLimiter — модульный синглтон, не делим ключ с соседними тестами.
+    vi.mocked(headers).mockResolvedValue(new Headers({ "x-forwarded-for": "203.0.113.10" }));
+    mocks.employeeFindMany.mockResolvedValue([]);
+
+    for (let i = 0; i < 10; i++) {
+      await expect(terminalLoginByPin("8888")).resolves.toEqual({
+        ok: false,
+        error: "Неверный PIN",
+      });
+    }
+
+    mocks.employeeFindMany.mockClear();
+    await expect(terminalLoginByPin("8888")).resolves.toEqual({
+      ok: false,
+      error: expect.stringMatching(/^Слишком много попыток\. Повторите через \d+ с\.$/),
+    });
+    expect(mocks.employeeFindMany).not.toHaveBeenCalled();
+    expect(mocks.cookieSet).not.toHaveBeenCalled();
+  });
+
+  it("throws when employee lookup fails instead of returning invalid PIN", async () => {
+    vi.mocked(headers).mockResolvedValue(new Headers({ "x-forwarded-for": "203.0.113.20" }));
+    mocks.employeeFindMany.mockRejectedValue(new Error("ECONNREFUSED"));
+
+    await expect(terminalLoginByPin("1234")).rejects.toThrow("ECONNREFUSED");
+    await expect(terminalLoginByPin("1234")).rejects.not.toMatchObject({
+      ok: false,
+      error: "Неверный PIN",
+    });
+    expect(mocks.cookieSet).not.toHaveBeenCalled();
+  });
+
+  it("sets the terminal cookie only after a successful PIN", async () => {
+    vi.mocked(headers).mockResolvedValue(new Headers({ "x-forwarded-for": "203.0.113.30" }));
+    mocks.employeeFindMany.mockResolvedValue([
+      { id: "emp-1", pin: "1234", status: "ACTIVE" },
+    ]);
+    mocks.employeeFindUnique.mockResolvedValue({
+      id: "emp-1",
+      fullName: "Иван Иванов",
+    });
+
+    await expect(terminalLoginByPin("1234")).resolves.toEqual({
+      ok: true,
+      employee: { id: "emp-1", fullName: "Иван Иванов" },
+    });
+    expect(mocks.cookieSet).toHaveBeenCalledOnce();
+    expect(mocks.cookieSet.mock.calls[0]?.[0]).toBe(TERMINAL_COOKIE);
+    expect(String(mocks.cookieSet.mock.calls[0]?.[1] ?? "")).not.toMatch(/1234/);
   });
 });
 
