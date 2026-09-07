@@ -73,6 +73,7 @@ const RAIL_TYPE_LABEL: Record<RailType, string> = { POLKA: "Полка", KANAVKA
 const APPROVAL_CODE_LENGTH = 4;
 const CODE_ROTATED_MESSAGE =
   "Старый код больше не действует. Запросите новый код у администратора.";
+const WRONG_APPROVAL_CODE_MESSAGE = "Неверный код подтверждения";
 
 const RAIL_LENGTH_LIMIT_MESSAGE = "Длина заготовок превышает длину взятых реек";
 
@@ -430,6 +431,9 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       await finishCreated(torcovkaSavedDetail(qty), `Торцовка внесена: ${qty} заг.`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
+      if (err instanceof Error && err.message === WRONG_APPROVAL_CODE_MESSAGE) {
+        setApprovalCode("");
+      }
       setSubmitting(false);
     }
   };

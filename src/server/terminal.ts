@@ -49,6 +49,8 @@ import {
   type TorcovkaApprovalSnapshot,
 } from "@/server/internal/torcovka-approval";
 import { requireClientRequestId } from "@/lib/request-id";
+import { assertValidHours, HOURS_NO_RATE_MESSAGE, isHourlyRateUnavailable } from "@/lib/hours-input";
+import { upakovkaAvailability } from "@/lib/upakovka-availability";
 import { operationEarning, operationRateSnapshotWrite, operationRatesFromSnapshots } from "@/lib/payroll";
 import { resolvePinLookup } from "@/lib/terminal-auth";
 import { RateLimiter, retryAfterSeconds } from "@/lib/rate-limit";
@@ -212,6 +214,7 @@ export async function getTerminalData(): Promise<TerminalData> {
     products,
     stockRows,
     nomStock,
+    nomItems,
     blankStock,
   ] = await Promise.all([
       prisma.employee.findUnique({
@@ -230,6 +233,7 @@ export async function getTerminalData(): Promise<TerminalData> {
       prisma.product.findMany({ include: { details: true, fasteners: true, extras: true } }),
       prisma.detailStock.findMany(),
       prisma.nomenclatureStock.findMany(),
+      prisma.nomenclatureItem.findMany({ select: { id: true, name: true, type: true } }),
       prisma.blankStock.findMany(),
     ]);
   if (!currentEmployee) {
@@ -263,6 +267,19 @@ export async function getTerminalData(): Promise<TerminalData> {
     blankRows,
     nomenclatureStock,
   );
+  const serializedProducts = products.map(serProduct);
+  const detailNames: Record<string, string> = {};
+  for (const d of domainDetails) detailNames[d.id] = d.name;
+  const nomNames: Record<string, { name: string; type: (typeof nomItems)[number]["type"] }> = {};
+  for (const item of nomItems) nomNames[item.id] = { name: item.name, type: item.type };
+  const upakovka: TerminalData["stock"]["upakovka"] = {};
+  for (const p of serializedProducts) {
+    upakovka[p.id] = upakovkaAvailability(
+      p,
+      { detailsReady: stock.detailsReady, nomenclature: stock.nomenclature },
+      { details: detailNames, nomenclature: nomNames },
+    );
+  }
   const today = new Date();
   const birthdaysToday = employees
     .filter((employee) => {
@@ -285,11 +302,12 @@ export async function getTerminalData(): Promise<TerminalData> {
     batches: batches.map(serBatch),
     railLots: lots.map(serLot),
     details: domainDetails,
-    products: products.map(serProduct),
+    products: serializedProducts,
     stock: {
       prisadkaPending: stock.prisadkaPending,
       detailsReady: stock.detailsReady,
       nomenclature: stock.nomenclature,
+      upakovka,
     },
   };
 }
@@ -1371,7 +1389,7 @@ export async function submitHours(
   await requireTerminalEmployee(employeeId || undefined);
   const requestId = requireClientRequestId(clientRequestId);
   if (!employeeId) throw new Error("Не выбран работник");
-  if (!(hours > 0)) throw new Error("Укажите количество часов");
+  assertValidHours(hours);
 
   try {
     await prisma.$transaction(async (tx) => {
@@ -1381,6 +1399,9 @@ export async function submitHours(
       });
       if (existing) return;
       const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
+      if (isHourlyRateUnavailable(rateSnapshots.hourlyRateSnapshot)) {
+        throw new Error(HOURS_NO_RATE_MESSAGE);
+      }
       const created = await tx.productionOperation.create({
         data: {
           type: "HOURS",

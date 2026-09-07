@@ -11,7 +11,10 @@ import { TerminalSuccessAck, useTerminalSuccessAck } from "@/components/terminal
 import { submitUpakovka } from "@/server/terminal";
 import { formatProductSku } from "@/lib/format";
 import { sectionLabel } from "@/lib/material";
-import { terminalStickyOperationClass } from "@/lib/scroll-classes";
+import { terminalDialogContentClass, terminalStickyOperationClass } from "@/lib/scroll-classes";
+import type { UpakovkaShortage } from "@/lib/upakovka-availability";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type {
   TerminalData,
   TerminalEmployee,
@@ -24,23 +27,8 @@ interface UpakovkaScreenProps {
   onDone: () => void | Promise<void>;
 }
 
-function canAssemble(product: TerminalProduct, data: TerminalData): number {
-  const limits: number[] = [];
-  for (const d of product.details) {
-    const ready = data.stock.detailsReady[d.detailId] ?? 0;
-    limits.push(Math.floor(ready / d.quantity));
-  }
-  for (const f of product.fastenerIds) {
-    const have = data.stock.nomenclature[f.nomenclatureId] ?? 0;
-    limits.push(Math.floor(have / f.quantity));
-  }
-  if (product.packagingId) {
-    limits.push(data.stock.nomenclature[product.packagingId] ?? 0);
-  }
-  for (const nomenclatureId of product.extraIds) {
-    limits.push(data.stock.nomenclature[nomenclatureId] ?? 0);
-  }
-  return limits.length ? Math.max(0, Math.min(...limits)) : 0;
+function availabilityOf(product: TerminalProduct, data: TerminalData) {
+  return data.stock.upakovka[product.id] ?? { canAssemble: 0, shortages: [] };
 }
 
 export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) {
@@ -71,6 +59,7 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
     return next;
   });
   const [dialogProduct, setDialogProduct] = useState<TerminalProduct | null>(null);
+  const [reasonProduct, setReasonProduct] = useState<TerminalProduct | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const successAck = useTerminalSuccessAck();
 
@@ -99,7 +88,7 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
   }, [liveProducts, picked, productById]);
 
   const dialogMax = dialogProduct
-    ? Math.max(canAssemble(dialogProduct, data), picked[dialogProduct.id] ?? 0)
+    ? Math.max(availabilityOf(dialogProduct, data).canAssemble, picked[dialogProduct.id] ?? 0)
     : 0;
   const pickedCount = Object.values(picked).reduce((a, b) => a + b, 0);
   const pickedLines = Object.keys(picked).filter((k) => (picked[k] ?? 0) > 0).length;
@@ -107,10 +96,13 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
     if (qty <= 0) return false;
     const product = productById.get(id);
     if (!product || product.status !== "ACTIVE") return true;
-    return qty > canAssemble(product, data);
+    return qty > availabilityOf(product, data).canAssemble;
   })
     ? "Текущий остаток меньше сохранённого количества. Если операция уже прошла, повтор будет идемпотентным."
     : null;
+  const reasonShortages: UpakovkaShortage[] = reasonProduct
+    ? availabilityOf(reasonProduct, data).shortages
+    : [];
 
   useEffect(() => {
     const picks = Object.entries(picked)
@@ -153,26 +145,30 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
 
       <OperationTileGrid>
         {products.map((p) => {
-          const max = canAssemble(p, data);
+          const max = availabilityOf(p, data).canAssemble;
           const qty = picked[p.id] ?? 0;
-          const disabled = max === 0 && qty === 0;
+          const unavailable = max === 0 && qty === 0;
           const material = materialById.get(p.materialId);
           const sku = formatProductSku(p.skuOzon, p.skuWb);
           return (
             <OperationTile
               key={p.id}
               layout="grid"
-              disabled={disabled}
+              disabled={unavailable}
+              allowClickWhenDisabled={unavailable}
               active={qty > 0}
               icon={<Package />}
               title={p.name}
               material={material ? { name: material.name, section: sectionLabel(material) } : undefined}
               subtitle={sku}
               highlight={qty > 0 ? { value: qty, label: "шт" } : undefined}
-              badge={qty === 0 && !disabled ? `${max} шт` : undefined}
+              badge={qty === 0 && !unavailable ? `${max} шт` : undefined}
               onClick={() => {
-                if (disabled) return;
                 successAck.dismiss();
+                if (unavailable) {
+                  setReasonProduct(p);
+                  return;
+                }
                 setDialogProduct(p);
               }}
               onClear={
@@ -219,6 +215,37 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
         }}
         onClose={() => setDialogProduct(null)}
       />
+
+      <Dialog open={reasonProduct != null} onOpenChange={(o) => !o && setReasonProduct(null)}>
+        {reasonProduct && (
+          <DialogContent className={terminalDialogContentClass} showCloseButton={false}>
+            <DialogHeader>
+              <DialogTitle className="text-xl">{reasonProduct.name}</DialogTitle>
+            </DialogHeader>
+            <p className="text-base font-medium">Нельзя упаковать</p>
+            {reasonShortages.length > 0 ? (
+              <div className="space-y-1">
+                <p className="text-muted-foreground text-base">Не хватает:</p>
+                <ul className="space-y-1 text-base">
+                  {reasonShortages.map((line) => (
+                    <li key={`${line.kind}:${line.name}`}>
+                      {line.name} — {line.shortage} шт
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <p className="text-muted-foreground text-base">Нет состава изделия.</p>
+            )}
+            <Button
+              className="h-14 w-full rounded-xl text-lg"
+              onClick={() => setReasonProduct(null)}
+            >
+              Понятно
+            </Button>
+          </DialogContent>
+        )}
+      </Dialog>
     </main>
   );
 }

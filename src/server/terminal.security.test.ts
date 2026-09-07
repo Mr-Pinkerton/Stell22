@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   productFindMany: vi.fn(),
   detailStockFindMany: vi.fn(),
   nomenclatureStockFindMany: vi.fn(),
+  nomenclatureItemFindMany: vi.fn(),
   blankStockFindMany: vi.fn(),
   productionOperationCreate: vi.fn(),
   productionOperationFindUnique: vi.fn(async () => null),
@@ -47,6 +48,7 @@ vi.mock("@/server/db", () => ({
     product: { findMany: mocks.productFindMany },
     detailStock: { findMany: mocks.detailStockFindMany },
     nomenclatureStock: { findMany: mocks.nomenclatureStockFindMany },
+    nomenclatureItem: { findMany: mocks.nomenclatureItemFindMany },
     blankStock: { findMany: mocks.blankStockFindMany },
     productionOperation: {
       create: mocks.productionOperationCreate,
@@ -138,6 +140,7 @@ describe("terminal action boundary", () => {
     mocks.productFindMany.mockResolvedValue([]);
     mocks.detailStockFindMany.mockResolvedValue([]);
     mocks.nomenclatureStockFindMany.mockResolvedValue([]);
+    mocks.nomenclatureItemFindMany.mockResolvedValue([]);
     mocks.blankStockFindMany.mockResolvedValue([]);
 
     const data = await getTerminalData();
@@ -207,6 +210,7 @@ describe("terminal action boundary", () => {
     mocks.productFindMany.mockResolvedValue([]);
     mocks.detailStockFindMany.mockResolvedValue([]);
     mocks.nomenclatureStockFindMany.mockResolvedValue([]);
+    mocks.nomenclatureItemFindMany.mockResolvedValue([]);
     mocks.blankStockFindMany.mockResolvedValue([
       {
         materialId: "mat-1",
@@ -266,6 +270,81 @@ describe("terminal action boundary", () => {
     expect(mocks.writeChangeLog).toHaveBeenCalledOnce();
   });
 });
+
+function hoursEmployee(hourlyRate: number | null) {
+  return {
+    id: "employee-1",
+    fullName: "Иван Иванов",
+    hourlyRate,
+    rateTorcovkaSort1: null,
+    rateTorcovkaSort2: null,
+    ratePrisadkaTorcev: null,
+    ratePrisadkaPloskt: null,
+    rateUpakovka: null,
+  };
+}
+
+describe("submitHours owner invariants", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.requireTerminalEmployee.mockResolvedValue({
+      id: "employee-1",
+      fullName: "Иван Иванов",
+    });
+    mocks.productionOperationFindUnique.mockResolvedValue(null);
+  });
+
+  it("creates 1h and 0.5h when hourly rate is set", async () => {
+    mocks.employeeFindUnique.mockResolvedValue(hoursEmployee(500));
+    mocks.productionOperationCreate.mockResolvedValue({ id: "operation-1" });
+
+    await submitHours("employee-1", 1, "hours-1");
+    await submitHours("employee-1", 0.5, "hours-0.5");
+    await submitHours("employee-1", 7.5, "hours-7.5");
+
+    expect(mocks.productionOperationCreate).toHaveBeenCalledTimes(3);
+    const hours = mocks.productionOperationCreate.mock.calls.map((call) => {
+      const arg = call[0] as { data?: { hours?: number; hourlyRateSnapshot?: unknown } };
+      return arg.data?.hours;
+    });
+    expect(hours).toEqual([1, 0.5, 7.5]);
+    expect(
+      (mocks.productionOperationCreate.mock.calls[0]?.[0] as { data?: { hourlyRateSnapshot?: unknown } })
+        .data?.hourlyRateSnapshot,
+    ).toBe(500);
+  });
+
+  it("rejects 1.25h without creating an operation", async () => {
+    mocks.employeeFindUnique.mockResolvedValue(hoursEmployee(500));
+
+    await expect(submitHours("employee-1", 1.25, "hours-1.25")).rejects.toThrow(
+      "Часы — кратно 0,5",
+    );
+    expect(mocks.productionOperationCreate).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing hourly rate before create", async () => {
+    mocks.employeeFindUnique.mockResolvedValue(hoursEmployee(null));
+
+    await expect(submitHours("employee-1", 1, "hours-no-rate-1")).rejects.toThrow(
+      "Почасовая ставка не задана",
+    );
+    await expect(submitHours("employee-1", 0.5, "hours-no-rate-0.5")).rejects.toThrow(
+      "Почасовая ставка не задана",
+    );
+    expect(mocks.productionOperationCreate).not.toHaveBeenCalled();
+  });
+
+  it("rejects zero hourly rate before create", async () => {
+    mocks.employeeFindUnique.mockResolvedValue(hoursEmployee(0));
+
+    await expect(submitHours("employee-1", 1, "hours-zero-rate-1")).rejects.toThrow(
+      "Почасовая ставка не задана",
+    );
+    expect(mocks.productionOperationCreate).not.toHaveBeenCalled();
+  });
+});
+
 
 describe("terminalLoginByPin expected failures", () => {
   beforeEach(() => {

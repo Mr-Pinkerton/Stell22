@@ -117,6 +117,11 @@ interface OperationTileProps {
   /** Крупная строка в шапке плитки, напр. «Взято 5 реек». */
   highlight?: { prefix?: string; value: number | string; label?: string };
   onClick?: () => void;
+  /**
+   * Keep the tile tappable while it looks disabled (UPAKOVKA shortage explanation).
+   * Native `disabled` is not used so the control stays reachable.
+   */
+  allowClickWhenDisabled?: boolean;
   /** Сброс выбора (кнопка «Сбросить» на активной плитке). */
   onClear?: () => void;
   /** Нижняя подпись и полоса остатка (compact). value 0–1. */
@@ -143,6 +148,7 @@ export function OperationTile({
   titleNote,
   highlight,
   onClick,
+  allowClickWhenDisabled = false,
   onClear,
   meter,
   layout = "section",
@@ -152,6 +158,7 @@ export function OperationTile({
   const isCompact = layout === "compact";
   const isBlank = layout === "blank";
   const showClear = active && onClear != null;
+  const clickable = Boolean(onClick) && (!disabled || allowClickWhenDisabled);
 
   return (
     <Card
@@ -169,9 +176,10 @@ export function OperationTile({
                 : "h-40",
         isPerson ? TILE_WIDTH_PERSON : isGrid || isBlank ? TILE_WIDTH_GRID : TILE_WIDTH_SECTION,
         active && "border-brand bg-brand/5 border-2",
-        !disabled && onClick && "cursor-pointer active:scale-[0.98] active:opacity-90",
+        clickable && "cursor-pointer active:scale-[0.98] active:opacity-90",
         disabled && "opacity-60",
       )}
+      aria-disabled={disabled && allowClickWhenDisabled ? true : undefined}
     >
       <CardContent
         className={cn(
@@ -184,7 +192,7 @@ export function OperationTile({
                 ? "w-full min-w-0 flex-col px-4 py-4"
                 : "flex-col gap-2 px-4 py-4",
         )}
-        onClick={disabled ? undefined : isPerson || isCompact || isBlank ? onClick : undefined}
+        onClick={clickable && (isPerson || isCompact || isBlank) ? onClick : undefined}
       >
         {isBlank ? (
           <>
@@ -274,9 +282,9 @@ export function OperationTile({
             <div
               className={cn(
                 "flex shrink-0 items-center justify-between gap-2",
-                onClick && "cursor-pointer active:opacity-90",
+                clickable && "cursor-pointer active:opacity-90",
               )}
-              onClick={disabled ? undefined : onClick}
+              onClick={clickable ? onClick : undefined}
             >
               <span className="bg-muted text-muted-foreground flex size-11 shrink-0 items-center justify-center rounded-2xl [&_svg]:size-5 [&_svg]:stroke-[1.75]">
                 {icon}
@@ -296,8 +304,8 @@ export function OperationTile({
 
             <div className="flex min-h-0 flex-1 items-start justify-between gap-2">
               <div
-                className={cn("min-w-0 flex-1", onClick && "cursor-pointer active:opacity-90")}
-                onClick={disabled ? undefined : onClick}
+                className={cn("min-w-0 flex-1", clickable && "cursor-pointer active:opacity-90")}
+                onClick={clickable ? onClick : undefined}
               >
                 <span className="flex items-center gap-1.5">
                   <span className="min-w-0 truncate text-lg leading-tight font-semibold">

@@ -6,6 +6,7 @@ import type {
   RailLot,
   StockSnapshot,
 } from "@/types/domain";
+import type { UpakovkaAvailability } from "@/lib/upakovka-availability";
 
 export type TerminalScreen = "home" | "torcovka" | "prisadka" | "upakovka" | "hours";
 
@@ -68,7 +69,9 @@ export type TerminalProduct = Pick<
 export type TerminalStock = Pick<
   StockSnapshot,
   "prisadkaPending" | "detailsReady" | "nomenclature"
->;
+> & {
+  upakovka: Record<string, UpakovkaAvailability>;
+};
 
 export interface TerminalData {
   currentEmployee: TerminalEmployee;
