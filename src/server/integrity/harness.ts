@@ -88,7 +88,8 @@ export async function resetIntegrityFinance(db: PrismaClient): Promise<void> {
       "Batch",
       "Article",
       "ArticleCategory",
-      "AutoRule"
+      "AutoRule",
+      "Setting"
     RESTART IDENTITY CASCADE
   `);
 }
@@ -116,7 +117,8 @@ export async function resetIntegrityCostFreeze(db: PrismaClient): Promise<void> 
       "ChangeLog",
       "Employee",
       "Batch",
-      "Material"
+      "Material",
+      "Setting"
     RESTART IDENTITY CASCADE
   `);
 }
@@ -157,7 +159,8 @@ export async function resetIntegrityInventory(db: PrismaClient): Promise<void> {
       "ChangeLog",
       "Employee",
       "Batch",
-      "Material"
+      "Material",
+      "Setting"
     RESTART IDENTITY CASCADE
   `);
 }

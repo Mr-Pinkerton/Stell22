@@ -65,6 +65,7 @@ describe("lock order", () => {
       dealItem: {
         findMany: vi.fn(async () => [{ batchId: "batch-z" }, { batchId: "batch-a" }]),
       },
+      setting: { findUnique: vi.fn(async () => null) },
     };
 
     await lockDealsThenBatches(db as never, ["deal-b", "deal-a"]);
@@ -74,6 +75,35 @@ describe("lock order", () => {
     expect(sqls[1]).toContain('"Batch"');
     expect(sqls[1]).toContain("FOR UPDATE");
     expect(db.dealItem.findMany).toHaveBeenCalledOnce();
+  });
+
+  it("active lockDealsThenBatches locks Deal → RailLot → Batch in id order", async () => {
+    const sqls: string[] = [];
+    const tables: string[] = [];
+    const db = {
+      $queryRaw: vi.fn(async (query: Prisma.Sql) => {
+        const text = query.strings.join("?");
+        sqls.push(text);
+        if (text.includes('"Deal"')) tables.push("Deal");
+        if (text.includes('"RailLot"')) tables.push("RailLot");
+        if (text.includes('"Batch"')) tables.push("Batch");
+        return [];
+      }),
+      dealItem: {
+        findMany: vi.fn(async () => [{ batchId: "batch-z" }, { batchId: "batch-a" }]),
+      },
+      railLot: {
+        findMany: vi.fn(async () => [{ id: "lot-z" }, { id: "lot-a" }]),
+      },
+      setting: { findUnique: vi.fn(async () => ({ value: { version: 1, active: true } })) },
+    };
+
+    await lockDealsThenBatches(db as never, ["deal-b", "deal-a"]);
+
+    expect(tables).toEqual(["Deal", "RailLot", "Batch"]);
+    expect(sqls.find((s) => s.includes('"Deal"'))).toContain("ORDER BY id FOR UPDATE");
+    expect(sqls.find((s) => s.includes('"RailLot"'))).toContain("ORDER BY id FOR UPDATE");
+    expect(sqls.find((s) => s.includes('"Batch"'))).toContain("ORDER BY id FOR UPDATE");
   });
 
   it("lockAccountsThenDealsThenBatches locks Account before Deal before Batch", async () => {
@@ -87,14 +117,41 @@ describe("lock order", () => {
         return [];
       }),
       dealItem: { findMany: vi.fn(async () => [{ batchId: "batch-1" }]) },
+      setting: { findUnique: vi.fn(async () => null) },
     };
 
     await lockAccountsThenDealsThenBatches(db as never, ["acc-2", "acc-1"], ["deal-1"]);
     expect(tables).toEqual(["Account", "Deal", "Batch"]);
   });
 
+  it("active lockAccountsThenDealsThenBatches locks Account → Deal → RailLot → Batch", async () => {
+    const tables: string[] = [];
+    const sqls: string[] = [];
+    const db = {
+      $queryRaw: vi.fn(async (query: Prisma.Sql) => {
+        const text = query.strings.join("?");
+        sqls.push(text);
+        if (text.includes('"Account"')) tables.push("Account");
+        if (text.includes('"Deal"')) tables.push("Deal");
+        if (text.includes('"RailLot"')) tables.push("RailLot");
+        if (text.includes('"Batch"')) tables.push("Batch");
+        return [];
+      }),
+      dealItem: { findMany: vi.fn(async () => [{ batchId: "batch-1" }]) },
+      railLot: { findMany: vi.fn(async () => [{ id: "lot-b" }, { id: "lot-a" }]) },
+      setting: { findUnique: vi.fn(async () => ({ value: { version: 1, active: true } })) },
+    };
+
+    await lockAccountsThenDealsThenBatches(db as never, ["acc-2", "acc-1"], ["deal-1"]);
+    expect(tables).toEqual(["Account", "Deal", "RailLot", "Batch"]);
+    expect(sqls.find((s) => s.includes('"Account"'))).toContain("ORDER BY id FOR UPDATE");
+    expect(sqls.find((s) => s.includes('"Deal"'))).toContain("ORDER BY id FOR UPDATE");
+    expect(sqls.find((s) => s.includes('"RailLot"'))).toContain("ORDER BY id FOR UPDATE");
+    expect(sqls.find((s) => s.includes('"Batch"'))).toContain("ORDER BY id FOR UPDATE");
+  });
+
   it("skips empty id lists", async () => {
-    const db = { $queryRaw: vi.fn(), dealItem: { findMany: vi.fn() } };
+    const db = { $queryRaw: vi.fn(), dealItem: { findMany: vi.fn() }, setting: { findUnique: vi.fn(async () => null) } };
     await lockAccountsThenDealsThenBatches(db as never, [], []);
     expect(db.$queryRaw).not.toHaveBeenCalled();
     expect(db.dealItem.findMany).not.toHaveBeenCalled();

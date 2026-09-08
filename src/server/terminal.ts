@@ -24,6 +24,8 @@ import {
 } from "@/lib/detail-stock";
 import { D } from "@/lib/cost";
 import { lockEmployees, lockRailLots } from "@/server/internal/finance-operations";
+import { applyActiveTorcovkaInTx } from "@/server/internal/cost-flow-raw";
+import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import { blankSpecSortKey, lockDetails, snapshotUpakovkaApply } from "@/server/internal/inventory-integrity";
 import {
   approvalCodeMatches,
@@ -659,72 +661,92 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
     }
 
     const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
+    const costFlowActive = await isCostFlowActive(tx);
 
-    const dec = await tx.railLot.updateMany({
-      where: { id: railLotId, batchId, remainingQuantity: { gte: railsTaken } },
-      data: { remainingQuantity: { decrement: railsTaken } },
-    });
-    if (dec.count === 0) throw new Error("Недостаточно реек в пакете");
-
-    const op = await tx.productionOperation.create({
-      data: {
-        type: "TORCOVKA",
+    let opId: string;
+    if (costFlowActive) {
+      const created = await applyActiveTorcovkaInTx({
+        tx,
         employeeId,
         clientRequestId,
         batchId,
         railLotId,
         railsTaken,
-        torcovkaSubmitAckBand: persist.torcovkaSubmitAckBand,
-        torcovkaSubmitWasteReason: persist.torcovkaSubmitWasteReason,
-        torcovkaSubmitWasteNote: persist.torcovkaSubmitWasteNote,
-        workDate: new Date(),
-        ...rateSnapshots,
-        lines: {
-          create: picks.map((p) => ({
-            quantity: p.quantity,
-            blankLengthM: p.lengthM,
-            blankType: lot.railType,
-            blankSort: p.sort,
-            blankMaterialId: materialId,
-          })),
-        },
-      },
-    });
-
-    const sortedBlankPicks = [...picks].sort((a, b) =>
-      blankSpecSortKey({
+        picks,
+        persist,
+        rateSnapshots,
+        lot,
         materialId,
-        lengthM: a.lengthM,
-        detailType: lot.railType,
-        sort: a.sort,
-      }).localeCompare(
+      });
+      opId = created.opId;
+    } else {
+      const dec = await tx.railLot.updateMany({
+        where: { id: railLotId, batchId, remainingQuantity: { gte: railsTaken } },
+        data: { remainingQuantity: { decrement: railsTaken } },
+      });
+      if (dec.count === 0) throw new Error("Недостаточно реек в пакете");
+
+      const op = await tx.productionOperation.create({
+        data: {
+          type: "TORCOVKA",
+          employeeId,
+          clientRequestId,
+          batchId,
+          railLotId,
+          railsTaken,
+          torcovkaSubmitAckBand: persist.torcovkaSubmitAckBand,
+          torcovkaSubmitWasteReason: persist.torcovkaSubmitWasteReason,
+          torcovkaSubmitWasteNote: persist.torcovkaSubmitWasteNote,
+          workDate: new Date(),
+          ...rateSnapshots,
+          lines: {
+            create: picks.map((p) => ({
+              quantity: p.quantity,
+              blankLengthM: p.lengthM,
+              blankType: lot.railType,
+              blankSort: p.sort,
+              blankMaterialId: materialId,
+            })),
+          },
+        },
+      });
+      opId = op.id;
+
+      const sortedBlankPicks = [...picks].sort((a, b) =>
         blankSpecSortKey({
           materialId,
-          lengthM: b.lengthM,
+          lengthM: a.lengthM,
           detailType: lot.railType,
-          sort: b.sort,
-        }),
-      ),
-    );
-    for (const p of sortedBlankPicks) {
-      await tx.blankStock.upsert({
-        where: {
-          materialId_lengthM_detailType_sort: {
+          sort: a.sort,
+        }).localeCompare(
+          blankSpecSortKey({
+            materialId,
+            lengthM: b.lengthM,
+            detailType: lot.railType,
+            sort: b.sort,
+          }),
+        ),
+      );
+      for (const p of sortedBlankPicks) {
+        await tx.blankStock.upsert({
+          where: {
+            materialId_lengthM_detailType_sort: {
+              materialId,
+              lengthM: p.lengthM,
+              detailType: lot.railType,
+              sort: p.sort,
+            },
+          },
+          create: {
             materialId,
             lengthM: p.lengthM,
             detailType: lot.railType,
             sort: p.sort,
+            quantity: p.quantity,
           },
-        },
-        create: {
-          materialId,
-          lengthM: p.lengthM,
-          detailType: lot.railType,
-          sort: p.sort,
-          quantity: p.quantity,
-        },
-        update: { quantity: { increment: p.quantity } },
-      });
+          update: { quantity: { increment: p.quantity } },
+        });
+      }
     }
 
     const changeLogValues: Record<string, unknown> = {
@@ -749,7 +771,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
     await writeChangeLog(
       {
         entity: "ProductionOperation",
-        entityId: op.id,
+        entityId: opId,
         newValues: changeLogValues,
       },
       tx,

@@ -22,6 +22,16 @@ import {
   syncBatchTotalCostInternal,
   syncDealInternal,
 } from "@/server/internal/finance-operations";
+import {
+  COST_FLOW_DELETE_BATCH,
+  COST_FLOW_DRIVER_AFTER_CONSUMPTION,
+  COST_FLOW_LOT_UNINITIALIZED,
+  applyActiveRawWriteoffInTx,
+  initializeCreatedRailLotsInTx,
+  lotIsConsumed,
+  reallocateUnconsumedRailLotValuesInTx,
+} from "@/server/internal/cost-flow-raw";
+import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import type { Material, NomenclatureItem, RailType, Sort } from "@/types/domain";
 
 const PATH = "/purchases";
@@ -255,36 +265,43 @@ export async function createBatch(values: BatchFormValues): Promise<PurchaseBatc
   const purchaseDate = parseDate(values.purchaseDate);
   const usedCodes = await loadUsedPackageCodes();
 
-  const created = await prisma.batch.create({
-    data: {
-      name: values.name.trim(),
-      materialId: values.materialId,
-      sectionWidthMm: section.w,
-      sectionHeightMm: section.h,
-      purchaseCost: values.purchaseCost ?? 0,
-      totalCost: values.purchaseCost ?? 0, // при создании = закупочной (доставка из Сделок позже)
-      priceSort1: values.priceSort1 ?? 0,
-      priceSort2: values.priceSort2 ?? 0,
-      status: "IN_WORK",
-      purchaseDate,
-      note: values.note.trim() || null,
-      railLots: {
-        create: values.rails.map((r) => ({
-          lengthM: r.lengthM,
-          railType: r.railType,
-          sort: r.sort,
-          isPackage: r.mode === "package",
-          code:
-            r.mode === "package"
-              ? allocatePackageCode(r.lengthM, r.quantity, r.sort, usedCodes)
-              : null,
-          rows: r.rows ?? null,
-          layers: r.layers ?? null,
-          quantity: r.quantity,
-          remainingQuantity: r.quantity,
-        })),
+  const created = await prisma.$transaction(async (tx) => {
+    const batch = await tx.batch.create({
+      data: {
+        name: values.name.trim(),
+        materialId: values.materialId,
+        sectionWidthMm: section.w,
+        sectionHeightMm: section.h,
+        purchaseCost: values.purchaseCost ?? 0,
+        totalCost: values.purchaseCost ?? 0, // при создании = закупочной (доставка из Сделок позже)
+        priceSort1: values.priceSort1 ?? 0,
+        priceSort2: values.priceSort2 ?? 0,
+        status: "IN_WORK",
+        purchaseDate,
+        note: values.note.trim() || null,
+        railLots: {
+          create: values.rails.map((r) => ({
+            lengthM: r.lengthM,
+            railType: r.railType,
+            sort: r.sort,
+            isPackage: r.mode === "package",
+            code:
+              r.mode === "package"
+                ? allocatePackageCode(r.lengthM, r.quantity, r.sort, usedCodes)
+                : null,
+            rows: r.rows ?? null,
+            layers: r.layers ?? null,
+            quantity: r.quantity,
+            remainingQuantity: r.quantity,
+          })),
+        },
       },
-    },
+      include: { railLots: true },
+    });
+    if (await isCostFlowActive(tx)) {
+      await initializeCreatedRailLotsInTx(tx, batch);
+    }
+    return batch;
   });
 
   await writeChangeLog({
@@ -396,6 +413,26 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
         );
       }
 
+      const lots = await tx.railLot.findMany({ where: { batchId: id } });
+      const costFlowActive = await isCostFlowActive(tx);
+      const driversChanged =
+        num(current.priceSort1) !== nextMoney.priceSort1 ||
+        num(current.priceSort2) !== nextMoney.priceSort2 ||
+        current.materialId !== values.materialId ||
+        num(current.sectionWidthMm) !== section.w ||
+        num(current.sectionHeightMm) !== section.h;
+      const anyConsumed = lots.some(lotIsConsumed);
+      const lotsInitialized =
+        lots.length === 0 ||
+        lots.every((lot) => lot.initialValue != null && lot.remainingValue != null);
+      if (costFlowActive && lots.length > 0 && !lotsInitialized && driversChanged) {
+        throw new Error(COST_FLOW_LOT_UNINITIALIZED);
+      }
+      if (costFlowActive && anyConsumed && driversChanged) {
+        throw new Error(COST_FLOW_DRIVER_AFTER_CONSUMPTION);
+      }
+      const skipLateDeltaC = costFlowActive && !anyConsumed && driversChanged && lotsInitialized;
+
       await tx.batch.update({ where: { id }, data: scalarData });
       const dealIds = sortedUniqueIds(
         (
@@ -407,11 +444,22 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
       );
       if (dealIds.length > 0) {
         for (const dealId of dealIds) {
-          batchIds.push(...(await syncDealInternal(dealId, tx)));
+          batchIds.push(
+            ...(await syncDealInternal(
+              dealId,
+              tx,
+              skipLateDeltaC ? { skipLateDeltaCBatchIds: new Set([id]) } : undefined,
+            )),
+          );
         }
       } else {
-        const written = await syncBatchTotalCostInternal(id, tx);
+        const written = await syncBatchTotalCostInternal(id, tx, { skipLateDeltaC });
         if (written) batchIds.push(written);
+      }
+      if (skipLateDeltaC && lots.length > 0) {
+        const after = await tx.batch.findUniqueOrThrow({ where: { id } });
+        const afterLots = await tx.railLot.findMany({ where: { batchId: id } });
+        await reallocateUnconsumedRailLotValuesInTx(tx, after, afterLots);
       }
     });
   });
@@ -445,15 +493,18 @@ export async function writeOffBatchRemainder(id: string): Promise<PurchaseBatchR
     await lockBatches(tx, [id]);
     const lockedLots = await tx.railLot.findMany({
       where: { batchId: id },
-      select: { remainingQuantity: true },
     });
     const remaining = lockedLots.reduce((s, l) => s + l.remainingQuantity, 0);
     if (remaining <= 0) throw new Error("Остаток уже нулевой");
 
-    await tx.railLot.updateMany({
-      where: { batchId: id, remainingQuantity: { gt: 0 } },
-      data: { remainingQuantity: 0 },
-    });
+    if (await isCostFlowActive(tx)) {
+      await applyActiveRawWriteoffInTx(tx, id, lockedLots);
+    } else {
+      await tx.railLot.updateMany({
+        where: { batchId: id, remainingQuantity: { gt: 0 } },
+        data: { remainingQuantity: 0 },
+      });
+    }
     await writeChangeLog(
       {
         entity: "Batch",
@@ -475,6 +526,9 @@ export async function writeOffBatchRemainder(id: string): Promise<PurchaseBatchR
 
 export async function deleteBatch(id: string): Promise<void> {
   await requireAdmin();
+  if (await isCostFlowActive()) {
+    throw new Error(COST_FLOW_DELETE_BATCH);
+  }
   const [ops, deals] = await Promise.all([
     prisma.productionOperation.count({ where: { batchId: id } }),
     prisma.dealItem.count({ where: { batchId: id } }),

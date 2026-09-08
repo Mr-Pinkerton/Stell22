@@ -7,6 +7,12 @@ import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { lockBatches, lockProductionOperations, lockRailLots } from "@/server/internal/finance-operations";
+import {
+  correctActiveTorcovkaLineQuantityInTx,
+  correctActiveTorcovkaRailsTakenInTx,
+  reverseActiveTorcovkaStockInTx,
+} from "@/server/internal/cost-flow-raw";
+import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import { D } from "@/lib/cost";
 import { maybeFreezeBatch } from "@/server/internal/cost";
 import {
@@ -16,11 +22,13 @@ import {
   reverseUpakovkaOperation,
 } from "@/server/internal/production-reversal";
 import {
+  assertTorcovkaBlankInventoryBoundary,
   blankSpecSortKey,
   preparePrisadkaEdit,
   preparePrisadkaReverse,
   prepareTorcovkaBlankMutation,
   prepareUpakovkaEdit,
+  type BlankSpec,
 } from "@/server/internal/inventory-integrity";
 import { operationEarning, operationRatesFromSnapshots } from "@/lib/payroll";
 import { isOverRailLength } from "@/lib/torcovka";
@@ -43,6 +51,25 @@ function round2(n: number): number {
 }
 
 type OpFull = Prisma.ProductionOperationGetPayload<{ include: { lines: true } }>;
+
+function requireTorcovkaBlankSpecs(lines: OpFull["lines"]): BlankSpec[] {
+  return lines.map((l) => {
+    if (
+      l.blankLengthM == null ||
+      l.blankType == null ||
+      l.blankSort == null ||
+      l.blankMaterialId == null
+    ) {
+      throw new Error("Строка торцовки без спецификации заготовки");
+    }
+    return {
+      materialId: l.blankMaterialId,
+      lengthM: l.blankLengthM,
+      detailType: l.blankType,
+      sort: l.blankSort,
+    };
+  });
+}
 
 interface RefMaps {
   employeeName: Map<string, string>;
@@ -303,6 +330,39 @@ export async function updateProductionLineQuantity(
     const delta = newQty - oldQty;
     if (delta === 0) return;
 
+    if (await isCostFlowActive(tx)) {
+      const specs = requireTorcovkaBlankSpecs(op.lines);
+      await assertTorcovkaBlankInventoryBoundary(tx, op.createdAt, specs);
+      if (op.railLotId && op.railsTaken) {
+        const lot = await tx.railLot.findUnique({ where: { id: op.railLotId } });
+        const takenM = D(op.railsTaken).times(D(lot ? lot.lengthM : 0));
+        const usedM = op.lines.reduce(
+          (sum, l) => sum.plus(D(num(l.blankLengthM)).times(l.id === lineId ? newQty : l.quantity)),
+          D(0),
+        );
+        if (usedM.gt(takenM)) {
+          throw new Error("Суммарная длина заготовок превышает длину взятых реек");
+        }
+      }
+      await correctActiveTorcovkaLineQuantityInTx({
+        tx,
+        op,
+        lineId,
+        newQty,
+      });
+      await writeChangeLog(
+        {
+          entity: "ProductionOperation",
+          entityId: id,
+          newValues: { field: "Количество", oldValue: oldQty, newValue: newQty },
+        },
+        tx,
+      );
+      enqueueBatchId = op.batchId;
+      revalidateReports = true;
+      return;
+    }
+
     await prepareTorcovkaBlankMutation(tx, op.createdAt, [
       {
         materialId: blankMaterialId,
@@ -405,57 +465,62 @@ export async function deleteProductionOperation(id: string): Promise<void> {
     if (!op) throw new Error("Операция не найдена");
     if (op.isPaid) throw new Error("Нельзя удалить — операция уже выплачена");
 
-    if (op.type === "TORCOVKA" && op.batchId) {
-      await lockBatches(tx, [op.batchId]);
-    }
-
     if (op.type === "TORCOVKA") {
-      const specs = [];
-      for (const l of op.lines) {
-        if (
-          l.blankLengthM == null ||
-          l.blankType == null ||
-          l.blankSort == null ||
-          l.blankMaterialId == null
-        ) {
-          throw new Error("Строка торцовки без спецификации заготовки");
+      const costFlowActive = await isCostFlowActive(tx);
+      if (costFlowActive) {
+        const specs = requireTorcovkaBlankSpecs(op.lines);
+        await assertTorcovkaBlankInventoryBoundary(tx, op.createdAt, specs);
+        await reverseActiveTorcovkaStockInTx({ tx, op });
+        if (op.batchId) await lockBatches(tx, [op.batchId]);
+      } else {
+        if (op.batchId) await lockBatches(tx, [op.batchId]);
+        const specs = [];
+        for (const l of op.lines) {
+          if (
+            l.blankLengthM == null ||
+            l.blankType == null ||
+            l.blankSort == null ||
+            l.blankMaterialId == null
+          ) {
+            throw new Error("Строка торцовки без спецификации заготовки");
+          }
+          specs.push({
+            materialId: l.blankMaterialId,
+            lengthM: l.blankLengthM,
+            detailType: l.blankType,
+            sort: l.blankSort,
+          });
         }
-        specs.push({
-          materialId: l.blankMaterialId,
-          lengthM: l.blankLengthM,
-          detailType: l.blankType,
-          sort: l.blankSort,
-        });
-      }
-      await prepareTorcovkaBlankMutation(tx, op.createdAt, specs);
-      const sortedLines = [...op.lines].sort((a, b) =>
-        blankSpecSortKey({
-          materialId: a.blankMaterialId!,
-          lengthM: a.blankLengthM!,
-          detailType: a.blankType!,
-          sort: a.blankSort!,
-        }).localeCompare(
+        await prepareTorcovkaBlankMutation(tx, op.createdAt, specs);
+        const sortedLines = [...op.lines].sort((a, b) =>
           blankSpecSortKey({
-            materialId: b.blankMaterialId!,
-            lengthM: b.blankLengthM!,
-            detailType: b.blankType!,
-            sort: b.blankSort!,
-          }),
-        ),
-      );
-      for (const l of sortedLines) {
-        const dec = await tx.blankStock.updateMany({
-          where: {
-            materialId: l.blankMaterialId!,
-            lengthM: l.blankLengthM!,
-            detailType: l.blankType!,
-            sort: l.blankSort!,
-            quantity: { gte: l.quantity },
-          },
-          data: { quantity: { decrement: l.quantity } },
-        });
-        if (dec.count === 0) {
-          throw new Error("Нельзя удалить: заготовки уже прошли присадку/упаковку");
+            materialId: a.blankMaterialId!,
+            lengthM: a.blankLengthM!,
+            detailType: a.blankType!,
+            sort: a.blankSort!,
+          }).localeCompare(
+            blankSpecSortKey({
+              materialId: b.blankMaterialId!,
+              lengthM: b.blankLengthM!,
+              detailType: b.blankType!,
+              sort: b.blankSort!,
+            }),
+          ),
+        );
+        for (const l of sortedLines) {
+          const dec = await tx.blankStock.updateMany({
+            where: {
+              materialId: l.blankMaterialId!,
+              lengthM: l.blankLengthM!,
+              detailType: l.blankType!,
+              sort: l.blankSort!,
+              quantity: { gte: l.quantity },
+            },
+            data: { quantity: { decrement: l.quantity } },
+          });
+          if (dec.count === 0) {
+            throw new Error("Нельзя удалить: заготовки уже прошли присадку/упаковку");
+          }
         }
       }
     } else if (op.type === "PRISADKA") {
@@ -524,6 +589,75 @@ export async function correctTorcovkaRailsTaken(input: {
     const oldRailsTaken = op.railsTaken;
     if (!(newRailsTaken < oldRailsTaken)) {
       throw new Error("Можно только уменьшить количество фактически взятых реек");
+    }
+
+    const costFlowActive = await isCostFlowActive(tx);
+    if (costFlowActive) {
+      if (op.isPaid) throw new Error("Нельзя исправить — операция уже выплачена");
+      await lockRailLots(tx, [op.railLotId]);
+      const lot = await tx.railLot.findUnique({ where: { id: op.railLotId } });
+      if (!lot) throw new Error("Пакет реек не найден");
+      const producedM = op.lines.reduce(
+        (sum, l) => sum.plus(D(num(l.blankLengthM)).times(l.quantity)),
+        D(0),
+      );
+      const newTakenM = D(newRailsTaken).times(D(lot.lengthM));
+      if (producedM.gt(newTakenM)) {
+        throw new Error("Суммарная длина заготовок превышает длину взятых реек");
+      }
+      const batchPeek = await tx.batch.findUnique({ where: { id: op.batchId } });
+      if (!batchPeek) throw new Error("Партия не найдена");
+      if (batchPeek.frozenAt != null) {
+        throw new Error("Нельзя исправить — себестоимость партии заморожена");
+      }
+      await assertTorcovkaBlankInventoryBoundary(tx, op.createdAt, requireTorcovkaBlankSpecs(op.lines));
+      await correctActiveTorcovkaRailsTakenInTx({
+        tx,
+        op: { ...op, railsTaken: oldRailsTaken },
+        lot,
+        newRailsTaken,
+      });
+      await lockBatches(tx, [op.batchId]);
+      const batch = await tx.batch.findUnique({ where: { id: op.batchId } });
+      if (!batch) throw new Error("Партия не найдена");
+      if (batch.frozenAt != null) {
+        throw new Error("Нельзя исправить — себестоимость партии заморожена");
+      }
+      await writeChangeLog(
+        {
+          entity: "ProductionOperation",
+          entityId: operationId,
+          newValues: {
+            field: "railsTaken",
+            oldRailsTaken,
+            newRailsTaken,
+            deltaReturned: oldRailsTaken - newRailsTaken,
+            reason,
+          },
+        },
+        tx,
+      );
+      const lots = await tx.railLot.findMany({
+        where: { batchId: op.batchId },
+        select: { remainingQuantity: true },
+      });
+      const remaining = lots.reduce((s, l) => s + l.remainingQuantity, 0);
+      if (remaining > 0 && (batch.status !== "IN_WORK" || batch.closedAt != null)) {
+        await tx.batch.update({
+          where: { id: op.batchId },
+          data: { status: "IN_WORK", closedAt: null },
+        });
+        await writeChangeLog(
+          {
+            entity: "Batch",
+            entityId: op.batchId,
+            newValues: { reopened: true, viaOperationId: operationId },
+          },
+          tx,
+        );
+      }
+      enqueueBatchId = op.batchId;
+      return;
     }
 
     await lockRailLots(tx, [op.railLotId]);

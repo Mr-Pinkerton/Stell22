@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import { D } from "./cost";
 import {
   COST_FLOW_UNINITIALIZED_VERSION,
+  allocatePersistenceShares,
   allocateRailLotValues,
   bootstrapRawTransfer,
   canExactMonetaryReverse,
   componentTotal,
+  consumeRailValue,
   eventComponentsValid,
   isMonetaryPoolInitialized,
   remainingLotValue,
@@ -451,5 +453,76 @@ describe("pre-cutover snapshot representability (no runtime block)", () => {
     expect(canExactMonetaryReverse({ outputCostVersion: 0 })).toBe(false);
     expect(canExactMonetaryReverse({ outputCostVersion: 1 })).toBe(true);
     expect(canExactMonetaryReverse({ outputCostVersion: 3 })).toBe(true);
+  });
+});
+
+describe("consumeRailValue", () => {
+  it("last-rail take uses the exact stored remainingValue", () => {
+    const out = consumeRailValue({ remainingQuantity: 3, remainingValue: "1.000001", railsTaken: 3 });
+    expect(out.consumedRawValue.equals(D("1.000001"))).toBe(true);
+    expect(out.newRemainingValue.equals(D(0))).toBe(true);
+    expect(out.newRemainingQuantity).toBe(0);
+  });
+
+  it("1/3 consume is q6 and remainder is exact residual of stored value", () => {
+    const out = consumeRailValue({ remainingQuantity: 3, remainingValue: 1, railsTaken: 1 });
+    expect(out.consumedRawValue.equals(D("0.333333"))).toBe(true);
+    expect(out.newRemainingValue.equals(D("0.666667"))).toBe(true);
+    expect(out.consumedRawValue.plus(out.newRemainingValue).equals(D(1))).toBe(true);
+    expect(out.newRemainingQuantity).toBe(2);
+  });
+
+  it("does not independently re-round the remainder", () => {
+    const first = consumeRailValue({ remainingQuantity: 3, remainingValue: 1, railsTaken: 1 });
+    const second = consumeRailValue({
+      remainingQuantity: first.newRemainingQuantity,
+      remainingValue: first.newRemainingValue,
+      railsTaken: 1,
+    });
+    const last = consumeRailValue({
+      remainingQuantity: second.newRemainingQuantity,
+      remainingValue: second.newRemainingValue,
+      railsTaken: 1,
+    });
+    expect(first.consumedRawValue.plus(second.consumedRawValue).plus(last.consumedRawValue).equals(D(1))).toBe(
+      true,
+    );
+    expect(last.newRemainingValue.equals(D(0))).toBe(true);
+  });
+});
+
+describe("allocatePersistenceShares", () => {
+  it("zero-weight item never receives residual", () => {
+    const rows = allocatePersistenceShares({
+      total: 1,
+      items: [
+        { id: "a", shareBase: 1 },
+        { id: "b", shareBase: 1 },
+        { id: "c", shareBase: 1 },
+        { id: "z", shareBase: 0 },
+      ],
+    });
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r.value]));
+    expect(byId.z.equals(D(0))).toBe(true);
+    expect(rows.reduce((acc, r) => acc.plus(r.value), D(0)).equals(D(1))).toBe(true);
+  });
+
+  it("equal positive weights stay deterministic across input order", () => {
+    const items = [
+      { id: "m", shareBase: 1 },
+      { id: "a", shareBase: 1 },
+      { id: "z", shareBase: 1 },
+    ];
+    const mapA = Object.fromEntries(
+      allocatePersistenceShares({ total: 1, items }).map((r) => [r.id, r.value.toFixed(6)]),
+    );
+    const mapB = Object.fromEntries(
+      allocatePersistenceShares({ total: 1, items: [...items].reverse() }).map((r) => [
+        r.id,
+        r.value.toFixed(6),
+      ]),
+    );
+    expect(mapA).toEqual(mapB);
+    expect(mapA.z).toBe("0.333334");
   });
 });

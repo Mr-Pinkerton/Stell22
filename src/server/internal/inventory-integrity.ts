@@ -347,6 +347,20 @@ export async function assertInventoryBoundary(
   if (rows.length > 0) throw new Error(INVENTORY_BOUNDARY);
 }
 
+/** Read-only inventory-history check. Does not create BlankStock rows. */
+export async function assertTorcovkaBlankInventoryBoundary(
+  tx: Prisma.TransactionClient,
+  occurredAt: Date,
+  specs: Iterable<BlankSpec>,
+): Promise<void> {
+  const unique = uniqueSortedBlankSpecs(specs);
+  const refs: InventoryRef[] = [];
+  for (const spec of unique) {
+    refs.push(...(await blankSpecToInventoryRefs(tx, spec)));
+  }
+  await assertInventoryBoundary(tx, occurredAt, refs);
+}
+
 async function collectPrisadkaRefs(
   tx: Prisma.TransactionClient,
   lines: PrisadkaReverseLine[],

@@ -1,10 +1,8 @@
 /**
- * Package 1 cost-flow foundation — PURE MATH ONLY.
- *
- * COST FLOW IS NOT ACTIVE. These helpers are for future writers / tests.
- * They must not be called from terminal quantity writers in Package 1.
+ * Cost-flow foundation — PURE MATH ONLY.
  *
  * Decimal only. No Prisma. No JS `number` as money SoT.
+ * Writers call these only when `production_cost_flow` is active.
  */
 import { Decimal } from "decimal.js";
 import { D, type Num } from "@/lib/cost";
@@ -48,6 +46,113 @@ export type WacInput = {
 
 function fail(code: string, message: string): never {
   throw new CostFoundationError(code, message);
+}
+
+export type PersistenceShareItem = {
+  id: string;
+  shareBase: Num;
+};
+
+/**
+ * Persistence-safe split of `total` by positive shareBase.
+ * Residual → largest positive shareBase (tie-break: largest stable id).
+ * Zero-share items always receive 0. Signed totals are allowed (late ΔC).
+ * Mapping does not depend on input array order.
+ */
+export function allocatePersistenceShares(args: {
+  total: Num;
+  items: PersistenceShareItem[];
+}): { id: string; value: Decimal }[] {
+  const C = D(args.total);
+  if (args.items.length === 0) fail("ZERO_SHARE", "no items to allocate");
+
+  const rows = args.items.map((item) => {
+    const shareBase = D(item.shareBase);
+    if (shareBase.isNeg()) fail("NEGATIVE", `shareBase for ${item.id} must be >= 0`);
+    return { id: item.id, shareBase, persistedValue: D(0) };
+  });
+
+  const shareDenom = rows.reduce((acc, row) => acc.plus(row.shareBase), D(0));
+  if (shareDenom.isZero()) {
+    if (!C.isZero()) fail("ZERO_SHARE", "no positive-share item to receive allocation");
+    return rows
+      .slice()
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .map((row) => ({ id: row.id, value: D(0) }));
+  }
+
+  for (const row of rows) {
+    const share = row.shareBase.div(shareDenom);
+    row.persistedValue = q6(C.times(share));
+  }
+
+  const persistedSum = rows.reduce((acc, row) => acc.plus(row.persistedValue), D(0));
+  const residual = C.minus(persistedSum);
+
+  let receiver = rows.find((row) => row.shareBase.gt(0));
+  if (!receiver) fail("ZERO_SHARE", "no positive-share item to receive persistence residual");
+  for (const row of rows) {
+    if (!row.shareBase.gt(0)) continue;
+    if (
+      row.shareBase.gt(receiver.shareBase) ||
+      (row.shareBase.equals(receiver.shareBase) && row.id > receiver.id)
+    ) {
+      receiver = row;
+    }
+  }
+
+  receiver.persistedValue = receiver.persistedValue.plus(residual);
+
+  const total = rows.reduce((acc, row) => acc.plus(row.persistedValue), D(0));
+  if (!total.equals(C)) {
+    fail("CONSERVATION", "Σ allocated values must equal total at persistence scale");
+  }
+
+  rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return rows.map((row) => ({ id: row.id, value: row.persistedValue }));
+}
+
+/**
+ * Consume N rails from an identified RailLot remainingValue.
+ * Last-rail take is the exact stored residual. Non-last: q6(share), remainder
+ * is stored remaining minus consumed (not independently rounded).
+ */
+export function consumeRailValue(args: {
+  remainingQuantity: number;
+  remainingValue: Num;
+  railsTaken: number;
+}): { consumedRawValue: Decimal; newRemainingValue: Decimal; newRemainingQuantity: number } {
+  const remainingQuantity = args.remainingQuantity;
+  const railsTaken = args.railsTaken;
+  const remainingValue = D(args.remainingValue);
+  if (!Number.isInteger(remainingQuantity) || remainingQuantity <= 0) {
+    fail("INVALID_CONSUME", "remainingQuantity must be an integer > 0");
+  }
+  if (!Number.isInteger(railsTaken) || railsTaken <= 0) {
+    fail("INVALID_CONSUME", "railsTaken must be an integer > 0");
+  }
+  if (railsTaken > remainingQuantity) fail("OVERDRAW", "railsTaken exceeds remainingQuantity");
+  if (remainingValue.isNeg()) fail("NEGATIVE", "remainingValue must be >= 0");
+
+  if (railsTaken === remainingQuantity) {
+    return {
+      consumedRawValue: remainingValue,
+      newRemainingValue: D(0),
+      newRemainingQuantity: 0,
+    };
+  }
+
+  const consumedRawValue = q6(remainingValue.times(railsTaken).div(remainingQuantity));
+  const newRemainingValue = remainingValue.minus(consumedRawValue);
+  if (newRemainingValue.isNeg()) fail("NEGATIVE", "newRemainingValue must be >= 0");
+  if (!consumedRawValue.plus(newRemainingValue).equals(remainingValue)) {
+    fail("CONSERVATION", "consumed + remaining must equal previous remainingValue");
+  }
+  return {
+    consumedRawValue,
+    newRemainingValue,
+    newRemainingQuantity: remainingQuantity - railsTaken,
+  };
 }
 
 export function isMonetaryPoolInitialized(costVersion: number): boolean {
@@ -219,54 +324,32 @@ export function allocateRailLotValues(args: {
 
   const sumWeight = prepared.reduce((acc, row) => acc.plus(row.weight), D(0));
   const useWeight = sumWeight.gt(0);
-  const shareDenom = useWeight ? sumWeight : sumVolume;
 
-  const rows = prepared.map((row) => {
-    const shareBase = useWeight ? row.weight : row.volume;
-    const share = shareBase.div(shareDenom);
-    return {
+  const allocated = allocatePersistenceShares({
+    total: C,
+    items: prepared.map((row) => ({
       id: row.id,
-      volume: row.volume,
-      weight: row.weight,
-      shareBase,
-      persistedValue: q6(C.times(share)),
-    };
+      shareBase: useWeight ? row.weight : row.volume,
+    })),
   });
-
-  const persistedSum = rows.reduce((acc, row) => acc.plus(row.persistedValue), D(0));
-  const residual = C.minus(persistedSum);
-
-  let receiver = rows.find((row) => row.shareBase.gt(0));
-  if (!receiver) {
-    fail("ZERO_PURCHASED_VOLUME", "no positive-share lot to receive persistence residual");
-  }
-  for (const row of rows) {
-    if (!row.shareBase.gt(0)) continue;
-    if (
-      row.shareBase.gt(receiver.shareBase) ||
-      (row.shareBase.equals(receiver.shareBase) && row.id > receiver.id)
-    ) {
-      receiver = row;
-    }
-  }
-
-  receiver.persistedValue = receiver.persistedValue.plus(residual);
-  if (receiver.persistedValue.isNeg()) {
-    fail("NEGATIVE", "residual receiver initialValue must be >= 0");
-  }
-
-  const total = rows.reduce((acc, row) => acc.plus(row.persistedValue), D(0));
+  const byId = new Map(allocated.map((row) => [row.id, row.value]));
+  const total = allocated.reduce((acc, row) => acc.plus(row.value), D(0));
   if (!total.equals(C)) {
     fail("CONSERVATION", "Σ initialValue must equal C at persistence scale");
   }
+  if (allocated.some((row) => row.value.isNeg())) {
+    fail("NEGATIVE", "residual receiver initialValue must be >= 0");
+  }
 
-  rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  return rows.map((row) => ({
-    id: row.id,
-    volume: row.volume,
-    weight: row.weight,
-    initialValue: row.persistedValue,
-  }));
+  return prepared
+    .slice()
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((row) => ({
+      id: row.id,
+      volume: row.volume,
+      weight: row.weight,
+      initialValue: byId.get(row.id)!,
+    }));
 }
 
 export function remainingLotValue(args: {
