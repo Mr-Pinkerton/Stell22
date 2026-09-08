@@ -23,7 +23,7 @@ import {
   COST_FLOW_QTY_ONLY_WRITER,
 } from "@/server/internal/cost-flow-downstream";
 import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
-import { STALE_SNAPSHOT } from "@/server/internal/inventory-integrity";
+import { INVENTORY_BOUNDARY, STALE_SNAPSHOT } from "@/server/internal/inventory-integrity";
 import { applySupplyDeduction } from "@/server/internal/supply-deduct";
 import { deleteDetail } from "@/server/nomenclature";
 import { deleteProductionOperation, updateProductionLineQuantity } from "@/server/production";
@@ -2680,5 +2680,155 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       expect(destQty).toBe(0);
       expect(d(blank!.totalValue)!.gt(0)).toBe(true);
     }
+  });
+
+  async function seedBlankSourcedPrisadkaThenDetailInventory(args: {
+    active: boolean;
+    suffix: string;
+    qty: number;
+  }) {
+    if (args.active) await setCostFlowActive(true);
+    const world = await seedChain();
+    await prismaA.blankStock.create({
+      data: {
+        materialId: world.material.id,
+        lengthM: new Prisma.Decimal("1.8000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        quantity: args.qty,
+        ...(args.active
+          ? {
+              materialValue: new Prisma.Decimal("1000"),
+              laborValue: new Prisma.Decimal("100"),
+              totalValue: new Prisma.Decimal("1100"),
+              costVersion: 1,
+            }
+          : {}),
+      },
+    });
+    await submitPrisadka({
+      employeeId: world.emp.id,
+      clientRequestId: `p31-pri-${args.suffix}`,
+      picks: [{ detailId: world.detail.id, kind: "torcev", quantity: args.qty }],
+    });
+    expect(await detailBucketQty(world.detail.id, true, false)).toBe(args.qty);
+    const op = await prismaA.productionOperation.findFirstOrThrow({
+      where: { type: "PRISADKA" },
+      include: { lines: { orderBy: { id: "asc" } } },
+    });
+    const doc = await prismaA.inventory.create({
+      data: {
+        date: new Date(op.createdAt.getTime() + 1000),
+        status: "DRAFT",
+        lines: {
+          create: [
+            {
+              refType: "DETAIL",
+              refId: world.detail.id,
+              accountedQty: args.qty,
+              actualQty: args.qty,
+              deviation: 0,
+              deviationSum: 0,
+            },
+          ],
+        },
+      },
+    });
+    await conductInventory(doc.id);
+    return { world, op };
+  }
+
+  it("active blank-sourced PRISADKA delete is blocked by conducted DETAIL inventory", async () => {
+    const { world, op } = await seedBlankSourcedPrisadkaThenDetailInventory({
+      active: true,
+      suffix: `act-del-${seq}`,
+      qty: 10,
+    });
+    const destBefore = await prismaA.detailStock.findUniqueOrThrow({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId: world.detail.id,
+          torcevayaDone: true,
+          ploskostDone: false,
+        },
+      },
+    });
+    const blankBefore = await prismaA.blankStock.findUniqueOrThrow({
+      where: {
+        materialId_lengthM_detailType_sort: {
+          materialId: world.material.id,
+          lengthM: new Prisma.Decimal("1.8000"),
+          detailType: "POLKA",
+          sort: "SORT1",
+        },
+      },
+    });
+    const eventsBefore = await prismaA.costEvent.count();
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(INVENTORY_BOUNDARY);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
+    const dest = await prismaA.detailStock.findUniqueOrThrow({ where: { id: destBefore.id } });
+    const blank = await prismaA.blankStock.findUniqueOrThrow({ where: { id: blankBefore.id } });
+    expect(dest.quantity).toBe(10);
+    expect(blank.quantity).toBe(0);
+    expect(d(dest.materialValue)!.equals(d(destBefore.materialValue)!)).toBe(true);
+    expect(d(dest.laborValue)!.equals(d(destBefore.laborValue)!)).toBe(true);
+    expect(d(dest.totalValue)!.equals(d(destBefore.totalValue)!)).toBe(true);
+    expect(dest.costVersion).toBe(destBefore.costVersion);
+    expect(d(blank.materialValue)!.equals(d(blankBefore.materialValue)!)).toBe(true);
+    expect(d(blank.laborValue)!.equals(d(blankBefore.laborValue)!)).toBe(true);
+    expect(d(blank.totalValue)!.equals(d(blankBefore.totalValue)!)).toBe(true);
+    expect(blank.costVersion).toBe(blankBefore.costVersion);
+    expect(await prismaA.costEvent.count()).toBe(eventsBefore);
+  });
+
+  it("inactive blank-sourced PRISADKA delete is blocked by conducted DETAIL inventory", async () => {
+    const { world, op } = await seedBlankSourcedPrisadkaThenDetailInventory({
+      active: false,
+      suffix: `inact-del-${seq}`,
+      qty: 10,
+    });
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(INVENTORY_BOUNDARY);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
+    expect(await detailBucketQty(world.detail.id, true, false)).toBe(10);
+    expect(await blankQty(world.material.id)).toBe(0);
+  });
+
+  it("active blank-sourced PRISADKA correction is blocked by conducted DETAIL inventory", async () => {
+    const { world, op } = await seedBlankSourcedPrisadkaThenDetailInventory({
+      active: true,
+      suffix: `act-corr-${seq}`,
+      qty: 10,
+    });
+    const destBefore = await prismaA.detailStock.findUniqueOrThrow({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId: world.detail.id,
+          torcevayaDone: true,
+          ploskostDone: false,
+        },
+      },
+    });
+    const blankBefore = await prismaA.blankStock.findUniqueOrThrow({
+      where: {
+        materialId_lengthM_detailType_sort: {
+          materialId: world.material.id,
+          lengthM: new Prisma.Decimal("1.8000"),
+          detailType: "POLKA",
+          sort: "SORT1",
+        },
+      },
+    });
+    await expect(updateProductionLineQuantity(op.id, 0, 1)).rejects.toThrow(INVENTORY_BOUNDARY);
+    const after = await prismaA.productionOperation.findUniqueOrThrow({
+      where: { id: op.id },
+      include: { lines: true },
+    });
+    expect(after.lines.reduce((s, l) => s + l.quantity, 0)).toBe(10);
+    const dest = await prismaA.detailStock.findUniqueOrThrow({ where: { id: destBefore.id } });
+    const blank = await prismaA.blankStock.findUniqueOrThrow({ where: { id: blankBefore.id } });
+    expect(dest.quantity).toBe(10);
+    expect(blank.quantity).toBe(0);
+    expect(dest.costVersion).toBe(destBefore.costVersion);
+    expect(blank.costVersion).toBe(blankBefore.costVersion);
   });
 });

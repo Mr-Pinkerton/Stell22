@@ -35,6 +35,7 @@ import {
   assertInventoryBoundary,
   blankSpecSortKey,
   blankSpecToInventoryRefs,
+  collectPrisadkaRefs,
   lockDetails,
   prisadkaDestFlags,
   uniqueSortedBlankSpecs,
@@ -699,21 +700,7 @@ async function reverseActivePrisadkaLines(
     }
   }
 
-  const refs = [];
-  for (const line of lines) {
-    if (line.sourceIsBlank && line.blankMaterialId && line.blankLengthM != null && line.blankType && line.blankSort) {
-      refs.push(
-        ...(await blankSpecToInventoryRefs(tx, {
-          materialId: line.blankMaterialId,
-          lengthM: line.blankLengthM,
-          detailType: line.blankType,
-          sort: line.blankSort,
-        })),
-      );
-    } else if (line.detailId) {
-      refs.push({ refType: "DETAIL" as const, refId: line.detailId });
-    }
-  }
+  const refs = await collectPrisadkaRefs(tx, lines);
 
   const blankIds = await ensureAndLockActiveBlankPools(tx, uniqueSortedBlankSpecs(sourceBlanks));
   await createMissingActiveDetailPoolRows(tx, sourceDetails);

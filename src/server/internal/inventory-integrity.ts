@@ -361,7 +361,7 @@ export async function assertTorcovkaBlankInventoryBoundary(
   await assertInventoryBoundary(tx, occurredAt, refs);
 }
 
-async function collectPrisadkaRefs(
+export async function collectPrisadkaRefs(
   tx: Prisma.TransactionClient,
   lines: PrisadkaReverseLine[],
 ): Promise<InventoryRef[]> {
