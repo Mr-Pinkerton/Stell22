@@ -94,7 +94,7 @@ export async function ensureAndLockActiveBlankPools(
   return byKey;
 }
 
-async function lockExistingActiveBlankPools(
+export async function lockExistingActiveBlankPools(
   tx: Prisma.TransactionClient,
   specs: Iterable<BlankSpec>,
 ): Promise<Map<string, string>> {

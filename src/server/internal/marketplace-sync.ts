@@ -9,6 +9,8 @@ import {
   retryOnceOnSyncDeadlock,
   type SupplyKey,
 } from "@/server/internal/supply-deduct";
+import { COST_FLOW_QTY_ONLY_WRITER } from "@/server/internal/cost-flow-pools";
+import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import {
   formatMpSyncMessage,
   mpSyncLogLevel,
@@ -592,6 +594,7 @@ export async function syncMarketplacesAsUserInternal(userId: string): Promise<Sy
       });
       for (const row of rows) {
         if (row.productId && row.deductedQty > 0) {
+          if (await isCostFlowActive(tx)) throw new Error(COST_FLOW_QTY_ONLY_WRITER);
           await tx.$queryRaw`
             SELECT id FROM "ProductStock" WHERE "productId" = ${row.productId} FOR UPDATE
           `;

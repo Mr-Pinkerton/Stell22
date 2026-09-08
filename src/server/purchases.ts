@@ -31,6 +31,7 @@ import {
   lotIsConsumed,
   reallocateUnconsumedRailLotValuesInTx,
 } from "@/server/internal/cost-flow-raw";
+import { applyActiveSimplePurchaseReceipt } from "@/server/internal/cost-flow-downstream";
 import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import type { Material, NomenclatureItem, RailType, Sort } from "@/types/domain";
 
@@ -578,12 +579,20 @@ export async function createSimplePurchase(values: SimplePurchaseFormValues): Pr
         purchaseDate: parseDate(values.purchaseDate),
       },
     });
-    // Приход на склад крепежа/упаковки/разного.
-    await tx.nomenclatureStock.upsert({
-      where: { nomenclatureId: values.nomenclatureId },
-      create: { nomenclatureId: values.nomenclatureId, quantity: qty },
-      update: { quantity: { increment: qty } },
-    });
+    if (await isCostFlowActive(tx)) {
+      await applyActiveSimplePurchaseReceipt(
+        tx,
+        values.nomenclatureId,
+        qty,
+        values.unitPrice ?? 0,
+      );
+    } else {
+      await tx.nomenclatureStock.upsert({
+        where: { nomenclatureId: values.nomenclatureId },
+        create: { nomenclatureId: values.nomenclatureId, quantity: qty },
+        update: { quantity: { increment: qty } },
+      });
+    }
     return purchase;
   });
   await writeChangeLog({

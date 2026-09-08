@@ -1,5 +1,7 @@
 import type { Prisma } from "@prisma/client";
 import { allocate, isReady, requiredPrisadki } from "@/lib/detail-stock";
+import { applyActivePrisadkaPicks, applyActiveUpakovkaPrepared } from "@/server/internal/cost-flow-downstream";
+import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import {
   lockDetails,
   prepareUpakovkaReverse,
@@ -9,6 +11,30 @@ import {
 import type { RailType, Sort } from "@/types/domain";
 
 export async function applyPrisadkaPick(
+  tx: Prisma.TransactionClient,
+  operationId: string,
+  detailId: string,
+  kind: "torcev" | "plosk",
+  quantity: number,
+): Promise<void> {
+  await applyPrisadkaPicks(tx, operationId, [{ detailId, kind, quantity }]);
+}
+
+export async function applyPrisadkaPicks(
+  tx: Prisma.TransactionClient,
+  operationId: string,
+  picks: Array<{ detailId: string; kind: "torcev" | "plosk"; quantity: number }>,
+): Promise<void> {
+  if (await isCostFlowActive(tx)) {
+    await applyActivePrisadkaPicks(tx, operationId, picks);
+    return;
+  }
+  for (const pick of picks) {
+    await applyInactivePrisadkaPick(tx, operationId, pick.detailId, pick.kind, pick.quantity);
+  }
+}
+
+async function applyInactivePrisadkaPick(
   tx: Prisma.TransactionClient,
   operationId: string,
   detailId: string,
@@ -204,6 +230,10 @@ export async function applyUpakovkaPrepared(
   quantity: number,
   prepared: PreparedUpakovkaApply,
 ): Promise<void> {
+  if (await isCostFlowActive(tx)) {
+    await applyActiveUpakovkaPrepared(tx, operationId, quantity, prepared);
+    return;
+  }
   const neededByDetail = new Map<string, number>();
   const byId = new Map(prepared.details.map((d) => [d.detailId, d]));
   for (const pd of prepared.details) {

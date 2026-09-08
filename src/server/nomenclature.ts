@@ -9,6 +9,9 @@ import type {
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
+import { COST_FLOW_QTY_ONLY_WRITER } from "@/server/internal/cost-flow-pools";
+import { isCostFlowActive } from "@/server/internal/cost-flow-state";
+import { lockDetails } from "@/server/internal/inventory-integrity";
 import {
   assertUniqueActiveSkus,
   throwFriendlyActiveSkuConflict,
@@ -226,17 +229,25 @@ export async function deleteDetail(id: string): Promise<void> {
   if (usedInProduct > 0) {
     throw new Error("Нельзя удалить: деталь входит в изделие. Используйте «В архив».");
   }
-  const before = await prisma.detail.findUnique({ where: { id } });
-  if (!before) throw new Error("Деталь не найдена");
 
-  await prisma.$transaction([
-    prisma.detailStock.deleteMany({ where: { detailId: id } }),
-    prisma.detail.delete({ where: { id } }),
-  ]);
-  await writeChangeLog({
-    entity: "Detail",
-    entityId: id,
-    oldValues: { name: before.name, status: before.status },
+  await prisma.$transaction(async (tx) => {
+    await lockDetails(tx, [id]);
+    const before = await tx.detail.findUnique({ where: { id } });
+    if (!before) throw new Error("Деталь не найдена");
+    if (await isCostFlowActive(tx)) {
+      const stock = await tx.detailStock.findFirst({ where: { detailId: id } });
+      if (stock) throw new Error(COST_FLOW_QTY_ONLY_WRITER);
+    }
+    await tx.detailStock.deleteMany({ where: { detailId: id } });
+    await tx.detail.delete({ where: { id } });
+    await writeChangeLog(
+      {
+        entity: "Detail",
+        entityId: id,
+        oldValues: { name: before.name, status: before.status },
+      },
+      tx,
+    );
   });
   revalidatePath(PATH);
 }

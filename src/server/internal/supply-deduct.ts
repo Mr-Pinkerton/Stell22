@@ -1,5 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { computeSupplyDeduction } from "@/lib/supply-stock";
+import { PRODUCTION_COST_FLOW_KEY, parseProductionCostFlowValue } from "@/server/internal/cost-flow-state";
+import { COST_FLOW_QTY_ONLY_WRITER } from "@/server/internal/cost-flow-pools";
 
 export type SupplyDb = {
   $queryRaw: Prisma.TransactionClient["$queryRaw"];
@@ -137,6 +139,13 @@ export async function applySupplyDeduction(
   });
 
   if (toRemove > 0) {
+    const settingRows = await db.$queryRaw<Array<{ value: unknown }>>`
+      SELECT value FROM "Setting" WHERE key = ${PRODUCTION_COST_FLOW_KEY}
+    `;
+    if (settingRows[0]) {
+      const parsed = parseProductionCostFlowValue(settingRows[0].value);
+      if (parsed.active) throw new Error(COST_FLOW_QTY_ONLY_WRITER);
+    }
     const updated = await db.productStock.updateMany({
       where: { productId, quantity: { gte: toRemove } },
       data: { quantity: { decrement: toRemove } },

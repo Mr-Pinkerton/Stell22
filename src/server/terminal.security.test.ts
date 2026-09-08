@@ -62,6 +62,7 @@ vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: vi.fn() }));
 vi.mock("@/server/internal/cost", () => ({ archiveBatchIfDepleted: vi.fn() }));
 vi.mock("@/server/internal/production-reversal", () => ({
   applyPrisadkaPick: vi.fn(),
+  applyPrisadkaPicks: vi.fn(),
   applyUpakovkaPick: vi.fn(),
   applyUpakovkaPrepared: vi.fn(),
 }));

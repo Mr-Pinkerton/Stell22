@@ -8,6 +8,11 @@ import { requireAdmin } from "@/server/session";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { lockBatches, lockProductionOperations, lockRailLots } from "@/server/internal/finance-operations";
 import {
+  correctActivePrisadkaLine,
+  reverseActivePrisadkaOperation,
+  reverseActiveUpakovkaOperation,
+} from "@/server/internal/cost-flow-downstream";
+import {
   correctActiveTorcovkaLineQuantityInTx,
   correctActiveTorcovkaRailsTakenInTx,
   reverseActiveTorcovkaStockInTx,
@@ -28,6 +33,7 @@ import {
   preparePrisadkaReverse,
   prepareTorcovkaBlankMutation,
   prepareUpakovkaEdit,
+  snapshotUpakovkaApply,
   type BlankSpec,
 } from "@/server/internal/inventory-integrity";
 import { operationEarning, operationRatesFromSnapshots } from "@/lib/payroll";
@@ -260,24 +266,36 @@ export async function updateProductionLineQuantity(
         tx.operationDetailLine.findMany({ where: { operationId: id } }),
         tx.operationNomenclatureLine.findMany({ where: { operationId: id } }),
       ]);
-      const prepared = await prepareUpakovkaEdit(
-        tx,
-        op.createdAt,
-        op.productId,
-        detailLines,
-        nomenclatureLines,
-      );
-      await reverseUpakovkaOperation(
-        tx,
-        op.productId,
-        oldQty,
-        detailLines,
-        nomenclatureLines,
-        op.createdAt,
-      );
-      await tx.operationDetailLine.deleteMany({ where: { operationId: id } });
-      await tx.operationNomenclatureLine.deleteMany({ where: { operationId: id } });
-      await applyUpakovkaPrepared(tx, id, newQtyInt, prepared);
+      if (await isCostFlowActive(tx)) {
+        const prepared = await snapshotUpakovkaApply(tx, op.productId);
+        await reverseActiveUpakovkaOperation(tx, {
+          ...op,
+          lines: detailLines,
+          nomenclatureLines,
+        });
+        await tx.operationDetailLine.deleteMany({ where: { operationId: id } });
+        await tx.operationNomenclatureLine.deleteMany({ where: { operationId: id } });
+        await applyUpakovkaPrepared(tx, id, newQtyInt, prepared);
+      } else {
+        const prepared = await prepareUpakovkaEdit(
+          tx,
+          op.createdAt,
+          op.productId,
+          detailLines,
+          nomenclatureLines,
+        );
+        await reverseUpakovkaOperation(
+          tx,
+          op.productId,
+          oldQty,
+          detailLines,
+          nomenclatureLines,
+          op.createdAt,
+        );
+        await tx.operationDetailLine.deleteMany({ where: { operationId: id } });
+        await tx.operationNomenclatureLine.deleteMany({ where: { operationId: id } });
+        await applyUpakovkaPrepared(tx, id, newQtyInt, prepared);
+      }
       await tx.productionOperation.update({ where: { id }, data: { productQty: newQtyInt } });
       await writeChangeLog(
         {
@@ -299,10 +317,19 @@ export async function updateProductionLineQuantity(
       const kind: "torcev" | "plosk" = line.prisadkaTorcevaya ? "torcev" : "plosk";
       if (!line.detailId) throw new Error("Строка присадки без детали");
       const detailId = line.detailId;
-      await preparePrisadkaEdit(tx, op.createdAt, line, newQtyInt);
-      await reversePrisadkaLine(tx, line);
-      await tx.operationDetailLine.delete({ where: { id: line.id } });
-      await applyPrisadkaPick(tx, id, detailId, kind, newQtyInt);
+      if (await isCostFlowActive(tx)) {
+        await correctActivePrisadkaLine({
+          tx,
+          op: { id: op.id, createdAt: op.createdAt, lines: op.lines },
+          lineIndex,
+          newQty: newQtyInt,
+        });
+      } else {
+        await preparePrisadkaEdit(tx, op.createdAt, line, newQtyInt);
+        await reversePrisadkaLine(tx, line);
+        await tx.operationDetailLine.delete({ where: { id: line.id } });
+        await applyPrisadkaPick(tx, id, detailId, kind, newQtyInt);
+      }
       await writeChangeLog(
         {
           entity: "ProductionOperation",
@@ -524,20 +551,28 @@ export async function deleteProductionOperation(id: string): Promise<void> {
         }
       }
     } else if (op.type === "PRISADKA") {
-      await preparePrisadkaReverse(tx, op.createdAt, op.lines);
-      for (const l of op.lines) {
-        await reversePrisadkaLine(tx, l);
+      if (await isCostFlowActive(tx)) {
+        await reverseActivePrisadkaOperation(tx, op);
+      } else {
+        await preparePrisadkaReverse(tx, op.createdAt, op.lines);
+        for (const l of op.lines) {
+          await reversePrisadkaLine(tx, l);
+        }
       }
     } else if (op.type === "UPAKOVKA") {
       if (!op.productId) throw new Error("У операции не указано изделие");
-      await reverseUpakovkaOperation(
-        tx,
-        op.productId,
-        op.productQty ?? 0,
-        op.lines,
-        op.nomenclatureLines,
-        op.createdAt,
-      );
+      if (await isCostFlowActive(tx)) {
+        await reverseActiveUpakovkaOperation(tx, op);
+      } else {
+        await reverseUpakovkaOperation(
+          tx,
+          op.productId,
+          op.productQty ?? 0,
+          op.lines,
+          op.nomenclatureLines,
+          op.createdAt,
+        );
+      }
     }
 
     await tx.operationDetailLine.deleteMany({ where: { operationId: id } });

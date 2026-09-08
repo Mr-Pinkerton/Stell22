@@ -14,7 +14,7 @@ import { writeChangeLog } from "@/server/change-log";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { archiveBatchIfDepleted } from "@/server/internal/cost";
 import {
-  applyPrisadkaPick,
+  applyPrisadkaPicks,
   applyUpakovkaPrepared,
 } from "@/server/internal/production-reversal";
 import {
@@ -1059,9 +1059,7 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
         },
       });
 
-      for (const pick of picks) {
-        await applyPrisadkaPick(tx, op.id, pick.detailId, pick.kind, pick.quantity);
-      }
+      await applyPrisadkaPicks(tx, op.id, picks);
 
       await writeChangeLog(
         {

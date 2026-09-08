@@ -19,6 +19,11 @@ import type { Detail } from "@/types/domain";
 import type { ProductionStockRow, DetailStockRow } from "@/lib/warehouse-stock";
 import { inventoryDeviation, inventoryDeviationSum } from "@/lib/warehouse-stock";
 import {
+  applyActiveInventoryConduct,
+  lockActiveInventoryWriteSet,
+} from "@/server/internal/cost-flow-downstream";
+import { isCostFlowActive } from "@/server/internal/cost-flow-state";
+import {
   ALREADY_CONDUCTED,
   DRAFT_ALREADY_EXISTS,
   assertLiveEqualsAccounted,
@@ -362,10 +367,19 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
       });
       if (!doc) throw new Error("Инвентаризация не найдена");
 
-      await lockInventoryStockRows(tx, doc.lines);
+      const costFlowActive = await isCostFlowActive(tx);
+      if (costFlowActive) {
+        await lockActiveInventoryWriteSet(tx, doc.lines);
+      } else {
+        await lockInventoryStockRows(tx, doc.lines);
+      }
       await assertLiveEqualsAccounted(tx, doc.lines);
 
       const valuation = await getUnitCostSnapshot();
+
+      if (costFlowActive) {
+        await applyActiveInventoryConduct(tx, doc);
+      }
 
       for (const line of doc.lines) {
         const deviation = line.actualQty - line.accountedQty;
@@ -374,61 +388,63 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
           unitCostFromSnapshot(valuation, line.refType, line.refId),
         );
 
-        if (line.refType === "PRODUCT") {
-          await tx.productStock.upsert({
-            where: { productId: line.refId },
-            create: { productId: line.refId, quantity: line.actualQty },
-            update: { quantity: line.actualQty },
-          });
-        } else if (line.refType === "NOMENCLATURE") {
-          await tx.nomenclatureStock.upsert({
-            where: { nomenclatureId: line.refId },
-            create: { nomenclatureId: line.refId, quantity: line.actualQty },
-            update: { quantity: line.actualQty },
-          });
-        } else {
-          const detail = await tx.detail.findUniqueOrThrow({ where: { id: line.refId } });
-          if (!detail.prisadkaTorcevaya && !detail.prisadkaPloskost) {
-            await tx.blankStock.upsert({
-              where: {
-                materialId_lengthM_detailType_sort: {
+        if (!costFlowActive) {
+          if (line.refType === "PRODUCT") {
+            await tx.productStock.upsert({
+              where: { productId: line.refId },
+              create: { productId: line.refId, quantity: line.actualQty },
+              update: { quantity: line.actualQty },
+            });
+          } else if (line.refType === "NOMENCLATURE") {
+            await tx.nomenclatureStock.upsert({
+              where: { nomenclatureId: line.refId },
+              create: { nomenclatureId: line.refId, quantity: line.actualQty },
+              update: { quantity: line.actualQty },
+            });
+          } else {
+            const detail = await tx.detail.findUniqueOrThrow({ where: { id: line.refId } });
+            if (!detail.prisadkaTorcevaya && !detail.prisadkaPloskost) {
+              await tx.blankStock.upsert({
+                where: {
+                  materialId_lengthM_detailType_sort: {
+                    materialId: detail.materialId,
+                    lengthM: detail.lengthM,
+                    detailType: detail.detailType,
+                    sort: detail.sort,
+                  },
+                },
+                create: {
                   materialId: detail.materialId,
                   lengthM: detail.lengthM,
                   detailType: detail.detailType,
                   sort: detail.sort,
+                  quantity: line.actualQty,
                 },
-              },
-              create: {
-                materialId: detail.materialId,
-                lengthM: detail.lengthM,
-                detailType: detail.detailType,
-                sort: detail.sort,
-                quantity: line.actualQty,
-              },
-              update: { quantity: line.actualQty },
-            });
-          } else {
-            const existing = await tx.detailStock.findMany({
-              where: { detailId: line.refId },
-              select: { torcevayaDone: true, ploskostDone: true },
-            });
-            for (const w of normalizeReadyBuckets(detail, existing, line.actualQty)) {
-              await tx.detailStock.upsert({
-                where: {
-                  detailId_torcevayaDone_ploskostDone: {
+                update: { quantity: line.actualQty },
+              });
+            } else {
+              const existing = await tx.detailStock.findMany({
+                where: { detailId: line.refId },
+                select: { torcevayaDone: true, ploskostDone: true },
+              });
+              for (const w of normalizeReadyBuckets(detail, existing, line.actualQty)) {
+                await tx.detailStock.upsert({
+                  where: {
+                    detailId_torcevayaDone_ploskostDone: {
+                      detailId: line.refId,
+                      torcevayaDone: w.torcevayaDone,
+                      ploskostDone: w.ploskostDone,
+                    },
+                  },
+                  create: {
                     detailId: line.refId,
                     torcevayaDone: w.torcevayaDone,
                     ploskostDone: w.ploskostDone,
+                    quantity: w.quantity,
                   },
-                },
-                create: {
-                  detailId: line.refId,
-                  torcevayaDone: w.torcevayaDone,
-                  ploskostDone: w.ploskostDone,
-                  quantity: w.quantity,
-                },
-                update: { quantity: w.quantity },
-              });
+                  update: { quantity: w.quantity },
+                });
+              }
             }
           }
         }
