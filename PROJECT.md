@@ -171,39 +171,53 @@ Known remaining activation audit candidate from previous work:
 
 UPAKOVKA correction may need inventory-boundary coverage for current BOM references (`old ∪ current refs`). It must be proven/classified in the audit lane before becoming a fix.
 
-## 11. Previous reported AUDIT 1
+## 11. Local audit recovery
+
+Status: `COMPLETE`
+
+Local STEP 0 recovery (`audit/00-local-audit-recovery.md`) and STEP 0.5 canonicalization:
+
+- `08.01-audit-1-system-architecture.md` did **not** exist on this PC (repo, worktrees, temp, Cursor folders, stash, reflog, unreachable objects). Status: `NOT PREVIOUSLY CREATED / RERUN REQUIRED`.
+- 39 audit markdown files were in `/audit` before canonicalization (35 tracked; four `02.xx` untracked canonical candidates).
+- The four recovered files are now part of the canonical tree: `audit/02.01-torcovka-terminal-ui-review.md`, `audit/02.02-torcovka-terminal-ui-plan.md`, `audit/02.03-terminal-functional-ux-review.md`, `audit/02.05-terminal-ui-commit-regression-review.md`.
+- Conflicting current audit documents: **0**.
+- Independent lost Stell22 clone: **none**.
+- Historical copies, patches, and review bundles are **not** source of truth. See recovery report. Do not treat them as living findings.
+
+## 12. Previous reported AUDIT 1
 
 A previous Cursor session reported:
 
 `audit/08.01-audit-1-system-architecture.md`
 
-but that file was not present on GitHub `main`, and the reported audit BASE SHA could not be verified in GitHub.
+Recovery searched for it and did not find it. It was also absent from GitHub `main`.
 
 Status:
 
-`UNVERIFIED HISTORICAL DRAFT / NOT CANONICAL`
+`NOT PREVIOUSLY CREATED / RERUN REQUIRED`
 
-Do not continue the formal audit from that result. It may be used only as a source of hypotheses if later recovered.
+Do not restore or invent that file from memory. Rerun AUDIT 1 against actual current `main`. Existing `audit/00*`–`audit/03*` documents are prior evidence, not a substitute for AUDIT 1. `audit/03.02-production-cost-flow-architecture.md` is cost-flow architecture only.
 
-## 12. Current next step
+## 13. Current next step
 
-`NEXT`
+`NEXT = AUDIT 1 — SYSTEM ARCHITECTURE`
 
-Rerun **AUDIT 1 — SYSTEM ARCHITECTURE** in Cursor against the actual current `main`.
+Whole-system architecture. New document (do **not** write it in the canonicalization commit):
+
+`audit/08.01-audit-1-system-architecture.md`
 
 Constraints:
 
-- audit-only;
-- do not modify application code;
+- audit-only; do not modify application code in that pass;
 - do not turn findings into patches automatically;
-- verify actual HEAD and clean/dirty state first;
-- compare against existing `audit/00-*`, `01.*`, `02.*`, `03.*` documents so closed work is not rediscovered as new;
+- BASE = actual current `main` application checkpoint (`d9f940e8540801bdb27dd72210193f5e4ab038c3` unless newer **code** has landed);
+- use existing `audit/00-*`, `01.*`, `02.*`, `03.*` as prior evidence;
+- do not reopen closed findings without new evidence;
 - write the result to `audit/08.01-audit-1-system-architecture.md`;
+- update `audit/AUDIT-INDEX.md` in the same cycle;
 - do not commit/push until ChatGPT reviews the report unless the owner explicitly changes this workflow.
 
-After ChatGPT review, correct the audit artifact if necessary, then commit/push the audit documents and update `audit/AUDIT-INDEX.md`.
-
-## 13. Journal update rule
+## 14. Journal update rule
 
 After every significant delivery action record:
 
