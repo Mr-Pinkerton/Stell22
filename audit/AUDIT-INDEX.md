@@ -15,10 +15,10 @@ Do not import Woodveri door-manufacturing entities or workflows.
 | --- | --- |
 | Repository | `Mr-Pinkerton/Stell22` |
 | Branch | `main` |
-| Application-code checkpoint | `d9f940e8540801bdb27dd72210193f5e4ab038c3` — `fix: enforce prisadka inventory boundary` |
-| Docs checkpoint on `origin/main` | `d1f46e46232499b61f55e754b0bd70ddc5924bca` (canonicalize). AUDIT 1 finalization commit follows in this cycle. |
+| Application-code checkpoint | `3608b36bd324a5118f4ba5b1bbb21462cc0723d9` — `fix: block generic torcovka delete` (containment). Prior app checkpoint `d9f940e` remains the last pre-incident-containment code. |
+| Docs checkpoint on `origin/main` | forensics `c1cc3c6`; containment application `3608b36`. Post-deploy docs follow in this cycle. |
 | Audit program | STEP 0 recovery **COMPLETE**. **AUDIT 1 = COMPLETE / REVIEWED.** Next after INC-001: **AUDIT 2 — FINANCE & MONEY INTEGRITY**. |
-| Production incident | **`INC-001` = `OPEN — PHYSICAL FACT REQUIRED BEFORE PROD CORRECTION`**. Finding **`INC-001-F1` P1 / CONFIRMED**. `ARCH-P1-001` unrelated. Ops rule: do not delete TORCOVKA. No prod data write. |
+| Production incident | **`INC-001` = `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`**. Finding **`INC-001-F1` P1 / CONFIRMED**. Generic TORCOVKA delete `CONTAINED IN PRODUCTION`. Package data **not** corrected. `ARCH-P1-001` unrelated. |
 | `production_cost_flow` | inactive (delivery state; see `PROJECT.md`) |
 
 Always verify current `main` HEAD before relying on SHAs above.
@@ -148,7 +148,7 @@ No `audit/01.16*` or `audit/01.17*`.
 
 | File | Area | Type | BASE/Snapshot | Status | Canonical? | Notes |
 | ---- | ---- | ---- | ------------- | ------ | ---------- | ----- |
-| `audit/INC-001-torcovka-whole-package-production-incident.md` | TORCOVKA / RailLot | Production incident | Prod HEAD `d9f940e`; `origin/main` `b08b98b`; DB read-only 2026-09-09 | `OPEN — PHYSICAL FACT REQUIRED BEFORE PROD CORRECTION` | YES | Deleted op; remaining=0. Downstream NONE. Scenarios A/B designed, not implemented. Finding `INC-001-F1` P1. Employee not recoverable. |
+| `audit/INC-001-torcovka-whole-package-production-incident.md` | TORCOVKA / RailLot | Production incident | Prod HEAD `3608b36`; main CI `34357390695`; deploy `34357726641` | `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION` | YES | Generic delete contained. Package `ПАК-40-1280-01-7` remaining=0 unchanged. Scenarios A/B not implemented. `INC-001-F1` P1. |
 
 ---
 
@@ -211,11 +211,11 @@ BASE repo: `d1f46e46232499b61f55e754b0bd70ddc5924bca`. Application: `d9f940e8540
 
 ### INC-001 — TORCOVKA whole-package production incident
 
-Status: `OPEN — PHYSICAL FACT REQUIRED BEFORE PROD CORRECTION`
+Status: `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`
 
 Artifact: `audit/INC-001-torcovka-whole-package-production-incident.md`
 
-Finding: `INC-001-F1` (P1) — after TORCOVKA delete, no application path to restore falsely consumed `RailLot`. Downstream NONE. Correction Scenario A (physical remaining only) vs B (restore rails + 3843 blanks) designed, not implemented. Employee not recoverable from DB/logs. No production mutation.
+Finding: `INC-001-F1` (P1) — after TORCOVKA delete, no application path to restore falsely consumed `RailLot`. Generic delete path is now `CONTAINED IN PRODUCTION` (`3608b36`). Proper `cancelErroneousTorcovka` `NOT IMPLEMENTED`. Damaged package `NOT CORRECTED`. Scenario A vs B still requires physical facts. Employee not recoverable.
 
 ### AUDIT 2 — FINANCE & MONEY INTEGRITY
 

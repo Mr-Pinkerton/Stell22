@@ -1,8 +1,10 @@
 # INC-001 — TORCOVKA whole-package production incident
 
-Status: `OPEN — PHYSICAL FACT REQUIRED BEFORE PROD CORRECTION`
+Status: `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`
 
 Confirmed finding: `INC-001-F1 — TORCOVKA correction semantics after delete — P1 / CONFIRMED`
+
+Containment: `DEPLOYED / VERIFIED` — generic TORCOVKA delete is rejected in production before any mutation. Damaged package data is **not** corrected. `cancelErroneousTorcovka` is **not** implemented.
 
 `ARCH-P1-001` is **unrelated** (UPAKOVKA quantity-edit inventory boundary). Do not conflate.
 
@@ -10,27 +12,31 @@ AUDIT 1 remains `COMPLETE / REVIEWED`. AUDIT 2 remains `NEXT AFTER INC-001`.
 
 Date: 2026-09-09
 
-Production data: **not corrected** in this document cycle. Forensics + correction design. No SQL UPDATE/DELETE, no restore, no deploy of application containment in the docs checkpoint.
+Production data: **not corrected**. Forensics + correction design remain. Application containment is deployed; do not treat that as Scenario A/B.
 
 | | |
 | --- | --- |
 | Worktree | `D:/dev/St-torcovka-incident` |
 | Branch | `fix/torcovka-production-incident` |
-| Docs BASE | `b08b98b5f67f7568a18f090c54b362f01c3426ff` |
-| Prod app HEAD | `d9f940e8540801bdb27dd72210193f5e4ab038c3` |
-| Prod DB | `stell22` on VPS, read-only forensics |
+| Docs BASE (forensics checkpoint) | `c1cc3c628e24cbcc6ee8cd290ac361c613e49b9b` |
+| Application containment SHA | `3608b36bd324a5118f4ba5b1bbb21462cc0723d9` |
+| `origin/main` after containment | same as application SHA |
+| Prod app HEAD | `3608b36bd324a5118f4ba5b1bbb21462cc0723d9` |
+| Prod DB | `stell22` on VPS |
 | `production_cost_flow` | **absent** → inactive |
-| Mutations | **NONE** |
+| Schema / migration this deploy | **NO** (`No pending migrations to apply`; last = `20260907223000_cost_flow_foundation_constraints`; count = 37) |
+| Bootstrap | **NOT APPLIED** |
+| Production data correction | **NO** |
 
 | | |
 | --- | --- |
 | Worktree | `D:/dev/St-torcovka-incident` |
 | Branch | `fix/torcovka-production-incident` |
-| `origin/main` | `b08b98b5f67f7568a18f090c54b362f01c3426ff` |
-| Prod app HEAD | `d9f940e8540801bdb27dd72210193f5e4ab038c3` |
-| Prod DB | `stell22` on VPS, `SET TRANSACTION READ ONLY` / `SHOW transaction_read_only = on` |
-| `production_cost_flow` | **absent** → inactive (`isCostFlowActive` = false) |
-| Mutations | **NONE** |
+| Containment reviews | ChatGPT exact-diff PASS; Claude adversarial #1 PASS; smoke fix; isolated smoke/integrity PASS; Claude adversarial #2 PASS |
+| Main CI | run `34357390695` SUCCESS on `3608b36` |
+| Production Deploy | run `34357726641` SUCCESS; resolve-sha / CI / deploy / remote preflight / health = `3608b36` |
+| Public health | `https://stell22.ru/api/health` → `{"status":"ok","db":"up"}` |
+| Damaged package after deploy | `ПАК-40-1280-01-7` `quantity=1280` `remainingQuantity=0` (READ ONLY; unchanged) |
 
 ---
 
@@ -541,21 +547,51 @@ Not `ARCH-P1-001`. Not a reopen of DI-020 (high-waste guard; already on `main`).
 | Classification | `CONFIRMED` (production impact) / `NEEDS BUSINESS DECISION` on generic delete vs dedicated cancel |
 | Severity | **P1** — live package `ПАК-40-1280-01-7` is missing from terminal; batch waste displays ~100% of consumed metres; `correctTorcovkaRailsTaken` cannot run |
 | Impact | Inventory / production flow / waste reporting. Not money freeze (`frozenAt` null, cost flow inactive). |
-| Remediation | Incident Scenario A or B (one-off) first; optional later distinct cancel-erroneous verb. Do not silently invert INV-047. |
+| Generic TORCOVKA delete path | `CONTAINED IN PRODUCTION` (`3608b36`) — `deleteProductionOperation` rejects TORCOVKA before any mutation |
+| Erroneous-cancellation workflow | `NOT IMPLEMENTED` |
+| Damaged package data | `NOT CORRECTED` |
+| Remediation | Incident Scenario A or B (one-off) still required; optional later distinct cancel-erroneous verb. Do not silently invert INV-047. |
 
 ---
 
-## 19. Design pass (this document revision)
+## 19. Design pass (docs checkpoint `c1cc3c6`)
 
 | Action | Result |
 | ------ | ------ |
 | Prod mutations | NONE |
-| Application code | NOT CHANGED |
+| Application code | NOT CHANGED at that checkpoint |
 | PROJECT.md | YES (priority INC-001; AUDIT 2 deferred) |
-| Commit | NO |
-| Push | NO |
-| Deploy | NO |
+| Commit | `c1cc3c6` docs |
+| Push | YES (docs on incident branch / then main) |
+| Deploy | NO (docs only) |
 
-Status: `OPEN — PHYSICAL FACT REQUIRED BEFORE PROD CORRECTION`
+## 20. Containment deploy (`3608b36`) — `DEPLOYED / VERIFIED`
 
-Next: owner/factory answers the three physical facts; ChatGPT reviews Scenario A vs B before any production write.
+| | |
+| --- | --- |
+| Application commit | `3608b36bd324a5118f4ba5b1bbb21462cc0723d9` `fix: block generic torcovka delete` |
+| Main | same SHA (fast-forward from `b08b98b`) |
+| ChatGPT exact diff | PASS |
+| Claude adversarial #1 | PASS (MEDIUM: smoke script; then fixed) |
+| Isolated smoke | PASS on `localhost:5434 / stell22_smoke` |
+| Full integrity | 16 files / 222 passed on `localhost:5434 / stell22_integrity` |
+| Claude adversarial #2 | PASS on final diff |
+| GitHub main CI | run `34357390695` SUCCESS |
+| Production Deploy | run `34357726641` SUCCESS |
+| Production running SHA | `3608b36bd324a5118f4ba5b1bbb21462cc0723d9` |
+| Public health | `https://stell22.ru/api/health` `status=ok` `db=up` |
+| Schema / migration | unchanged; entrypoint `No pending migrations to apply` |
+| `production_cost_flow` | ABSENT / INACTIVE |
+| Bootstrap | NOT APPLIED |
+| Production data correction | NO |
+| `ПАК-40-1280-01-7` | `quantity=1280` `remainingQuantity=0` (READ ONLY, unchanged) |
+
+INC-001 overall: `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`
+
+Current next step still requires:
+
+1. physical remaining rails in `ПАК-40-1280-01-7`;
+2. whether 3843 × 0.36 m SORT1 blanks physically existed;
+3. employee identity if Scenario B is required.
+
+`AUDIT 2 — FINANCE & MONEY INTEGRITY` remains `NEXT AFTER INC-001`. Do not start it yet.

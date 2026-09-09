@@ -44,11 +44,15 @@ Repository: `Mr-Pinkerton/Stell22`
 
 Branch: `main`
 
-Last verified code checkpoint before recovery-document commits:
+Last verified production application SHA:
 
-`d9f940e8540801bdb27dd72210193f5e4ab038c3`
+`3608b36bd324a5118f4ba5b1bbb21462cc0723d9`
 
-`fix: enforce prisadka inventory boundary`
+`fix: block generic torcovka delete` (INC-001 containment)
+
+Prior code checkpoint before this incident:
+
+`d9f940e8540801bdb27dd72210193f5e4ab038c3` — `fix: enforce prisadka inventory boundary`
 
 Package 3.1 code state at that checkpoint:
 
@@ -69,7 +73,7 @@ Always establish current HEAD before starting new work because documentation com
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status.**
 
-**Current priority:** `INC-001 — TORCOVKA production incident` (`OPEN — PHYSICAL FACT REQUIRED BEFORE PROD CORRECTION`).
+**Current priority:** `INC-001 — TORCOVKA production incident` (`OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`).
 
 `AUDIT 2 — FINANCE & MONEY INTEGRITY` is `NEXT AFTER INC-001`. Do not start AUDIT 2 while INC-001 needs physical facts and a reviewed correction.
 
@@ -85,7 +89,7 @@ Reason: generic TORCOVKA delete reverses produced `BlankStock` but **intentional
 
 Correction of a **live** TORCOVKA must use existing correction actions (`correctTorcovkaRailsTaken`, line quantity edit), not delete.
 
-This rule is operational. Application containment (server reject of generic TORCOVKA delete) is a separate patch after docs checkpoint + review. Do not treat the rule as a production-data fix.
+This rule remains operational. Application containment is now **deployed in production** (`3608b36`): the server rejects generic TORCOVKA delete before any mutation. That does **not** restore `ПАК-40-1280-01-7` and does **not** implement `cancelErroneousTorcovka`. Do not treat containment as a production-data fix.
 
 `ARCH-P1-001` is unrelated.
 
@@ -242,7 +246,9 @@ ChatGPT adversarial review of the 08.01 draft: **accepted**. Recovery had record
 
 ## 13. Current next step
 
-`NEXT = INC-001 — owner/factory physical facts, then ChatGPT review of Scenario A vs B before any production write`
+`NEXT = INC-001 — owner/factory physical facts, then ChatGPT review of Scenario A vs B before any production-data correction`
+
+Containment of generic TORCOVKA delete is already in production (`3608b36`). Do not start AUDIT 2.
 
 Required before any prod mutation:
 
@@ -301,3 +307,21 @@ After every significant delivery action record:
 | Deploy | **NO** |
 | Activation | unchanged / `BLOCKED` |
 | Next | **Physical facts → reviewed Scenario A or B.** AUDIT 2 after INC-001. |
+
+## 17. Journal — INC-001 containment deploy
+
+| | |
+| --- | --- |
+| Date | 2026-09-09 |
+| Stage | INC-001 application containment |
+| BASE | docs `c1cc3c628e24cbcc6ee8cd290ac361c613e49b9b`; main before `b08b98b5f67f7568a18f090c54b362f01c3426ff` |
+| Result | Generic TORCOVKA delete rejected before mutation. SHA `3608b36bd324a5118f4ba5b1bbb21462cc0723d9`. |
+| Reviews | ChatGPT PASS; Claude #1 PASS; smoke fix; isolated smoke/integrity PASS; Claude #2 PASS |
+| Main CI | `34357390695` SUCCESS |
+| Deploy | Production Deploy `34357726641` SUCCESS; health OK; running SHA `3608b36` |
+| Schema / migration | NO change; `No pending migrations to apply` |
+| `production_cost_flow` | unchanged / INACTIVE (ABSENT) |
+| Bootstrap | NOT APPLIED |
+| Production data correction | NO |
+| Damaged package | `ПАК-40-1280-01-7` remaining=0 unchanged |
+| Next | Physical facts → Scenario A/B. AUDIT 2 after INC-001. |
