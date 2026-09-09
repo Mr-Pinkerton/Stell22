@@ -104,7 +104,13 @@ function nomenclatureColumns(showMin: boolean): Column<ProductionStockRow>[] {
   return cols;
 }
 
-export function WarehouseProductionTab({ stock }: { stock: WarehouseStock }) {
+export function WarehouseProductionTab({
+  stock,
+  sourceStock = stock,
+}: {
+  stock: WarehouseStock;
+  sourceStock?: WarehouseStock;
+}) {
   const [activeTab, setActiveTab] = useState<ProductionTab>("products");
 
   const productRows = stock.products;
@@ -112,6 +118,8 @@ export function WarehouseProductionTab({ stock }: { stock: WarehouseStock }) {
   const fastenerRows = stock.fasteners;
   const packagingRows = stock.packaging;
   const otherRows = stock.other;
+
+  const filterEmpty = "Нет строк по выбранным фильтрам";
 
   return (
     <div className="space-y-4">
@@ -128,7 +136,7 @@ export function WarehouseProductionTab({ stock }: { stock: WarehouseStock }) {
             <DataTable
               columns={productColumns}
               rows={productRows}
-              empty="Изделий нет"
+              empty={sourceStock.products.length === 0 ? "Изделий нет" : filterEmpty}
               padded
               className="border-0"
             />
@@ -137,7 +145,7 @@ export function WarehouseProductionTab({ stock }: { stock: WarehouseStock }) {
             <DataTable
               columns={detailColumns}
               rows={detailRows}
-              empty="Деталей нет"
+              empty={sourceStock.details.length === 0 ? "Деталей нет" : filterEmpty}
               padded
               className="border-0"
             />
@@ -146,7 +154,7 @@ export function WarehouseProductionTab({ stock }: { stock: WarehouseStock }) {
             <DataTable
               columns={nomenclatureColumns(true)}
               rows={fastenerRows}
-              empty="Крепежа нет"
+              empty={sourceStock.fasteners.length === 0 ? "Крепежа нет" : filterEmpty}
               padded
               className="border-0"
             />
@@ -155,7 +163,7 @@ export function WarehouseProductionTab({ stock }: { stock: WarehouseStock }) {
             <DataTable
               columns={nomenclatureColumns(true)}
               rows={packagingRows}
-              empty="Упаковки нет"
+              empty={sourceStock.packaging.length === 0 ? "Упаковки нет" : filterEmpty}
               padded
               className="border-0"
             />
@@ -164,7 +172,7 @@ export function WarehouseProductionTab({ stock }: { stock: WarehouseStock }) {
             <DataTable
               columns={nomenclatureColumns(false)}
               rows={otherRows}
-              empty="Позиций нет"
+              empty={sourceStock.other.length === 0 ? "Позиций нет" : filterEmpty}
               padded
               className="border-0"
             />

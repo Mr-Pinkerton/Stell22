@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   filterMpStockRows,
   filterShipmentRows,
+  filterWarehouseProductionStock,
   getDefaultMpTableFilters,
   getDefaultShipmentTableFilters,
   isMpExtraFiltersDefault,
@@ -9,6 +10,7 @@ import {
   WAREHOUSE_FILTER_ALL,
 } from "@/lib/warehouse-table-filters";
 import type { MpStockRow, ShipmentRow } from "@/mocks/warehouse-fixtures";
+import type { DetailStockRow, ProductionStockRow } from "@/lib/warehouse-stock";
 
 const mp: MpStockRow[] = [
   { id: "1", marketplace: "OZON", sku: "ART-001", productName: "Полка настенная", quantity: 28 },
@@ -185,5 +187,81 @@ describe("warehouse extra filter defaults", () => {
       isShipmentExtraFiltersDefault({ ...getDefaultShipmentTableFilters(), status: "SHIPPED" }),
     ).toBe(false);
     expect(isShipmentExtraFiltersDefault(getDefaultShipmentTableFilters())).toBe(true);
+  });
+});
+
+function item(id: string, name: string, extra: Partial<ProductionStockRow> = {}): ProductionStockRow {
+  return { id, name, quantity: 1, ...extra };
+}
+
+function detail(id: string, name: string): DetailStockRow {
+  return { id, name, quantity: 2, ready: 1, pendingPrisadka: 1 };
+}
+
+const productionStock = {
+  products: [
+    item("p1", "Полка настенная", { sku: "ART-001" }),
+    item("p2", "Ящик", { sku: "BOX-2" }),
+  ],
+  details: [detail("d1", "Полка 600"), detail("d2", "Канавка 720")],
+  fasteners: [item("f1", "Саморез 4x40"), item("f2", "Винт М6")],
+  packaging: [item("k1", "Коробка стандарт"), item("k2", "Плёнка")],
+  other: [item("o1", "Перчатки"), item("o2", "Маркер")],
+  blanks: [item("b1", "Сосна · 2.4 м · полка · 1 сорт")],
+};
+
+describe("filterWarehouseProductionStock", () => {
+  it("products: name, SKU, case-insensitive, trim", () => {
+    expect(filterWarehouseProductionStock(productionStock, "настенная").products.map((r) => r.id)).toEqual(["p1"]);
+    expect(filterWarehouseProductionStock(productionStock, "art-001").products.map((r) => r.id)).toEqual(["p1"]);
+    expect(filterWarehouseProductionStock(productionStock, "  ЯЩИК  ").products.map((r) => r.id)).toEqual(["p2"]);
+  });
+
+  it("details: name", () => {
+    expect(filterWarehouseProductionStock(productionStock, "канавка").details.map((r) => r.id)).toEqual(["d2"]);
+  });
+
+  it("fasteners: name", () => {
+    expect(filterWarehouseProductionStock(productionStock, "винт").fasteners.map((r) => r.id)).toEqual(["f2"]);
+  });
+
+  it("packaging: name", () => {
+    expect(filterWarehouseProductionStock(productionStock, "коробка").packaging.map((r) => r.id)).toEqual(["k1"]);
+  });
+
+  it("other: name", () => {
+    expect(filterWarehouseProductionStock(productionStock, "перчат").other.map((r) => r.id)).toEqual(["o1"]);
+  });
+
+  it("search применяется ко всем пяти visible collections", () => {
+    const next = filterWarehouseProductionStock(productionStock, "полка");
+    expect(next.products.map((r) => r.id)).toEqual(["p1"]);
+    expect(next.details.map((r) => r.id)).toEqual(["d1"]);
+    expect(next.fasteners).toEqual([]);
+    expect(next.packaging).toEqual([]);
+    expect(next.other).toEqual([]);
+    // blanks name contains «полка», but UI/export do not show blanks — same array ref
+    expect(next.blanks).toBe(productionStock.blanks);
+  });
+
+  it("пустой search возвращает те же строки; source не мутируется; blanks без изменений", () => {
+    const snapshot = {
+      products: productionStock.products.map((r) => r.id),
+      details: productionStock.details.map((r) => r.id),
+      fasteners: productionStock.fasteners.map((r) => r.id),
+      packaging: productionStock.packaging.map((r) => r.id),
+      other: productionStock.other.map((r) => r.id),
+      blanks: productionStock.blanks.map((r) => r.id),
+    };
+    const next = filterWarehouseProductionStock(productionStock, "   ");
+    expect(next.products.map((r) => r.id)).toEqual(snapshot.products);
+    expect(next.details.map((r) => r.id)).toEqual(snapshot.details);
+    expect(next.fasteners.map((r) => r.id)).toEqual(snapshot.fasteners);
+    expect(next.packaging.map((r) => r.id)).toEqual(snapshot.packaging);
+    expect(next.other.map((r) => r.id)).toEqual(snapshot.other);
+    expect(next.blanks).toBe(productionStock.blanks);
+
+    next.products.push(item("p-mut", "X"));
+    expect(productionStock.products.map((r) => r.id)).toEqual(snapshot.products);
   });
 });

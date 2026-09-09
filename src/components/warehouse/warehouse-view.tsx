@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import {
   filterMpStockRows,
   filterShipmentRows,
+  filterWarehouseProductionStock,
   getDefaultMpTableFilters,
   getDefaultShipmentTableFilters,
   isMpExtraFiltersDefault,
@@ -184,6 +185,7 @@ export function WarehouseView({ stock, initialDocs, mpStock, supplies }: Warehou
     useState<WarehouseMarketplaceFilter>(WAREHOUSE_FILTER_ALL);
   const [shipmentStatus, setShipmentStatus] =
     useState<WarehouseShipmentStatusFilter>(WAREHOUSE_FILTER_ALL);
+  const [productionSearch, setProductionSearch] = useState("");
   const [inventoryDocs, setInventoryDocs] = useState<InventoryDocRow[]>(initialDocs);
   const [pending, startTransition] = useTransition();
   const [exporting, startExport] = useTransition();
@@ -203,6 +205,11 @@ export function WarehouseView({ stock, initialDocs, mpStock, supplies }: Warehou
     [supplies, shipmentSearch, shipmentMarketplace, shipmentStatus],
   );
 
+  const filteredProductionStock = useMemo(
+    () => filterWarehouseProductionStock(stock, productionSearch),
+    [stock, productionSearch],
+  );
+
   const buildWarehouseSheets = (): { base: string; sheets: XlsxSheet[] } => {
     if (activeTab === "production") {
       const prodCols = [
@@ -215,7 +222,7 @@ export function WarehouseView({ stock, initialDocs, mpStock, supplies }: Warehou
           {
             name: "Изделия",
             columns: prodCols,
-            rows: stock.products.map((r) => ({ name: r.name, quantity: r.quantity })),
+            rows: filteredProductionStock.products.map((r) => ({ name: r.name, quantity: r.quantity })),
           },
           {
             name: "Детали",
@@ -225,7 +232,7 @@ export function WarehouseView({ stock, initialDocs, mpStock, supplies }: Warehou
               { header: "Ждут присадку", key: "pending", numFmt: XLSX_FMT.int },
               { header: "Всего", key: "quantity", numFmt: XLSX_FMT.int },
             ],
-            rows: stock.details.map((r) => ({
+            rows: filteredProductionStock.details.map((r) => ({
               name: r.name,
               ready: r.ready,
               pending: r.pendingPrisadka,
@@ -235,17 +242,17 @@ export function WarehouseView({ stock, initialDocs, mpStock, supplies }: Warehou
           {
             name: "Крепёж",
             columns: prodCols,
-            rows: stock.fasteners.map((r) => ({ name: r.name, quantity: r.quantity })),
+            rows: filteredProductionStock.fasteners.map((r) => ({ name: r.name, quantity: r.quantity })),
           },
           {
             name: "Упаковка",
             columns: prodCols,
-            rows: stock.packaging.map((r) => ({ name: r.name, quantity: r.quantity })),
+            rows: filteredProductionStock.packaging.map((r) => ({ name: r.name, quantity: r.quantity })),
           },
           {
             name: "Разное",
             columns: prodCols,
-            rows: stock.other.map((r) => ({ name: r.name, quantity: r.quantity })),
+            rows: filteredProductionStock.other.map((r) => ({ name: r.name, quantity: r.quantity })),
           },
         ],
       };
@@ -416,6 +423,14 @@ export function WarehouseView({ stock, initialDocs, mpStock, supplies }: Warehou
             }}
           />
         )}
+        {activeTab === "production" && (
+          <FiltersBar
+            search
+            searchPlaceholder="Поиск по складу"
+            searchValue={productionSearch}
+            onSearchChange={setProductionSearch}
+          />
+        )}
 
         {activeTab === "mp" && (
           <WarehouseMpTab
@@ -427,7 +442,9 @@ export function WarehouseView({ stock, initialDocs, mpStock, supplies }: Warehou
             }
           />
         )}
-        {activeTab === "production" && <WarehouseProductionTab stock={stock} />}
+        {activeTab === "production" && (
+          <WarehouseProductionTab stock={filteredProductionStock} sourceStock={stock} />
+        )}
         {activeTab === "shipments" && (
           <WarehouseShipmentsTab
             rows={visibleShipmentRows}

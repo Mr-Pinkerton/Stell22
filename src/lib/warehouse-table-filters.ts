@@ -4,6 +4,7 @@ import type {
   ShipmentRow,
   ShipmentStatus,
 } from "@/mocks/warehouse-fixtures";
+import type { DetailStockRow, ProductionStockRow } from "@/lib/warehouse-stock";
 
 export const WAREHOUSE_FILTER_ALL = "ALL";
 
@@ -75,4 +76,48 @@ export function filterShipmentRows<T extends ShipmentRow>(
     if (filters.status !== WAREHOUSE_FILTER_ALL && row.status !== filters.status) return false;
     return true;
   });
+}
+
+export interface WarehouseProductionStockSlice {
+  products: ProductionStockRow[];
+  details: DetailStockRow[];
+  fasteners: ProductionStockRow[];
+  packaging: ProductionStockRow[];
+  other: ProductionStockRow[];
+  blanks?: ProductionStockRow[];
+}
+
+function matchesProductionName(row: { name?: string | null }, search: string): boolean {
+  return (row.name ?? "").toLowerCase().includes(search);
+}
+
+function matchesProductRow(row: ProductionStockRow, search: string): boolean {
+  if (matchesProductionName(row, search)) return true;
+  return (row.sku ?? "").toLowerCase().includes(search);
+}
+
+/** Search по пяти видимым коллекциям; `blanks` не фильтруется (нет в UI). */
+export function filterWarehouseProductionStock<T extends WarehouseProductionStockSlice>(
+  stock: T,
+  search: string,
+): T {
+  const q = search.trim().toLowerCase();
+  if (!q) {
+    return {
+      ...stock,
+      products: stock.products.slice(),
+      details: stock.details.slice(),
+      fasteners: stock.fasteners.slice(),
+      packaging: stock.packaging.slice(),
+      other: stock.other.slice(),
+    };
+  }
+  return {
+    ...stock,
+    products: stock.products.filter((row) => matchesProductRow(row, q)),
+    details: stock.details.filter((row) => matchesProductionName(row, q)),
+    fasteners: stock.fasteners.filter((row) => matchesProductionName(row, q)),
+    packaging: stock.packaging.filter((row) => matchesProductionName(row, q)),
+    other: stock.other.filter((row) => matchesProductionName(row, q)),
+  };
 }
