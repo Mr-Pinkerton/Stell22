@@ -19,6 +19,34 @@ Do not import Woodveri door-manufacturing entities or workflows.
 
 If a Library/chat/Cursor result conflicts with GitHub `main`, GitHub wins after factual verification.
 
+## Mandatory audit file discipline
+
+All persistent audit artifacts must live under:
+
+`<repo>/audit/`
+
+The only canonical project-control files outside `audit/` are:
+
+- `START-HERE.md`
+- `PROJECT.md`
+
+Do not keep canonical audit/review/remediation/findings documents in the repo root, `.cursor/`, sibling folders, Downloads/Documents/Desktop, temporary folders or arbitrary Cursor workspaces.
+
+Whenever an audit document is created, completed, renamed, moved, superseded, or changes status, **this `audit/AUDIT-INDEX.md` must be updated in the same working cycle**.
+
+An audit task is not DONE if its artifact exists but this index does not reflect the current path/status.
+
+Before committing audit work, verify:
+
+- all persistent audit artifacts are under `audit/`;
+- there are no newly-created audit documents outside `audit/`;
+- this index is synchronized;
+- internal links point to existing canonical paths.
+
+Cursor/chat-only output or an unindexed local file is `UNVERIFIED / NOT CANONICAL`.
+
+The always-on Cursor rule is `.cursor/rules/audit-truth.mdc`.
+
 ## Audit constitution
 
 Primary rule file:
@@ -61,9 +89,28 @@ ChatGPT reviews Cursor evidence, finds errors/omissions, maintains architectural
 
 Every substantial Cursor result must identify BASE SHA, branch/HEAD state, changed files, evidence, checks/tests and blockers.
 
-A Cursor/chat-only result is not canonical. Completed audit work must be written to `audit/*.md` and committed/pushed.
+A Cursor/chat-only result is not canonical. Completed audit work must be written to `audit/*.md`, indexed here, then committed/pushed.
 
 Every patch headed to production requires a separate final adversarial review in Cursor using **Claude**. If Claude causes code changes, rerun Claude review on the new final diff before deploy.
+
+## Local audit recovery status
+
+Status: `REQUIRED BEFORE AUDIT 1 RERUN`
+
+Reason:
+
+Previous Cursor sessions may have created Stell22 audit documents outside the repository or outside `<repo>/audit/` on the local PC. GitHub therefore cannot be assumed to contain the complete historical audit corpus.
+
+Recovery procedure:
+
+1. Cursor scans the accessible local PC for Stell22 audit/review/remediation/findings documents.
+2. Produce a factual inventory with absolute paths, modified times, sizes, titles and probable canonical relationship.
+3. Do not delete, overwrite or move external files during discovery.
+4. Compare recovered files with current `<repo>/audit/` contents.
+5. Classify each recovered file: `CANONICAL-CANDIDATE`, `DUPLICATE`, `OLDER VERSION`, `CONFLICTING VERSION`, `UNRELATED`.
+6. ChatGPT reviews the inventory.
+7. Only after review, consolidate approved material into `<repo>/audit/`.
+8. Update this index with every recovered canonical artifact and status.
 
 ## Cross-chat protocol
 
@@ -88,25 +135,28 @@ but this artifact was absent from GitHub `main`, and its reported BASE SHA could
 
 Status:
 
-`UNVERIFIED HISTORICAL DRAFT / NOT CANONICAL`
+`UNVERIFIED HISTORICAL DRAFT / POSSIBLY LOCAL`
 
-Do not use it as the formal continuation point.
+Do not discard it and do not rerun it yet. First perform the local recovery scan described above. If the original file is recovered, compare and review it before deciding whether AUDIT 1 must be rerun.
 
 ## Current audit queue
 
+### STEP 0 — LOCAL AUDIT RECOVERY
+
+Status: `NEXT`
+
+Find and inventory all historical Stell22 audit artifacts on the local PC. No application-code changes. No deletion. No commit/push until ChatGPT reviews the recovery inventory.
+
 ### AUDIT 1 — SYSTEM ARCHITECTURE
 
-Status: `NEXT / RERUN REQUIRED`
+Status: `BLOCKED BY LOCAL RECOVERY`
 
-Run in Cursor from actual current `main`.
-Audit only. No application-code fixes.
-
-Expected artifact:
+Expected canonical artifact if a rerun is ultimately required:
 
 `audit/08.01-audit-1-system-architecture.md`
 
-The artifact must be reviewed in ChatGPT before commit/push unless the owner explicitly changes the workflow.
+Do not rerun until recovered local audit artifacts have been inventoried and reviewed.
 
 ### Subsequent audits
 
-Define `08.02`, `08.03`, etc. only after AUDIT 1 establishes the system-level map and the next logical audit areas. Avoid inventing a long fixed sequence before the evidence warrants it.
+Define `08.02`, `08.03`, etc. only after recovery and AUDIT 1 status are resolved. Avoid inventing a long fixed sequence before the evidence warrants it.
