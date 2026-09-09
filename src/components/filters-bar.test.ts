@@ -95,4 +95,46 @@ describe("isFiltersBarDefault", () => {
       }),
     ).toBe(true);
   });
+
+  it("без custom default current month остаётся default", () => {
+    expect(
+      isFiltersBarDefault({
+        ...pristine,
+        date: true,
+        dateFilter: getDefaultDateFilterValue(),
+      }),
+    ).toBe(true);
+    expect(
+      isFiltersBarDefault({
+        ...pristine,
+        date: true,
+        dateFilter: { ...getDefaultDateFilterValue(), allTime: true },
+      }),
+    ).toBe(false);
+  });
+
+  it("Sales ALL TIME custom default: allTime = default, current month dirty", () => {
+    const salesDefault = {
+      month: getDefaultDateFilterValue().month,
+      rangeStart: null,
+      rangeEnd: null,
+      allTime: true,
+    };
+    expect(
+      isFiltersBarDefault({
+        ...pristine,
+        date: true,
+        dateFilter: salesDefault,
+        dateDefaultValue: salesDefault,
+      }),
+    ).toBe(true);
+    expect(
+      isFiltersBarDefault({
+        ...pristine,
+        date: true,
+        dateFilter: getDefaultDateFilterValue(),
+        dateDefaultValue: salesDefault,
+      }),
+    ).toBe(false);
+  });
 });

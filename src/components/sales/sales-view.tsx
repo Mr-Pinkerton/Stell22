@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { syncMarketplaces, type SalesData } from "@/server/marketplace";
 import type { SalesReportRow } from "@/mocks/report-fixtures";
@@ -12,6 +12,16 @@ import { KpiTile } from "@/components/kpi-tile";
 import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent } from "@/components/ui/card";
 import { filterSalesRows } from "@/lib/sales-table-filters";
+import {
+  getDefaultSalesDateFilterValue,
+  isSalesDraftApplied,
+  salesAppliedKey,
+  salesDraftFromParams,
+  salesHrefFromDraft,
+  salesPeriodFromParams,
+  syncSalesDraftIfAppliedChanged,
+} from "@/lib/sales-period";
+import type { DateFilterValue } from "@/components/date-filter";
 
 const columns: Column<SalesReportRow>[] = [
   {
@@ -49,11 +59,38 @@ function formatSyncedAt(iso: string | null): string {
   return `обновлено ${formatIsoDateTime(iso)}`;
 }
 
+const salesDateDefault = getDefaultSalesDateFilterValue();
+
 export function SalesView({ data }: { data: SalesData }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
   const [search, setSearch] = useState("");
   const visibleRows = useMemo(() => filterSalesRows(data.rows, search), [data.rows, search]);
+
+  const appliedParams = new URLSearchParams(searchParams.toString());
+  const appliedKey = salesAppliedKey(appliedParams);
+  const [dateFilter, setDateFilter] = useState<DateFilterValue>(() =>
+    salesDraftFromParams(appliedParams),
+  );
+  const [syncedAppliedKey, setSyncedAppliedKey] = useState(appliedKey);
+
+  if (appliedKey !== syncedAppliedKey) {
+    const next = syncSalesDraftIfAppliedChanged(syncedAppliedKey, appliedParams, dateFilter);
+    setSyncedAppliedKey(next.appliedKey);
+    setDateFilter(next.dateFilter);
+  }
+
+  const draftApplied = isSalesDraftApplied(dateFilter, appliedParams);
+  const appliedAllTime = salesPeriodFromParams(appliedParams) === null;
+
+  const applyPeriod = () => {
+    router.push(salesHrefFromDraft(dateFilter, appliedParams));
+  };
+
+  const resetPeriod = () => {
+    router.push(salesHrefFromDraft(salesDateDefault, appliedParams));
+  };
 
   const handleSync = () => {
     startTransition(async () => {
@@ -94,9 +131,17 @@ export function SalesView({ data }: { data: SalesData }) {
 
         <FiltersBar
           search
+          date
+          dateAllTime
           searchPlaceholder="SKU или изделие"
           searchValue={search}
           onSearchChange={setSearch}
+          dateFilterValue={dateFilter}
+          onDateFilterChange={setDateFilter}
+          dateDefaultValue={salesDateDefault}
+          onApply={applyPeriod}
+          applyDisabled={draftApplied}
+          onReset={resetPeriod}
         />
 
         <Card className="surface-card ring-0">
@@ -106,7 +151,9 @@ export function SalesView({ data }: { data: SalesData }) {
               rows={visibleRows}
               empty={
                 data.rows.length === 0
-                  ? "Продаж нет — нажмите «Синхронизировать с МП»"
+                  ? appliedAllTime
+                    ? "Продаж нет — нажмите «Синхронизировать с МП»"
+                    : "Нет продаж за выбранный период"
                   : "Нет строк по выбранным фильтрам"
               }
               padded

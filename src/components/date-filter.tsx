@@ -11,11 +11,14 @@ import {
   getCurrentMonth,
   isDayInRange,
   isSameDay,
-  isSameMonth,
   normalizeRange,
   startOfMonth,
 } from "@/lib/dates";
 import { formatFilterDateRange, formatFilterMonth } from "@/lib/format";
+import { dateFiltersEqual, type DateFilterValue } from "@/lib/date-filter-value";
+
+export type { DateFilterValue };
+export { dateFiltersEqual };
 
 export const DATE_FILTER_WIDTH = "w-[280px]";
 
@@ -23,13 +26,6 @@ const WEEKDAY_LABELS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 
 const triggerClass =
   "border-border bg-card hover:border-[#98a2b3] focus-visible:border-ring focus-visible:bg-card h-10 min-h-10 cursor-pointer rounded-xl border px-4 text-left text-sm font-normal";
-
-export interface DateFilterValue {
-  month: Date;
-  rangeStart: Date | null;
-  rangeEnd: Date | null;
-  allTime?: boolean;
-}
 
 interface DateFilterProps {
   value?: DateFilterValue;
@@ -252,9 +248,13 @@ export function getDefaultDateFilterValue(): DateFilterValue {
   return getDefaultValue();
 }
 
-/** Семантическое сравнение с дефолтом: текущий месяц, без диапазона, не «за всё время». */
-export function isDefaultDateFilterValue(value: DateFilterValue): boolean {
-  if (value.allTime) return false;
-  if (value.rangeStart !== null || value.rangeEnd !== null) return false;
-  return isSameMonth(value.month, getDefaultDateFilterValue().month);
+/**
+ * Сравнение с дефолтом DateFilter. Без второго аргумента — текущий месяц
+ * (Reports/Finance). Sales передаёт ALL TIME.
+ */
+export function isDefaultDateFilterValue(
+  value: DateFilterValue,
+  dateDefaultValue: DateFilterValue = getDefaultDateFilterValue(),
+): boolean {
+  return dateFiltersEqual(value, dateDefaultValue);
 }

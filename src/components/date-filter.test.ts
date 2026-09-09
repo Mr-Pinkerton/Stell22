@@ -41,4 +41,16 @@ describe("isDefaultDateFilterValue", () => {
       }),
     ).toBe(false);
   });
+
+  it("custom ALL TIME default считается default; current month — нет", () => {
+    const salesDefault = {
+      month: getDefaultDateFilterValue().month,
+      rangeStart: null,
+      rangeEnd: null,
+      allTime: true as const,
+    };
+    expect(isDefaultDateFilterValue(salesDefault, salesDefault)).toBe(true);
+    expect(isDefaultDateFilterValue({ ...salesDefault, allTime: true })).toBe(false);
+    expect(isDefaultDateFilterValue(getDefaultDateFilterValue(), salesDefault)).toBe(false);
+  });
 });

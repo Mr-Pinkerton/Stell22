@@ -40,6 +40,11 @@ export interface FiltersBarProps extends SectionFilters {
   applyDisabled?: boolean;
   /** После внутреннего сброса (controlled callbacks). Reports — синхронизация URL. */
   onReset?: () => void;
+  /**
+   * Дефолт DateFilter для dirty/Reset. Нет пропа — текущий месяц.
+   * Sales передаёт ALL TIME.
+   */
+  dateDefaultValue?: DateFilterValue;
   /** Предметные controls в той же строке (родитель задаёт семантику). */
   extraFilters?: ReactNode;
   /** Родитель: внешние extra filters отличаются от default. */
@@ -59,11 +64,14 @@ export function isFiltersBarDefault(input: {
   dateFilter: DateFilterValue;
   weekFilter: string;
   extraFiltersDirty?: boolean;
+  dateDefaultValue?: DateFilterValue;
 }): boolean {
   if (input.extraFiltersDirty) return false;
   if (input.search && input.query !== "") return false;
   if (input.archive && input.showArchive) return false;
-  if (input.date && !isDefaultDateFilterValue(input.dateFilter)) return false;
+  if (input.date && !isDefaultDateFilterValue(input.dateFilter, input.dateDefaultValue)) {
+    return false;
+  }
   if (input.weekFilter !== getDefaultWeekFilterValue()) return false;
   return true;
 }
@@ -90,10 +98,12 @@ export function FiltersBar({
   extraFilters,
   extraFiltersDirty = false,
   onResetExtraFilters,
+  dateDefaultValue,
 }: FiltersBarProps) {
   const hasAny = search || date || weeks || archive || extraFilters != null;
+  const resolvedDateDefault = dateDefaultValue ?? getDefaultDateFilterValue();
   const [internalDateFilter, setInternalDateFilter] = useState<DateFilterValue>(
-    getDefaultDateFilterValue,
+    () => dateDefaultValue ?? getDefaultDateFilterValue(),
   );
   const dateFilter = dateFilterValue ?? internalDateFilter;
 
@@ -144,10 +154,11 @@ export function FiltersBar({
     dateFilter,
     weekFilter,
     extraFiltersDirty,
+    dateDefaultValue,
   });
 
   const handleReset = () => {
-    setDateFilter(getDefaultDateFilterValue());
+    setDateFilter(resolvedDateDefault);
     setWeekFilter(getDefaultWeekFilterValue());
     setQuery("");
     setShowArchive(false);

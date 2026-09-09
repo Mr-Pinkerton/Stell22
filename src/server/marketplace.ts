@@ -4,6 +4,8 @@ import { prisma } from "@/server/db";
 import { requireAdmin } from "@/server/session";
 import { revalidatePath } from "next/cache";
 import { syncMarketplacesAsUserInternal } from "@/server/internal/marketplace-sync";
+import { saleDatePrismaWhere } from "@/lib/sales-period";
+import type { Period } from "@/lib/dates";
 import type { SalesReportRow } from "@/mocks/report-fixtures";
 import type {
   Marketplace,
@@ -45,11 +47,16 @@ export interface SalesData {
 /**
  * Продажи МП на реальных данных (таблица Sale). Агрегируем по артикулу/изделию
  * (оба маркетплейса вместе). Возвраты учтены отрицательными кол-вом/выручкой.
+ * `period === null` — все продажи; иначе фильтр `Sale.date` до aggregation.
  */
-export async function getSalesData(): Promise<SalesData> {
+export async function getSalesData(period: Period | null = null): Promise<SalesData> {
   await requireAdmin();
+  const dateWhere = saleDatePrismaWhere(period);
   const [sales, products, lastStock] = await Promise.all([
-    prisma.sale.findMany({ orderBy: { date: "desc" } }),
+    prisma.sale.findMany({
+      where: dateWhere,
+      orderBy: { date: "desc" },
+    }),
     prisma.product.findMany({ select: { id: true, name: true, skuOzon: true, skuWb: true } }),
     prisma.mpStock.findFirst({ orderBy: { syncedAt: "desc" }, select: { syncedAt: true } }),
   ]);
