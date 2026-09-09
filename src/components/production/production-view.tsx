@@ -14,11 +14,18 @@ import {
 } from "@/server/production";
 import {
   filterProductionEntries,
+  filterProductionTableRows,
   formatChangeLogWhen,
   formatEntryTime,
+  getDefaultProductionTableFilters,
+  isProductionExtraFiltersDefault,
   OPERATION_TYPE_LABEL,
   OPERATION_TYPE_UNIT,
+  productionEmployeeOptions,
+  PRODUCTION_FILTER_ALL,
   sortProductionEntries,
+  type ProductionOperationFilter,
+  type ProductionPaymentFilter,
 } from "@/lib/production-entries";
 import { formatIsoDate, formatLength, formatMoney } from "@/lib/format";
 import { exportXlsx } from "@/lib/export-xlsx";
@@ -28,6 +35,7 @@ import { scrollTableYClass } from "@/lib/scroll-classes";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
+import { filterSelectTriggerClass } from "@/components/filter-fields";
 import {
   ExpandableDetailRow,
   expandableChevronClass,
@@ -44,6 +52,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { FormDialog } from "@/components/form-dialog-shared";
 import { Field, fieldClass } from "@/components/nomenclature/form-shared";
 import {
@@ -82,6 +98,146 @@ const DETAIL_HEADERS = [
 
 const CHANGE_LOG_HEADERS = ["Когда", "Кто", "Поле", "Было", "Стало"] as const;
 
+const OPERATION_FILTER_OPTIONS: { value: ProductionOperationFilter; label: string }[] = [
+  { value: PRODUCTION_FILTER_ALL, label: "Все операции" },
+  ...(Object.keys(OPERATION_TYPE_LABEL) as Array<keyof typeof OPERATION_TYPE_LABEL>).map(
+    (type) => ({ value: type, label: OPERATION_TYPE_LABEL[type] }),
+  ),
+];
+
+const PAYMENT_FILTER_OPTIONS: { value: ProductionPaymentFilter; label: string }[] = [
+  { value: PRODUCTION_FILTER_ALL, label: "Все" },
+  { value: "UNPAID", label: "Не выплачено" },
+  { value: "PAID", label: "Выплачено" },
+];
+
+const filterSelectContentClass = "rounded-xl shadow-balanced ring-0 p-1.5";
+const employeeSelectTriggerClass = cn(filterSelectTriggerClass, "w-56");
+const operationSelectTriggerClass = cn(filterSelectTriggerClass, "w-44");
+const paymentSelectTriggerClass = cn(filterSelectTriggerClass, "w-44");
+
+function ProductionExtraFilters({
+  employeeId,
+  employeeOptions,
+  onEmployeeChange,
+  operation,
+  onOperationChange,
+  payment,
+  onPaymentChange,
+}: {
+  employeeId: string;
+  employeeOptions: { id: string; label: string }[];
+  onEmployeeChange: (value: string) => void;
+  operation: ProductionOperationFilter;
+  onOperationChange: (value: ProductionOperationFilter) => void;
+  payment: ProductionPaymentFilter;
+  onPaymentChange: (value: ProductionPaymentFilter) => void;
+}) {
+  const employeeLabel =
+    employeeId === PRODUCTION_FILTER_ALL
+      ? "Все сотрудники"
+      : (employeeOptions.find((o) => o.id === employeeId)?.label ?? "Все сотрудники");
+  const operationLabel =
+    OPERATION_FILTER_OPTIONS.find((o) => o.value === operation)?.label ?? "Все операции";
+  const paymentLabel =
+    PAYMENT_FILTER_OPTIONS.find((o) => o.value === payment)?.label ?? "Все";
+
+  return (
+    <>
+      <div className="grid gap-1.5">
+        <Label htmlFor="f-employee" className="cursor-default">
+          Сотрудник
+        </Label>
+        <Select
+          value={employeeId}
+          onValueChange={(v) => onEmployeeChange(v ?? PRODUCTION_FILTER_ALL)}
+        >
+          <SelectTrigger id="f-employee" className={employeeSelectTriggerClass}>
+            <SelectValue placeholder="Все сотрудники">{employeeLabel}</SelectValue>
+          </SelectTrigger>
+          <SelectContent
+            className={filterSelectContentClass}
+            side="bottom"
+            sideOffset={8}
+            alignItemWithTrigger={false}
+          >
+            <SelectItem value={PRODUCTION_FILTER_ALL} className="cursor-pointer rounded-lg">
+              Все сотрудники
+            </SelectItem>
+            {employeeOptions.map((opt) => (
+              <SelectItem key={opt.id} value={opt.id} className="cursor-pointer rounded-lg">
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor="f-operation" className="cursor-default">
+          Операция
+        </Label>
+        <Select
+          value={operation}
+          onValueChange={(v) =>
+            onOperationChange(
+              v != null && (v === PRODUCTION_FILTER_ALL || v in OPERATION_TYPE_LABEL)
+                ? (v as ProductionOperationFilter)
+                : PRODUCTION_FILTER_ALL,
+            )
+          }
+        >
+          <SelectTrigger id="f-operation" className={operationSelectTriggerClass}>
+            <SelectValue placeholder="Все операции">{operationLabel}</SelectValue>
+          </SelectTrigger>
+          <SelectContent
+            className={filterSelectContentClass}
+            side="bottom"
+            sideOffset={8}
+            alignItemWithTrigger={false}
+          >
+            {OPERATION_FILTER_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value} className="cursor-pointer rounded-lg">
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="grid gap-1.5">
+        <Label htmlFor="f-payment" className="cursor-default">
+          Выплата
+        </Label>
+        <Select
+          value={payment}
+          onValueChange={(v) =>
+            onPaymentChange(
+              v === "PAID" || v === "UNPAID" || v === PRODUCTION_FILTER_ALL
+                ? v
+                : PRODUCTION_FILTER_ALL,
+            )
+          }
+        >
+          <SelectTrigger id="f-payment" className={paymentSelectTriggerClass}>
+            <SelectValue placeholder="Все">{paymentLabel}</SelectValue>
+          </SelectTrigger>
+          <SelectContent
+            className={filterSelectContentClass}
+            side="bottom"
+            sideOffset={8}
+            alignItemWithTrigger={false}
+          >
+            {PAYMENT_FILTER_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value} className="cursor-pointer rounded-lg">
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </>
+  );
+}
+
 interface DetailEditRow {
   index: number;
   detailName: string;
@@ -91,6 +247,11 @@ interface DetailEditRow {
 
 export function ProductionView({ initialEntries }: { initialEntries: ProductionEntryRow[] }) {
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
+  const [employeeFilter, setEmployeeFilter] = useState<string>(PRODUCTION_FILTER_ALL);
+  const [operationFilter, setOperationFilter] =
+    useState<ProductionOperationFilter>(PRODUCTION_FILTER_ALL);
+  const [paymentFilter, setPaymentFilter] =
+    useState<ProductionPaymentFilter>(PRODUCTION_FILTER_ALL);
   const [entries, setEntries] = useState(initialEntries);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [correctRow, setCorrectRow] = useState<ProductionEntryRow | null>(null);
@@ -99,10 +260,22 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
   const [, startTransition] = useTransition();
   const [exporting, startExport] = useTransition();
 
+  const employeeOptions = useMemo(() => productionEmployeeOptions(entries), [entries]);
+
+  const extraFilters = useMemo(
+    () => ({
+      employeeId: employeeFilter,
+      operation: operationFilter,
+      payment: paymentFilter,
+    }),
+    [employeeFilter, operationFilter, paymentFilter],
+  );
+
   const rows = useMemo(() => {
-    const filtered = filterProductionEntries(entries, dateFilter);
+    const period = filterProductionEntries(entries, dateFilter);
+    const filtered = filterProductionTableRows(period, extraFilters);
     return sortProductionEntries(filtered);
-  }, [entries, dateFilter]);
+  }, [entries, dateFilter, extraFilters]);
 
   const handleExport = () =>
     startExport(async () => {
@@ -225,6 +398,24 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
         dateAllTime
         dateFilterValue={dateFilter}
         onDateFilterChange={setDateFilter}
+        extraFilters={
+          <ProductionExtraFilters
+            employeeId={employeeFilter}
+            employeeOptions={employeeOptions}
+            onEmployeeChange={setEmployeeFilter}
+            operation={operationFilter}
+            onOperationChange={setOperationFilter}
+            payment={paymentFilter}
+            onPaymentChange={setPaymentFilter}
+          />
+        }
+        extraFiltersDirty={!isProductionExtraFiltersDefault(extraFilters)}
+        onResetExtraFilters={() => {
+          const defaults = getDefaultProductionTableFilters();
+          setEmployeeFilter(defaults.employeeId);
+          setOperationFilter(defaults.operation);
+          setPaymentFilter(defaults.payment);
+        }}
       />
 
       <Card className="surface-card ring-0">
@@ -253,7 +444,7 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
                       colSpan={COL_SPAN}
                       className={cn(cellPad, "text-muted-foreground h-24 text-center")}
                     >
-                      Внесений за период нет
+                      Нет операций по выбранным фильтрам
                     </TableCell>
                   </TableRow>
                 ) : (

@@ -18,12 +18,77 @@ export const OPERATION_TYPE_UNIT: Record<OperationType, string> = {
   HOURS: "ч",
 };
 
+export const PRODUCTION_FILTER_ALL = "ALL";
+
+export type ProductionOperationFilter = "ALL" | OperationType;
+export type ProductionPaymentFilter = "ALL" | "PAID" | "UNPAID";
+
+export interface ProductionTableFilters {
+  employeeId: typeof PRODUCTION_FILTER_ALL | (string & {});
+  operation: ProductionOperationFilter;
+  payment: ProductionPaymentFilter;
+}
+
+export function getDefaultProductionTableFilters(): ProductionTableFilters {
+  return {
+    employeeId: PRODUCTION_FILTER_ALL,
+    operation: PRODUCTION_FILTER_ALL,
+    payment: PRODUCTION_FILTER_ALL,
+  };
+}
+
+export function isProductionExtraFiltersDefault(input: ProductionTableFilters): boolean {
+  return (
+    input.employeeId === PRODUCTION_FILTER_ALL &&
+    input.operation === PRODUCTION_FILTER_ALL &&
+    input.payment === PRODUCTION_FILTER_ALL
+  );
+}
+
+export interface ProductionEmployeeOption {
+  id: string;
+  label: string;
+}
+
+/** Уникальные сотрудники журнала (по employeeId). Label — первое встреченное ФИО. */
+export function productionEmployeeOptions(
+  rows: Pick<ProductionEntryRow, "employeeId" | "employeeName">[],
+): ProductionEmployeeOption[] {
+  const byId = new Map<string, string>();
+  for (const row of rows) {
+    if (!byId.has(row.employeeId)) byId.set(row.employeeId, row.employeeName);
+  }
+  return [...byId.entries()]
+    .map(([id, label]) => ({ id, label }))
+    .sort(
+      (a, b) => a.label.localeCompare(b.label, "ru") || a.id.localeCompare(b.id),
+    );
+}
+
 /** Фильтр по дате операции (workDate). */
 export function filterProductionEntries(
   rows: ProductionEntryRow[],
   filter: DateFilterValue,
 ): ProductionEntryRow[] {
   return rows.filter((row) => matchesDateFilter(row.workDate, filter));
+}
+
+/** Локальные фильтры журнала поверх уже отрезанного периода. */
+export function filterProductionTableRows<T extends ProductionEntryRow>(
+  rows: T[],
+  filters: ProductionTableFilters,
+): T[] {
+  return rows.filter((row) => {
+    if (filters.employeeId !== PRODUCTION_FILTER_ALL && row.employeeId !== filters.employeeId) {
+      return false;
+    }
+    if (filters.operation !== PRODUCTION_FILTER_ALL && row.type !== filters.operation) {
+      return false;
+    }
+    if (filters.payment === "PAID" && row.isPaid !== true) return false;
+    if (filters.payment === "UNPAID" && row.isPaid !== false) return false;
+    return true;
+  });
 }
 
 /** Свежие внесения сверху. */
