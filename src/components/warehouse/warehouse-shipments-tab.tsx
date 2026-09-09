@@ -58,16 +58,20 @@ const columns: Column<ShipmentRow>[] = [
 
 interface WarehouseShipmentsTabProps {
   rows: ShipmentRow[];
+  empty?: string;
 }
 
-export function WarehouseShipmentsTab({ rows }: WarehouseShipmentsTabProps) {
+export function WarehouseShipmentsTab({
+  rows,
+  empty = "Поставок нет — нажмите «Синхронизировать с МП» в разделе Продажи",
+}: WarehouseShipmentsTabProps) {
   return (
     <Card className="surface-card ring-0">
       <CardContent className="p-0">
         <DataTable
           columns={columns}
           rows={rows}
-          empty="Поставок нет — нажмите «Синхронизировать с МП» в разделе Продажи"
+          empty={empty}
           padded
           className="border-0"
         />

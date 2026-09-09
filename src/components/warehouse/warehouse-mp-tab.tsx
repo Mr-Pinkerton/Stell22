@@ -30,13 +30,17 @@ const columns: Column<MpStockRow>[] = [
 
 interface WarehouseMpTabProps {
   rows?: MpStockRow[];
+  empty?: string;
 }
 
-export function WarehouseMpTab({ rows = mpStockRows }: WarehouseMpTabProps) {
+export function WarehouseMpTab({
+  rows = mpStockRows,
+  empty = "Нет данных с маркетплейсов",
+}: WarehouseMpTabProps) {
   return (
     <Card className="surface-card ring-0">
       <CardContent className="p-0">
-        <DataTable columns={columns} rows={rows} empty="Нет данных с маркетплейсов" padded className="border-0" />
+        <DataTable columns={columns} rows={rows} empty={empty} padded className="border-0" />
       </CardContent>
     </Card>
   );
