@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -40,6 +40,12 @@ export interface FiltersBarProps extends SectionFilters {
   applyDisabled?: boolean;
   /** После внутреннего сброса (controlled callbacks). Reports — синхронизация URL. */
   onReset?: () => void;
+  /** Предметные controls в той же строке (родитель задаёт семантику). */
+  extraFilters?: ReactNode;
+  /** Родитель: внешние extra filters отличаются от default. */
+  extraFiltersDirty?: boolean;
+  /** Сброс extra filters в default. Вызывается после встроенных, до onReset. */
+  onResetExtraFilters?: () => void;
 }
 
 /** Видимые встроенные фильтры совпадают с дефолтом (для disabled «Сбросить»). */
@@ -52,7 +58,9 @@ export function isFiltersBarDefault(input: {
   showArchive: boolean;
   dateFilter: DateFilterValue;
   weekFilter: string;
+  extraFiltersDirty?: boolean;
 }): boolean {
+  if (input.extraFiltersDirty) return false;
   if (input.search && input.query !== "") return false;
   if (input.archive && input.showArchive) return false;
   if (input.date && !isDefaultDateFilterValue(input.dateFilter)) return false;
@@ -79,8 +87,11 @@ export function FiltersBar({
   onApply,
   applyDisabled = false,
   onReset,
+  extraFilters,
+  extraFiltersDirty = false,
+  onResetExtraFilters,
 }: FiltersBarProps) {
-  const hasAny = search || date || weeks || archive;
+  const hasAny = search || date || weeks || archive || extraFilters != null;
   const [internalDateFilter, setInternalDateFilter] = useState<DateFilterValue>(
     getDefaultDateFilterValue,
   );
@@ -132,6 +143,7 @@ export function FiltersBar({
     showArchive,
     dateFilter,
     weekFilter,
+    extraFiltersDirty,
   });
 
   const handleReset = () => {
@@ -139,6 +151,7 @@ export function FiltersBar({
     setWeekFilter(getDefaultWeekFilterValue());
     setQuery("");
     setShowArchive(false);
+    onResetExtraFilters?.();
     onReset?.();
   };
 
@@ -206,6 +219,7 @@ export function FiltersBar({
           Показать архив
         </label>
       )}
+      {extraFilters}
       <div className="ml-auto flex shrink-0 gap-2">
         <Button
           type="button"

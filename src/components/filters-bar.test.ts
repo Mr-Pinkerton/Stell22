@@ -75,4 +75,24 @@ describe("isFiltersBarDefault", () => {
       }),
     ).toBe(false);
   });
+
+  it("extraFiltersDirty=true → Reset enabled (не default)", () => {
+    expect(
+      isFiltersBarDefault({
+        ...pristine,
+        date: true,
+        extraFiltersDirty: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("extraFiltersDirty=false не ломает встроенный default", () => {
+    expect(
+      isFiltersBarDefault({
+        ...pristine,
+        date: true,
+        extraFiltersDirty: false,
+      }),
+    ).toBe(true);
+  });
 });

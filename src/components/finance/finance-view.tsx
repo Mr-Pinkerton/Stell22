@@ -47,6 +47,7 @@ import { XLSX_FMT, type XlsxSheet } from "@/lib/xlsx-types";
 import { formatIsoDate } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
+import { FILTER_SELECT_WIDTH, filterSelectTriggerClass } from "@/components/filter-fields";
 import { SegmentTabs } from "@/components/reports/report-shared";
 
 const flowTypeLabel = (t: "INCOME" | "EXPENSE") => (t === "INCOME" ? "Доход" : "Расход");
@@ -71,6 +72,22 @@ import {
 } from "@/components/finance/deal-form-dialog";
 import { StatementUploadDialog } from "@/components/finance/statement-upload-dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { cn } from "@/lib/utils";
+import {
+  filterCashFlowTableRows,
+  getDefaultCashFlowTableFilters,
+  isCashFlowExtraFiltersDefault,
+  type CashFlowTableFlowType,
+} from "@/lib/cashflow-table-filters";
 
 type FinanceTab = "cashflow" | "reference" | "rules" | "deals" | "statements";
 
@@ -85,9 +102,75 @@ const TABS: { key: FinanceTab; label: string }[] = [
 const tabActionButtonClass =
   "h-10 shrink-0 cursor-pointer rounded-xl px-5 [&_svg]:stroke-[1.75]";
 
+const FLOW_TYPE_OPTIONS: { value: CashFlowTableFlowType; label: string }[] = [
+  { value: "ALL", label: "Все операции" },
+  { value: "INCOME", label: "Поступления" },
+  { value: "EXPENSE", label: "Расходы" },
+];
+
+const flowTypeSelectTriggerClass = cn(filterSelectTriggerClass, FILTER_SELECT_WIDTH);
+const flowTypeSelectContentClass = "rounded-xl shadow-balanced ring-0 p-1.5";
+
+function CashflowExtraFilters({
+  flowType,
+  onFlowTypeChange,
+  unassignedOnly,
+  onUnassignedOnlyChange,
+}: {
+  flowType: CashFlowTableFlowType;
+  onFlowTypeChange: (value: CashFlowTableFlowType) => void;
+  unassignedOnly: boolean;
+  onUnassignedOnlyChange: (checked: boolean) => void;
+}) {
+  const flowTypeLabel =
+    FLOW_TYPE_OPTIONS.find((o) => o.value === flowType)?.label ?? "Все операции";
+
+  return (
+    <>
+      <div className="grid gap-1.5">
+        <Label htmlFor="f-flow-type" className="cursor-default">
+          Тип
+        </Label>
+        <Select
+          value={flowType}
+          onValueChange={(v) => onFlowTypeChange((v as CashFlowTableFlowType) ?? "ALL")}
+        >
+          <SelectTrigger id="f-flow-type" className={flowTypeSelectTriggerClass}>
+            <SelectValue placeholder="Все операции">{flowTypeLabel}</SelectValue>
+          </SelectTrigger>
+          <SelectContent
+            className={flowTypeSelectContentClass}
+            side="bottom"
+            sideOffset={8}
+            alignItemWithTrigger={false}
+          >
+            {FLOW_TYPE_OPTIONS.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value} className="cursor-pointer rounded-lg">
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <label className="border-border bg-card hover:border-[#98a2b3] hover:bg-muted/40 flex h-10 cursor-pointer items-center gap-2.5 self-end rounded-xl border px-3.5 text-sm font-medium transition-colors">
+        <Checkbox
+          id="f-unassigned"
+          className="border-[#98a2b3] bg-card size-[18px] cursor-pointer"
+          checked={unassignedOnly}
+          onCheckedChange={(v) => onUnassignedOnlyChange(v === true)}
+        />
+        Только неразнесённые
+      </label>
+    </>
+  );
+}
+
 export function FinanceView({ data }: { data: FinanceData }) {
   const [activeTab, setActiveTab] = useState<FinanceTab>("cashflow");
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
+  const [cashflowSearch, setCashflowSearch] = useState("");
+  const [cashflowFlowType, setCashflowFlowType] = useState<CashFlowTableFlowType>("ALL");
+  const [cashflowUnassignedOnly, setCashflowUnassignedOnly] = useState(false);
   const [, startTransition] = useTransition();
   const [exporting, startExport] = useTransition();
 
@@ -118,9 +201,19 @@ export function FinanceView({ data }: { data: FinanceData }) {
   const categoryCreateRef = useRef<(() => void) | null>(null);
   const accountCreateRef = useRef<(() => void) | null>(null);
 
-  const filteredCashFlows = useMemo(
+  const periodCashFlows = useMemo(
     () => cashFlows.filter((row) => matchesDateFilter(row.date, dateFilter)),
     [cashFlows, dateFilter],
+  );
+
+  const visibleCashFlows = useMemo(
+    () =>
+      filterCashFlowTableRows(periodCashFlows, {
+        search: cashflowSearch,
+        flowType: cashflowFlowType,
+        unassignedOnly: cashflowUnassignedOnly,
+      }),
+    [periodCashFlows, cashflowSearch, cashflowFlowType, cashflowUnassignedOnly],
   );
 
   // Остаток на счетах считается от «якорей» по ВСЕМ операциям (без фильтра
@@ -282,7 +375,7 @@ export function FinanceView({ data }: { data: FinanceData }) {
             { header: "Статья", key: "article", width: 22 },
             { header: "Сделка", key: "deal", width: 22 },
           ],
-          rows: filteredCashFlows.map((r) => ({
+          rows: periodCashFlows.map((r) => ({
             date: formatIsoDate(r.date),
             flowType: r.isTransfer ? "Перевод" : flowTypeLabel(r.flowType),
             amount: r.amount,
@@ -418,9 +511,39 @@ export function FinanceView({ data }: { data: FinanceData }) {
           dateAllTime
           dateFilterValue={dateFilter}
           onDateFilterChange={setDateFilter}
+          search={activeTab === "cashflow"}
+          searchPlaceholder="Описание или контрагент"
+          searchValue={activeTab === "cashflow" ? cashflowSearch : undefined}
+          onSearchChange={activeTab === "cashflow" ? setCashflowSearch : undefined}
+          extraFilters={
+            activeTab === "cashflow" ? (
+              <CashflowExtraFilters
+                flowType={cashflowFlowType}
+                onFlowTypeChange={setCashflowFlowType}
+                unassignedOnly={cashflowUnassignedOnly}
+                onUnassignedOnlyChange={setCashflowUnassignedOnly}
+              />
+            ) : undefined
+          }
+          extraFiltersDirty={
+            activeTab === "cashflow" &&
+            !isCashFlowExtraFiltersDefault({
+              flowType: cashflowFlowType,
+              unassignedOnly: cashflowUnassignedOnly,
+            })
+          }
+          onResetExtraFilters={
+            activeTab === "cashflow"
+              ? () => {
+                  const defaults = getDefaultCashFlowTableFilters();
+                  setCashflowFlowType(defaults.flowType);
+                  setCashflowUnassignedOnly(defaults.unassignedOnly);
+                }
+              : undefined
+          }
         />
 
-        <FinanceKpiBlock rows={filteredCashFlows} accounts={balanceTileAccounts} articles={articles} />
+        <FinanceKpiBlock rows={periodCashFlows} accounts={balanceTileAccounts} articles={articles} />
 
         <SegmentTabs
           ariaLabel="Финансы"
@@ -458,7 +581,7 @@ export function FinanceView({ data }: { data: FinanceData }) {
 
         {activeTab === "cashflow" && (
           <FinanceCashflowTab
-            rows={filteredCashFlows}
+            rows={visibleCashFlows}
             articles={articles}
             counterparties={counterparties}
             deals={deals}
