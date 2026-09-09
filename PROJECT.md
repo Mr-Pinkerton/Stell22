@@ -67,6 +67,8 @@ Always establish current HEAD before starting new work because documentation com
 
 `ACTIVE MODE: SYSTEM AUDIT`
 
+AUDIT 1 (system architecture) is `COMPLETE / REVIEWED`. Next audit section: **AUDIT 2 — FINANCE & MONEY INTEGRITY**.
+
 The current objective is not an endless chain of local fixes. Audit the system as a whole, then group confirmed findings into coherent remediation packages.
 
 Audit loop:
@@ -167,9 +169,13 @@ At the last verified application checkpoint:
 - business money initialization: `NO`;
 - Close Month: `NOT IMPLEMENTED`.
 
-Known remaining activation audit candidate from previous work:
+Known remaining activation blocker (confirmed in AUDIT 1):
 
-UPAKOVKA correction may need inventory-boundary coverage for current BOM references (`old ∪ current refs`). It must be proven/classified in the audit lane before becoming a fix.
+`ARCH-P1-001` — UPAKOVKA quantity edit does not cover the full `old refs ∪ current refs` inventory boundary after a BOM change. Status: `OPEN / CONFIRMED`. Impact: inventory integrity. **Not fixed.**
+
+Operational mitigation (not a fix): until patched, avoid historical UPAKOVKA → BOM/composition change → inventory on **new** BOM refs → quantity edit of the old UPAKOVKA operation. Current-ref inventory boundary can be skipped.
+
+Do not activate `production_cost_flow` while this is open.
 
 ## 11. Local audit recovery
 
@@ -184,38 +190,77 @@ Local STEP 0 recovery (`audit/00-local-audit-recovery.md`) and STEP 0.5 canonica
 - Independent lost Stell22 clone: **none**.
 - Historical copies, patches, and review bundles are **not** source of truth. See recovery report. Do not treat them as living findings.
 
-## 12. Previous reported AUDIT 1
+## 12. AUDIT 1 — SYSTEM ARCHITECTURE
 
-A previous Cursor session reported:
+Status: `COMPLETE / REVIEWED`
 
-`audit/08.01-audit-1-system-architecture.md`
+Artifact: `audit/08.01-audit-1-system-architecture.md`
 
-Recovery searched for it and did not find it. It was also absent from GitHub `main`.
+Repository audit base: `d1f46e46232499b61f55e754b0bd70ddc5924bca`
 
-Status:
+Application code base: `d9f940e8540801bdb27dd72210193f5e4ab038c3`
 
-`NOT PREVIOUSLY CREATED / RERUN REQUIRED`
+Result:
 
-Do not restore or invent that file from memory. Rerun AUDIT 1 against actual current `main`. Existing `audit/00*`–`audit/03*` documents are prior evidence, not a substitute for AUDIT 1. `audit/03.02-production-cost-flow-architecture.md` is cost-flow architecture only.
+- P0 = 0
+- P1 = `ARCH-P1-001`
+- P2 = 0
+- P3 = 0
+- simplify = `ARCH-SIMPLIFY-001` (`TEMPORARY MIGRATION DEBT / REMOVE AFTER CUTOVER`)
+- no new missing capabilities after adversarial review
+- no unresolved owner questions from AUDIT 1
+- existing known states were not reopened as new findings
+
+### `ARCH-P1-001`
+
+UPAKOVKA quantity edit does not cover the full `old refs ∪ current refs` inventory boundary after BOM change.
+
+Status: `OPEN / CONFIRMED`
+
+Impact: inventory integrity.
+
+Do **not** mark it fixed. No remediation patch in this cycle.
+
+Operational mitigation (not a fix): until `ARCH-P1-001` is patched, avoid this sequence:
+
+1. a historical UPAKOVKA operation exists;
+2. product BOM/composition is changed;
+3. inventory is conducted on refs of the **new** BOM;
+4. quantity of the **old** UPAKOVKA operation is then edited.
+
+Reason: the current-ref inventory boundary can be skipped.
+
+ChatGPT adversarial review of the 08.01 draft: **accepted**. Recovery had recorded that 08.01 did not previously exist; this cycle created and finalized it. `audit/03.02-production-cost-flow-architecture.md` remains cost-flow architecture only.
 
 ## 13. Current next step
 
-`NEXT = AUDIT 1 — SYSTEM ARCHITECTURE`
+`NEXT = AUDIT 2 — FINANCE & MONEY INTEGRITY`
 
-Whole-system architecture. New document (do **not** write it in the canonicalization commit):
+Audit-only. Do not start implementation or remediation in that pass. Do not open the AUDIT 2 file in the AUDIT 1 finalization commit.
 
-`audit/08.01-audit-1-system-architecture.md`
+High-level scope:
+
+- CashFlow;
+- Account / balance;
+- Statement/import;
+- Deal allocations;
+- transfers;
+- Payment/payroll money;
+- corrections/voids;
+- transaction boundaries;
+- idempotency;
+- confirmed/unconfirmed money;
+- reconciliation;
+- Sale vs money where relevant.
 
 Constraints:
 
 - audit-only; do not modify application code in that pass;
 - do not turn findings into patches automatically;
-- BASE = actual current `main` application checkpoint (`d9f940e8540801bdb27dd72210193f5e4ab038c3` unless newer **code** has landed);
-- use existing `audit/00-*`, `01.*`, `02.*`, `03.*` as prior evidence;
 - do not reopen closed findings without new evidence;
-- write the result to `audit/08.01-audit-1-system-architecture.md`;
+- write the result under `audit/` when that audit starts;
 - update `audit/AUDIT-INDEX.md` in the same cycle;
-- do not commit/push until ChatGPT reviews the report unless the owner explicitly changes this workflow.
+- `production_cost_flow` stays inactive; activation stays `BLOCKED`.
 
 ## 14. Journal update rule
 
@@ -232,3 +277,18 @@ After every significant delivery action record:
 - deploy status;
 - activation status;
 - next step.
+
+## 15. Journal — AUDIT 1 finalization
+
+| | |
+| --- | --- |
+| Date | 2026-09-09 |
+| Stage | AUDIT 1 — system architecture |
+| BASE | repo `d1f46e46232499b61f55e754b0bd70ddc5924bca`; app `d9f940e8540801bdb27dd72210193f5e4ab038c3` |
+| Result | `COMPLETE / REVIEWED`. P0=0. P1=`ARCH-P1-001` OPEN/CONFIRMED. P2=0. P3=0. Simplify=`ARCH-SIMPLIFY-001`. |
+| Blockers | `ARCH-P1-001` remains an activation blocker. `production_cost_flow` inactive. Activation `BLOCKED`. Bootstrap `NOT APPLIED`. |
+| Review | ChatGPT adversarial review accepted. No application patch. |
+| Claude deploy gate | not required (docs only, no deploy) |
+| Deploy | **NO** |
+| Activation | unchanged / `BLOCKED` |
+| Next | **AUDIT 2 — FINANCE & MONEY INTEGRITY** |

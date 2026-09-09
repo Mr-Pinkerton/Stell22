@@ -16,8 +16,8 @@ Do not import Woodveri door-manufacturing entities or workflows.
 | Repository | `Mr-Pinkerton/Stell22` |
 | Branch | `main` |
 | Application-code checkpoint | `d9f940e8540801bdb27dd72210193f5e4ab038c3` — `fix: enforce prisadka inventory boundary` |
-| Docs checkpoint before this canonicalization | `86992a8d8aaa1f66cd064ef2db77b67623806d7b` |
-| Audit program | STEP 0 recovery **COMPLETE**. Canonical index rebuilt. **AUDIT 1 not yet rerun.** |
+| Docs checkpoint on `origin/main` | `d1f46e46232499b61f55e754b0bd70ddc5924bca` (canonicalize). AUDIT 1 finalization commit follows in this cycle. |
+| Audit program | STEP 0 recovery **COMPLETE**. **AUDIT 1 = COMPLETE / REVIEWED.** Next: **AUDIT 2 — FINANCE & MONEY INTEGRITY**. |
 | `production_cost_flow` | inactive (delivery state; see `PROJECT.md`) |
 
 Always verify current `main` HEAD before relying on SHAs above.
@@ -55,7 +55,7 @@ Audit loop: `find -> prove -> classify -> record -> continue`. Do not auto-patch
 
 Every file listed below exists under `audit/` unless noted. `01.16` and `01.17` **never existed** (recovery + git history); that gap is not an error.
 
-Status vocabulary: `ACTIVE`, `COMPLETE`, `IMPLEMENTED`, `CLOSED`, `DEFERRED BY OWNER`, `DESIGN RISK`, `SUPERSEDED`, `HISTORICAL`, `PLAN`, `NEXT`, `BLOCKED`, `UNKNOWN — NEEDS REVIEW`.
+Status vocabulary: `ACTIVE`, `COMPLETE`, `COMPLETE / REVIEWED`, `IMPLEMENTED`, `CLOSED`, `DEFERRED BY OWNER`, `DESIGN RISK`, `SUPERSEDED`, `HISTORICAL`, `PLAN`, `NEXT`, `BLOCKED`, `UNKNOWN — NEEDS REVIEW`.
 
 Canonical? = this path is the living copy in `/audit` on `main`.
 
@@ -137,17 +137,27 @@ No `audit/01.16*` or `audit/01.17*`.
 | `audit/03.01-production-cost-truth-map.md` | Cost | Truth map | `1bf910908f72f478e635a3202fb605cec62176b8` | `COMPLETE` | YES | Read-only. Do not reopen closed DI cards from this map. |
 | `audit/03.02-production-cost-flow-architecture.md` | Cost | Architecture | Snapshot `1bf91090`; Package 3 review BASE `77ee6af9691130a2e3411ff6fa558f9e6b7dc17d` | `COMPLETE` | YES | Cost-flow architecture (not whole-system AUDIT 1). Packages 2/3 implemented in code; activation `BLOCKED` (`PROJECT.md`). |
 
+### D.7 AUDIT 1 — whole-system architecture (08.xx)
+
+| File | Area | Type | BASE/Snapshot | Status | Canonical? | Notes |
+| ---- | ---- | ---- | ------------- | ------ | ---------- | ----- |
+| `audit/08.01-audit-1-system-architecture.md` | Whole system | Architecture audit | Repo `d1f46e46232499b61f55e754b0bd70ddc5924bca`; app `d9f940e8540801bdb27dd72210193f5e4ab038c3` | `COMPLETE / REVIEWED` | YES | ChatGPT adversarial review accepted. New P0=0. New P1=`ARCH-P1-001` (OPEN / CONFIRMED; not patched). New P2/P3=0. Simplify=`ARCH-SIMPLIFY-001`. Next: **AUDIT 2 — FINANCE & MONEY INTEGRITY**. |
+
 ---
 
 ## E. AUDIT 1 — SYSTEM ARCHITECTURE
 
 | | |
 | --- | --- |
-| Expected filename when rerun | 08.01-audit-1-system-architecture.md (under `audit/`; **not present now**) |
-| Recovery | **Not found** in repo, worktrees, temp snapshot, Cursor folders, stash, reflog, or unreachable objects |
-| Status | `NOT PREVIOUSLY CREATED / RERUN REQUIRED` |
-| This step | Do **not** create the file here |
-| Next | Rerun against current application `main` (`d9f940e` unless `main` has newer **application** commits). Use 00–03 as prior evidence. Do not reopen closed findings without new evidence. |
+| Filename | `audit/08.01-audit-1-system-architecture.md` |
+| Recovery | Previously **not found**; this cycle **created** (not restored from memory) |
+| Status | `COMPLETE / REVIEWED` |
+| BASE | Repo HEAD `d1f46e46232499b61f55e754b0bd70ddc5924bca`; application `d9f940e8540801bdb27dd72210193f5e4ab038c3` |
+| New P0 | 0 |
+| New P1 | `ARCH-P1-001` (`OPEN / CONFIRMED`; not patched) |
+| New P2 / P3 | 0 |
+| Simplify | `ARCH-SIMPLIFY-001` (temporary migration debt) |
+| Next | **AUDIT 2 — FINANCE & MONEY INTEGRITY** |
 
 `03.02` is production **cost-flow** architecture. It is **not** a substitute for AUDIT 1.
 
@@ -182,16 +192,18 @@ Status: `COMPLETE`
 
 ### STEP 0.5 — AUDIT CANONICALIZATION
 
-Status: this cycle.
+Status: `COMPLETE` (`d1f46e4`).
 
 ### AUDIT 1 — SYSTEM ARCHITECTURE
 
+Status: `COMPLETE / REVIEWED`
+
+Artifact: `audit/08.01-audit-1-system-architecture.md`
+
+BASE repo: `d1f46e46232499b61f55e754b0bd70ddc5924bca`. Application: `d9f940e8540801bdb27dd72210193f5e4ab038c3`. New P0=0. New P1=`ARCH-P1-001` (OPEN / CONFIRMED). New P2/P3=0. Simplify=`ARCH-SIMPLIFY-001`.
+
+### AUDIT 2 — FINANCE & MONEY INTEGRITY
+
 Status: `NEXT`
 
-Artifact if/when rerun: 08.01-audit-1-system-architecture.md in `audit/` (create only in the AUDIT 1 pass).
-
-Constraints: audit-only; no application-code changes in that audit pass unless the owner later opens a remediation package; current actual `main` application checkpoint is the BASE unless newer code lands; existing 00–03 tree is prior evidence.
-
-### Subsequent audits
-
-Define `08.02`, `08.03`, etc. only after AUDIT 1 is written and indexed. Do not invent a long fixed sequence before the evidence warrants it.
+Audit-only. Not opened as a file in the AUDIT 1 cycle. High-level scope: CashFlow, Account/balance, Statement/import, Deal allocations, transfers, Payment/payroll money, corrections/voids, transaction boundaries, idempotency, confirmed/unconfirmed money, reconciliation, Sale vs money where relevant.
