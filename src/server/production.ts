@@ -37,6 +37,7 @@ import {
   type BlankSpec,
 } from "@/server/internal/inventory-integrity";
 import { operationEarning, operationRatesFromSnapshots } from "@/lib/payroll";
+import { assertTorcovkaGenericDeleteAllowed } from "@/lib/torcovka-delete-policy";
 import { isOverRailLength } from "@/lib/torcovka";
 import { dayKey } from "@/lib/entries";
 import type {
@@ -491,6 +492,7 @@ export async function deleteProductionOperation(id: string): Promise<void> {
     });
     if (!op) throw new Error("Операция не найдена");
     if (op.isPaid) throw new Error("Нельзя удалить — операция уже выплачена");
+    assertTorcovkaGenericDeleteAllowed(op.type);
 
     if (op.type === "TORCOVKA") {
       const costFlowActive = await isCostFlowActive(tx);

@@ -13,6 +13,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { Prisma } from "@prisma/client";
 import { writeOffBatchRemainder } from "@/server/purchases";
 import { correctTorcovkaRailsTaken, deleteProductionOperation } from "@/server/production";
+import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "@/lib/torcovka-delete-policy";
 import { submitTorcovka } from "@/server/terminal";
 import { archiveBatchIfDepleted } from "@/server/internal/cost";
 import { lockBatches, lockRailLots } from "@/server/internal/finance-operations";
@@ -839,7 +840,7 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
     expect(lot.remainingQuantity).toBe(16);
   });
 
-  it("12: delete TORCOVKA does not return rails", async () => {
+  it("12: generic TORCOVKA delete is rejected before stock mutation", async () => {
     const seeded = await seedExistingOp({
       suffix: `c12-${Date.now()}`,
       railsTaken: 20,
@@ -848,10 +849,14 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
       blankLengthM: "1",
       lotLengthM: "4",
     });
-    await deleteProductionOperation(seeded.op.id);
+    await expect(deleteProductionOperation(seeded.op.id)).rejects.toThrow(
+      TORCOVKA_GENERIC_DELETE_BLOCKED,
+    );
     const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: seeded.lot.id } });
     expect(lot.remainingQuantity).toBe(10);
-    expect(await prismaA.productionOperation.findUnique({ where: { id: seeded.op.id } })).toBeNull();
+    expect(await prismaA.productionOperation.findUnique({ where: { id: seeded.op.id } })).not.toBeNull();
+    const stock = await prismaA.blankStock.findUniqueOrThrow({ where: { id: seeded.stock.id } });
+    expect(stock.quantity).toBe(4);
   });
 
   it("13a: correction || submit same RailLot: remaining >= 0, railsTaken authoritative, no partial", async () => {

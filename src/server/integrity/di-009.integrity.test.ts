@@ -20,6 +20,7 @@ import {
   prepareUpakovkaEdit,
 } from "@/server/internal/inventory-integrity";
 import { correctTorcovkaRailsTaken, deleteProductionOperation, updateProductionLineQuantity } from "@/server/production";
+import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "@/lib/torcovka-delete-policy";
 import { submitPrisadka, submitUpakovka } from "@/server/terminal";
 import { conductInventory, getInventoryDocs, updateInventoryLineActual } from "@/server/warehouse";
 import {
@@ -619,12 +620,12 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
       (await prismaA.productStock.findUniqueOrThrow({ where: { productId: p.id } })).quantity,
     ).toBe(productQtyBefore);
 
-    await deleteProductionOperation(op.id);
-    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(0);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(TORCOVKA_GENERIC_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     const blank = await prismaA.blankStock.findFirst({
       where: { materialId: mat.id, detailType: "POLKA", sort: "SORT1" },
     });
-    expect(blank?.quantity ?? 0).toBe(0);
+    expect(blank?.quantity ?? 0).toBeGreaterThan(0);
   });
 
   it("11 ChangeLog before/after/delta exact", async () => {

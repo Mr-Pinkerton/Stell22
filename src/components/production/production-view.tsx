@@ -22,6 +22,7 @@ import {
 } from "@/lib/production-entries";
 import { formatIsoDate, formatLength, formatMoney } from "@/lib/format";
 import { exportXlsx } from "@/lib/export-xlsx";
+import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "@/lib/torcovka-delete-policy";
 import { XLSX_FMT } from "@/lib/xlsx-types";
 import { scrollTableYClass } from "@/lib/scroll-classes";
 import { cn } from "@/lib/utils";
@@ -141,6 +142,10 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
     if (!row) return;
     if (row.isPaid) {
       toast.error("Нельзя удалить — операция уже выплачена");
+      return;
+    }
+    if (row.type === "TORCOVKA") {
+      toast.error(TORCOVKA_GENERIC_DELETE_BLOCKED);
       return;
     }
     startTransition(async () => {
@@ -418,18 +423,35 @@ function ProductionRowGroup({
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className={tableActionDestructiveClass}
-                      onClick={onDelete}
-                    >
-                      <Trash2 />
-                    </Button>
+                    row.type === "TORCOVKA" ? (
+                      <span className="inline-flex">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className={tableActionDestructiveClass}
+                          disabled
+                          aria-label={TORCOVKA_GENERIC_DELETE_BLOCKED}
+                        >
+                          <Trash2 />
+                        </Button>
+                      </span>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={tableActionDestructiveClass}
+                        onClick={onDelete}
+                      >
+                        <Trash2 />
+                      </Button>
+                    )
                   }
                 />
-                <TooltipContent>Удалить</TooltipContent>
+                <TooltipContent>
+                  {row.type === "TORCOVKA" ? TORCOVKA_GENERIC_DELETE_BLOCKED : "Удалить"}
+                </TooltipContent>
               </Tooltip>
             </div>
           )}

@@ -1,8 +1,8 @@
-// Смок-скрипт для проверки обратной разноски торцовки/присадки/упаковки
-// (правка/удаление операций производства) на реальной транзакционной БД. Не входит
-// в автоматический набор тестов (vitest в этом проекте — только чистые
-// функции, без БД, см. .cursor/rules/testing.mdc) — запуск вручную:
-// npm run smoke:production
+// Смок-скрипт для проверки обратной разноски присадки/упаковки и containment
+// generic delete торцовки (INC-001: generic TORCOVKA delete запрещён) на реальной
+// транзакционной БД. Не входит в автоматический набор тестов (vitest в этом
+// проекте — только чистые функции, без БД, см. .cursor/rules/testing.mdc) —
+// запуск вручную: npm run smoke:production
 // Использует dev-БД из .env; после прогона данные возвращаются к исходному
 // состоянию через `npm run db:seed`.
 import "./smoke-cookies-preload";
@@ -17,6 +17,7 @@ import {
   deleteProductionOperation,
   updateProductionLineQuantity,
 } from "../src/server/production";
+import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "../src/lib/torcovka-delete-policy";
 
 const prisma = new PrismaClient();
 let smokeAdminUserId: string | null = null;
@@ -61,6 +62,21 @@ async function ignoringRevalidate<T>(fn: () => Promise<T>): Promise<T | undefine
     if (msg.includes("static generation store missing")) return undefined;
     throw err;
   }
+}
+
+/** Expected domain reject: do not treat it as Next.js revalidate noise. */
+async function expectAdminActionRejected(
+  fn: () => Promise<unknown>,
+  expectedMessage: string,
+): Promise<void> {
+  try {
+    await withAdminSession(fn);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg === expectedMessage) return;
+    throw err;
+  }
+  throw new Error(`FAIL: ожидалась ошибка: ${expectedMessage}`);
 }
 
 function assertEqual(actual: number, expected: number, label: string) {
@@ -233,16 +249,12 @@ async function testUpakovkaRoundtrip() {
   }
 }
 
-async function testTorcovkaDeleteDoesNotReturnRails() {
-  console.log("\n=== ТОРЦОВКА: удаление НЕ возвращает рейки (списание = отход) ===");
+async function testTorcovkaGenericDeleteBlocked() {
+  console.log("\n=== ТОРЦОВКА: generic delete запрещён (INC-001 containment) ===");
   const employee = await prisma.employee.findFirstOrThrow({ where: { status: "ACTIVE" } });
   const lot = await prisma.railLot.findFirstOrThrow({ where: { remainingQuantity: { gte: 5 } } });
   const detail = await prisma.detail.findFirstOrThrow({ where: { detailType: lot.railType } });
 
-  const blankBefore =
-    (await prisma.blankStock.findFirst({
-      where: { lengthM: detail.lengthM, detailType: detail.detailType, sort: detail.sort },
-    }))?.quantity ?? 0;
   const remainingBefore = lot.remainingQuantity;
 
   const submitInput = {
@@ -274,27 +286,56 @@ async function testTorcovkaDeleteDoesNotReturnRails() {
     .remainingQuantity;
   assertEqual(remainingAfterSubmit, remainingBefore - 5, "рейки списаны из пакета при торцовке");
 
+  const blankAfterSubmit =
+    (await prisma.blankStock.findFirst({
+      where: { lengthM: detail.lengthM, detailType: detail.detailType, sort: detail.sort },
+    }))?.quantity ?? 0;
+
   const op = await prisma.productionOperation.findFirstOrThrow({
     where: { type: "TORCOVKA", employeeId: employee.id, railLotId: lot.id },
     orderBy: { createdAt: "desc" },
   });
+  const lineCountAfterSubmit = await prisma.operationDetailLine.count({
+    where: { operationId: op.id },
+  });
 
-  // Удаляем запись — рейки НЕ должны вернуться в пакет (они уже распилены),
-  // а произведённые заготовки должны уйти со склада заготовок.
-  await withAdminSession(() => deleteProductionOperation(op.id));
+  await expectAdminActionRejected(
+    () => deleteProductionOperation(op.id),
+    TORCOVKA_GENERIC_DELETE_BLOCKED,
+  );
 
-  const remainingAfterDelete = (await prisma.railLot.findUniqueOrThrow({ where: { id: lot.id } }))
-    .remainingQuantity;
-  assertEqual(remainingAfterDelete, remainingBefore - 5, "рейки НЕ возвращены в пакет после удаления");
+  const remainingAfterRejectedDelete = (
+    await prisma.railLot.findUniqueOrThrow({ where: { id: lot.id } })
+  ).remainingQuantity;
+  assertEqual(
+    remainingAfterRejectedDelete,
+    remainingAfterSubmit,
+    "RailLot remaining не изменился после rejected generic delete",
+  );
 
-  const blankAfterDelete =
+  const blankAfterRejectedDelete =
     (await prisma.blankStock.findFirst({
       where: { lengthM: detail.lengthM, detailType: detail.detailType, sort: detail.sort },
     }))?.quantity ?? 0;
-  assertEqual(blankAfterDelete, blankBefore, "произведённые заготовки сняты со склада заготовок");
+  assertEqual(
+    blankAfterRejectedDelete,
+    blankAfterSubmit,
+    "BlankStock quantity не изменился после rejected generic delete",
+  );
 
-  console.log(
-    "OK   5 реек остаются «взятыми» без записи о производстве — это и есть отход по партии",
+  const opStillExists = await prisma.productionOperation.findUnique({ where: { id: op.id } });
+  if (!opStillExists) {
+    throw new Error("FAIL: TORCOVKA операция удалена несмотря на INC-001 containment");
+  }
+  console.log("OK   операция осталась в БД");
+
+  const lineCountAfterRejectedDelete = await prisma.operationDetailLine.count({
+    where: { operationId: op.id },
+  });
+  assertEqual(
+    lineCountAfterRejectedDelete,
+    lineCountAfterSubmit,
+    "строки операции не удалены после rejected generic delete",
   );
 }
 
@@ -380,7 +421,7 @@ async function testPrisadkaDeleteBlockedWhenConsumedFurther() {
 }
 
 async function main() {
-  await testTorcovkaDeleteDoesNotReturnRails();
+  await testTorcovkaGenericDeleteBlocked();
   await testPrisadkaRoundtrip();
   await testUpakovkaRoundtrip();
   await testPrisadkaDeleteBlockedWhenConsumedFurther();

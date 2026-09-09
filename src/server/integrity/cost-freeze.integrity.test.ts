@@ -12,6 +12,7 @@ import { maybeFreezeBatch, recalcBatchCosts } from "@/server/internal/cost";
 import { syncBatchTotalCostInternal } from "@/server/internal/finance-operations";
 import { markEmployeePaid } from "@/server/payroll";
 import { deleteProductionOperation, updateProductionLineQuantity } from "@/server/production";
+import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "@/lib/torcovka-delete-policy";
 import { updateBatch } from "@/server/purchases";
 import {
   createIntegrityClients,
@@ -505,7 +506,7 @@ describe.skipIf(!enabled)("cost-freeze integrity (DI-005/006/018/019/BD-3)", () 
     expect(after.frozenAt).not.toBeNull();
   });
 
-  it("7b delete wins Op lock: last unpaid TORCOVKA removed, no Payment B, freeze FINAL from remaining A", async () => {
+  it("7b generic TORCOVKA delete is rejected; unpaid op and stock stay (INC-001 containment)", async () => {
     const suffix = `t7b-${Date.now()}`;
     const material = await seedMaterial(`mat-${suffix}`);
     const batch = await seedBatch({
@@ -529,55 +530,17 @@ describe.skipIf(!enabled)("cost-freeze integrity (DI-005/006/018/019/BD-3)", () 
     });
     await seedBlankStock(material.id, QTY_A + QTY_B);
 
-    const orig = prisma.$transaction.bind(prisma);
-    let firstTx = true;
-    let resolveEntered!: () => void;
-    const entered = new Promise<void>((r) => {
-      resolveEntered = r;
-    });
-    let releaseTx!: () => void;
-    const gate = new Promise<void>((r) => {
-      releaseTx = r;
-    });
-    const spy = vi.spyOn(prisma, "$transaction").mockImplementation((...args: unknown[]) => {
-      if (firstTx) {
-        firstTx = false;
-        resolveEntered();
-        return gate.then(() => orig(...(args as Parameters<typeof orig>)));
-      }
-      return orig(...(args as Parameters<typeof orig>));
-    });
+    await expect(deleteProductionOperation(opB.id)).rejects.toThrow(TORCOVKA_GENERIC_DELETE_BLOCKED);
 
-    let payrollError: unknown;
-    try {
-      const payrollP = markEmployeePaid(empB.id).catch((err) => {
-        payrollError = err;
-      });
-      await entered;
-      await deleteProductionOperation(opB.id);
-      releaseTx();
-      await payrollP;
-    } finally {
-      spy.mockRestore();
-    }
-
-    expect(await prismaA.productionOperation.findUnique({ where: { id: opB.id } })).toBeNull();
+    expect(await prismaA.productionOperation.findUnique({ where: { id: opB.id } })).not.toBeNull();
     expect(await prismaA.productionOperation.findUnique({ where: { id: opA.id } })).not.toBeNull();
-    expect(await prismaA.payment.count({ where: { employeeId: empB.id } })).toBe(0);
-    expect(String(payrollError)).toMatch(/уже выплачены|невыплаченных/i);
     const stock = await prismaA.blankStock.findFirstOrThrow({ where: { materialId: material.id } });
-    expect(stock.quantity).toBe(QTY_A);
+    expect(stock.quantity).toBe(QTY_A + QTY_B);
     expect(
       await prismaA.productionOperation.count({
         where: { batchId: batch.id, type: "TORCOVKA", isPaid: false },
       }),
-    ).toBe(0);
-    const after = await prismaA.batch.findUniqueOrThrow({ where: { id: batch.id } });
-    expect(after.frozenAt).not.toBeNull();
-    const finals = await prismaA.batchCost.findMany({
-      where: { batchId: batch.id, status: "FINAL" },
-    });
-    expectFinalMatchesCommittedQty(finals, QTY_A, after.totalCost);
+    ).toBe(1);
   });
 
   it("8 updateBatch section on frozen batch is rejected", async () => {

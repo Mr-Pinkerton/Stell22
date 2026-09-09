@@ -17,11 +17,11 @@ import { assignCanonicalTorcovkaLineIds } from "@/lib/torcovka-cost";
 import {
   COST_FLOW_DRIVER_AFTER_CONSUMPTION,
   COST_FLOW_POOL_UNINITIALIZED,
-  COST_FLOW_PRE_CUTOVER_REVERSE,
   COST_FLOW_VERSION_MISMATCH,
 } from "@/server/internal/cost-flow-raw";
 import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
 import { INVENTORY_BOUNDARY } from "@/server/internal/inventory-integrity";
+import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "@/lib/torcovka-delete-policy";
 import {
   correctTorcovkaRailsTaken,
   deleteProductionOperation,
@@ -412,7 +412,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     expect(await prismaA.productionOperation.count({ where: { railLotId: world.lot.id } })).toBe(0);
   });
 
-  it("10 active delete removes blank receipt, writes TORCOVKA_ZERO_OUTPUT, does not restore rails", async () => {
+  it("10 generic TORCOVKA delete is rejected before reverse (INC-001 containment)", async () => {
     await setCostFlowActive(true);
     const world = await seedWorld();
     const lotBefore = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
@@ -422,31 +422,23 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
       include: { lines: true },
     });
     const lotAfterTorc = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
-    const consumed = d(op.consumedRawValue)!;
-    const blankMat = op.lines.reduce((s, l) => s.plus(d(l.receiptMaterialValue)!), D(0));
     expect(lotAfterTorc.remainingQuantity).toBe(lotBefore.remainingQuantity - 1);
-    expect(d(lotBefore.remainingValue)!.equals(d(lotAfterTorc.remainingValue)!.plus(consumed))).toBe(true);
-    await deleteProductionOperation(op.id);
-    const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
-    const blank = await blankOf(world.material.id, 1.8);
-    const events = await prismaA.costEvent.findMany({
+    const blankBefore = await blankOf(world.material.id, 1.8);
+    const eventsBefore = await prismaA.costEvent.count({
       where: { type: "TORCOVKA_ZERO_OUTPUT", batchId: world.batch.id },
     });
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(TORCOVKA_GENERIC_DELETE_BLOCKED);
+    const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
+    const blank = await blankOf(world.material.id, 1.8);
     expect(lot.remainingQuantity).toBe(lotAfterTorc.remainingQuantity);
     expect(d(lot.remainingValue)!.equals(d(lotAfterTorc.remainingValue)!)).toBe(true);
-    expect(blank?.quantity).toBe(0);
-    expect(d(blank?.materialValue)!.equals(D(0))).toBe(true);
-    expect(d(blank?.laborValue)!.equals(D(0))).toBe(true);
-    expect(d(blank?.totalValue)!.equals(D(0))).toBe(true);
-    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(0);
-    expect(events).toHaveLength(1);
-    expect(events[0]?.operationId).toBeNull();
-    expect(d(events[0]?.materialValue)!.equals(consumed)).toBe(true);
-    expect(d(events[0]?.laborValue)!.equals(D(0))).toBe(true);
-    expect(d(events[0]?.nomenclatureValue)!.equals(D(0))).toBe(true);
-    expect(d(events[0]?.totalValue)!.equals(consumed)).toBe(true);
-    expect(blankMat.equals(consumed)).toBe(true);
-    expect(d(lot.remainingValue)!.plus(d(events[0]?.materialValue)!).equals(d(lotBefore.remainingValue)!)).toBe(true);
+    expect(blank?.quantity).toBe(blankBefore?.quantity);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
+    expect(
+      await prismaA.costEvent.count({
+        where: { type: "TORCOVKA_ZERO_OUTPUT", batchId: world.batch.id },
+      }),
+    ).toBe(eventsBefore);
   });
 
   it("11 reversal after pool mutation is blocked atomically", async () => {
@@ -459,7 +451,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
       where: { materialId: world.material.id, lengthM: 1.8, detailType: "POLKA", sort: "SORT1" },
       data: { costVersion: { increment: 1 } },
     });
-    await expect(deleteProductionOperation(op.id)).rejects.toThrow(COST_FLOW_VERSION_MISMATCH);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(TORCOVKA_GENERIC_DELETE_BLOCKED);
     expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
     expect(lot.remainingQuantity).toBe(lotMid.remainingQuantity);
@@ -476,7 +468,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     await setCostFlowActive(true);
     const op = await prismaA.productionOperation.findFirstOrThrow({ where: { railLotId: world.lot.id } });
     const lotMid = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
-    await expect(deleteProductionOperation(op.id)).rejects.toThrow(COST_FLOW_PRE_CUTOVER_REVERSE);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(TORCOVKA_GENERIC_DELETE_BLOCKED);
     expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
     expect(lot.remainingQuantity).toBe(lotMid.remainingQuantity);
@@ -702,7 +694,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     const lotBefore = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
     const blankBefore = await blankOf(world.material.id, 1.8);
     const eventsBefore = await prismaA.costEvent.count();
-    await expect(deleteProductionOperation(op.id)).rejects.toThrow(INVENTORY_BOUNDARY);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(TORCOVKA_GENERIC_DELETE_BLOCKED);
     expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
     const blank = await blankOf(world.material.id, 1.8);
