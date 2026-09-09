@@ -1,15 +1,17 @@
 "use client";
 
-import { useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { syncMarketplaces, type SalesData } from "@/server/marketplace";
 import type { SalesReportRow } from "@/mocks/report-fixtures";
 import { formatMoney, formatIsoDateTime } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
+import { FiltersBar } from "@/components/filters-bar";
 import { KpiTile } from "@/components/kpi-tile";
 import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent } from "@/components/ui/card";
+import { filterSalesRows } from "@/lib/sales-table-filters";
 
 const columns: Column<SalesReportRow>[] = [
   {
@@ -50,6 +52,8 @@ function formatSyncedAt(iso: string | null): string {
 export function SalesView({ data }: { data: SalesData }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
+  const [search, setSearch] = useState("");
+  const visibleRows = useMemo(() => filterSalesRows(data.rows, search), [data.rows, search]);
 
   const handleSync = () => {
     startTransition(async () => {
@@ -88,12 +92,23 @@ export function SalesView({ data }: { data: SalesData }) {
           />
         </div>
 
+        <FiltersBar
+          search
+          searchPlaceholder="SKU или изделие"
+          searchValue={search}
+          onSearchChange={setSearch}
+        />
+
         <Card className="surface-card ring-0">
           <CardContent className="p-0">
             <DataTable
               columns={columns}
-              rows={data.rows}
-              empty="Продаж нет — нажмите «Синхронизировать с МП»"
+              rows={visibleRows}
+              empty={
+                data.rows.length === 0
+                  ? "Продаж нет — нажмите «Синхронизировать с МП»"
+                  : "Нет строк по выбранным фильтрам"
+              }
               padded
               className="border-0"
             />
