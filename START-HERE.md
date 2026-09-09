@@ -22,13 +22,18 @@ Never import door-specific entities, routes, WIP assumptions, or business rules 
 9. GitHub `audit/00-invariants.md`
 10. relevant later `audit/01.*`, `02.*`, `03.*`
 
-## Current HEAD at last sync
+## Current documentation checkpoint
+
+`6dec426b25b25c663ec26ea5ac1debeabe570dc4`
+
+This checkpoint includes the canonical `PROJECT.md` and `audit/AUDIT-INDEX.md` recovery documents.
+Always verify current `main` before relying on this SHA because later commits may exist.
+
+Last verified application-code checkpoint before the recovery-doc commits:
 
 `d9f940e8540801bdb27dd72210193f5e4ab038c3`
 
 `fix: enforce prisadka inventory boundary`
-
-Always verify current `main` before relying on this SHA.
 
 ## Current work mode
 
