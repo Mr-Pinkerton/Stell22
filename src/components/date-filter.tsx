@@ -11,6 +11,7 @@ import {
   getCurrentMonth,
   isDayInRange,
   isSameDay,
+  isSameMonth,
   normalizeRange,
   startOfMonth,
 } from "@/lib/dates";
@@ -249,4 +250,11 @@ export function DateFilter({ value, onChange }: DateFilterProps) {
 
 export function getDefaultDateFilterValue(): DateFilterValue {
   return getDefaultValue();
+}
+
+/** Семантическое сравнение с дефолтом: текущий месяц, без диапазона, не «за всё время». */
+export function isDefaultDateFilterValue(value: DateFilterValue): boolean {
+  if (value.allTime) return false;
+  if (value.rangeStart !== null || value.rangeEnd !== null) return false;
+  return isSameMonth(value.month, getDefaultDateFilterValue().month);
 }

@@ -253,7 +253,7 @@ export function EmployeesView({ initialEmployees }: { initialEmployees: Employee
       <FiltersBar
         search
         archive
-        actionLabel="Найти"
+        searchPlaceholder="ФИО сотрудника"
         searchValue={search}
         onSearchChange={setSearch}
         archiveChecked={showArchive}

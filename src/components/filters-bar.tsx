@@ -10,6 +10,7 @@ import type { SectionFilters } from "@/lib/navigation";
 import {
   DateFilter,
   getDefaultDateFilterValue,
+  isDefaultDateFilterValue,
   type DateFilterValue,
 } from "@/components/date-filter";
 import { WeekFilter, getDefaultWeekFilterValue } from "@/components/week-filter";
@@ -29,10 +30,30 @@ export interface FiltersBarProps extends SectionFilters {
   /** Выбранная неделя пт–чт (id = дата пятницы), контролируемо. */
   weekValue?: string;
   onWeekChange?: (value: string) => void;
+  /** Placeholder поля поиска. */
+  searchPlaceholder?: string;
   /** Подпись основной кнопки применения фильтров (по умолчанию «Показать»). */
   actionLabel?: string;
-  /** Клик по кнопке применения (например, записать период в URL). */
+  /** Клик по кнопке применения (например, записать период в URL). Без колбэка кнопка не рендерится. */
   onApply?: () => void;
+}
+
+/** Видимые встроенные фильтры совпадают с дефолтом (для disabled «Сбросить»). */
+export function isFiltersBarDefault(input: {
+  search?: boolean;
+  archive?: boolean;
+  date?: boolean;
+  weeks?: boolean;
+  query: string;
+  showArchive: boolean;
+  dateFilter: DateFilterValue;
+  weekFilter: string;
+}): boolean {
+  if (input.search && input.query !== "") return false;
+  if (input.archive && input.showArchive) return false;
+  if (input.date && !isDefaultDateFilterValue(input.dateFilter)) return false;
+  if (input.weeks && input.weekFilter !== getDefaultWeekFilterValue()) return false;
+  return true;
 }
 
 export function FiltersBar({
@@ -49,6 +70,7 @@ export function FiltersBar({
   onDateFilterChange,
   weekValue,
   onWeekChange,
+  searchPlaceholder = "Поиск",
   actionLabel = "Показать",
   onApply,
 }: FiltersBarProps) {
@@ -95,6 +117,17 @@ export function FiltersBar({
 
   if (!hasAny) return null;
 
+  const filtersAtDefault = isFiltersBarDefault({
+    search,
+    archive,
+    date,
+    weeks,
+    query,
+    showArchive,
+    dateFilter,
+    weekFilter,
+  });
+
   const handleReset = () => {
     setDateFilter(getDefaultDateFilterValue());
     setWeekFilter(getDefaultWeekFilterValue());
@@ -124,7 +157,7 @@ export function FiltersBar({
           </Label>
           <Input
             id="f-search"
-            placeholder="Название / имя"
+            placeholder={searchPlaceholder}
             className={cn("w-56", filterInputClass)}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -166,13 +199,21 @@ export function FiltersBar({
           Показать архив
         </label>
       )}
-      <div className="ml-auto flex gap-2">
-        <Button variant="ghost" className={filterActionClass} onClick={handleReset}>
+      <div className="ml-auto flex shrink-0 gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          className={filterActionClass}
+          disabled={filtersAtDefault}
+          onClick={handleReset}
+        >
           Сбросить
         </Button>
-        <Button className={filterActionClass} onClick={onApply}>
-          {actionLabel}
-        </Button>
+        {onApply ? (
+          <Button type="button" className={filterActionClass} onClick={onApply}>
+            {actionLabel}
+          </Button>
+        ) : null}
       </div>
     </div>
   );
