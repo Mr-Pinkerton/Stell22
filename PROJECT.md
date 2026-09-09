@@ -65,21 +65,29 @@ Always establish current HEAD before starting new work because documentation com
 
 ## 5. Current work mode
 
-`ACTIVE MODE: SYSTEM AUDIT`
+`ACTIVE MODE: INC-001 PRODUCTION INCIDENT` (audit program paused for this correction)
 
-AUDIT 1 (system architecture) is `COMPLETE / REVIEWED`. Next audit section: **AUDIT 2 — FINANCE & MONEY INTEGRITY**.
+AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status.**
 
-The current objective is not an endless chain of local fixes. Audit the system as a whole, then group confirmed findings into coherent remediation packages.
+**Current priority:** `INC-001 — TORCOVKA production incident` (`OPEN — PHYSICAL FACT REQUIRED BEFORE PROD CORRECTION`).
 
-Audit loop:
+`AUDIT 2 — FINANCE & MONEY INTEGRITY` is `NEXT AFTER INC-001`. Do not start AUDIT 2 while INC-001 needs physical facts and a reviewed correction.
 
-`find -> prove -> classify -> record -> continue`
+The audit loop still applies to new findings (`INC-001-F1`). Do not automatically invert INV-047 (generic TORCOVKA delete returning rails).
 
-Only after a logical audit section:
+## 5.1 Temporary operational rule — TORCOVKA delete
 
-`group -> prioritize -> remediation package`
+`ACCEPTED` until an explicit erroneous-cancellation flow exists:
 
-Do not automatically fix every audit finding.
+**`DO NOT DELETE TORCOVKA OPERATIONS`**
+
+Reason: generic TORCOVKA delete reverses produced `BlankStock` but **intentionally does not restore** `RailLot` remaining quantity (`INC-001-F1`). That is how `ПАК-40-1280-01-7` vanished from the terminal after the incident op was deleted.
+
+Correction of a **live** TORCOVKA must use existing correction actions (`correctTorcovkaRailsTaken`, line quantity edit), not delete.
+
+This rule is operational. Application containment (server reject of generic TORCOVKA delete) is a separate patch after docs checkpoint + review. Do not treat the rule as a production-data fix.
+
+`ARCH-P1-001` is unrelated.
 
 ## 6. Cursor / ChatGPT working model
 
@@ -234,33 +242,19 @@ ChatGPT adversarial review of the 08.01 draft: **accepted**. Recovery had record
 
 ## 13. Current next step
 
-`NEXT = AUDIT 2 — FINANCE & MONEY INTEGRITY`
+`NEXT = INC-001 — owner/factory physical facts, then ChatGPT review of Scenario A vs B before any production write`
 
-Audit-only. Do not start implementation or remediation in that pass. Do not open the AUDIT 2 file in the AUDIT 1 finalization commit.
+Required before any prod mutation:
 
-High-level scope:
+- physical remaining rails in `ПАК-40-1280-01-7`;
+- whether 3843 × 0.36 m SORT1 blanks were physically produced;
+- employee identity if Scenario B.
 
-- CashFlow;
-- Account / balance;
-- Statement/import;
-- Deal allocations;
-- transfers;
-- Payment/payroll money;
-- corrections/voids;
-- transaction boundaries;
-- idempotency;
-- confirmed/unconfirmed money;
-- reconciliation;
-- Sale vs money where relevant.
+Do **not** start AUDIT 2 in this pass.
 
-Constraints:
+`AUDIT 2 — FINANCE & MONEY INTEGRITY` = `NEXT AFTER INC-001`.
 
-- audit-only; do not modify application code in that pass;
-- do not turn findings into patches automatically;
-- do not reopen closed findings without new evidence;
-- write the result under `audit/` when that audit starts;
-- update `audit/AUDIT-INDEX.md` in the same cycle;
-- `production_cost_flow` stays inactive; activation stays `BLOCKED`.
+When AUDIT 2 starts: audit-only; do not auto-patch findings; `production_cost_flow` stays inactive; activation stays `BLOCKED`.
 
 ## 14. Journal update rule
 
@@ -291,4 +285,19 @@ After every significant delivery action record:
 | Claude deploy gate | not required (docs only, no deploy) |
 | Deploy | **NO** |
 | Activation | unchanged / `BLOCKED` |
-| Next | **AUDIT 2 — FINANCE & MONEY INTEGRITY** |
+| Next | **INC-001** (AUDIT 2 deferred until INC-001 physical facts + correction review) |
+
+## 16. Journal — INC-001 correction design
+
+| | |
+| --- | --- |
+| Date | 2026-09-09 |
+| Stage | INC-001 TORCOVKA whole-package production incident |
+| BASE | `b08b98b5f67f7568a18f090c54b362f01c3426ff` (worktree `fix/torcovka-production-incident`); prod app `d9f940e` |
+| Result | Delete semantics verified. Downstream NONE. Employee not recoverable. Scenarios A/B designed, not implemented. Finding `INC-001-F1` P1 recorded. |
+| Blockers | Physical remaining rails; whether 3843 blanks existed; employee if Scenario B. `ARCH-P1-001` unchanged. |
+| Review | Correction design only. No application patch. ChatGPT reviews A vs B before prod write. |
+| Claude deploy gate | not required (no deploy) |
+| Deploy | **NO** |
+| Activation | unchanged / `BLOCKED` |
+| Next | **Physical facts → reviewed Scenario A or B.** AUDIT 2 after INC-001. |

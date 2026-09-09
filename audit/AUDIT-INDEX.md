@@ -17,7 +17,8 @@ Do not import Woodveri door-manufacturing entities or workflows.
 | Branch | `main` |
 | Application-code checkpoint | `d9f940e8540801bdb27dd72210193f5e4ab038c3` — `fix: enforce prisadka inventory boundary` |
 | Docs checkpoint on `origin/main` | `d1f46e46232499b61f55e754b0bd70ddc5924bca` (canonicalize). AUDIT 1 finalization commit follows in this cycle. |
-| Audit program | STEP 0 recovery **COMPLETE**. **AUDIT 1 = COMPLETE / REVIEWED.** Next: **AUDIT 2 — FINANCE & MONEY INTEGRITY**. |
+| Audit program | STEP 0 recovery **COMPLETE**. **AUDIT 1 = COMPLETE / REVIEWED.** Next after INC-001: **AUDIT 2 — FINANCE & MONEY INTEGRITY**. |
+| Production incident | **`INC-001` = `OPEN — PHYSICAL FACT REQUIRED BEFORE PROD CORRECTION`**. Finding **`INC-001-F1` P1 / CONFIRMED**. `ARCH-P1-001` unrelated. Ops rule: do not delete TORCOVKA. No prod data write. |
 | `production_cost_flow` | inactive (delivery state; see `PROJECT.md`) |
 
 Always verify current `main` HEAD before relying on SHAs above.
@@ -143,6 +144,12 @@ No `audit/01.16*` or `audit/01.17*`.
 | ---- | ---- | ---- | ------------- | ------ | ---------- | ----- |
 | `audit/08.01-audit-1-system-architecture.md` | Whole system | Architecture audit | Repo `d1f46e46232499b61f55e754b0bd70ddc5924bca`; app `d9f940e8540801bdb27dd72210193f5e4ab038c3` | `COMPLETE / REVIEWED` | YES | ChatGPT adversarial review accepted. New P0=0. New P1=`ARCH-P1-001` (OPEN / CONFIRMED; not patched). New P2/P3=0. Simplify=`ARCH-SIMPLIFY-001`. Next: **AUDIT 2 — FINANCE & MONEY INTEGRITY**. |
 
+### D.8 Production incidents
+
+| File | Area | Type | BASE/Snapshot | Status | Canonical? | Notes |
+| ---- | ---- | ---- | ------------- | ------ | ---------- | ----- |
+| `audit/INC-001-torcovka-whole-package-production-incident.md` | TORCOVKA / RailLot | Production incident | Prod HEAD `d9f940e`; `origin/main` `b08b98b`; DB read-only 2026-09-09 | `OPEN — PHYSICAL FACT REQUIRED BEFORE PROD CORRECTION` | YES | Deleted op; remaining=0. Downstream NONE. Scenarios A/B designed, not implemented. Finding `INC-001-F1` P1. Employee not recoverable. |
+
 ---
 
 ## E. AUDIT 1 — SYSTEM ARCHITECTURE
@@ -202,8 +209,16 @@ Artifact: `audit/08.01-audit-1-system-architecture.md`
 
 BASE repo: `d1f46e46232499b61f55e754b0bd70ddc5924bca`. Application: `d9f940e8540801bdb27dd72210193f5e4ab038c3`. New P0=0. New P1=`ARCH-P1-001` (OPEN / CONFIRMED). New P2/P3=0. Simplify=`ARCH-SIMPLIFY-001`.
 
+### INC-001 — TORCOVKA whole-package production incident
+
+Status: `OPEN — PHYSICAL FACT REQUIRED BEFORE PROD CORRECTION`
+
+Artifact: `audit/INC-001-torcovka-whole-package-production-incident.md`
+
+Finding: `INC-001-F1` (P1) — after TORCOVKA delete, no application path to restore falsely consumed `RailLot`. Downstream NONE. Correction Scenario A (physical remaining only) vs B (restore rails + 3843 blanks) designed, not implemented. Employee not recoverable from DB/logs. No production mutation.
+
 ### AUDIT 2 — FINANCE & MONEY INTEGRITY
 
-Status: `NEXT`
+Status: `NEXT AFTER INC-001`
 
-Audit-only. Not opened as a file in the AUDIT 1 cycle. High-level scope: CashFlow, Account/balance, Statement/import, Deal allocations, transfers, Payment/payroll money, corrections/voids, transaction boundaries, idempotency, confirmed/unconfirmed money, reconciliation, Sale vs money where relevant.
+Audit-only when started. Do not open as a file until INC-001 production correction is decided. High-level scope: CashFlow, Account/balance, Statement/import, Deal allocations, transfers, Payment/payroll money, corrections/voids, transaction boundaries, idempotency, confirmed/unconfirmed money, reconciliation, Sale vs money where relevant.
