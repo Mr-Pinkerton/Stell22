@@ -81,6 +81,15 @@ const ADD_LABELS: Record<TabKey, string> = {
   other: "Добавить позицию",
 };
 
+const SEARCH_PLACEHOLDERS: Record<TabKey, string> = {
+  products: "Название или SKU",
+  details: "Номер или название детали",
+  materials: "Материал",
+  fasteners: "Название",
+  packaging: "Название",
+  other: "Название",
+};
+
 const TAB_TO_NOM_TYPE: Partial<Record<TabKey, NomenclatureType>> = {
   fasteners: "FASTENER",
   packaging: "PACKAGING",
@@ -680,7 +689,7 @@ export function NomenclatureView({
         <FiltersBar
           search
           archive
-          actionLabel="Найти"
+          searchPlaceholder={SEARCH_PLACEHOLDERS[activeTab]}
           searchValue={search}
           onSearchChange={setSearch}
           archiveChecked={showArchive}

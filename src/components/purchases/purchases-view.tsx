@@ -363,7 +363,7 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
       <FiltersBar
         search
         archive
-        actionLabel="Найти"
+        searchPlaceholder="Название партии"
         searchValue={search}
         onSearchChange={setSearch}
         archiveChecked={showArchive}
