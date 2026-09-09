@@ -5,8 +5,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
-import { dateFilterFromParams, paramsFromDateFilter } from "@/lib/report-period";
-import type { DateFilterValue } from "@/components/date-filter";
+import { isReportsDraftApplied, reportsAppliedKey, reportsDraftFromParams, reportsHrefFromDraft, syncReportsDraftIfAppliedChanged } from "@/lib/report-period";
+import { getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
+import { getDefaultWeekFilterValue } from "@/components/week-filter";
 import { SegmentTabs } from "@/components/reports/report-shared";
 import { ReportPurchasesTab } from "@/components/reports/report-purchases-tab";
 import { ReportCostTab } from "@/components/reports/report-cost-tab";
@@ -31,10 +32,7 @@ const TABS: { key: ReportTab; label: string }[] = [
   { key: "waste", label: "Процент отхода" },
 ];
 
-const TAB_FILTERS: Record<
-  ReportTab,
-  { date?: boolean; weeks?: boolean; archive?: boolean }
-> = {
+const TAB_FILTERS: Record<ReportTab, { date?: boolean; weeks?: boolean }> = {
   purchases: { date: true },
   cost: { date: true },
   salaries: { date: true, weeks: true },
@@ -57,11 +55,24 @@ export function ReportsView({
 
   const router = useRouter();
   const searchParams = useSearchParams();
-  // Фильтр даты/недели инициализируется из URL, чтобы отражать текущий охват.
-  const [dateFilter, setDateFilter] = useState<DateFilterValue>(() =>
-    dateFilterFromParams(new URLSearchParams(searchParams.toString())),
+  const appliedParams = new URLSearchParams(searchParams.toString());
+  const appliedKey = reportsAppliedKey(appliedParams);
+
+  const [dateFilter, setDateFilter] = useState<DateFilterValue>(
+    () => reportsDraftFromParams(appliedParams).dateFilter,
   );
-  const [week, setWeek] = useState<string>(() => searchParams.get("week") ?? "");
+  const [week, setWeek] = useState<string>(() => reportsDraftFromParams(appliedParams).week);
+  const [syncedAppliedKey, setSyncedAppliedKey] = useState(appliedKey);
+
+  if (appliedKey !== syncedAppliedKey) {
+    const next = syncReportsDraftIfAppliedChanged(syncedAppliedKey, appliedParams, {
+      dateFilter,
+      week,
+    });
+    setSyncedAppliedKey(next.appliedKey);
+    setDateFilter(next.dateFilter);
+    setWeek(next.week);
+  }
 
   // Смена месяца делает выбранную неделю невалидной — сбрасываем.
   const handleDateFilterChange = (value: DateFilterValue) => {
@@ -69,14 +80,17 @@ export function ReportsView({
     setDateFilter(value);
   };
 
-  // «Показать»/«Применить» → период (и неделя для ЗП) в URL. Страница (server)
+  // «Показать» → период (и неделя для ЗП) в URL. Страница (server)
   // перечитает searchParams и пересоберёт отчёты за выбранный охват (A11/A12).
   const applyPeriod = () => {
-    const params = paramsFromDateFilter(dateFilter);
-    if (week) params.set("week", week);
-    const qs = params.toString();
-    router.push(qs ? `/reports?${qs}` : "/reports");
+    router.push(reportsHrefFromDraft(dateFilter, week));
   };
+
+  const resetPeriod = () => {
+    router.push(reportsHrefFromDraft(getDefaultDateFilterValue(), getDefaultWeekFilterValue()));
+  };
+
+  const draftApplied = isReportsDraftApplied(dateFilter, week, appliedParams);
 
   const filters = TAB_FILTERS[activeTab];
 
@@ -228,7 +242,9 @@ export function ReportsView({
           weekValue={week}
           onWeekChange={setWeek}
           onApply={applyPeriod}
-          actionLabel={activeTab === "purchases" ? "Применить" : "Показать"}
+          applyDisabled={draftApplied}
+          onReset={resetPeriod}
+          actionLabel="Показать"
         />
 
         <SegmentTabs

@@ -43,16 +43,26 @@ describe("isFiltersBarDefault", () => {
     ).toBe(false);
   });
 
-  it("невидимые date/week не делают бар dirty", () => {
+  it("невидимая дата не делает бар dirty", () => {
+    expect(
+      isFiltersBarDefault({
+        ...pristine,
+        search: true,
+        archive: true,
+        dateFilter: { ...getDefaultDateFilterValue(), allTime: true },
+      }),
+    ).toBe(true);
+  });
+
+  it("непустая неделя dirty даже если WeekFilter скрыт", () => {
     expect(
       isFiltersBarDefault({
         ...pristine,
         search: true,
         archive: true,
         weekFilter: "2026-09-04",
-        dateFilter: { ...getDefaultDateFilterValue(), allTime: true },
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("выбранная неделя при weeks → dirty", () => {

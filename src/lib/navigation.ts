@@ -76,7 +76,7 @@ export const navItems: NavItem[] = [
     href: "/reports",
     icon: FileBarChart,
     canExport: true,
-    filters: { date: true, dateAllTime: true, archive: true },
+    filters: { date: true, dateAllTime: true },
   },
   {
     slug: "finance",

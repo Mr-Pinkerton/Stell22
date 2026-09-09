@@ -36,6 +36,10 @@ export interface FiltersBarProps extends SectionFilters {
   actionLabel?: string;
   /** Клик по кнопке применения (например, записать период в URL). Без колбэка кнопка не рендерится. */
   onApply?: () => void;
+  /** Primary action disabled, если черновик уже применён (Reports). */
+  applyDisabled?: boolean;
+  /** После внутреннего сброса (controlled callbacks). Reports — синхронизация URL. */
+  onReset?: () => void;
 }
 
 /** Видимые встроенные фильтры совпадают с дефолтом (для disabled «Сбросить»). */
@@ -52,7 +56,7 @@ export function isFiltersBarDefault(input: {
   if (input.search && input.query !== "") return false;
   if (input.archive && input.showArchive) return false;
   if (input.date && !isDefaultDateFilterValue(input.dateFilter)) return false;
-  if (input.weeks && input.weekFilter !== getDefaultWeekFilterValue()) return false;
+  if (input.weekFilter !== getDefaultWeekFilterValue()) return false;
   return true;
 }
 
@@ -73,6 +77,8 @@ export function FiltersBar({
   searchPlaceholder = "Поиск",
   actionLabel = "Показать",
   onApply,
+  applyDisabled = false,
+  onReset,
 }: FiltersBarProps) {
   const hasAny = search || date || weeks || archive;
   const [internalDateFilter, setInternalDateFilter] = useState<DateFilterValue>(
@@ -133,6 +139,7 @@ export function FiltersBar({
     setWeekFilter(getDefaultWeekFilterValue());
     setQuery("");
     setShowArchive(false);
+    onReset?.();
   };
 
   const selectAllTime = () => {
@@ -210,7 +217,12 @@ export function FiltersBar({
           Сбросить
         </Button>
         {onApply ? (
-          <Button type="button" className={filterActionClass} onClick={onApply}>
+          <Button
+            type="button"
+            className={filterActionClass}
+            disabled={applyDisabled}
+            onClick={onApply}
+          >
             {actionLabel}
           </Button>
         ) : null}

@@ -9,6 +9,8 @@ import {
   endOfDay,
   getCurrentMonth,
   getMonthPeriod,
+  isSameDay,
+  isSameMonth,
   normalizeRange,
   startOfBusinessDay,
   startOfMonth,
@@ -113,4 +115,78 @@ export function dateFilterFromParams(params: URLSearchParams): DateFilterValue {
   }
   const month = parseMonth(params.get("month") ?? undefined);
   return { month: month ?? base, rangeStart: null, rangeEnd: null, allTime: false };
+}
+
+function sameOptionalDay(a: Date | null | undefined, b: Date | null | undefined): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return isSameDay(a, b);
+}
+
+/** Семантическое равенство черновика даты (без identity Date). */
+export function dateFiltersEqual(a: DateFilterValue, b: DateFilterValue): boolean {
+  if (Boolean(a.allTime) !== Boolean(b.allTime)) return false;
+  if (a.allTime) return true;
+
+  const aRange = Boolean(a.rangeStart && a.rangeEnd);
+  const bRange = Boolean(b.rangeStart && b.rangeEnd);
+  if (aRange && bRange) {
+    return isSameDay(a.rangeStart!, b.rangeStart!) && isSameDay(a.rangeEnd!, b.rangeEnd!);
+  }
+  if (a.rangeStart || a.rangeEnd || b.rangeStart || b.rangeEnd) {
+    return sameOptionalDay(a.rangeStart, b.rangeStart) && sameOptionalDay(a.rangeEnd, b.rangeEnd);
+  }
+  return isSameMonth(a.month, b.month);
+}
+
+/** Query отчёта из черновика FiltersBar (Apply и Reset). */
+export function reportsHrefFromDraft(filter: DateFilterValue, week = ""): string {
+  const params = paramsFromDateFilter(filter);
+  if (week) params.set("week", week);
+  const qs = params.toString();
+  return qs ? `/reports?${qs}` : "/reports";
+}
+
+/** Черновик совпадает с уже применённым URL (Показать можно disabled). */
+export function isReportsDraftApplied(
+  draft: DateFilterValue,
+  week: string,
+  params: URLSearchParams,
+): boolean {
+  const applied = dateFilterFromParams(params);
+  const appliedWeek = params.get("week") ?? "";
+  return dateFiltersEqual(draft, applied) && week === appliedWeek;
+}
+
+export function reportsDraftFromParams(params: URLSearchParams): {
+  dateFilter: DateFilterValue;
+  week: string;
+} {
+  return {
+    dateFilter: dateFilterFromParams(params),
+    week: params.get("week") ?? "",
+  };
+}
+
+/** Стабильная сигнатура applied URL: пустой query ≡ текущий месяц. */
+export function reportsAppliedKey(params: URLSearchParams): string {
+  const { dateFilter, week } = reportsDraftFromParams(params);
+  return reportsHrefFromDraft(dateFilter, week);
+}
+
+/**
+ * Синхронизация draft с applied URL только если canonical applied изменился
+ * (Back/Forward). Неподтверждённый ввод сохраняется, пока ключ тот же.
+ */
+export function syncReportsDraftIfAppliedChanged(
+  prevAppliedKey: string,
+  params: URLSearchParams,
+  draft: { dateFilter: DateFilterValue; week: string },
+): { appliedKey: string; dateFilter: DateFilterValue; week: string } {
+  const appliedKey = reportsAppliedKey(params);
+  if (appliedKey === prevAppliedKey) {
+    return { appliedKey, dateFilter: draft.dateFilter, week: draft.week };
+  }
+  const next = reportsDraftFromParams(params);
+  return { appliedKey, dateFilter: next.dateFilter, week: next.week };
 }

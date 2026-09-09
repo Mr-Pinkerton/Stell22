@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { getDefaultDateFilterValue } from "@/components/date-filter";
 import { createLocalDate, getMonthPeriod } from "./dates";
 import {
   dateFilterFromParams,
+  dateFiltersEqual,
   inPeriod,
+  isReportsDraftApplied,
   paramsFromDateFilter,
   periodFromParams,
+  reportsAppliedKey,
+  reportsHrefFromDraft,
+  syncReportsDraftIfAppliedChanged,
   weekRangeFromParams,
 } from "./report-period";
 
@@ -128,5 +134,205 @@ describe("round-trip filter ⇄ params", () => {
       allTime: true,
     }));
     expect(v.allTime).toBe(true);
+  });
+});
+
+function queryFromHref(href: string): URLSearchParams {
+  const q = href.includes("?") ? href.slice(href.indexOf("?") + 1) : "";
+  return new URLSearchParams(q);
+}
+
+describe("reportsHrefFromDraft", () => {
+  it("месяц → /reports?month=YYYY-MM", () => {
+    expect(
+      reportsHrefFromDraft({
+        month: createLocalDate(2026, 6, 1),
+        rangeStart: null,
+        rangeEnd: null,
+        allTime: false,
+      }),
+    ).toBe("/reports?month=2026-07");
+  });
+
+  it("диапазон → from/to без month/all", () => {
+    const q = queryFromHref(
+      reportsHrefFromDraft({
+        month: createLocalDate(2026, 6, 1),
+        rangeStart: createLocalDate(2026, 6, 3),
+        rangeEnd: createLocalDate(2026, 6, 20),
+        allTime: false,
+      }),
+    );
+    expect(q.get("from")).toBe("2026-07-03");
+    expect(q.get("to")).toBe("2026-07-20");
+    expect(q.has("month")).toBe(false);
+    expect(q.has("all")).toBe(false);
+  });
+
+  it("всё время → all=1 без month/from/to", () => {
+    const q = queryFromHref(
+      reportsHrefFromDraft({
+        month: createLocalDate(2026, 6, 1),
+        rangeStart: null,
+        rangeEnd: null,
+        allTime: true,
+      }),
+    );
+    expect(q.get("all")).toBe("1");
+    expect(q.has("month")).toBe(false);
+    expect(q.has("from")).toBe(false);
+    expect(q.has("to")).toBe(false);
+  });
+
+  it("неделя ЗП → week=YYYY-MM-DD (пятница)", () => {
+    const q = queryFromHref(
+      reportsHrefFromDraft(
+        {
+          month: createLocalDate(2026, 6, 1),
+          rangeStart: null,
+          rangeEnd: null,
+          allTime: false,
+        },
+        "2026-07-03",
+      ),
+    );
+    expect(q.get("month")).toBe("2026-07");
+    expect(q.get("week")).toBe("2026-07-03");
+  });
+
+  it("reset (default + пустая неделя) не оставляет from/to/all/week", () => {
+    const q = queryFromHref(reportsHrefFromDraft(getDefaultDateFilterValue(), ""));
+    expect(q.has("from")).toBe(false);
+    expect(q.has("to")).toBe(false);
+    expect(q.has("all")).toBe(false);
+    expect(q.has("week")).toBe(false);
+    expect(q.get("month")).toMatch(/^\d{4}-\d{2}$/);
+  });
+});
+
+describe("isReportsDraftApplied", () => {
+  it("пустой URL совпадает с текущим месяцем без недели", () => {
+    expect(isReportsDraftApplied(getDefaultDateFilterValue(), "", new URLSearchParams())).toBe(
+      true,
+    );
+  });
+
+  it("month текущего месяца совпадает с дефолтным draft", () => {
+    const href = reportsHrefFromDraft(getDefaultDateFilterValue(), "");
+    expect(isReportsDraftApplied(getDefaultDateFilterValue(), "", queryFromHref(href))).toBe(
+      true,
+    );
+  });
+
+  it("черновик allTime не совпадает с URL месяца", () => {
+    expect(
+      isReportsDraftApplied(
+        { ...getDefaultDateFilterValue(), allTime: true },
+        "",
+        queryFromHref(reportsHrefFromDraft(getDefaultDateFilterValue(), "")),
+      ),
+    ).toBe(false);
+  });
+
+  it("неприменённая неделя — dirty", () => {
+    const date = {
+      month: createLocalDate(2026, 6, 1),
+      rangeStart: null,
+      rangeEnd: null,
+      allTime: false,
+    };
+    expect(
+      isReportsDraftApplied(date, "2026-07-03", queryFromHref(reportsHrefFromDraft(date, ""))),
+    ).toBe(false);
+  });
+
+  it("применённые month+week совпадают с draft", () => {
+    const date = {
+      month: createLocalDate(2026, 6, 1),
+      rangeStart: null,
+      rangeEnd: null,
+      allTime: false,
+    };
+    expect(
+      isReportsDraftApplied(
+        date,
+        "2026-07-03",
+        queryFromHref(reportsHrefFromDraft(date, "2026-07-03")),
+      ),
+    ).toBe(true);
+  });
+});
+
+const march = {
+  month: createLocalDate(2026, 2, 1),
+  rangeStart: null,
+  rangeEnd: null,
+  allTime: false,
+};
+const april = {
+  month: createLocalDate(2026, 3, 1),
+  rangeStart: null,
+  rangeEnd: null,
+  allTime: false,
+};
+
+describe("reportsAppliedKey", () => {
+  it("пустой query и month текущего месяца — одна applied-сигнатура", () => {
+    expect(reportsAppliedKey(new URLSearchParams())).toBe(
+      reportsAppliedKey(queryFromHref(reportsHrefFromDraft(getDefaultDateFilterValue(), ""))),
+    );
+  });
+
+  it("март и апрель — разные ключи", () => {
+    expect(reportsAppliedKey(queryFromHref(reportsHrefFromDraft(march, "")))).not.toBe(
+      reportsAppliedKey(queryFromHref(reportsHrefFromDraft(april, ""))),
+    );
+  });
+
+  it("week меняет ключ", () => {
+    expect(reportsAppliedKey(queryFromHref(reportsHrefFromDraft(march, "2026-03-06")))).not.toBe(
+      reportsAppliedKey(queryFromHref(reportsHrefFromDraft(march, ""))),
+    );
+  });
+});
+
+describe("syncReportsDraftIfAppliedChanged", () => {
+  it("applied март + draft март → applied=true, draft не трогаем", () => {
+    const params = queryFromHref(reportsHrefFromDraft(march, ""));
+    const key = reportsAppliedKey(params);
+    const next = syncReportsDraftIfAppliedChanged(key, params, { dateFilter: march, week: "" });
+    expect(dateFiltersEqual(next.dateFilter, march)).toBe(true);
+    expect(isReportsDraftApplied(next.dateFilter, next.week, params)).toBe(true);
+  });
+
+  it("draft апрель при URL март → applied=false, ввод сохраняется", () => {
+    const params = queryFromHref(reportsHrefFromDraft(march, ""));
+    const key = reportsAppliedKey(params);
+    const next = syncReportsDraftIfAppliedChanged(key, params, { dateFilter: april, week: "" });
+    expect(dateFiltersEqual(next.dateFilter, april)).toBe(true);
+    expect(next.week).toBe("");
+    expect(isReportsDraftApplied(next.dateFilter, next.week, params)).toBe(false);
+  });
+
+  it("canonical URL сменился на апрель → draft восстанавливается, applied=true", () => {
+    const marchParams = queryFromHref(reportsHrefFromDraft(march, ""));
+    const aprilParams = queryFromHref(reportsHrefFromDraft(april, ""));
+    const next = syncReportsDraftIfAppliedChanged(reportsAppliedKey(marchParams), aprilParams, {
+      dateFilter: march,
+      week: "",
+    });
+    expect(dateFiltersEqual(next.dateFilter, april)).toBe(true);
+    expect(isReportsDraftApplied(next.dateFilter, next.week, aprilParams)).toBe(true);
+  });
+
+  it("URL с week → URL без week восстанавливает пустую неделю", () => {
+    const withWeek = queryFromHref(reportsHrefFromDraft(march, "2026-03-06"));
+    const withoutWeek = queryFromHref(reportsHrefFromDraft(march, ""));
+    const next = syncReportsDraftIfAppliedChanged(reportsAppliedKey(withWeek), withoutWeek, {
+      dateFilter: march,
+      week: "2026-03-06",
+    });
+    expect(next.week).toBe("");
+    expect(isReportsDraftApplied(next.dateFilter, next.week, withoutWeek)).toBe(true);
   });
 });
