@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   getDefaultDateFilterValue,
   isDefaultDateFilterValue,
+  formatDateFilterTriggerLabel,
+  selectDateFilterMonth,
 } from "@/components/date-filter";
 import { addMonths, createLocalDate } from "@/lib/dates";
 
@@ -52,5 +54,35 @@ describe("isDefaultDateFilterValue", () => {
     expect(isDefaultDateFilterValue(salesDefault, salesDefault)).toBe(true);
     expect(isDefaultDateFilterValue({ ...salesDefault, allTime: true })).toBe(false);
     expect(isDefaultDateFilterValue(getDefaultDateFilterValue(), salesDefault)).toBe(false);
+  });
+});
+
+describe("DateFilter month-only API", () => {
+  const july = createLocalDate(2026, 6, 1);
+  const ranged = {
+    month: july,
+    rangeStart: createLocalDate(2026, 6, 10),
+    rangeEnd: createLocalDate(2026, 6, 20),
+    allTime: false,
+  };
+
+  it("default consumer (allowRange) показывает range в подписи", () => {
+    expect(formatDateFilterTriggerLabel(ranged)).toMatch(/10/);
+    expect(formatDateFilterTriggerLabel(ranged, true)).toMatch(/10/);
+  });
+
+  it("month-only не показывает range в подписи", () => {
+    expect(formatDateFilterTriggerLabel(ranged, false)).not.toMatch(/10/);
+    expect(formatDateFilterTriggerLabel(ranged, false)).toMatch(/2026/);
+  });
+
+  it("selectDateFilterMonth выбирает месяц и сбрасывает range", () => {
+    const next = selectDateFilterMonth(createLocalDate(2026, 6, 15));
+    expect(next.rangeStart).toBeNull();
+    expect(next.rangeEnd).toBeNull();
+    expect(next.allTime).toBe(false);
+    expect(next.month.getFullYear()).toBe(2026);
+    expect(next.month.getMonth()).toBe(6);
+    expect(next.month.getDate()).toBe(1);
   });
 });

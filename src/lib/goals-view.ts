@@ -1,31 +1,24 @@
-import type { DateFilterValue } from "@/components/date-filter";
-import { isSameMonth, startOfMonth } from "@/lib/dates";
-import { formatGoalMonthIso, parseGoalMonthIso } from "@/lib/goals";
+import type { DateFilterValue } from "@/lib/date-filter-value";
+import { isSameMonth } from "@/lib/dates";
+import { parseGoalMonthIso } from "@/lib/goals";
 import type { GoalRow } from "@/mocks/goals-fixtures";
-import { matchesDateFilter } from "@/lib/match-date-filter";
 
+/** Month-only: allTime → все; иначе тот же календарный месяц, что filter.month. Range игнорируется. */
 export function filterGoalsByDate(goals: GoalRow[], filter: DateFilterValue): GoalRow[] {
   if (filter.allTime) return goals;
-  return goals.filter((g) => matchesDateFilter(g.month, filter));
+  return goals.filter((g) => isSameMonth(parseGoalMonthIso(g.month), filter.month));
 }
 
 export function splitGoalsForView(
   goals: GoalRow[],
   filter: DateFilterValue,
-  now: Date = new Date(),
-): { active: GoalRow[]; past: GoalRow[] } {
-  const viewMonth = filter.allTime ? startOfMonth(now) : startOfMonth(filter.month);
-  const viewMonthIso = formatGoalMonthIso(viewMonth);
-
+): { active: GoalRow[]; archived: GoalRow[] } {
   const filtered = filterGoalsByDate(goals, filter);
-
-  const active = filtered.filter((g) => g.status === "ACTIVE" && g.month === viewMonthIso);
-  const activeIds = new Set(active.map((g) => g.id));
-  const past = filtered
-    .filter((g) => !activeIds.has(g.id))
+  const active = filtered.filter((g) => g.status === "ACTIVE");
+  const archived = filtered
+    .filter((g) => g.status === "ARCHIVED")
     .sort((a, b) => (a.month < b.month ? 1 : a.month > b.month ? -1 : 0));
-
-  return { active, past };
+  return { active, archived };
 }
 
 export function goalMonthLabel(iso: string): string {

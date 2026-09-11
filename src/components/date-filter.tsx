@@ -30,6 +30,11 @@ const triggerClass =
 interface DateFilterProps {
   value?: DateFilterValue;
   onChange?: (value: DateFilterValue) => void;
+  /**
+   * Выбор произвольного диапазона дней. Default `true` — прежнее поведение.
+   * Goals передаёт `false` (только календарный месяц).
+   */
+  allowRange?: boolean;
 }
 
 function getDefaultValue(): DateFilterValue {
@@ -37,15 +42,23 @@ function getDefaultValue(): DateFilterValue {
   return { month, rangeStart: null, rangeEnd: null, allTime: false };
 }
 
-function getDisplayLabel(value: DateFilterValue): string {
+/** Месяц без day-range. Для month-only DateFilter. */
+export function selectDateFilterMonth(month: Date): DateFilterValue {
+  return { month: startOfMonth(month), rangeStart: null, rangeEnd: null, allTime: false };
+}
+
+export function formatDateFilterTriggerLabel(
+  value: DateFilterValue,
+  allowRange = true,
+): string {
   if (value.allTime) return "За всё время";
-  if (value.rangeStart && value.rangeEnd) {
+  if (allowRange && value.rangeStart && value.rangeEnd) {
     return formatFilterDateRange(value.rangeStart, value.rangeEnd);
   }
   return formatFilterMonth(value.month);
 }
 
-export function DateFilter({ value, onChange }: DateFilterProps) {
+export function DateFilter({ value, onChange, allowRange = true }: DateFilterProps) {
   const [internalValue, setInternalValue] = useState<DateFilterValue>(getDefaultValue);
   const current = value ?? internalValue;
 
@@ -58,7 +71,7 @@ export function DateFilter({ value, onChange }: DateFilterProps) {
   const [viewMonth, setViewMonth] = useState(() => current.month);
   const [hoverDay, setHoverDay] = useState<Date | null>(null);
 
-  const displayLabel = getDisplayLabel(current);
+  const displayLabel = formatDateFilterTriggerLabel(current, allowRange);
   const calendarDays = useMemo(() => buildCalendarMonth(viewMonth), [viewMonth]);
 
   const updateValue = (patch: Partial<DateFilterValue>) => {
@@ -73,13 +86,19 @@ export function DateFilter({ value, onChange }: DateFilterProps) {
     setOpen(nextOpen);
     if (!nextOpen) setHoverDay(null);
     if (nextOpen) {
-      setViewMonth(current.rangeStart ? startOfMonth(current.rangeStart) : current.month);
+      setViewMonth(
+        allowRange && current.rangeStart ? startOfMonth(current.rangeStart) : current.month,
+      );
     }
   };
 
   const handlePrevMonth = () => {
     const nextMonth = addMonths(viewMonth, -1);
     setViewMonth(nextMonth);
+    if (!allowRange) {
+      setValue(selectDateFilterMonth(nextMonth));
+      return;
+    }
     if (!current.rangeStart && !current.rangeEnd) {
       updateValue({ month: nextMonth });
     }
@@ -88,12 +107,20 @@ export function DateFilter({ value, onChange }: DateFilterProps) {
   const handleNextMonth = () => {
     const nextMonth = addMonths(viewMonth, 1);
     setViewMonth(nextMonth);
+    if (!allowRange) {
+      setValue(selectDateFilterMonth(nextMonth));
+      return;
+    }
     if (!current.rangeStart && !current.rangeEnd) {
       updateValue({ month: nextMonth });
     }
   };
 
   const handleDayClick = (day: Date) => {
+    if (!allowRange) {
+      setValue(selectDateFilterMonth(day));
+      return;
+    }
     setHoverDay(null);
 
     if (!current.rangeStart || (current.rangeStart && current.rangeEnd)) {
@@ -131,7 +158,7 @@ export function DateFilter({ value, onChange }: DateFilterProps) {
       </PopoverTrigger>
 
       <PopoverContent align="start" className={cn(DATE_FILTER_WIDTH, "rounded-xl p-3 shadow-soft-lg ring-0")}>
-        <div className="mb-3 flex items-center justify-between gap-2">
+        <div className={cn("flex items-center justify-between gap-2", allowRange && "mb-3")}>
           <Button
             type="button"
             variant="ghost"
@@ -155,6 +182,8 @@ export function DateFilter({ value, onChange }: DateFilterProps) {
           </Button>
         </div>
 
+        {allowRange ? (
+          <>
         <div className="mb-1 grid grid-cols-7 gap-1">
           {WEEKDAY_LABELS.map((label) => (
             <div
@@ -239,6 +268,8 @@ export function DateFilter({ value, onChange }: DateFilterProps) {
             );
           })}
         </div>
+          </>
+        ) : null}
       </PopoverContent>
     </Popover>
   );

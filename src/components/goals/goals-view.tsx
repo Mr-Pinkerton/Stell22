@@ -40,10 +40,11 @@ export function GoalsView({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pending, startTransition] = useTransition();
 
-  const { active, past } = useMemo(
+  const { active, archived } = useMemo(
     () => splitGoalsForView(initialGoals, dateFilter),
     [initialGoals, dateFilter],
   );
+  const monthSelected = !dateFilter.allTime;
 
   const handleCreate = (values: GoalFormValues) => {
     startTransition(async () => {
@@ -69,6 +70,7 @@ export function GoalsView({
       <FiltersBar
         date
         dateAllTime
+        dateAllowRange={false}
         dateFilterValue={dateFilter}
         onDateFilterChange={setDateFilter}
       />
@@ -77,7 +79,9 @@ export function GoalsView({
         <section className="space-y-4">
           <h2 className="text-lg font-semibold tracking-tight">Активные цели</h2>
           {active.length === 0 ? (
-            <p className="text-muted-foreground text-sm">Активных целей за период нет</p>
+            <p className="text-muted-foreground text-sm">
+              {monthSelected ? "Активных целей за выбранный месяц нет" : "Активных целей нет"}
+            </p>
           ) : (
             <div className="grid gap-4 lg:grid-cols-2">
               {active.map((goal) => (
@@ -88,15 +92,17 @@ export function GoalsView({
         </section>
 
         <section className="space-y-4">
-          <h2 className="text-lg font-semibold tracking-tight">Прошлые периоды</h2>
-          {past.length === 0 ? (
-            <p className="text-muted-foreground text-sm">Архивных целей за период нет</p>
+          <h2 className="text-lg font-semibold tracking-tight">Архивные цели</h2>
+          {archived.length === 0 ? (
+            <p className="text-muted-foreground text-sm">
+              {monthSelected ? "Архивных целей за выбранный месяц нет" : "Архивных целей нет"}
+            </p>
           ) : (
             <Card className="surface-card ring-0">
               <CardContent className="p-0">
                 <DataTable
                   columns={pastColumns}
-                  rows={past}
+                  rows={archived}
                   empty="Нет целей"
                   padded
                   className="border-0"

@@ -45,6 +45,11 @@ export interface FiltersBarProps extends SectionFilters {
    * Sales передаёт ALL TIME.
    */
   dateDefaultValue?: DateFilterValue;
+  /**
+   * Диапазон дней в DateFilter. Default true.
+   * Goals передаёт false (только месяц).
+   */
+  dateAllowRange?: boolean;
   /** Предметные controls в той же строке (родитель задаёт семантику). */
   extraFilters?: ReactNode;
   /** Родитель: внешние extra filters отличаются от default. */
@@ -99,6 +104,7 @@ export function FiltersBar({
   extraFiltersDirty = false,
   onResetExtraFilters,
   dateDefaultValue,
+  dateAllowRange = true,
 }: FiltersBarProps) {
   const hasAny = search || date || weeks || archive || extraFilters != null;
   const resolvedDateDefault = dateDefaultValue ?? getDefaultDateFilterValue();
@@ -199,7 +205,11 @@ export function FiltersBar({
         <div className="grid gap-1.5">
           <Label className="cursor-default">Дата</Label>
           <div className="flex flex-wrap items-center gap-2">
-            <DateFilter value={dateFilter} onChange={handleDateChange} />
+            <DateFilter
+              value={dateFilter}
+              onChange={handleDateChange}
+              allowRange={dateAllowRange}
+            />
             {dateAllTime && (
               <Button
                 type="button"
