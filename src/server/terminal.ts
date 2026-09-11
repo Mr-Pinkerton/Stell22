@@ -24,6 +24,11 @@ import {
 } from "@/lib/detail-stock";
 import { D } from "@/lib/cost";
 import { lockEmployees, lockRailLots } from "@/server/internal/finance-operations";
+import {
+  canonicalLengthDecimal,
+  canonicalizeTorcovkaPicks,
+  torcovkaPicksForLog,
+} from "@/server/internal/blank-length";
 import { applyActiveTorcovkaInTx } from "@/server/internal/cost-flow-raw";
 import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import { blankSpecSortKey, lockDetails, snapshotUpakovkaApply } from "@/server/internal/inventory-integrity";
@@ -96,6 +101,50 @@ function isDuplicateClientRequest(e: unknown): boolean {
   return Array.isArray(target)
     ? target.includes("clientRequestId")
     : String(target ?? "").includes("clientRequestId");
+}
+
+function isPrismaP2025(e: unknown): boolean {
+  return typeof e === "object" && e !== null && (e as { code?: unknown }).code === "P2025";
+}
+
+function logTorcovkaP2025Forensic(payload: {
+  clientRequestId: string;
+  employeeId: string;
+  railLotId: string;
+  batchId: string;
+  rawPicks: unknown;
+  normalizedPicks: unknown;
+}): void {
+  try {
+    console.error(
+      JSON.stringify({
+        event: "torcovka_p2025",
+        clientRequestId: payload.clientRequestId,
+        employeeId: payload.employeeId,
+        railLotId: payload.railLotId,
+        batchId: payload.batchId,
+        rawPicks: payload.rawPicks,
+        normalizedPicks: payload.normalizedPicks,
+        prismaCode: "P2025",
+      }),
+    );
+  } catch {
+    try {
+      console.error(
+        JSON.stringify({
+          event: "torcovka_p2025",
+          clientRequestId: payload.clientRequestId,
+          employeeId: payload.employeeId,
+          railLotId: payload.railLotId,
+          batchId: payload.batchId,
+          prismaCode: "P2025",
+          forensicPayloadSerializationFailed: true,
+        }),
+      );
+    } catch {
+      // Forensic logging must never replace the original P2025.
+    }
+  }
 }
 
 function snapshotNumber(value: Prisma.Decimal | number | null): number | null {
@@ -510,7 +559,8 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
   await requireTerminalEmployee(input?.employeeId);
   const clientRequestId = requireClientRequestId(input.clientRequestId);
   const { employeeId, batchId, railLotId, railsTaken } = input;
-  const picks = input.picks.filter((p) => p.quantity > 0);
+  const rawPicks = input.picks;
+  const picks = canonicalizeTorcovkaPicks(rawPicks);
   if (!employeeId) throw new Error("Не выбран работник");
   if (!Number.isInteger(railsTaken) || railsTaken <= 0) {
     throw new Error("Укажите количество взятых реек");
@@ -702,7 +752,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
           lines: {
             create: picks.map((p) => ({
               quantity: p.quantity,
-              blankLengthM: p.lengthM,
+              blankLengthM: canonicalLengthDecimal(p.lengthMFixed4),
               blankType: lot.railType,
               blankSort: p.sort,
               blankMaterialId: materialId,
@@ -728,18 +778,19 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
         ),
       );
       for (const p of sortedBlankPicks) {
+        const lengthM = canonicalLengthDecimal(p.lengthMFixed4);
         await tx.blankStock.upsert({
           where: {
             materialId_lengthM_detailType_sort: {
               materialId,
-              lengthM: p.lengthM,
+              lengthM,
               detailType: lot.railType,
               sort: p.sort,
             },
           },
           create: {
             materialId,
-            lengthM: p.lengthM,
+            lengthM,
             detailType: lot.railType,
             sort: p.sort,
             quantity: p.quantity,
@@ -754,7 +805,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
       batchId,
       railLotId,
       railsTaken,
-      picks,
+      picks: torcovkaPicksForLog(picks),
       ...snapshotFieldsForLog(rateSnapshots),
     };
     if (approvalMeta) {
@@ -785,6 +836,16 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
     return { status: "CREATED_NEW" as const };
   }).catch((e) => {
     if (isDuplicateClientRequest(e)) return { status: "IDEMPOTENT_REPLAY" as const };
+    if (isPrismaP2025(e)) {
+      logTorcovkaP2025Forensic({
+        clientRequestId,
+        employeeId,
+        railLotId,
+        batchId,
+        rawPicks,
+        normalizedPicks: picks,
+      });
+    }
     throw e;
   });
 
