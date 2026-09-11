@@ -24,20 +24,39 @@ Never import door-specific entities, routes, WIP assumptions, or business rules 
 
 ## Current documentation checkpoint
 
+`71a01b40008cf6da7cbc843b3b0dbaa31cf01853`
+
+`Merge pull request #1 from Mr-Pinkerton/integration/p2025-di020`
+
+This SHA is current `origin/main` and was deployed (Production Deploy `34635510843` SUCCESS). Always verify current `main` before relying on this SHA because later commits may exist.
+
+Historical documentation recovery checkpoint (no longer current):
+
 `6dec426b25b25c663ec26ea5ac1debeabe570dc4`
 
-This checkpoint includes the canonical `PROJECT.md` and `audit/AUDIT-INDEX.md` recovery documents.
-Always verify current `main` before relying on this SHA because later commits may exist.
-
-Last verified application-code checkpoint before the recovery-doc commits:
+Last pre-incident application-code checkpoint:
 
 `d9f940e8540801bdb27dd72210193f5e4ab038c3`
 
 `fix: enforce prisadka inventory boundary`
 
+INC-001 containment SHA (still in the running tree):
+
+`3608b36bd324a5118f4ba5b1bbb21462cc0723d9`
+
 ## Current work mode
 
-The project is in a **system audit** phase.
+The project is in **architecture-hardening**: **ARCH-2 / Primary-System Readiness**.
+
+Current architecture draft: `audit/08.02-primary-system-readiness-architecture.md` — `PROPOSED / INDEPENDENT REVIEW REQUIRED`.
+
+Do not implement ARCH-2 packages until that draft is independently reviewed.
+
+AUDIT 1 remains `COMPLETE / REVIEWED`. Do not reopen it.
+
+`AUDIT 2 — FINANCE & MONEY INTEGRITY` is **not started**.
+
+INC-001 remains open (containment deployed; production data not corrected). Do not treat architecture docs as a production-data fix.
 
 Do not fix every finding immediately.
 
