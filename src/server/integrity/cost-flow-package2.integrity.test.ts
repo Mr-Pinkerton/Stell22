@@ -1236,4 +1236,160 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     expect(op.lines[0]!.quantity).toBe(5);
     expect(op.lines[0]!.blankLengthM!.toFixed(4)).toBe("0.7360");
   });
+
+  it("T1 inactive railsTaken correction rejects paid operation with no mutation", async () => {
+    await setCostFlowActive(false);
+    const world = await seedWorld({ remaining: 10 });
+    await createdTorcovka(
+      world,
+      3,
+      [{ lengthM: 1.8, sort: "SORT1", quantity: 2 }],
+      `rt-paid-inact-${world.suffix}`,
+    );
+    const op = await prismaA.productionOperation.findFirstOrThrow({
+      where: { railLotId: world.lot.id },
+    });
+    await prismaA.productionOperation.update({
+      where: { id: op.id },
+      data: { isPaid: true, paidAt: new Date("2026-09-02T00:00:00.000Z") },
+    });
+    const lotBefore = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
+    const batchBefore = await prismaA.batch.findUniqueOrThrow({ where: { id: world.batch.id } });
+    const logsBefore = await prismaA.changeLog.count();
+    await expect(
+      correctTorcovkaRailsTaken({
+        operationId: op.id,
+        newRailsTaken: 2,
+        reason: "paid inactive",
+      }),
+    ).rejects.toThrow("Нельзя исправить — операция уже выплачена");
+    const opAfter = await prismaA.productionOperation.findUniqueOrThrow({ where: { id: op.id } });
+    const lotAfter = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
+    const batchAfter = await prismaA.batch.findUniqueOrThrow({ where: { id: world.batch.id } });
+    expect(opAfter.railsTaken).toBe(3);
+    expect(opAfter.isPaid).toBe(true);
+    expect(lotAfter.remainingQuantity).toBe(lotBefore.remainingQuantity);
+    expect(batchAfter.status).toBe(batchBefore.status);
+    expect(batchAfter.closedAt).toEqual(batchBefore.closedAt);
+    expect(await prismaA.changeLog.count()).toBe(logsBefore);
+  });
+
+  it("T2 inactive railsTaken correction rejects later CONDUCTED inventory with no mutation", async () => {
+    await setCostFlowActive(false);
+    const world = await seedWorld({ remaining: 10 });
+    await createdTorcovka(
+      world,
+      3,
+      [{ lengthM: 1.8, sort: "SORT1", quantity: 2 }],
+      `rt-inv-inact-${world.suffix}`,
+    );
+    const op = await prismaA.productionOperation.findFirstOrThrow({
+      where: { railLotId: world.lot.id },
+    });
+    await coveringZeroDeviationInventory({
+      materialId: world.material.id,
+      lengthM: "1.8000",
+      accountedQty: 2,
+      suffix: `rt-inv-inact-${world.suffix}`,
+    });
+    const lotBefore = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
+    const batchBefore = await prismaA.batch.findUniqueOrThrow({ where: { id: world.batch.id } });
+    const logsBefore = await prismaA.changeLog.count();
+    await expect(
+      correctTorcovkaRailsTaken({
+        operationId: op.id,
+        newRailsTaken: 2,
+        reason: "boundary inactive",
+      }),
+    ).rejects.toThrow(INVENTORY_BOUNDARY);
+    const opAfter = await prismaA.productionOperation.findUniqueOrThrow({ where: { id: op.id } });
+    const lotAfter = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
+    const batchAfter = await prismaA.batch.findUniqueOrThrow({ where: { id: world.batch.id } });
+    expect(opAfter.railsTaken).toBe(3);
+    expect(lotAfter.remainingQuantity).toBe(lotBefore.remainingQuantity);
+    expect(batchAfter.status).toBe(batchBefore.status);
+    expect(batchAfter.closedAt).toEqual(batchBefore.closedAt);
+    expect(await prismaA.changeLog.count()).toBe(logsBefore);
+  });
+
+  it("T3 unpaid inactive railsTaken correction returns rails, reopens batch, logs reason", async () => {
+    await setCostFlowActive(false);
+    const world = await seedWorld({ remaining: 10 });
+    await createdTorcovka(
+      world,
+      3,
+      [{ lengthM: 1.8, sort: "SORT1", quantity: 2 }],
+      `rt-ok-inact-${world.suffix}`,
+    );
+    const op = await prismaA.productionOperation.findFirstOrThrow({
+      where: { railLotId: world.lot.id },
+      include: { lines: true },
+    });
+    await prismaA.batch.update({
+      where: { id: world.batch.id },
+      data: { status: "ARCHIVED", closedAt: new Date("2026-09-01T00:00:00.000Z") },
+    });
+    const lotBefore = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
+    expect(lotBefore.remainingQuantity).toBe(7);
+    const logsBefore = await prismaA.changeLog.count();
+    await correctTorcovkaRailsTaken({
+      operationId: op.id,
+      newRailsTaken: 2,
+      reason: "over-entered rails inactive",
+    });
+    const opAfter = await prismaA.productionOperation.findUniqueOrThrow({
+      where: { id: op.id },
+      include: { lines: true },
+    });
+    const lotAfter = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
+    const batchAfter = await prismaA.batch.findUniqueOrThrow({ where: { id: world.batch.id } });
+    expect(opAfter.railsTaken).toBe(2);
+    expect(lotAfter.remainingQuantity).toBe(lotBefore.remainingQuantity + 1);
+    expect(batchAfter.status).toBe("IN_WORK");
+    expect(batchAfter.closedAt).toBeNull();
+    expect(opAfter.consumedRawValue).toBeNull();
+    expect(opAfter.pieceLaborCost).toBeNull();
+    expect(opAfter.lines[0]?.quantity).toBe(2);
+    const corrLog = await prismaA.changeLog.findFirstOrThrow({
+      where: { entity: "ProductionOperation", entityId: op.id },
+      orderBy: { changedAt: "desc" },
+    });
+    const values = corrLog.newValues as {
+      field?: string;
+      oldRailsTaken?: number;
+      newRailsTaken?: number;
+      deltaReturned?: number;
+      reason?: string;
+    };
+    expect(values.field).toBe("railsTaken");
+    expect(values.oldRailsTaken).toBe(3);
+    expect(values.newRailsTaken).toBe(2);
+    expect(values.deltaReturned).toBe(1);
+    expect(values.reason).toBe("over-entered rails inactive");
+    const reopenLog = await prismaA.changeLog.findFirstOrThrow({
+      where: { entity: "Batch", entityId: world.batch.id },
+      orderBy: { changedAt: "desc" },
+    });
+    expect(reopenLog.newValues).toMatchObject({ reopened: true, viaOperationId: op.id });
+    expect(await prismaA.changeLog.count()).toBe(logsBefore + 2);
+  });
+
+  it("T4 inactive generic TORCOVKA delete remains blocked (INC-001)", async () => {
+    await setCostFlowActive(false);
+    const world = await seedWorld();
+    await createdTorcovka(world, 1, normalPicks(1), `inc001-inact-${world.suffix}`);
+    const op = await prismaA.productionOperation.findFirstOrThrow({
+      where: { railLotId: world.lot.id },
+    });
+    const lotBefore = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
+    const blankBefore = await blankOf(world.material.id, 1.8);
+    const eventsBefore = await prismaA.costEvent.count();
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(TORCOVKA_GENERIC_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
+    const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
+    const blank = await blankOf(world.material.id, 1.8);
+    expect(lot.remainingQuantity).toBe(lotBefore.remainingQuantity);
+    expect(blank?.quantity).toBe(blankBefore?.quantity);
+    expect(await prismaA.costEvent.count()).toBe(eventsBefore);
+  });
 });
