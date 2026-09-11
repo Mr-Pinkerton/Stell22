@@ -991,9 +991,11 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
       where: { railLotId: world.lot.id },
       include: { lines: { orderBy: { id: "asc" } } },
     });
+    expect(op.lines).toHaveLength(1);
+    expect(op.lines[0]?.quantity).toBe(4);
     const consumed = d(op.consumedRawValue)!;
     const oldLabor = d(op.pieceLaborCost)!;
-    await updateProductionLineQuantity(op.id, 0, 3);
+    await updateProductionLineQuantity(op.id, 0, 5);
     const after = await prismaA.productionOperation.findUniqueOrThrow({
       where: { id: op.id },
       include: { lines: { orderBy: { id: "asc" } } },
@@ -1202,5 +1204,34 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     const s2 = op.lines.find((l) => l.blankSort === "SORT2");
     expect(d(s1?.receiptMaterialValue)!.equals(a.get("SORT1|0.9")!)).toBe(true);
     expect(d(s2?.receiptMaterialValue)!.equals(a.get("SORT2|0.9")!)).toBe(true);
+  });
+
+  it("T8 near-equal picks merge before active cost-flow writes", async () => {
+    await setCostFlowActive(true);
+    const world = await seedWorld({ remaining: 10, lotLengthM: "2" });
+    await createdTorcovka(
+      world,
+      2,
+      [
+        { lengthM: 0.736, sort: "SORT1", quantity: 2 },
+        { lengthM: 0.7359999999999, sort: "SORT1", quantity: 3 },
+      ],
+      `p2025-t8-${world.suffix}`,
+    );
+    const blanks = await prismaA.blankStock.findMany({
+      where: { materialId: world.material.id },
+    });
+    expect(blanks).toHaveLength(1);
+    expect(blanks[0]!.quantity).toBe(5);
+    expect(blanks[0]!.lengthM.toFixed(4)).toBe("0.7360");
+    expect(blanks[0]!.materialValue).not.toBeNull();
+    expect(blanks[0]!.laborValue).not.toBeNull();
+    const op = await prismaA.productionOperation.findFirstOrThrow({
+      where: { railLotId: world.lot.id },
+      include: { lines: true },
+    });
+    expect(op.lines).toHaveLength(1);
+    expect(op.lines[0]!.quantity).toBe(5);
+    expect(op.lines[0]!.blankLengthM!.toFixed(4)).toBe("0.7360");
   });
 });
