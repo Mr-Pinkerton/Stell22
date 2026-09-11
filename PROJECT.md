@@ -28,15 +28,15 @@ The system is not only a status tracker. Production facts must remain reconcilab
 
 ## 3. Canonical source hierarchy
 
-1. GitHub `main`: current code + committed audit documents.
-2. This `PROJECT.md`: owner decisions, package/deploy/activation status and current next step.
-3. `audit/AUDIT-INDEX.md`: audit navigation/status.
+1. GitHub `main`: current code + committed audit documents. **This is canonical truth.**
+2. This `PROJECT.md`: owner decisions, package/deploy/activation status and current next step — **on `main`**. The copy on `audit/arch2-primary-system-readiness` is a **proposed journal update** and becomes the main project-journal state **only after a reviewed merge**.
+3. `audit/AUDIT-INDEX.md`: audit navigation/status (same rule: main vs proposed branch).
 4. `/Projects/Stell22` Library snapshot: cross-chat recovery/cache.
 5. Chat/Cursor transcripts: working evidence only.
 
 If sources conflict, verify the actual GitHub `main` and record the divergence.
 
-A Cursor/chat statement without a committed project artifact is not canonical.
+A Cursor/chat statement without a committed project artifact is not canonical. A committed artifact on a review branch is not canonical `main` until merge.
 
 ## 4. Current verified technical checkpoint
 
@@ -87,7 +87,9 @@ AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUD
 
 INC-001 remains `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`. Containment is still in production on `71a01b4`. Do not treat ARCH-2 as a production-data fix. Do not automatically invert INV-047 (generic TORCOVKA delete returning rails).
 
-**Current architecture-hardening work:** ARCH-2 / Primary-System Readiness (`audit/08.02-primary-system-readiness-architecture.md`), status `PROPOSED / INDEPENDENT REVIEW REQUIRED`.
+**Current architecture-hardening work:** ARCH-2 / Primary-System Readiness (`audit/08.02-primary-system-readiness-architecture.md`).
+
+Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED`. Independent Review #1 = **REQUEST CHANGES**. Corrections applied on this branch. **Independent Review #2 pending.** ARCH-2 is **not accepted**. This `PROJECT.md` text is proposed on the review branch; it becomes the main journal only after reviewed merge.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -253,17 +255,19 @@ ChatGPT adversarial review of the 08.01 draft: **accepted**. Recovery had record
 
 ## 12.1 ARCH-2 — PRIMARY-SYSTEM READINESS
 
-Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED`
+Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED` (Review #1 **REQUEST CHANGES**; Review #2 pending)
 
-Artifact: `audit/08.02-primary-system-readiness-architecture.md`
+Artifact (canonical **path**, not yet on `main`): `audit/08.02-primary-system-readiness-architecture.md`
 
-BASE: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853`
+Application/main BASE: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853`
 
-Forward-looking architecture so Stell22 can become the only warehouse/production operational source of truth. PSR namespace. **Not** a reopen of AUDIT 1. No application/schema change in this cycle.
+Forward-looking architecture so Stell22 can become the only warehouse/production operational source of truth. PSR namespace. **Not** a reopen of AUDIT 1. No application/schema change in this cycle. Proposed on branch until reviewed merge.
 
 ## 13. Current next step
 
-`NEXT = independent adversarial review of audit/08.02-primary-system-readiness-architecture.md before accepting any ARCH-2 implementation packages`
+`NEXT = Independent Review #2 of audit/08.02-primary-system-readiness-architecture.md. No implementation package accepted yet.`
+
+Independent Review #1 = **REQUEST CHANGES**. Documentation corrections for ARCH2-R1…R6 are on this branch. ARCH-2 is **not accepted**.
 
 Do **not** implement InventoryMovement / dual-write / cutover in this cycle.
 
@@ -272,6 +276,8 @@ Do **not** start AUDIT 2. AUDIT 2 remains `NOT STARTED` / `NEXT AFTER INC-001`.
 INC-001 remains OPEN (containment deployed on `71a01b4`; physical facts still required before any production-data correction). ARCH-2 does not close it.
 
 When AUDIT 2 starts: audit-only; do not auto-patch findings; `production_cost_flow` stays inactive; activation stays `BLOCKED`.
+
+This NEXT is proposed on the review branch; it becomes the main journal NEXT only after reviewed merge.
 
 ## 14. Journal update rule
 
@@ -369,3 +375,24 @@ After every significant delivery action record:
 | AUDIT 1 | unchanged `COMPLETE / REVIEWED` |
 | AUDIT 2 | **NOT STARTED** |
 | Next | Independent adversarial review of `audit/08.02` |
+
+## 20. Journal — ARCH-2 Independent Review #1
+
+| | |
+| --- | --- |
+| Date | 2026-09-12 |
+| Stage | ARCH-2 Independent Review #1 |
+| BASE branch commit | `7c1b651e63747912285a5840246c64b9a053844b` |
+| Application/main | `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` |
+| Verdict | **REQUEST CHANGES** |
+| Findings | `ARCH2-R1`…`ARCH2-R6` accepted into the draft |
+| Result | Draft still `PROPOSED / INDEPENDENT REVIEW REQUIRED`. Review #2 required. ARCH-2 **not accepted**. |
+| Application / schema | unchanged |
+| `production_cost_flow` | unchanged / INACTIVE |
+| `ARCH-P1-001` | OPEN / CONFIRMED (ACTIVE path) |
+| AUDIT 1 | COMPLETE / REVIEWED |
+| AUDIT 2 | **NOT STARTED** |
+| INC-001 | OPEN |
+| Deploy / merge | **NO** |
+| Canonicality | Proposed branch artifact; not main truth until reviewed merge |
+| Next | **Independent Review #2** |

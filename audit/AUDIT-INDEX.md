@@ -14,15 +14,16 @@ Do not import Woodveri door-manufacturing entities or workflows.
 | | |
 | --- | --- |
 | Repository | `Mr-Pinkerton/Stell22` |
-| Branch | `main` (this INDEX update lands on `audit/arch2-primary-system-readiness` until merge) |
+| Branch | `main` is canonical. This INDEX edit is on `audit/arch2-primary-system-readiness` until a reviewed merge. |
 | Application-code checkpoint | `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` — `Merge pull request #1 from Mr-Pinkerton/integration/p2025-di020`. Production Deploy `34635510843` SUCCESS. Prior containment SHA `3608b36` remains historical INC-001 containment; it is no longer the running SHA. |
-| Docs checkpoint | ARCH-2 draft `audit/08.02-primary-system-readiness-architecture.md` (this cycle). AUDIT 1 artifact `08.01` unchanged. |
-| Audit program | STEP 0 recovery **COMPLETE**. **AUDIT 1 = COMPLETE / REVIEWED** (not reopened). **ARCH-2 = PROPOSED / INDEPENDENT REVIEW REQUIRED** (primary-system readiness; not a new AUDIT 1 defect count). **AUDIT 2 is NOT started.** |
+| Docs on `main` | AUDIT 1 artifact `08.01` and INDEX/PROJECT as last merged. |
+| Proposed ARCH-2 (this branch only) | `audit/08.02-primary-system-readiness-architecture.md` — `PROPOSED / INDEPENDENT REVIEW REQUIRED`. Independent Review #1 = **REQUEST CHANGES**. Review #2 pending. **Not canonical `main` truth until reviewed merge.** |
+| Audit program | STEP 0 recovery **COMPLETE**. **AUDIT 1 = COMPLETE / REVIEWED** (not reopened). **ARCH-2 = PROPOSED / INDEPENDENT REVIEW REQUIRED** (Review #1 REQUEST CHANGES; Review #2 pending). Not a new AUDIT 1 defect count. **AUDIT 2 is NOT started.** |
 | Production incident | **`INC-001` = `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`**. Finding **`INC-001-F1` P1 / CONFIRMED**. Generic TORCOVKA delete `CONTAINED IN PRODUCTION`. Package data **not** corrected. `ARCH-P1-001` unrelated to INC-001. |
 | `production_cost_flow` | inactive (delivery state; see `PROJECT.md`) |
 | `ARCH-P1-001` | **OPEN / CONFIRMED**. Scope = `production_cost_flow` **ACTIVE** UPAKOVKA quantity-edit path. Inactive `prepareUpakovkaEdit` already unions old ∪ current refs. Not fixed. |
 
-Always verify current `main` HEAD before relying on SHAs above.
+Always verify current `main` HEAD before relying on SHAs above. Branch-only `08.02` / INDEX / PROJECT wording is **proposed** until merge.
 
 `08.01` = current-system architecture audit. `08.02` = forward-looking primary-system readiness architecture. They answer different questions. Do not treat 08.02 as a reopen of AUDIT 1.
 
@@ -59,9 +60,9 @@ Audit loop: `find -> prove -> classify -> record -> continue`. Do not auto-patch
 
 Every file listed below exists under `audit/` unless noted. `01.16` and `01.17` **never existed** (recovery + git history); that gap is not an error.
 
-Status vocabulary: `ACTIVE`, `COMPLETE`, `COMPLETE / REVIEWED`, `IMPLEMENTED`, `CLOSED`, `DEFERRED BY OWNER`, `DESIGN RISK`, `SUPERSEDED`, `HISTORICAL`, `PLAN`, `NEXT`, `BLOCKED`, `UNKNOWN — NEEDS REVIEW`, `PROPOSED / INDEPENDENT REVIEW REQUIRED`.
+Canonical? = living copy in `/audit` **on `main`**. A file may occupy the canonical **path** on a review branch before merge; that is not main truth.
 
-Canonical? = this path is the living copy in `/audit` on `main`.
+Status vocabulary: `ACTIVE`, `COMPLETE`, `COMPLETE / REVIEWED`, `IMPLEMENTED`, `CLOSED`, `DEFERRED BY OWNER`, `DESIGN RISK`, `SUPERSEDED`, `HISTORICAL`, `PLAN`, `NEXT`, `BLOCKED`, `UNKNOWN — NEEDS REVIEW`, `PROPOSED / INDEPENDENT REVIEW REQUIRED`.
 
 ### D.0 Index and recovery
 
@@ -148,7 +149,7 @@ No `audit/01.16*` or `audit/01.17*`.
 | File | Area | Type | BASE/Snapshot | Status | Canonical? | Notes |
 | ---- | ---- | ---- | ------------- | ------ | ---------- | ----- |
 | `audit/08.01-audit-1-system-architecture.md` | Whole system | Architecture audit | Repo `d1f46e46232499b61f55e754b0bd70ddc5924bca`; app `d9f940e8540801bdb27dd72210193f5e4ab038c3` | `COMPLETE / REVIEWED` | YES | ChatGPT adversarial review accepted. New P0=0. New P1=`ARCH-P1-001` (OPEN / CONFIRMED; ACTIVE-path scope). New P2/P3=0. Simplify=`ARCH-SIMPLIFY-001`. **Do not reopen.** AUDIT 2 is a later finance audit, not started. |
-| `audit/08.02-primary-system-readiness-architecture.md` | Primary-system readiness | Architecture draft | Repo/app `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` | `PROPOSED / INDEPENDENT REVIEW REQUIRED` | YES | ARCH-2. Physical `InventoryMovement` + projections. PSR-MUST-001…007. Not a reopen of AUDIT 1. No valuation journal. Generic `CommandExecution` not mandatory. |
+| `audit/08.02-primary-system-readiness-architecture.md` | Primary-system readiness | Architecture draft | App/main `71a01b4`; proposed on branch `audit/arch2-primary-system-readiness` | `PROPOSED / INDEPENDENT REVIEW REQUIRED` | PATH YES; MAIN NO | ARCH-2. Review #1 **REQUEST CHANGES** (ARCH2-R1…R6). Review #2 pending. Canonical on `main` only after reviewed merge. PSR-MUST-001…008. Not a reopen of AUDIT 1. No valuation journal. Generic `CommandExecution` not mandatory. |
 
 ### D.8 Production incidents
 
@@ -223,13 +224,15 @@ BASE repo: `d1f46e46232499b61f55e754b0bd70ddc5924bca`. Application: `d9f940e8540
 
 Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED`
 
-Artifact: `audit/08.02-primary-system-readiness-architecture.md`
+Artifact: `audit/08.02-primary-system-readiness-architecture.md` (canonical **path**; **not** on `main` until reviewed merge)
 
-BASE: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853`.
+Application/main BASE: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853`.
+
+Independent Review #1: **REQUEST CHANGES** (ARCH2-R1…R6). Corrections applied on this branch. **Review #2 pending.**
 
 Forward-looking foundation so Stell22 can become the only warehouse/production operational source of truth. PSR-MUST / PSR-DESIGN / PSR-DEFER / PSR-REJECT namespace. **Not** a new AUDIT 1 defect register.
 
-NEXT: independent adversarial review of `audit/08.02` before accepting implementation packages.
+NEXT: **Independent Review #2**. No implementation package accepted yet.
 
 ### INC-001 — TORCOVKA whole-package production incident
 

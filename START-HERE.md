@@ -22,15 +22,27 @@ Never import door-specific entities, routes, WIP assumptions, or business rules 
 9. GitHub `audit/00-invariants.md`
 10. relevant later `audit/01.*`, `02.*`, `03.*`
 
-## Current documentation checkpoint
+## Application / main checkpoint
 
 `71a01b40008cf6da7cbc843b3b0dbaa31cf01853`
 
 `Merge pull request #1 from Mr-Pinkerton/integration/p2025-di020`
 
-This SHA is current `origin/main` and was deployed (Production Deploy `34635510843` SUCCESS). Always verify current `main` before relying on this SHA because later commits may exist.
+This SHA is current GitHub `origin/main` (application + last merged docs) and was deployed (Production Deploy `34635510843` SUCCESS). Always verify current `main` before relying on it.
 
-Historical documentation recovery checkpoint (no longer current):
+## Proposed ARCH-2 branch (not main truth)
+
+Branch: `audit/arch2-primary-system-readiness`
+
+Proposed architecture draft: `audit/08.02-primary-system-readiness-architecture.md`
+
+That draft occupies the canonical audit **path** but is **not** canonical `main` documentation until Independent Review #2 passes and a reviewed merge lands.
+
+Do **not** treat `71a01b4` as the documentation checkpoint for this 08.02 text: 08.02 exists only on the review branch.
+
+Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED`. Independent Review #1 = **REQUEST CHANGES**. **NEXT = Independent Review #2.**
+
+Historical documentation recovery checkpoint (no longer current on main):
 
 `6dec426b25b25c663ec26ea5ac1debeabe570dc4`
 
@@ -46,11 +58,11 @@ INC-001 containment SHA (still in the running tree):
 
 ## Current work mode
 
-The project is in **architecture-hardening**: **ARCH-2 / Primary-System Readiness**.
+The project (on `main`) remains: production at `71a01b4`; AUDIT 1 complete; INC-001 open; AUDIT 2 not started.
 
-Current architecture draft: `audit/08.02-primary-system-readiness-architecture.md` — `PROPOSED / INDEPENDENT REVIEW REQUIRED`.
+On the **proposed** review branch only: **architecture-hardening ARCH-2 / Primary-System Readiness**, awaiting Independent Review #2.
 
-Do not implement ARCH-2 packages until that draft is independently reviewed.
+Do not implement ARCH-2 packages until the draft is accepted after Review #2 and merged.
 
 AUDIT 1 remains `COMPLETE / REVIEWED`. Do not reopen it.
 
