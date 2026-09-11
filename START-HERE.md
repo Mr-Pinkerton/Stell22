@@ -22,22 +22,51 @@ Never import door-specific entities, routes, WIP assumptions, or business rules 
 9. GitHub `audit/00-invariants.md`
 10. relevant later `audit/01.*`, `02.*`, `03.*`
 
-## Current documentation checkpoint
+## Application / main checkpoint
+
+`71a01b40008cf6da7cbc843b3b0dbaa31cf01853`
+
+`Merge pull request #1 from Mr-Pinkerton/integration/p2025-di020`
+
+This SHA is the current production **application** checkpoint on GitHub `origin/main` and was deployed (Production Deploy `34635510843` SUCCESS). A later documentation merge of ARCH-2 does **not** change this application SHA and is **not** a production application deploy. Always verify current `main` before relying on it.
+
+## ARCH-2 — Primary-System Readiness
+
+Canonical architecture: `audit/08.02-primary-system-readiness-architecture.md`
+
+Status: **`ACCEPTED / REVIEWED`**.
+
+Independent Review #1 = REQUEST CHANGES (R1…R6 CLOSED/PASS). Independent Review #2 = REQUEST CHANGES (R7…R8 CLOSED/PASS). Independent Review #3 = **PASS / ACCEPT** (new blockers = 0).
+
+`ACCEPTED / REVIEWED` means the architecture **contract** is accepted. It does **not** mean PSR implementation complete, primary-system readiness achieved, ledger deployed, paper removable, or `production_cost_flow` active.
+
+**NEXT = PSR-P0** — pre-schema contracts / design closure. Not InventoryMovement schema. Do not start PSR-P0 automatically from this acceptance.
+
+Historical documentation recovery checkpoint (no longer current on main):
 
 `6dec426b25b25c663ec26ea5ac1debeabe570dc4`
 
-This checkpoint includes the canonical `PROJECT.md` and `audit/AUDIT-INDEX.md` recovery documents.
-Always verify current `main` before relying on this SHA because later commits may exist.
-
-Last verified application-code checkpoint before the recovery-doc commits:
+Last pre-incident application-code checkpoint:
 
 `d9f940e8540801bdb27dd72210193f5e4ab038c3`
 
 `fix: enforce prisadka inventory boundary`
 
+INC-001 containment SHA (still in the running tree):
+
+`3608b36bd324a5118f4ba5b1bbb21462cc0723d9`
+
 ## Current work mode
 
-The project is in a **system audit** phase.
+The project on `main`: production application at `71a01b4`; AUDIT 1 complete; ARCH-2 architecture **ACCEPTED / REVIEWED**; INC-001 open; AUDIT 2 not started.
+
+**NEXT = PSR-P0** (pre-schema contracts). Not started. Do not implement InventoryMovement / dual-write / cutover until PSR-P0 closes the schema-shaping questions.
+
+AUDIT 1 remains `COMPLETE / REVIEWED`. Do not reopen it.
+
+`AUDIT 2 — FINANCE & MONEY INTEGRITY` is **not started**.
+
+INC-001 remains open (containment deployed; production data not corrected). Do not treat architecture docs as a production-data fix.
 
 Do not fix every finding immediately.
 

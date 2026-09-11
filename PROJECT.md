@@ -1,6 +1,6 @@
 # Stell22 — Project Journal / Source of Truth
 
-Updated: 2026-09-09
+Updated: 2026-09-12
 
 This file answers three questions:
 
@@ -28,8 +28,8 @@ The system is not only a status tracker. Production facts must remain reconcilab
 
 ## 3. Canonical source hierarchy
 
-1. GitHub `main`: current code + committed audit documents.
-2. This `PROJECT.md`: owner decisions, package/deploy/activation status and current next step.
+1. GitHub `main`: current code + committed audit documents. **This is canonical truth.**
+2. This `PROJECT.md`: owner decisions, package/deploy/activation status and current next step — **on `main`**.
 3. `audit/AUDIT-INDEX.md`: audit navigation/status.
 4. `/Projects/Stell22` Library snapshot: cross-chat recovery/cache.
 5. Chat/Cursor transcripts: working evidence only.
@@ -46,38 +46,54 @@ Branch: `main`
 
 Last verified production application SHA:
 
-`3608b36bd324a5118f4ba5b1bbb21462cc0723d9`
+`71a01b40008cf6da7cbc843b3b0dbaa31cf01853`
 
-`fix: block generic torcovka delete` (INC-001 containment)
+`Merge pull request #1 from Mr-Pinkerton/integration/p2025-di020`
 
-Prior code checkpoint before this incident:
+Evidence: GitHub Production Deploy run `34635510843` SUCCESS (2026-09-11, `workflow_dispatch`; Resolve origin/main SHA / CI verify / Deploy origin/main all SUCCESS). Head SHA of that run = `71a01b40008cf6da7cbc843b3b0dbaa31cf01853`.
+
+That deploy includes:
+
+- INC-001 generic TORCOVKA-delete containment (`3608b36`, still in effect);
+- UI filter work;
+- TORCOVKA BlankStock length canonicalization and railsTaken correction hardening (PR #1).
+
+Prior documented prod SHA (containment-only):
+
+`3608b36bd324a5118f4ba5b1bbb21462cc0723d9` — `fix: block generic torcovka delete`
+
+Earlier pre-incident application checkpoint:
 
 `d9f940e8540801bdb27dd72210193f5e4ab038c3` — `fix: enforce prisadka inventory boundary`
 
-Package 3.1 code state at that checkpoint:
+Cost-flow / activation state at the current checkpoint:
 
-- committed;
-- pushed;
-- deployed dormant;
-- PRISADKA inventory-boundary blocker closed;
-- `production_cost_flow` inactive;
+- Cost flow Package 2/3: committed / **deployed dormant**;
+- `production_cost_flow` **INACTIVE**;
 - bootstrap not applied;
 - business money initialization not performed;
-- activation remains blocked.
+- activation remains **BLOCKED** (`ARCH-P1-001` OPEN on the ACTIVE path);
+- Close Month: **NOT IMPLEMENTED**.
 
-Always establish current HEAD before starting new work because documentation commits may be newer than the code checkpoint above.
+Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: INC-001 PRODUCTION INCIDENT` (audit program paused for this correction)
+`ACTIVE MODE: PSR-P0 PENDING` (architecture accepted; next package not started)
 
-AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status.**
+AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
-**Current priority:** `INC-001 — TORCOVKA production incident` (`OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`).
+`AUDIT 2 — FINANCE & MONEY INTEGRITY` is **NOT STARTED**. It remains `NEXT AFTER INC-001`. ARCH-2 does **not** silently start AUDIT 2.
 
-`AUDIT 2 — FINANCE & MONEY INTEGRITY` is `NEXT AFTER INC-001`. Do not start AUDIT 2 while INC-001 needs physical facts and a reviewed correction.
+INC-001 remains `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`. Containment is still in production on `71a01b4`. Do not treat ARCH-2 as a production-data fix. Do not automatically invert INV-047 (generic TORCOVKA delete returning rails).
 
-The audit loop still applies to new findings (`INC-001-F1`). Do not automatically invert INV-047 (generic TORCOVKA delete returning rails).
+**ARCH-2 / Primary-System Readiness** (`audit/08.02-primary-system-readiness-architecture.md`): **`ACCEPTED / REVIEWED`**.
+
+Independent Review #1 = REQUEST CHANGES (R1…R6 **CLOSED / PASS**). Independent Review #2 = REQUEST CHANGES (R7…R8 **CLOSED / PASS**). Independent Review #3 = **PASS / ACCEPT**. New blockers = 0.
+
+`ACCEPTED / REVIEWED` means the **architecture contract** is accepted. It does **not** mean PSR implementation complete, primary-system readiness achieved, ledger deployed, paper removable, or `production_cost_flow` active.
+
+NEXT package: **PSR-P0** (pre-schema contracts / design closure). **Not started** in this cycle. Not InventoryMovement schema.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -89,9 +105,9 @@ Reason: generic TORCOVKA delete reverses produced `BlankStock` but **intentional
 
 Correction of a **live** TORCOVKA must use existing correction actions (`correctTorcovkaRailsTaken`, line quantity edit), not delete.
 
-This rule remains operational. Application containment is now **deployed in production** (`3608b36`): the server rejects generic TORCOVKA delete before any mutation. That does **not** restore `ПАК-40-1280-01-7` and does **not** implement `cancelErroneousTorcovka`. Do not treat containment as a production-data fix.
+This rule remains operational. Application containment is **deployed in production** (first at `3608b36`; still present on running `71a01b4`): the server rejects generic TORCOVKA delete before any mutation. That does **not** restore `ПАК-40-1280-01-7` and does **not** implement `cancelErroneousTorcovka`. Do not treat containment as a production-data fix.
 
-`ARCH-P1-001` is unrelated.
+`ARCH-P1-001` is unrelated to INC-001.
 
 ## 6. Cursor / ChatGPT working model
 
@@ -181,13 +197,19 @@ At the last verified application checkpoint:
 - business money initialization: `NO`;
 - Close Month: `NOT IMPLEMENTED`.
 
-Known remaining activation blocker (confirmed in AUDIT 1):
+Known remaining activation blocker (confirmed in AUDIT 1; scope refined in ARCH-2):
 
-`ARCH-P1-001` — UPAKOVKA quantity edit does not cover the full `old refs ∪ current refs` inventory boundary after a BOM change. Status: `OPEN / CONFIRMED`. Impact: inventory integrity. **Not fixed.**
+`ARCH-P1-001` — **OPEN / CONFIRMED**. Scope = `production_cost_flow` **ACTIVE** UPAKOVKA quantity-edit path. Activation blocker. **Not fixed.**
 
-Operational mitigation (not a fix): until patched, avoid historical UPAKOVKA → BOM/composition change → inventory on **new** BOM refs → quantity edit of the old UPAKOVKA operation. Current-ref inventory boundary can be skipped.
+Current **inactive** runtime already protects `old refs ∪ current BOM refs` via `prepareUpakovkaEdit`. Do **not** say the inactive path has the same missing union check.
 
-Do not activate `production_cost_flow` while this is open.
+The unresolved finding is specifically the ACTIVE branch:
+
+`snapshot current BOM → reverseActiveUpakovkaOperation(old refs) → apply current BOM`
+
+without a single pre-mutation inventory boundary over old ∪ current refs.
+
+`production_cost_flow` stays **INACTIVE**. Do not activate while this is open.
 
 ## 11. Local audit recovery
 
@@ -225,40 +247,39 @@ Result:
 
 ### `ARCH-P1-001`
 
-UPAKOVKA quantity edit does not cover the full `old refs ∪ current refs` inventory boundary after BOM change.
-
 Status: `OPEN / CONFIRMED`
 
-Impact: inventory integrity.
+Scope: `production_cost_flow` **ACTIVE** UPAKOVKA quantity-edit path. Activation blocker.
 
-Do **not** mark it fixed. No remediation patch in this cycle.
+Current inactive runtime already protects `old refs ∪ current BOM refs` via `prepareUpakovkaEdit`. The unresolved finding is the ACTIVE branch: snapshot current BOM → reverse old refs → apply current BOM without a single pre-mutation inventory boundary over old ∪ current refs.
 
-Operational mitigation (not a fix): until `ARCH-P1-001` is patched, avoid this sequence:
-
-1. a historical UPAKOVKA operation exists;
-2. product BOM/composition is changed;
-3. inventory is conducted on refs of the **new** BOM;
-4. quantity of the **old** UPAKOVKA operation is then edited.
-
-Reason: the current-ref inventory boundary can be skipped.
+Do **not** mark it fixed. Do **not** say the inactive path has the same missing union check. `production_cost_flow` stays INACTIVE. No remediation patch in this documentation cycle.
 
 ChatGPT adversarial review of the 08.01 draft: **accepted**. Recovery had recorded that 08.01 did not previously exist; this cycle created and finalized it. `audit/03.02-production-cost-flow-architecture.md` remains cost-flow architecture only.
 
+## 12.1 ARCH-2 — PRIMARY-SYSTEM READINESS
+
+Status: `ACCEPTED / REVIEWED` (Review #1 R1…R6 CLOSED/PASS; Review #2 R7…R8 CLOSED/PASS; Review #3 **PASS / ACCEPT**; new blockers = 0)
+
+Artifact (canonical on `main` after reviewed merge): `audit/08.02-primary-system-readiness-architecture.md`
+
+Application/main BASE: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` (docs merge ≠ production application deploy)
+
+Forward-looking architecture so Stell22 can become the only warehouse/production operational source of truth. PSR namespace. **Not** a reopen of AUDIT 1. Architecture contract accepted; **not** implementation complete. No application/schema change in this cycle.
+
 ## 13. Current next step
 
-`NEXT = INC-001 — owner/factory physical facts, then ChatGPT review of Scenario A vs B before any production-data correction`
+`NEXT = PSR-P0 — Pre-schema Primary-System Readiness contracts/design closure.`
 
-Containment of generic TORCOVKA delete is already in production (`3608b36`). Do not start AUDIT 2.
+PSR-P0 resolves schema-shaping contracts (Q1, Q2, Q5, Q7, Q8) **before** any Prisma schema/migration for InventoryMovement. **Do not start PSR-P0 in the ARCH-2 acceptance cycle.**
 
-Required before any prod mutation:
+Independent Review #3 = **PASS / ACCEPT**. ARCH-2 = **ACCEPTED / REVIEWED**. R1…R8 = **CLOSED / PASS**.
 
-- physical remaining rails in `ПАК-40-1280-01-7`;
-- whether 3843 × 0.36 m SORT1 blanks were physically produced;
-- employee identity if Scenario B.
+Do **not** implement InventoryMovement / dual-write / cutover in this cycle.
 
-Do **not** start AUDIT 2 in this pass.
+Do **not** start AUDIT 2. AUDIT 2 remains `NOT STARTED` / `NEXT AFTER INC-001`.
 
-`AUDIT 2 — FINANCE & MONEY INTEGRITY` = `NEXT AFTER INC-001`.
+INC-001 remains OPEN (containment deployed on `71a01b4`; physical facts still required before any production-data correction). ARCH-2 does not close it.
 
 When AUDIT 2 starts: audit-only; do not auto-patch findings; `production_cost_flow` stays inactive; activation stays `BLOCKED`.
 
@@ -325,3 +346,100 @@ After every significant delivery action record:
 | Production data correction | NO |
 | Damaged package | `ПАК-40-1280-01-7` remaining=0 unchanged |
 | Next | Physical facts → Scenario A/B. AUDIT 2 after INC-001. |
+
+## 18. Journal — origin/main `71a01b4` production deploy
+
+| | |
+| --- | --- |
+| Date | 2026-09-11 (deploy); recorded 2026-09-12 |
+| Stage | Production deploy of current `origin/main` |
+| SHA | `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` |
+| Result | Production Deploy run `34635510843` SUCCESS |
+| Includes | INC-001 containment + UI filters + TORCOVKA length/railsTaken hardening (PR #1) |
+| Schema / migration | no change claimed in this docs cycle |
+| `production_cost_flow` | unchanged / INACTIVE |
+| Bootstrap | NOT APPLIED |
+| Production data correction | NO |
+| INC-001 data | still not corrected |
+| Next after deploy | ARCH-2 documentation (this cycle) |
+
+## 19. Journal — ARCH-2 primary-system readiness draft
+
+| | |
+| --- | --- |
+| Date | 2026-09-12 |
+| Stage | ARCH-2 / Primary-System Readiness architecture draft |
+| BASE | `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` |
+| Result | `audit/08.02-primary-system-readiness-architecture.md` created. Status `PROPOSED / INDEPENDENT REVIEW REQUIRED`. |
+| Blockers | `ARCH-P1-001` OPEN / CONFIRMED (ACTIVE path). INC-001 OPEN. `production_cost_flow` INACTIVE. |
+| Review | Independent adversarial review required before implementation packages |
+| Claude deploy gate | not required (docs only, no deploy) |
+| Deploy | **NO** |
+| Activation | unchanged / `BLOCKED` |
+| AUDIT 1 | unchanged `COMPLETE / REVIEWED` |
+| AUDIT 2 | **NOT STARTED** |
+| Next | Independent adversarial review of `audit/08.02` |
+
+## 20. Journal — ARCH-2 Independent Review #1
+
+| | |
+| --- | --- |
+| Date | 2026-09-12 |
+| Stage | ARCH-2 Independent Review #1 |
+| BASE branch commit | `7c1b651e63747912285a5840246c64b9a053844b` |
+| Application/main | `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` |
+| Verdict | **REQUEST CHANGES** |
+| Findings | `ARCH2-R1`…`ARCH2-R6` accepted into the draft |
+| Result | Draft still `PROPOSED / INDEPENDENT REVIEW REQUIRED`. Review #2 required. ARCH-2 **not accepted**. |
+| Application / schema | unchanged |
+| `production_cost_flow` | unchanged / INACTIVE |
+| `ARCH-P1-001` | OPEN / CONFIRMED (ACTIVE path) |
+| AUDIT 1 | COMPLETE / REVIEWED |
+| AUDIT 2 | **NOT STARTED** |
+| INC-001 | OPEN |
+| Deploy / merge | **NO** |
+| Canonicality | Proposed branch artifact; not main truth until reviewed merge |
+| Next | **Independent Review #2** |
+
+## 21. Journal — ARCH-2 Independent Review #2
+
+| | |
+| --- | --- |
+| Date | 2026-09-12 |
+| Stage | ARCH-2 Independent Review #2 |
+| BASE branch commit | `3777b68f5340acc20dfa9872346b4c568f5dc886` |
+| Application/main | `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` |
+| Verdict | **REQUEST CHANGES** |
+| Findings | `ARCH2-R7` BLOCKER (final epoch before correction); `ARCH2-R8` MAJOR (pre-schema questions). R1…R6 remain CLOSED/PASS. |
+| Result | Draft still `PROPOSED / INDEPENDENT REVIEW REQUIRED`. Review #3 required. ARCH-2 **not accepted**. |
+| Application / schema | unchanged |
+| `production_cost_flow` | unchanged / INACTIVE |
+| `ARCH-P1-001` | OPEN / CONFIRMED (ACTIVE path) |
+| AUDIT 1 | COMPLETE / REVIEWED |
+| AUDIT 2 | **NOT STARTED** |
+| INC-001 | OPEN |
+| Deploy / merge | **NO** |
+| Canonicality | Proposed branch artifact; not main truth until reviewed merge |
+| Next | **Independent Review #3** |
+
+## 22. Journal — ARCH-2 Independent Review #3
+
+| | |
+| --- | --- |
+| Date | 2026-09-12 |
+| Stage | ARCH-2 Independent Review #3 |
+| BASE branch commit | `7b98f79c642e37eb89e14da95839770e57ec9142` |
+| Application/main | `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` |
+| Verdict | **PASS / ACCEPT** |
+| New blockers | **0** |
+| Findings | R1…R8 remain **CLOSED / PASS**. No new architecture blockers. |
+| Result | ARCH-2 **`ACCEPTED / REVIEWED`**. Architecture contract accepted. **Not** implementation complete. |
+| Application / schema | unchanged |
+| `production_cost_flow` | unchanged / INACTIVE |
+| `ARCH-P1-001` | OPEN / CONFIRMED (ACTIVE path) |
+| AUDIT 1 | COMPLETE / REVIEWED |
+| AUDIT 2 | **NOT STARTED** |
+| INC-001 | OPEN |
+| Production deploy | **NO** |
+| Canonicality | `audit/08.02` on `main` is the canonical ARCH-2 architecture after this reviewed merge |
+| Next | **PSR-P0** (not started). Not InventoryMovement schema. |

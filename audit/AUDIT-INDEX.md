@@ -1,6 +1,6 @@
 # Stell22 Audit — Index
 
-Updated: 2026-09-09
+Updated: 2026-09-12
 
 This is the canonical audit navigation and **master registry** for Stell22.
 
@@ -14,14 +14,18 @@ Do not import Woodveri door-manufacturing entities or workflows.
 | | |
 | --- | --- |
 | Repository | `Mr-Pinkerton/Stell22` |
-| Branch | `main` |
-| Application-code checkpoint | `3608b36bd324a5118f4ba5b1bbb21462cc0723d9` — `fix: block generic torcovka delete` (containment). Prior app checkpoint `d9f940e` remains the last pre-incident-containment code. |
-| Docs checkpoint on `origin/main` | forensics `c1cc3c6`; containment application `3608b36`. Post-deploy docs follow in this cycle. |
-| Audit program | STEP 0 recovery **COMPLETE**. **AUDIT 1 = COMPLETE / REVIEWED.** Next after INC-001: **AUDIT 2 — FINANCE & MONEY INTEGRITY**. |
-| Production incident | **`INC-001` = `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`**. Finding **`INC-001-F1` P1 / CONFIRMED**. Generic TORCOVKA delete `CONTAINED IN PRODUCTION`. Package data **not** corrected. `ARCH-P1-001` unrelated. |
+| Branch | `main` is canonical. |
+| Application-code checkpoint | `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` — `Merge pull request #1 from Mr-Pinkerton/integration/p2025-di020`. Production Deploy `34635510843` SUCCESS. Prior containment SHA `3608b36` remains historical INC-001 containment; it is no longer the running SHA. A later docs merge of ARCH-2 does **not** change this application SHA and is **not** a production application deploy. |
+| Docs on `main` | AUDIT 1 artifact `08.01` (`COMPLETE / REVIEWED`). ARCH-2 artifact `08.02` (`ACCEPTED / REVIEWED`). INDEX/PROJECT as last merged. |
+| ARCH-2 | `audit/08.02-primary-system-readiness-architecture.md` — **`ACCEPTED / REVIEWED`**. Independent Review #1 = REQUEST CHANGES (R1…R6 CLOSED/PASS). Independent Review #2 = REQUEST CHANGES (R7…R8 CLOSED/PASS). Independent Review #3 = **PASS / ACCEPT** (new blockers = 0). Architecture contract accepted; **not** implementation complete. NEXT = **PSR-P0** (not started). |
+| Audit program | STEP 0 recovery **COMPLETE**. **AUDIT 1 = COMPLETE / REVIEWED** (not reopened). **ARCH-2 = ACCEPTED / REVIEWED** (architecture contract). Not a new AUDIT 1 defect count. **AUDIT 2 is NOT started.** |
+| Production incident | **`INC-001` = `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`**. Finding **`INC-001-F1` P1 / CONFIRMED**. Generic TORCOVKA delete `CONTAINED IN PRODUCTION`. Package data **not** corrected. `ARCH-P1-001` unrelated to INC-001. |
 | `production_cost_flow` | inactive (delivery state; see `PROJECT.md`) |
+| `ARCH-P1-001` | **OPEN / CONFIRMED**. Scope = `production_cost_flow` **ACTIVE** UPAKOVKA quantity-edit path. Inactive `prepareUpakovkaEdit` already unions old ∪ current refs. Not fixed. |
 
-Always verify current `main` HEAD before relying on SHAs above.
+Always verify current `main` HEAD before relying on SHAs above. Application SHA `71a01b4` is unchanged by the ARCH-2 documentation merge.
+
+`08.01` = current-system architecture audit. `08.02` = accepted primary-system readiness architecture contract. They answer different questions. Do not treat 08.02 as a reopen of AUDIT 1. `ACCEPTED / REVIEWED` does **not** mean PSR implementation complete, ledger deployed, paper removable, or `production_cost_flow` active.
 
 ---
 
@@ -56,15 +60,15 @@ Audit loop: `find -> prove -> classify -> record -> continue`. Do not auto-patch
 
 Every file listed below exists under `audit/` unless noted. `01.16` and `01.17` **never existed** (recovery + git history); that gap is not an error.
 
-Status vocabulary: `ACTIVE`, `COMPLETE`, `COMPLETE / REVIEWED`, `IMPLEMENTED`, `CLOSED`, `DEFERRED BY OWNER`, `DESIGN RISK`, `SUPERSEDED`, `HISTORICAL`, `PLAN`, `NEXT`, `BLOCKED`, `UNKNOWN — NEEDS REVIEW`.
+Canonical? = living copy in `/audit` **on `main`**. A file may occupy the canonical **path** on a review branch before merge; that is not main truth.
 
-Canonical? = this path is the living copy in `/audit` on `main`.
+Status vocabulary: `ACTIVE`, `COMPLETE`, `COMPLETE / REVIEWED`, `ACCEPTED / REVIEWED`, `IMPLEMENTED`, `CLOSED`, `DEFERRED BY OWNER`, `DESIGN RISK`, `SUPERSEDED`, `HISTORICAL`, `PLAN`, `NEXT`, `BLOCKED`, `UNKNOWN — NEEDS REVIEW`, `PROPOSED / INDEPENDENT REVIEW REQUIRED`.
 
 ### D.0 Index and recovery
 
 | File | Area | Type | BASE/Snapshot | Status | Canonical? | Notes |
 | ---- | ---- | ---- | ------------- | ------ | ---------- | ----- |
-| `audit/AUDIT-INDEX.md` | Program | Index | `d9f940e` app / this cycle | `ACTIVE` | YES | Master registry. Update in the same cycle as any audit-file change. |
+| `audit/AUDIT-INDEX.md` | Program | Index | `71a01b4` app / this cycle | `ACTIVE` | YES | Master registry. Update in the same cycle as any audit-file change. |
 | `audit/00-local-audit-recovery.md` | Recovery | Recovery report | Local scan @ `d9f940e` | `HISTORICAL` | YES | `RECOVERY COMPLETE / HISTORICAL REFERENCE`. Not a findings register. |
 
 ### D.1 Этап 00 — charter / maps / backlog
@@ -138,11 +142,14 @@ No `audit/01.16*` or `audit/01.17*`.
 | `audit/03.01-production-cost-truth-map.md` | Cost | Truth map | `1bf910908f72f478e635a3202fb605cec62176b8` | `COMPLETE` | YES | Read-only. Do not reopen closed DI cards from this map. |
 | `audit/03.02-production-cost-flow-architecture.md` | Cost | Architecture | Snapshot `1bf91090`; Package 3 review BASE `77ee6af9691130a2e3411ff6fa558f9e6b7dc17d` | `COMPLETE` | YES | Cost-flow architecture (not whole-system AUDIT 1). Packages 2/3 implemented in code; activation `BLOCKED` (`PROJECT.md`). |
 
-### D.7 AUDIT 1 — whole-system architecture (08.xx)
+### D.7 AUDIT 1 / ARCH-2 — whole-system architecture (08.xx)
+
+`08.01` and `08.02` are **not** the same audit. `08.01` classifies current-system defects. `08.02` defines primary-system readiness (PSR-*) before Stell22 can be the only warehouse/production SoT. Do not reopen AUDIT 1 defect counts from 08.02.
 
 | File | Area | Type | BASE/Snapshot | Status | Canonical? | Notes |
 | ---- | ---- | ---- | ------------- | ------ | ---------- | ----- |
-| `audit/08.01-audit-1-system-architecture.md` | Whole system | Architecture audit | Repo `d1f46e46232499b61f55e754b0bd70ddc5924bca`; app `d9f940e8540801bdb27dd72210193f5e4ab038c3` | `COMPLETE / REVIEWED` | YES | ChatGPT adversarial review accepted. New P0=0. New P1=`ARCH-P1-001` (OPEN / CONFIRMED; not patched). New P2/P3=0. Simplify=`ARCH-SIMPLIFY-001`. Next: **AUDIT 2 — FINANCE & MONEY INTEGRITY**. |
+| `audit/08.01-audit-1-system-architecture.md` | Whole system | Architecture audit | Repo `d1f46e46232499b61f55e754b0bd70ddc5924bca`; app `d9f940e8540801bdb27dd72210193f5e4ab038c3` | `COMPLETE / REVIEWED` | YES | ChatGPT adversarial review accepted. New P0=0. New P1=`ARCH-P1-001` (OPEN / CONFIRMED; ACTIVE-path scope). New P2/P3=0. Simplify=`ARCH-SIMPLIFY-001`. **Do not reopen.** AUDIT 2 is a later finance audit, not started. |
+| `audit/08.02-primary-system-readiness-architecture.md` | Primary-system readiness | Architecture contract | App/main `71a01b4` (docs merge does not change application SHA) | `ACCEPTED / REVIEWED` | YES | ARCH-2. Review #1 REQUEST CHANGES → R1…R6 CLOSED/PASS. Review #2 REQUEST CHANGES → R7…R8 CLOSED/PASS. Review #3 **PASS / ACCEPT** (new blockers = 0). Architecture contract accepted; **not** implementation complete. NEXT = PSR-P0 (not started). PSR-MUST-001…008. Not a reopen of AUDIT 1. No valuation journal. Generic `CommandExecution` not mandatory. |
 
 ### D.8 Production incidents
 
@@ -161,12 +168,14 @@ No `audit/01.16*` or `audit/01.17*`.
 | Status | `COMPLETE / REVIEWED` |
 | BASE | Repo HEAD `d1f46e46232499b61f55e754b0bd70ddc5924bca`; application `d9f940e8540801bdb27dd72210193f5e4ab038c3` |
 | New P0 | 0 |
-| New P1 | `ARCH-P1-001` (`OPEN / CONFIRMED`; not patched) |
+| New P1 | `ARCH-P1-001` (`OPEN / CONFIRMED`; not patched; ACTIVE UPAKOVKA qty-edit path) |
 | New P2 / P3 | 0 |
 | Simplify | `ARCH-SIMPLIFY-001` (temporary migration debt) |
-| Next | **AUDIT 2 — FINANCE & MONEY INTEGRITY** |
+| Next from AUDIT 1 | **AUDIT 2 — FINANCE & MONEY INTEGRITY** (still **not started**; not silently opened by ARCH-2) |
 
 `03.02` is production **cost-flow** architecture. It is **not** a substitute for AUDIT 1.
+
+`08.02` is **ARCH-2 primary-system readiness**. It is **not** a substitute for AUDIT 1 and does **not** change the AUDIT 1 counts above.
 
 ---
 
@@ -207,7 +216,29 @@ Status: `COMPLETE / REVIEWED`
 
 Artifact: `audit/08.01-audit-1-system-architecture.md`
 
-BASE repo: `d1f46e46232499b61f55e754b0bd70ddc5924bca`. Application: `d9f940e8540801bdb27dd72210193f5e4ab038c3`. New P0=0. New P1=`ARCH-P1-001` (OPEN / CONFIRMED). New P2/P3=0. Simplify=`ARCH-SIMPLIFY-001`.
+BASE repo: `d1f46e46232499b61f55e754b0bd70ddc5924bca`. Application: `d9f940e8540801bdb27dd72210193f5e4ab038c3`. New P0=0. New P1=`ARCH-P1-001` (OPEN / CONFIRMED; ACTIVE path). New P2/P3=0. Simplify=`ARCH-SIMPLIFY-001`.
+
+**Do not reopen AUDIT 1.**
+
+### ARCH-2 — PRIMARY-SYSTEM READINESS
+
+Status: `ACCEPTED / REVIEWED`
+
+Artifact: `audit/08.02-primary-system-readiness-architecture.md` (canonical ARCH-2 architecture on `main` after Review #3 merge)
+
+Application/main BASE: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` (unchanged by this documentation merge; **not** a production application deploy).
+
+Independent Review #1: **REQUEST CHANGES** (ARCH2-R1…R6 **CLOSED / PASS**; not reopened).
+
+Independent Review #2: **REQUEST CHANGES** (ARCH2-R7…R8 **CLOSED / PASS**; not reopened).
+
+Independent Review #3: **PASS / ACCEPT**. New architecture blockers = **0**. R1…R8 = **CLOSED / PASS**.
+
+`ACCEPTED / REVIEWED` = architecture **contract** accepted. It does **not** mean PSR implementation complete, primary-system readiness achieved, ledger deployed, paper removable, or `production_cost_flow` active.
+
+Forward-looking foundation so Stell22 can become the only warehouse/production operational source of truth. PSR-MUST / PSR-DESIGN / PSR-DEFER / PSR-REJECT namespace. **Not** a new AUDIT 1 defect register.
+
+NEXT: **PSR-P0 — Pre-schema Primary-System Readiness contracts/design closure**. Not InventoryMovement schema. **Not started** in this cycle. AUDIT 2 not started.
 
 ### INC-001 — TORCOVKA whole-package production incident
 
@@ -215,10 +246,10 @@ Status: `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTI
 
 Artifact: `audit/INC-001-torcovka-whole-package-production-incident.md`
 
-Finding: `INC-001-F1` (P1) — after TORCOVKA delete, no application path to restore falsely consumed `RailLot`. Generic delete path is now `CONTAINED IN PRODUCTION` (`3608b36`). Proper `cancelErroneousTorcovka` `NOT IMPLEMENTED`. Damaged package `NOT CORRECTED`. Scenario A vs B still requires physical facts. Employee not recoverable.
+Finding: `INC-001-F1` (P1) — after TORCOVKA delete, no application path to restore falsely consumed `RailLot`. Generic delete path is `CONTAINED IN PRODUCTION` (first at `3608b36`; still present on running `71a01b4`). Proper `cancelErroneousTorcovka` `NOT IMPLEMENTED`. Damaged package `NOT CORRECTED`. Scenario A vs B still requires physical facts. Employee not recoverable. ARCH-2 does **not** close INC-001.
 
 ### AUDIT 2 — FINANCE & MONEY INTEGRITY
 
-Status: `NEXT AFTER INC-001`
+Status: `NOT STARTED` (`NEXT AFTER INC-001`)
 
-Audit-only when started. Do not open as a file until INC-001 production correction is decided. High-level scope: CashFlow, Account/balance, Statement/import, Deal allocations, transfers, Payment/payroll money, corrections/voids, transaction boundaries, idempotency, confirmed/unconfirmed money, reconciliation, Sale vs money where relevant.
+ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. Do not open as a file until INC-001 production correction is decided. High-level scope: CashFlow, Account/balance, Statement/import, Deal allocations, transfers, Payment/payroll money, corrections/voids, transaction boundaries, idempotency, confirmed/unconfirmed money, reconciliation, Sale vs money where relevant.
