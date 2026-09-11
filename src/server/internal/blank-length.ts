@@ -51,7 +51,7 @@ export function canonicalizeTorcovkaPicks(
 ): CanonicalTorcovkaPick[] {
   const merged = new Map<string, CanonicalTorcovkaPick>();
   for (const p of rawPicks) {
-    if (p.quantity <= 0) continue;
+    if (!(p.quantity > 0)) continue;
     const lengthMFixed4 = canonicalLengthFixed4(p.lengthM);
     const key = `${lengthMFixed4}|${p.sort}`;
     const existing = merged.get(key);

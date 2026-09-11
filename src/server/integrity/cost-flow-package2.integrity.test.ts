@@ -305,7 +305,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     expect(d(s2?.pieceLaborCost)!.equals(D(8))).toBe(true);
   });
 
-  it("5 same BlankStock target: one pool version increment, lines reconcile", async () => {
+  it("5 same BlankStock target: identical picks merge, one pool version increment, lines reconcile", async () => {
     await setCostFlowActive(true);
     const world = await seedWorld();
     await createdTorcovka(
@@ -321,6 +321,8 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
       where: { railLotId: world.lot.id },
       include: { lines: true },
     });
+    expect(op.lines).toHaveLength(1);
+    expect(op.lines[0]!.quantity).toBe(2);
     const blank = await blankOf(world.material.id, 0.9);
     expect(blank?.quantity).toBe(2);
     expect(blank?.costVersion).toBe(2);

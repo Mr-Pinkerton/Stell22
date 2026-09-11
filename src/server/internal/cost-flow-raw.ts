@@ -15,7 +15,6 @@ import {
   torcovkaPieceLaborCost,
 } from "@/lib/torcovka-cost";
 import type { OperationRateSnapshotWrite } from "@/lib/payroll";
-import { canonicalLengthFixed4 } from "@/server/internal/blank-length";
 import {
   blankSpecSortKey,
   uniqueSortedBlankSpecs,
@@ -48,7 +47,7 @@ async function lockBlankRow(tx: Prisma.TransactionClient, id: string): Promise<v
 }
 
 function lengthDec(value: Prisma.Decimal | number | string): Prisma.Decimal {
-  return new Prisma.Decimal(canonicalLengthFixed4(value));
+  return new Prisma.Decimal(D(value.toString()).toFixed(4));
 }
 
 function moneyZero(): Prisma.Decimal {
@@ -260,7 +259,7 @@ export async function applyActiveTorcovkaInTx(args: {
       lines: {
         create: picks.map((p, i) => ({
           quantity: p.quantity,
-          blankLengthM: lengthDec(p.lengthM),
+          blankLengthM: p.lengthM,
           blankType: lot.railType,
           blankSort: p.sort,
           blankMaterialId: materialId,

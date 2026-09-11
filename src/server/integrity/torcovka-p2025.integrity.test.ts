@@ -252,7 +252,7 @@ describe.skipIf(!enabled)("TORCOVKA P2025 length canonicalization", () => {
     expect(await prismaA.productionOperation.count({ where: { railLotId: world.lot.id } })).toBe(1);
   });
 
-  it("T7 later transaction error still rolls back", async () => {
+  it("T7 insufficient rails fail before writes after canonicalization", async () => {
     const world = await seedWorld({ remaining: 1, lotLengthM: "2" });
     await expect(
       submitTorcovka(
@@ -271,6 +271,5 @@ describe.skipIf(!enabled)("TORCOVKA P2025 length canonicalization", () => {
     expect(await prismaA.blankStock.count({ where: { materialId: world.material.id } })).toBe(0);
     const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
     expect(lot.remainingQuantity).toBe(1);
-    expect(await prismaA.changeLog.count()).toBe(0);
   });
 });

@@ -107,6 +107,46 @@ function isPrismaP2025(e: unknown): boolean {
   return typeof e === "object" && e !== null && (e as { code?: unknown }).code === "P2025";
 }
 
+function logTorcovkaP2025Forensic(payload: {
+  clientRequestId: string;
+  employeeId: string;
+  railLotId: string;
+  batchId: string;
+  rawPicks: unknown;
+  normalizedPicks: unknown;
+}): void {
+  try {
+    console.error(
+      JSON.stringify({
+        event: "torcovka_p2025",
+        clientRequestId: payload.clientRequestId,
+        employeeId: payload.employeeId,
+        railLotId: payload.railLotId,
+        batchId: payload.batchId,
+        rawPicks: payload.rawPicks,
+        normalizedPicks: payload.normalizedPicks,
+        prismaCode: "P2025",
+      }),
+    );
+  } catch {
+    try {
+      console.error(
+        JSON.stringify({
+          event: "torcovka_p2025",
+          clientRequestId: payload.clientRequestId,
+          employeeId: payload.employeeId,
+          railLotId: payload.railLotId,
+          batchId: payload.batchId,
+          prismaCode: "P2025",
+          forensicPayloadSerializationFailed: true,
+        }),
+      );
+    } catch {
+      // Forensic logging must never replace the original P2025.
+    }
+  }
+}
+
 function snapshotNumber(value: Prisma.Decimal | number | null): number | null {
   if (value == null) return null;
   return typeof value === "object" && "toNumber" in value ? value.toNumber() : Number(value);
@@ -797,18 +837,14 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
   }).catch((e) => {
     if (isDuplicateClientRequest(e)) return { status: "IDEMPOTENT_REPLAY" as const };
     if (isPrismaP2025(e)) {
-      console.error(
-        JSON.stringify({
-          event: "torcovka_p2025",
-          clientRequestId,
-          employeeId,
-          railLotId,
-          batchId,
-          rawPicks,
-          normalizedPicks: picks,
-          prismaCode: "P2025",
-        }),
-      );
+      logTorcovkaP2025Forensic({
+        clientRequestId,
+        employeeId,
+        railLotId,
+        batchId,
+        rawPicks,
+        normalizedPicks: picks,
+      });
     }
     throw e;
   });

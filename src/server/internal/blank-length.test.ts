@@ -77,6 +77,16 @@ describe("canonicalizeTorcovkaPicks", () => {
     ]);
   });
 
+  it("discards NaN quantity the same as the pre-patch quantity > 0 filter", () => {
+    const merged = canonicalizeTorcovkaPicks([
+      { lengthM: 0.736, sort: "SORT1", quantity: Number.NaN },
+      { lengthM: 0.5, sort: "SORT1", quantity: 1 },
+    ]);
+    expect(merged).toEqual([
+      { lengthM: 0.5, lengthMFixed4: "0.5000", sort: "SORT1", quantity: 1 },
+    ]);
+  });
+
   it("preserves first appearance order of canonical keys after merge", () => {
     const merged = canonicalizeTorcovkaPicks([
       { lengthM: 0.7361, sort: "SORT1", quantity: 1 },
