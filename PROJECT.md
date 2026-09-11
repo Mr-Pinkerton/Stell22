@@ -89,7 +89,7 @@ INC-001 remains `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA 
 
 **Current architecture-hardening work:** ARCH-2 / Primary-System Readiness (`audit/08.02-primary-system-readiness-architecture.md`).
 
-Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED`. Independent Review #1 = **REQUEST CHANGES**. Corrections applied on this branch. **Independent Review #2 pending.** ARCH-2 is **not accepted**. This `PROJECT.md` text is proposed on the review branch; it becomes the main journal only after reviewed merge.
+Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED`. Independent Review #1 = REQUEST CHANGES (R1…R6 **CLOSED / PASS**). Independent Review #2 = **REQUEST CHANGES**. **Independent Review #3 pending.** ARCH-2 is **not accepted**. This `PROJECT.md` text is proposed on the review branch; it becomes the main journal only after reviewed merge.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -255,7 +255,7 @@ ChatGPT adversarial review of the 08.01 draft: **accepted**. Recovery had record
 
 ## 12.1 ARCH-2 — PRIMARY-SYSTEM READINESS
 
-Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED` (Review #1 **REQUEST CHANGES**; Review #2 pending)
+Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED` (Review #1 R1…R6 CLOSED/PASS; Review #2 **REQUEST CHANGES**; Review #3 pending)
 
 Artifact (canonical **path**, not yet on `main`): `audit/08.02-primary-system-readiness-architecture.md`
 
@@ -265,9 +265,9 @@ Forward-looking architecture so Stell22 can become the only warehouse/production
 
 ## 13. Current next step
 
-`NEXT = Independent Review #2 of audit/08.02-primary-system-readiness-architecture.md. No implementation package accepted yet.`
+`NEXT = Independent Review #3 of audit/08.02-primary-system-readiness-architecture.md. No implementation package accepted yet.`
 
-Independent Review #1 = **REQUEST CHANGES**. Documentation corrections for ARCH2-R1…R6 are on this branch. ARCH-2 is **not accepted**.
+Independent Review #2 = **REQUEST CHANGES** (ARCH2-R7 BLOCKER, ARCH2-R8 MAJOR). R1…R6 remain CLOSED/PASS. Documentation corrections are on this branch. ARCH-2 is **not accepted**.
 
 Do **not** implement InventoryMovement / dual-write / cutover in this cycle.
 
@@ -396,3 +396,24 @@ After every significant delivery action record:
 | Deploy / merge | **NO** |
 | Canonicality | Proposed branch artifact; not main truth until reviewed merge |
 | Next | **Independent Review #2** |
+
+## 21. Journal — ARCH-2 Independent Review #2
+
+| | |
+| --- | --- |
+| Date | 2026-09-12 |
+| Stage | ARCH-2 Independent Review #2 |
+| BASE branch commit | `3777b68f5340acc20dfa9872346b4c568f5dc886` |
+| Application/main | `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` |
+| Verdict | **REQUEST CHANGES** |
+| Findings | `ARCH2-R7` BLOCKER (final epoch before correction); `ARCH2-R8` MAJOR (pre-schema questions). R1…R6 remain CLOSED/PASS. |
+| Result | Draft still `PROPOSED / INDEPENDENT REVIEW REQUIRED`. Review #3 required. ARCH-2 **not accepted**. |
+| Application / schema | unchanged |
+| `production_cost_flow` | unchanged / INACTIVE |
+| `ARCH-P1-001` | OPEN / CONFIRMED (ACTIVE path) |
+| AUDIT 1 | COMPLETE / REVIEWED |
+| AUDIT 2 | **NOT STARTED** |
+| INC-001 | OPEN |
+| Deploy / merge | **NO** |
+| Canonicality | Proposed branch artifact; not main truth until reviewed merge |
+| Next | **Independent Review #3** |

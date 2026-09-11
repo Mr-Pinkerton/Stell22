@@ -36,11 +36,11 @@ Branch: `audit/arch2-primary-system-readiness`
 
 Proposed architecture draft: `audit/08.02-primary-system-readiness-architecture.md`
 
-That draft occupies the canonical audit **path** but is **not** canonical `main` documentation until Independent Review #2 passes and a reviewed merge lands.
+That draft occupies the canonical audit **path** but is **not** canonical `main` documentation until ARCH-2 is accepted after Independent Review #3 and a reviewed merge lands.
 
 Do **not** treat `71a01b4` as the documentation checkpoint for this 08.02 text: 08.02 exists only on the review branch.
 
-Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED`. Independent Review #1 = **REQUEST CHANGES**. **NEXT = Independent Review #2.**
+Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED`. Independent Review #1 = REQUEST CHANGES (R1…R6 CLOSED/PASS). Independent Review #2 = **REQUEST CHANGES**. **NEXT = Independent Review #3.**
 
 Historical documentation recovery checkpoint (no longer current on main):
 
@@ -60,9 +60,9 @@ INC-001 containment SHA (still in the running tree):
 
 The project (on `main`) remains: production at `71a01b4`; AUDIT 1 complete; INC-001 open; AUDIT 2 not started.
 
-On the **proposed** review branch only: **architecture-hardening ARCH-2 / Primary-System Readiness**, awaiting Independent Review #2.
+On the **proposed** review branch only: **architecture-hardening ARCH-2 / Primary-System Readiness**, awaiting Independent Review #3.
 
-Do not implement ARCH-2 packages until the draft is accepted after Review #2 and merged.
+Do not implement ARCH-2 packages until the draft is accepted after Review #3 and merged.
 
 AUDIT 1 remains `COMPLETE / REVIEWED`. Do not reopen it.
 
