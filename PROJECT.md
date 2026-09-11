@@ -29,14 +29,14 @@ The system is not only a status tracker. Production facts must remain reconcilab
 ## 3. Canonical source hierarchy
 
 1. GitHub `main`: current code + committed audit documents. **This is canonical truth.**
-2. This `PROJECT.md`: owner decisions, package/deploy/activation status and current next step — **on `main`**. The copy on `audit/arch2-primary-system-readiness` is a **proposed journal update** and becomes the main project-journal state **only after a reviewed merge**.
-3. `audit/AUDIT-INDEX.md`: audit navigation/status (same rule: main vs proposed branch).
+2. This `PROJECT.md`: owner decisions, package/deploy/activation status and current next step — **on `main`**.
+3. `audit/AUDIT-INDEX.md`: audit navigation/status.
 4. `/Projects/Stell22` Library snapshot: cross-chat recovery/cache.
 5. Chat/Cursor transcripts: working evidence only.
 
 If sources conflict, verify the actual GitHub `main` and record the divergence.
 
-A Cursor/chat statement without a committed project artifact is not canonical. A committed artifact on a review branch is not canonical `main` until merge.
+A Cursor/chat statement without a committed project artifact is not canonical.
 
 ## 4. Current verified technical checkpoint
 
@@ -79,7 +79,7 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: ARCH-2 PRIMARY-SYSTEM READINESS` (architecture-hardening; documentation)
+`ACTIVE MODE: PSR-P0 PENDING` (architecture accepted; next package not started)
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
@@ -87,9 +87,13 @@ AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUD
 
 INC-001 remains `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`. Containment is still in production on `71a01b4`. Do not treat ARCH-2 as a production-data fix. Do not automatically invert INV-047 (generic TORCOVKA delete returning rails).
 
-**Current architecture-hardening work:** ARCH-2 / Primary-System Readiness (`audit/08.02-primary-system-readiness-architecture.md`).
+**ARCH-2 / Primary-System Readiness** (`audit/08.02-primary-system-readiness-architecture.md`): **`ACCEPTED / REVIEWED`**.
 
-Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED`. Independent Review #1 = REQUEST CHANGES (R1…R6 **CLOSED / PASS**). Independent Review #2 = **REQUEST CHANGES**. **Independent Review #3 pending.** ARCH-2 is **not accepted**. This `PROJECT.md` text is proposed on the review branch; it becomes the main journal only after reviewed merge.
+Independent Review #1 = REQUEST CHANGES (R1…R6 **CLOSED / PASS**). Independent Review #2 = REQUEST CHANGES (R7…R8 **CLOSED / PASS**). Independent Review #3 = **PASS / ACCEPT**. New blockers = 0.
+
+`ACCEPTED / REVIEWED` means the **architecture contract** is accepted. It does **not** mean PSR implementation complete, primary-system readiness achieved, ledger deployed, paper removable, or `production_cost_flow` active.
+
+NEXT package: **PSR-P0** (pre-schema contracts / design closure). **Not started** in this cycle. Not InventoryMovement schema.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -255,19 +259,21 @@ ChatGPT adversarial review of the 08.01 draft: **accepted**. Recovery had record
 
 ## 12.1 ARCH-2 — PRIMARY-SYSTEM READINESS
 
-Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED` (Review #1 R1…R6 CLOSED/PASS; Review #2 **REQUEST CHANGES**; Review #3 pending)
+Status: `ACCEPTED / REVIEWED` (Review #1 R1…R6 CLOSED/PASS; Review #2 R7…R8 CLOSED/PASS; Review #3 **PASS / ACCEPT**; new blockers = 0)
 
-Artifact (canonical **path**, not yet on `main`): `audit/08.02-primary-system-readiness-architecture.md`
+Artifact (canonical on `main` after reviewed merge): `audit/08.02-primary-system-readiness-architecture.md`
 
-Application/main BASE: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853`
+Application/main BASE: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` (docs merge ≠ production application deploy)
 
-Forward-looking architecture so Stell22 can become the only warehouse/production operational source of truth. PSR namespace. **Not** a reopen of AUDIT 1. No application/schema change in this cycle. Proposed on branch until reviewed merge.
+Forward-looking architecture so Stell22 can become the only warehouse/production operational source of truth. PSR namespace. **Not** a reopen of AUDIT 1. Architecture contract accepted; **not** implementation complete. No application/schema change in this cycle.
 
 ## 13. Current next step
 
-`NEXT = Independent Review #3 of audit/08.02-primary-system-readiness-architecture.md. No implementation package accepted yet.`
+`NEXT = PSR-P0 — Pre-schema Primary-System Readiness contracts/design closure.`
 
-Independent Review #2 = **REQUEST CHANGES** (ARCH2-R7 BLOCKER, ARCH2-R8 MAJOR). R1…R6 remain CLOSED/PASS. Documentation corrections are on this branch. ARCH-2 is **not accepted**.
+PSR-P0 resolves schema-shaping contracts (Q1, Q2, Q5, Q7, Q8) **before** any Prisma schema/migration for InventoryMovement. **Do not start PSR-P0 in the ARCH-2 acceptance cycle.**
+
+Independent Review #3 = **PASS / ACCEPT**. ARCH-2 = **ACCEPTED / REVIEWED**. R1…R8 = **CLOSED / PASS**.
 
 Do **not** implement InventoryMovement / dual-write / cutover in this cycle.
 
@@ -276,8 +282,6 @@ Do **not** start AUDIT 2. AUDIT 2 remains `NOT STARTED` / `NEXT AFTER INC-001`.
 INC-001 remains OPEN (containment deployed on `71a01b4`; physical facts still required before any production-data correction). ARCH-2 does not close it.
 
 When AUDIT 2 starts: audit-only; do not auto-patch findings; `production_cost_flow` stays inactive; activation stays `BLOCKED`.
-
-This NEXT is proposed on the review branch; it becomes the main journal NEXT only after reviewed merge.
 
 ## 14. Journal update rule
 
@@ -417,3 +421,25 @@ After every significant delivery action record:
 | Deploy / merge | **NO** |
 | Canonicality | Proposed branch artifact; not main truth until reviewed merge |
 | Next | **Independent Review #3** |
+
+## 22. Journal — ARCH-2 Independent Review #3
+
+| | |
+| --- | --- |
+| Date | 2026-09-12 |
+| Stage | ARCH-2 Independent Review #3 |
+| BASE branch commit | `7b98f79c642e37eb89e14da95839770e57ec9142` |
+| Application/main | `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` |
+| Verdict | **PASS / ACCEPT** |
+| New blockers | **0** |
+| Findings | R1…R8 remain **CLOSED / PASS**. No new architecture blockers. |
+| Result | ARCH-2 **`ACCEPTED / REVIEWED`**. Architecture contract accepted. **Not** implementation complete. |
+| Application / schema | unchanged |
+| `production_cost_flow` | unchanged / INACTIVE |
+| `ARCH-P1-001` | OPEN / CONFIRMED (ACTIVE path) |
+| AUDIT 1 | COMPLETE / REVIEWED |
+| AUDIT 2 | **NOT STARTED** |
+| INC-001 | OPEN |
+| Production deploy | **NO** |
+| Canonicality | `audit/08.02` on `main` is the canonical ARCH-2 architecture after this reviewed merge |
+| Next | **PSR-P0** (not started). Not InventoryMovement schema. |

@@ -28,19 +28,19 @@ Never import door-specific entities, routes, WIP assumptions, or business rules 
 
 `Merge pull request #1 from Mr-Pinkerton/integration/p2025-di020`
 
-This SHA is current GitHub `origin/main` (application + last merged docs) and was deployed (Production Deploy `34635510843` SUCCESS). Always verify current `main` before relying on it.
+This SHA is the current production **application** checkpoint on GitHub `origin/main` and was deployed (Production Deploy `34635510843` SUCCESS). A later documentation merge of ARCH-2 does **not** change this application SHA and is **not** a production application deploy. Always verify current `main` before relying on it.
 
-## Proposed ARCH-2 branch (not main truth)
+## ARCH-2 — Primary-System Readiness
 
-Branch: `audit/arch2-primary-system-readiness`
+Canonical architecture: `audit/08.02-primary-system-readiness-architecture.md`
 
-Proposed architecture draft: `audit/08.02-primary-system-readiness-architecture.md`
+Status: **`ACCEPTED / REVIEWED`**.
 
-That draft occupies the canonical audit **path** but is **not** canonical `main` documentation until ARCH-2 is accepted after Independent Review #3 and a reviewed merge lands.
+Independent Review #1 = REQUEST CHANGES (R1…R6 CLOSED/PASS). Independent Review #2 = REQUEST CHANGES (R7…R8 CLOSED/PASS). Independent Review #3 = **PASS / ACCEPT** (new blockers = 0).
 
-Do **not** treat `71a01b4` as the documentation checkpoint for this 08.02 text: 08.02 exists only on the review branch.
+`ACCEPTED / REVIEWED` means the architecture **contract** is accepted. It does **not** mean PSR implementation complete, primary-system readiness achieved, ledger deployed, paper removable, or `production_cost_flow` active.
 
-Status: `PROPOSED / INDEPENDENT REVIEW REQUIRED`. Independent Review #1 = REQUEST CHANGES (R1…R6 CLOSED/PASS). Independent Review #2 = **REQUEST CHANGES**. **NEXT = Independent Review #3.**
+**NEXT = PSR-P0** — pre-schema contracts / design closure. Not InventoryMovement schema. Do not start PSR-P0 automatically from this acceptance.
 
 Historical documentation recovery checkpoint (no longer current on main):
 
@@ -58,11 +58,9 @@ INC-001 containment SHA (still in the running tree):
 
 ## Current work mode
 
-The project (on `main`) remains: production at `71a01b4`; AUDIT 1 complete; INC-001 open; AUDIT 2 not started.
+The project on `main`: production application at `71a01b4`; AUDIT 1 complete; ARCH-2 architecture **ACCEPTED / REVIEWED**; INC-001 open; AUDIT 2 not started.
 
-On the **proposed** review branch only: **architecture-hardening ARCH-2 / Primary-System Readiness**, awaiting Independent Review #3.
-
-Do not implement ARCH-2 packages until the draft is accepted after Review #3 and merged.
+**NEXT = PSR-P0** (pre-schema contracts). Not started. Do not implement InventoryMovement / dual-write / cutover until PSR-P0 closes the schema-shaping questions.
 
 AUDIT 1 remains `COMPLETE / REVIEWED`. Do not reopen it.
 
