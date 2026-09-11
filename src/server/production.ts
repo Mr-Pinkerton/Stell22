@@ -627,10 +627,10 @@ export async function correctTorcovkaRailsTaken(input: {
     if (!(newRailsTaken < oldRailsTaken)) {
       throw new Error("Можно только уменьшить количество фактически взятых реек");
     }
+    if (op.isPaid) throw new Error("Нельзя исправить — операция уже выплачена");
 
     const costFlowActive = await isCostFlowActive(tx);
     if (costFlowActive) {
-      if (op.isPaid) throw new Error("Нельзя исправить — операция уже выплачена");
       await lockRailLots(tx, [op.railLotId]);
       const lot = await tx.railLot.findUnique({ where: { id: op.railLotId } });
       if (!lot) throw new Error("Пакет реек не найден");
@@ -716,6 +716,8 @@ export async function correctTorcovkaRailsTaken(input: {
     if (producedM.gt(newTakenM)) {
       throw new Error("Суммарная длина заготовок превышает длину взятых реек");
     }
+
+    await assertTorcovkaBlankInventoryBoundary(tx, op.createdAt, requireTorcovkaBlankSpecs(op.lines));
 
     const delta = oldRailsTaken - newRailsTaken;
     await tx.railLot.update({

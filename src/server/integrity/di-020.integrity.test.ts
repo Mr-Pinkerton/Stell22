@@ -728,7 +728,7 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
     expect(op.torcovkaSubmitAckBand).toBe("HIGH_WASTE");
   });
 
-  it("9: paid + not frozen: correction allowed, Payment unchanged", async () => {
+  it("9: paid + not frozen: correction rejected, Payment unchanged", async () => {
     const seeded = await seedExistingOp({
       suffix: `c9-${Date.now()}`,
       railsTaken: 20,
@@ -745,15 +745,19 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
         items: { create: [{ operationId: seeded.op.id }] },
       },
     });
-    await correctTorcovkaRailsTaken({
-      operationId: seeded.op.id,
-      newRailsTaken: 4,
-      reason: "paid ok",
-    });
+    await expect(
+      correctTorcovkaRailsTaken({
+        operationId: seeded.op.id,
+        newRailsTaken: 4,
+        reason: "paid ok",
+      }),
+    ).rejects.toThrow("Нельзя исправить — операция уже выплачена");
     const op = await prismaA.productionOperation.findUniqueOrThrow({ where: { id: seeded.op.id } });
+    const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: seeded.lot.id } });
     const pay = await prismaA.payment.findUniqueOrThrow({ where: { id: payment.id } });
     expect(op.isPaid).toBe(true);
-    expect(op.railsTaken).toBe(4);
+    expect(op.railsTaken).toBe(20);
+    expect(lot.remainingQuantity).toBe(10);
     expect(Number(pay.amount)).toBe(40);
     expect(op.torcovkaSubmitAckBand).toBe("HIGH_WASTE");
   });
