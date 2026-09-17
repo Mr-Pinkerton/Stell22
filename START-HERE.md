@@ -28,7 +28,9 @@ Never import door-specific entities, routes, WIP assumptions, or business rules 
 
 `Merge pull request #3 from Mr-Pinkerton/feat/ops-corr-01-traceability-v1`
 
-This SHA is the current production **application** checkpoint on GitHub `origin/main` and was deployed (Production Deploy `35204366279` SUCCESS). Schema/migrations = none in that deploy. `production_cost_flow` remains INACTIVE. Always verify current `main` before relying on it.
+This SHA is the current production **application** checkpoint and was deployed (Production Deploy `35204366279` SUCCESS). Schema/migrations = none in that deploy. `production_cost_flow` remains INACTIVE.
+
+A later documentation merge of PSR-P0-CORR will advance GitHub `main`. The production application remains `0686d0036da52cc32aaff531c91f1dd2ded899ec` until a **separate** production deploy. Always verify current `main` HEAD; do not treat `0686d00` as canonical `origin/main` after that docs merge.
 
 Prior production application checkpoint (**historical**, do not rewrite):
 

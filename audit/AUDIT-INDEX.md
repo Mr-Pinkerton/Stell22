@@ -24,7 +24,7 @@ Do not import Woodveri door-manufacturing entities or workflows.
 | `production_cost_flow` | inactive (delivery state; see `PROJECT.md`) |
 | `ARCH-P1-001` | **OPEN / CONFIRMED**. Scope = `production_cost_flow` **ACTIVE** UPAKOVKA quantity-edit path. Inactive `prepareUpakovkaEdit` already unions old ∪ current refs. Not fixed. |
 
-Always verify current `main` HEAD before relying on SHAs above. Application SHA `0686d00` is the current production application. Historical SHA `71a01b4` is not rewritten.
+Always verify current `main` HEAD before relying on git SHA. Production **application** SHA `0686d00` remains until a separate deploy. A documentation merge of `08.03` advances GitHub `main` and does **not** change the production application. Historical SHA `71a01b4` is not rewritten.
 
 `08.01` = current-system architecture audit. `08.02` = accepted primary-system readiness architecture contract. They answer different questions. Do not treat 08.02 as a reopen of AUDIT 1. `ACCEPTED / REVIEWED` does **not** mean PSR implementation complete, ledger deployed, paper removable, or `production_cost_flow` active.
 

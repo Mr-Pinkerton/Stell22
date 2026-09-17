@@ -52,6 +52,8 @@ Last verified production application SHA:
 
 Evidence: GitHub Production Deploy run `35204366279` SUCCESS (2026-09-17, `workflow_dispatch`; `headSha` = `0686d0036da52cc32aaff531c91f1dd2ded899ec`).
 
+A later documentation merge of PSR-P0-CORR (`audit/08.03`) will advance GitHub `main`. The production **application** remains `0686d0036da52cc32aaff531c91f1dd2ded899ec` until a **separate** production deploy. This contract’s application-code base remains that SHA.
+
 That deploy includes:
 
 - OPS-CORR-01 Production Traceability v1 (PR #3);
