@@ -3,7 +3,9 @@ import { createLocalDate } from "@/lib/dates";
 import type { ProductionEntryRow } from "@/mocks/production-fixtures";
 import {
   filterProductionEntries,
+  filterProductionEntriesByCreatedAt,
   filterProductionTableRows,
+  formatProductionQuantity,
   getDefaultProductionTableFilters,
   isProductionExtraFiltersDefault,
   productionEmployeeOptions,
@@ -219,6 +221,86 @@ describe("productionEmployeeOptions", () => {
       row({ id: "b", employeeId: "emp-1", employeeName: "Иванов Иван" }),
     ];
     expect(productionEmployeeOptions(rows)).toEqual([{ id: "emp-1", label: "Иванов И." }]);
+  });
+});
+
+describe("filterProductionEntriesByCreatedAt", () => {
+  // 2026-06-30T21:30:00Z = 01.07.2026, 00:30 Europe/Moscow (см. format.test.ts).
+  const midnightMoscow = row({
+    id: "utc-june-msk-july",
+    workDate: "2026-06-30",
+    createdAt: "2026-06-30T21:30:00.000Z",
+  });
+  const juneAfternoon = row({
+    id: "june-afternoon",
+    workDate: "2026-06-15",
+    createdAt: "2026-06-15T10:00:00.000Z",
+  });
+  const rows = [midnightMoscow, juneAfternoon];
+
+  const june = {
+    allTime: false,
+    month: createLocalDate(2026, 5, 1),
+    rangeStart: null,
+    rangeEnd: null,
+  };
+  const july = {
+    allTime: false,
+    month: createLocalDate(2026, 6, 1),
+    rangeStart: null,
+    rangeEnd: null,
+  };
+
+  it("режет по календарному дню createdAt в зоне проекта, не по UTC-дате", () => {
+    expect(filterProductionEntriesByCreatedAt(rows, june).map((r) => r.id)).toEqual([
+      "june-afternoon",
+    ]);
+    expect(filterProductionEntriesByCreatedAt(rows, july).map((r) => r.id)).toEqual([
+      "utc-june-msk-july",
+    ]);
+  });
+
+  it("allTime возвращает все", () => {
+    expect(
+      filterProductionEntriesByCreatedAt(rows, {
+        allTime: true,
+        month: new Date(),
+        rangeStart: null,
+        rangeEnd: null,
+      }),
+    ).toHaveLength(2);
+  });
+
+  it("независим от workDate: AND с фильтром даты работы", () => {
+    const byWork = filterProductionEntries(rows, june);
+    expect(byWork.map((r) => r.id)).toEqual(["utc-june-msk-july", "june-afternoon"]);
+    expect(filterProductionEntriesByCreatedAt(byWork, july).map((r) => r.id)).toEqual([
+      "utc-june-msk-july",
+    ]);
+    expect(filterProductionEntriesByCreatedAt(byWork, june).map((r) => r.id)).toEqual([
+      "june-afternoon",
+    ]);
+  });
+});
+
+describe("formatProductionQuantity", () => {
+  it("торцовка / присадка / часы — количество и единица", () => {
+    expect(formatProductionQuantity(row({ id: "t", type: "TORCOVKA", quantity: 10 }))).toBe(
+      "10 дет",
+    );
+    expect(formatProductionQuantity(row({ id: "p", type: "PRISADKA", quantity: 5 }))).toBe(
+      "5 присадк.",
+    );
+    expect(formatProductionQuantity(row({ id: "h", type: "HOURS", quantity: 8 }))).toBe("8 ч");
+  });
+
+  it("упаковка добавляет имя изделия, если оно есть", () => {
+    expect(formatProductionQuantity(row({ id: "u1", type: "UPAKOVKA", quantity: 2 }))).toBe("2 шт");
+    expect(
+      formatProductionQuantity(
+        row({ id: "u2", type: "UPAKOVKA", quantity: 2, productName: "Стеллаж 5" }),
+      ),
+    ).toBe("2 шт · Стеллаж 5");
   });
 });
 

@@ -3,7 +3,7 @@
 import { Fragment, useMemo, useState, useTransition } from "react";
 import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
+import { DateFilter, getDefaultDateFilterValue, isDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
 import {
   type ProductionEntryRow,
 } from "@/mocks/production-fixtures";
@@ -14,9 +14,10 @@ import {
 } from "@/server/production";
 import {
   filterProductionEntries,
+  filterProductionEntriesByCreatedAt,
   filterProductionTableRows,
   formatChangeLogWhen,
-  formatEntryTime,
+  formatProductionQuantity,
   getDefaultProductionTableFilters,
   isProductionExtraFiltersDefault,
   OPERATION_TYPE_LABEL,
@@ -27,7 +28,7 @@ import {
   type ProductionOperationFilter,
   type ProductionPaymentFilter,
 } from "@/lib/production-entries";
-import { formatIsoDate, formatLength, formatMoney } from "@/lib/format";
+import { formatIsoDate, formatIsoDateTime, formatLength, formatMoney } from "@/lib/format";
 import { exportXlsx } from "@/lib/export-xlsx";
 import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "@/lib/torcovka-delete-policy";
 import { XLSX_FMT } from "@/lib/xlsx-types";
@@ -71,8 +72,8 @@ import {
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-const COL_SPAN = 6;
-const COL_WIDTHS = ["13%", "9%", "28%", "14%", "16%", "12%"] as const;
+const COL_SPAN = 7;
+const COL_WIDTHS = ["13%", "16%", "18%", "12%", "14%", "15%", "12%"] as const;
 
 const cellPad = "px-3 first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
 
@@ -115,8 +116,11 @@ const filterSelectContentClass = "rounded-xl shadow-balanced ring-0 p-1.5";
 const employeeSelectTriggerClass = cn(filterSelectTriggerClass, "w-56");
 const operationSelectTriggerClass = cn(filterSelectTriggerClass, "w-44");
 const paymentSelectTriggerClass = cn(filterSelectTriggerClass, "w-44");
+const filterActionClass = "h-10 cursor-pointer rounded-xl px-4";
 
 function ProductionExtraFilters({
+  createdAtFilter,
+  onCreatedAtFilterChange,
   employeeId,
   employeeOptions,
   onEmployeeChange,
@@ -125,6 +129,8 @@ function ProductionExtraFilters({
   payment,
   onPaymentChange,
 }: {
+  createdAtFilter: DateFilterValue;
+  onCreatedAtFilterChange: (value: DateFilterValue) => void;
   employeeId: string;
   employeeOptions: { id: string; label: string }[];
   onEmployeeChange: (value: string) => void;
@@ -144,6 +150,34 @@ function ProductionExtraFilters({
 
   return (
     <>
+      <div className="grid gap-1.5">
+        <Label className="cursor-default">Дата внесения</Label>
+        <div className="flex flex-wrap items-center gap-2">
+          <DateFilter
+            value={createdAtFilter}
+            onChange={(value) => onCreatedAtFilterChange({ ...value, allTime: false })}
+          />
+          <Button
+            type="button"
+            variant={createdAtFilter.allTime ? "default" : "outline"}
+            className={cn(
+              filterActionClass,
+              !createdAtFilter.allTime &&
+                "border-[#D0D5DD] bg-card hover:border-[#98A2B3] hover:bg-muted border",
+            )}
+            onClick={() =>
+              onCreatedAtFilterChange({
+                month: createdAtFilter.month,
+                rangeStart: null,
+                rangeEnd: null,
+                allTime: true,
+              })
+            }
+          >
+            За всё время
+          </Button>
+        </div>
+      </div>
       <div className="grid gap-1.5">
         <Label htmlFor="f-employee" className="cursor-default">
           Сотрудник
@@ -247,6 +281,7 @@ interface DetailEditRow {
 
 export function ProductionView({ initialEntries }: { initialEntries: ProductionEntryRow[] }) {
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
+  const [createdAtFilter, setCreatedAtFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
   const [employeeFilter, setEmployeeFilter] = useState<string>(PRODUCTION_FILTER_ALL);
   const [operationFilter, setOperationFilter] =
     useState<ProductionOperationFilter>(PRODUCTION_FILTER_ALL);
@@ -272,10 +307,11 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
   );
 
   const rows = useMemo(() => {
-    const period = filterProductionEntries(entries, dateFilter);
-    const filtered = filterProductionTableRows(period, extraFilters);
+    const byWorkDate = filterProductionEntries(entries, dateFilter);
+    const byCreatedAt = filterProductionEntriesByCreatedAt(byWorkDate, createdAtFilter);
+    const filtered = filterProductionTableRows(byCreatedAt, extraFilters);
     return sortProductionEntries(filtered);
-  }, [entries, dateFilter, extraFilters]);
+  }, [entries, dateFilter, createdAtFilter, extraFilters]);
 
   const handleExport = () =>
     startExport(async () => {
@@ -284,22 +320,22 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
           {
             name: "Производство",
             columns: [
-              { header: "Дата", key: "date", width: 14 },
-              { header: "Время", key: "time", width: 10 },
-              { header: "ФИО", key: "employee", width: 28 },
+              { header: "Дата работы", key: "date", width: 14 },
+              { header: "Внесено", key: "submitted", width: 20 },
+              { header: "Внёс", key: "employee", width: 28 },
               { header: "Операция", key: "operation", width: 16 },
               { header: "Партия", key: "batch", width: 24 },
-              { header: "Кол-во", key: "quantity", numFmt: XLSX_FMT.int },
+              { header: "Количество", key: "quantityLabel", width: 22 },
               { header: "Сумма", key: "amount", numFmt: XLSX_FMT.money },
               { header: "Статус", key: "status", width: 16 },
             ],
             rows: rows.map((r) => ({
               date: formatIsoDate(r.workDate),
-              time: formatEntryTime(r.createdAt),
+              submitted: formatIsoDateTime(r.createdAt),
               employee: r.employeeName,
               operation: OPERATION_TYPE_LABEL[r.type],
               batch: r.batchName ?? "",
-              quantity: r.quantity,
+              quantityLabel: formatProductionQuantity(r),
               amount: r.amount,
               status: r.isPaid ? "Выплачено" : "Не выплачено",
             })),
@@ -396,10 +432,13 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
       <FiltersBar
         date
         dateAllTime
+        dateLabel="Дата работы"
         dateFilterValue={dateFilter}
         onDateFilterChange={setDateFilter}
         extraFilters={
           <ProductionExtraFilters
+            createdAtFilter={createdAtFilter}
+            onCreatedAtFilterChange={setCreatedAtFilter}
             employeeId={employeeFilter}
             employeeOptions={employeeOptions}
             onEmployeeChange={setEmployeeFilter}
@@ -409,9 +448,13 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
             onPaymentChange={setPaymentFilter}
           />
         }
-        extraFiltersDirty={!isProductionExtraFiltersDefault(extraFilters)}
+        extraFiltersDirty={
+          !isProductionExtraFiltersDefault(extraFilters) ||
+          !isDefaultDateFilterValue(createdAtFilter)
+        }
         onResetExtraFilters={() => {
           const defaults = getDefaultProductionTableFilters();
+          setCreatedAtFilter(getDefaultDateFilterValue());
           setEmployeeFilter(defaults.employeeId);
           setOperationFilter(defaults.operation);
           setPaymentFilter(defaults.payment);
@@ -429,10 +472,11 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
               </colgroup>
               <TableHeader className="[&_tr]:border-b">
                 <TableRow className={stickyHeadRowClass}>
-                  <TableHead className={cn(cellPad, headLeftClass)}>Дата</TableHead>
-                  <TableHead className={cn(cellPad, headCenterClass)}>Время</TableHead>
-                  <TableHead className={cn(cellPad, headLeftClass)}>ФИО</TableHead>
-                  <TableHead className={cn(cellPad, headCenterClass)}>Сумма</TableHead>
+                  <TableHead className={cn(cellPad, headLeftClass)}>Дата работы</TableHead>
+                  <TableHead className={cn(cellPad, headCenterClass)}>Внесено</TableHead>
+                  <TableHead className={cn(cellPad, headLeftClass)}>Внёс</TableHead>
+                  <TableHead className={cn(cellPad, headLeftClass)}>Операция</TableHead>
+                  <TableHead className={cn(cellPad, headCenterClass)}>Количество</TableHead>
                   <TableHead className={cn(cellPad, headCenterClass)}>Статус</TableHead>
                   <TableHead className={cn(cellPad, headCenterClass, "w-14")} />
                 </TableRow>
@@ -592,13 +636,16 @@ function ProductionRowGroup({
           </div>
         </TableCell>
         <TableCell className={cn(expandableSummaryCellClass, "text-center tabular-nums")}>
-          {formatEntryTime(row.createdAt)}
+          {formatIsoDateTime(row.createdAt)}
         </TableCell>
         <TableCell className={expandableSummaryCellClass}>
           <span className="block truncate font-medium">{row.employeeName}</span>
         </TableCell>
-        <TableCell className={cn(expandableSummaryCellClass, "text-center font-medium tabular-nums")}>
-          {formatMoney(row.amount)}
+        <TableCell className={expandableSummaryCellClass}>
+          <span className="block truncate">{OPERATION_TYPE_LABEL[row.type]}</span>
+        </TableCell>
+        <TableCell className={cn(expandableSummaryCellClass, "text-center tabular-nums")}>
+          <span className="block truncate">{formatProductionQuantity(row)}</span>
         </TableCell>
         <TableCell className={cn(expandableSummaryCellClass, "text-center")}>
           <Badge variant={row.isPaid ? "outline" : "secondary"}>
@@ -688,9 +735,30 @@ function ProductionEntryDetail({
 
   return (
     <div className="space-y-4">
+      <dl className="grid gap-x-6 gap-y-2 pl-1 text-sm sm:grid-cols-2 lg:grid-cols-3">
+        <div>
+          <dt className="text-muted-foreground text-xs">Дата работы</dt>
+          <dd className="tabular-nums">{formatIsoDate(row.workDate)}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground text-xs">Внесено в систему</dt>
+          <dd className="tabular-nums">{formatIsoDateTime(row.createdAt)}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground text-xs">Внёс</dt>
+          <dd>{row.employeeName}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground text-xs">Тип</dt>
+          <dd className="font-semibold">{OPERATION_TYPE_LABEL[row.type]}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground text-xs">Выплата</dt>
+          <dd>{row.isPaid ? "Выплачено" : "Не выплачено"}</dd>
+        </div>
+      </dl>
+
       <p className="text-foreground pl-1 text-sm leading-relaxed">
-        <span className="font-semibold">{OPERATION_TYPE_LABEL[row.type]}</span>
-        <span className="text-muted-foreground"> · </span>
         <span>{row.batchName ?? "—"}</span>
         <span className="text-muted-foreground"> · </span>
         <span>
