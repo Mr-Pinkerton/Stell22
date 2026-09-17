@@ -60,7 +60,7 @@ That deploy includes:
 - UI filter work;
 - TORCOVKA BlankStock length canonicalization and railsTaken correction hardening (PR #1).
 
-PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY**. No runtime `InventoryMovement` writers. `PSR-Q-004` / R-07 / R-10 / R-11 architecture **CLOSED**; local implementation **NOT COMMITTED / NOT MERGED / NOT DEPLOYED** (`audit/08.07`). PSR-P2 dual-write **NOT STARTED**.
+PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY**. No runtime `InventoryMovement` writers. `PSR-Q-004` / R-07 / R-10 / R-11 architecture **CLOSED**; implementation **COMMITTED ON FEATURE BRANCH / PR #9 OPEN / NOT MERGED / NOT DEPLOYED** (`audit/08.07`). PSR-P2 dual-write **NOT STARTED**.
 
 Prior documented production application SHA:
 
@@ -91,7 +91,7 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: PSR-P1 COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY` (`audit/08.06`). Schema contract remains `audit/08.05` (**ACCEPTED DESIGN** at contract creation; do not rewrite that historical header). PSR-P0 remains **COMPLETE / ACCEPTED** as an architecture/design contract only (`audit/08.03` + `audit/08.04`; **not** runtime). `PSR-Q-004` / R-07 / R-10 / R-11 architecture **CLOSED**; local implementation **NOT COMMITTED / NOT MERGED / NOT DEPLOYED** (`audit/08.07`). PSR-P2 dual-write **NOT STARTED**.
+`ACTIVE MODE: PSR-P1 COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY` (`audit/08.06`). Schema contract remains `audit/08.05` (**ACCEPTED DESIGN** at contract creation; do not rewrite that historical header). PSR-P0 remains **COMPLETE / ACCEPTED** as an architecture/design contract only (`audit/08.03` + `audit/08.04`; **not** runtime). `PSR-Q-004` / R-07 / R-10 / R-11 architecture **CLOSED**; implementation **COMMITTED ON FEATURE BRANCH / PR #9 OPEN / NOT MERGED / NOT DEPLOYED** (`audit/08.07`). PSR-P2 dual-write **NOT STARTED**.
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
@@ -115,7 +115,7 @@ PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT = remaining PSR-P2 contour preconditions (R-04 / R-05 / R-06) then dual-write. Not dual-write implementation. `PSR-Q-004` / R-07 / R-10 / R-11 architecture **CLOSED**; local implementation **NOT COMMITTED / NOT MERGED / NOT DEPLOYED** (`audit/08.07`; Canonical? **NO**). R-04/R-05/R-06 remain before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center.
+NEXT = remaining PSR-P2 contour preconditions (R-04 / R-05 / R-06) then dual-write. Not dual-write implementation. `PSR-Q-004` / R-07 / R-10 / R-11 architecture **CLOSED**; implementation **COMMITTED ON FEATURE BRANCH / PR #9 OPEN / NOT MERGED / NOT DEPLOYED** (`audit/08.07`; Canonical? **NO**). R-04/R-05/R-06 remain before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -299,7 +299,7 @@ PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03
 
 PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`08.06`). Empty unused SHADOW-capable `InventoryMovement` in production; row count = **0**. No runtime writers.
 
-`PSR-Q-004` / R-07 / R-10 / R-11 architecture **CLOSED**; local implementation **NOT COMMITTED / NOT MERGED / NOT DEPLOYED** (`audit/08.07`).
+`PSR-Q-004` / R-07 / R-10 / R-11 architecture **CLOSED**; implementation **COMMITTED ON FEATURE BRANCH / PR #9 OPEN / NOT MERGED / NOT DEPLOYED** (`audit/08.07`).
 
 Does **not** mean dual-write, SHADOW posting, authoritative ledger, `OPENING_BALANCE` data, paper removal, `production_cost_flow` activation, or Correction Center.
 
@@ -604,7 +604,7 @@ After every significant delivery action record:
 | Stage | PSR-P2 general preconditions implementation |
 | BASE GitHub `main` | `394f753dd4e04ea5d2b345894041f63e70818d2d` |
 | Production application | `92532e818df41160b434caac2c6d94933e93d810` (**unchanged**) |
-| Result | `audit/08.07-psr-p2-pre-dual-write-general-preconditions.md` (working tree; **not** on `main`). Architecture **CLOSED**. Local implementation **NOT COMMITTED / NOT MERGED / NOT DEPLOYED**. |
+| Result | `audit/08.07-psr-p2-pre-dual-write-general-preconditions.md`. Architecture **CLOSED**. Implementation **VERIFIED / COMMITTED ON FEATURE BRANCH / PR #9 OPEN / NOT MERGED / NOT DEPLOYED**. GitHub `main` unchanged (`394f753`). |
 | Q4 | Setting `inventory_movement_shadow_write`; writer = SHARED TX lock; ON/OFF = same EXCLUSIVE control lock as reset via transaction-only setter + maintenance CLI; not wired into physical writers |
 | R-07 | New migration `recordedAt TIMESTAMPTZ(3)`; P1 migration not rewritten; empty-table guard |
 | R-10 | SHADOW-only delete; exclusive control lock first (same primitive as gate ON/OFF); causal UNIQUE unchanged |
