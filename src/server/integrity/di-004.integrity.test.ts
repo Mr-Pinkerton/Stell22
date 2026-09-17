@@ -4,7 +4,7 @@ import {
   ensureIntegritySchema,
   resetIntegrityFinance,
 } from "./harness";
-import { applySupplyDeduction } from "@/server/internal/supply-deduct";
+import { applyOzonSupplyCancellation, applySupplyDeduction } from "@/server/internal/supply-deduct";
 
 const enabled = Boolean(process.env.INTEGRITY_TEST_DATABASE_URL);
 
@@ -72,6 +72,8 @@ describe.skipIf(!enabled)("DI-004 integrity", () => {
     expect(ps.quantity).toBe(2);
     expect(s.deductedQty).toBe(8);
     expect(s.shortfallQty).toBe(0);
+    expect(s.stockAccountingGeneration).toBe(1);
+    expect(s.stockAccountingOpen).toBe(true);
   });
 
   it("one TX with stock 3 and target 8 deducts 3 and records shortfall 5", async () => {
@@ -178,23 +180,16 @@ describe.skipIf(!enabled)("DI-004 integrity", () => {
     expect(stockA.quantity).toBe(10);
     expect(stockB.quantity).toBe(7);
     expect(afterDeduct.deductedQty).toBe(3);
+    expect(afterDeduct.stockAccountingGeneration).toBe(1);
+    expect(afterDeduct.stockAccountingOpen).toBe(true);
 
-    await prismaA.$transaction(async (tx) => {
-      const row = await tx.supply.findUniqueOrThrow({ where: { id: supply.id } });
-      if (row.productId && row.deductedQty > 0) {
-        await tx.$queryRaw`
-          SELECT id FROM "ProductStock" WHERE "productId" = ${row.productId} FOR UPDATE
-        `;
-        await tx.productStock.update({
-          where: { productId: row.productId },
-          data: { quantity: { increment: row.deductedQty } },
-        });
-        await tx.supply.update({
-          where: { id: row.id },
-          data: { deductedQty: 0, shortfallQty: 0, status: "PENDING" },
-        });
-      }
-    });
+    await prismaA.$transaction((tx) =>
+      applyOzonSupplyCancellation(tx, {
+        marketplace: supply.marketplace,
+        externalId: supply.externalId,
+        sku: supply.sku,
+      }),
+    );
 
     const restoredA = await prismaA.productStock.findUniqueOrThrow({
       where: { productId: archived.id },
@@ -204,5 +199,9 @@ describe.skipIf(!enabled)("DI-004 integrity", () => {
     });
     expect(restoredA.quantity).toBe(10);
     expect(restoredB.quantity).toBe(10);
+    const afterCancel = await prismaA.supply.findUniqueOrThrow({ where: { id: supply.id } });
+    expect(afterCancel.stockAccountingGeneration).toBe(1);
+    expect(afterCancel.stockAccountingOpen).toBe(false);
+    expect(afterCancel.status).toBe("PENDING");
   });
 });

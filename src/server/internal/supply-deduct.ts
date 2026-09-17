@@ -2,6 +2,10 @@ import { Prisma } from "@prisma/client";
 import { computeSupplyDeduction } from "@/lib/supply-stock";
 import { PRODUCTION_COST_FLOW_KEY, parseProductionCostFlowValue } from "@/server/internal/cost-flow-state";
 import { COST_FLOW_QTY_ONLY_WRITER } from "@/server/internal/cost-flow-pools";
+import {
+  evaluateOzonSupplyCancellation,
+  nextSupplyAccountingLifecycle,
+} from "@/server/internal/supply-accounting-cycle";
 
 export type SupplyDb = {
   $queryRaw: Prisma.TransactionClient["$queryRaw"];
@@ -129,6 +133,14 @@ export async function applySupplyDeduction(
     return { toRemove: 0, shortfall: 0 };
   }
 
+  const lifecycle = nextSupplyAccountingLifecycle({
+    targetQty: input.targetQty,
+    deductedQty: alreadyDeducted,
+    shortfallQty: alreadyShort,
+    stockAccountingGeneration: supply.stockAccountingGeneration,
+    stockAccountingOpen: supply.stockAccountingOpen,
+  });
+
   const lockedQty = await lockProductStockQty(db, productId);
   const available = lockedQty ?? 0;
   const { toRemove, shortfall, newDeducted, newShort } = computeSupplyDeduction({
@@ -159,8 +171,84 @@ export async function applySupplyDeduction(
 
   await db.supply.update({
     where: { id: supply.id },
-    data: { deductedQty: newDeducted, shortfallQty: newShort },
+    data: {
+      deductedQty: newDeducted,
+      shortfallQty: newShort,
+      stockAccountingGeneration: lifecycle.generation,
+      stockAccountingOpen: lifecycle.open,
+    },
   });
 
   return { toRemove, shortfall };
+}
+
+export async function findOzonSupplyKeysByExternalIds(
+  db: SupplyDb,
+  externalIds: string[],
+): Promise<SupplyKey[]> {
+  if (externalIds.length === 0) return [];
+  const rows = await db.supply.findMany({
+    where: { marketplace: "OZON", externalId: { in: externalIds } },
+    select: { marketplace: true, externalId: true, sku: true },
+  });
+  return rows;
+}
+
+/**
+ * Close an open Ozon stock-accounting cycle under the Supply row lock.
+ * Restores ProductStock by deductedQty only. Generation is unchanged.
+ */
+export async function applyOzonSupplyCancellation(
+  db: SupplyDb,
+  key: SupplyKey,
+): Promise<{ restored: number; closed: boolean }> {
+  await lockSuppliesInOrder(db, [key]);
+  const supply = await db.supply.findUnique({
+    where: {
+      marketplace_externalId_sku: {
+        marketplace: key.marketplace,
+        externalId: key.externalId,
+        sku: key.sku,
+      },
+    },
+  });
+  if (!supply) return { restored: 0, closed: false };
+
+  const decision = evaluateOzonSupplyCancellation({
+    stockAccountingOpen: supply.stockAccountingOpen,
+    deductedQty: supply.deductedQty,
+  });
+  if (decision.action === "noop") {
+    return { restored: 0, closed: false };
+  }
+
+  if (decision.restoreQty > 0 && supply.productId) {
+    const settingRows = await db.$queryRaw<Array<{ value: unknown }>>`
+      SELECT value FROM "Setting" WHERE key = ${PRODUCTION_COST_FLOW_KEY}
+    `;
+    if (settingRows[0]) {
+      const parsed = parseProductionCostFlowValue(settingRows[0].value);
+      if (parsed.active) throw new Error(COST_FLOW_QTY_ONLY_WRITER);
+    }
+    await db.$queryRaw`
+      SELECT id FROM "ProductStock" WHERE "productId" = ${supply.productId} FOR UPDATE
+    `;
+    await db.productStock.upsert({
+      where: { productId: supply.productId },
+      create: { productId: supply.productId, quantity: decision.restoreQty },
+      update: { quantity: { increment: decision.restoreQty } },
+    });
+  }
+
+  await db.supply.update({
+    where: { id: supply.id },
+    data: {
+      deductedQty: 0,
+      shortfallQty: 0,
+      status: "PENDING",
+      stockAccountingOpen: false,
+    },
+  });
+
+  return { restored: decision.restoreQty, closed: true };
 }
