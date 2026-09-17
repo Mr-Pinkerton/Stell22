@@ -71,6 +71,12 @@ jobs:
       - name: CLI import security
         run: npm run security:cli-imports
 
+      - name: InventoryMovement append-only policy
+        run: npm run security:inventory-movement-append-only
+
+      - name: InventoryMovement SHADOW write-gate control policy
+        run: npm run security:inventory-movement-shadow-write-control
+
       # Сборка без подключения к БД (как в Dockerfile) — ловим ошибки
       # типов и битые страницы до ручного деплоя на прод.
       - name: Build

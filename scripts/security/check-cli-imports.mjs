@@ -40,6 +40,14 @@ run("scripts/smoke-production-reversal.ts --import-only", [
   "scripts/smoke-production-reversal.ts",
   "--import-only",
 ]);
+run("scripts/reset-inventory-movement-shadow.ts --import-only", [
+  "scripts/reset-inventory-movement-shadow.ts",
+  "--import-only",
+]);
+run("scripts/set-inventory-movement-shadow-write.ts --import-only", [
+  "scripts/set-inventory-movement-shadow-write.ts",
+  "--import-only",
+]);
 
 if (failures.length > 0) {
   console.error(`CLI import checks failed (${failures.length}):`);
@@ -48,5 +56,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  "CLI import checks passed: run-mp-sync, fetch-statements, and smoke-production-reversal resolve without server-only.",
+  "CLI import checks passed: run-mp-sync, fetch-statements, smoke-production-reversal, reset-inventory-movement-shadow, and set-inventory-movement-shadow-write resolve without server-only.",
 );
