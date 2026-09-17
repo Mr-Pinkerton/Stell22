@@ -746,7 +746,7 @@ model InventoryMovement {
   reason               String?
 
   effectiveAt DateTime
-  recordedAt  DateTime @default(now())
+  recordedAt  DateTime @default(now()) @db.Timestamptz(3)
 
   reversalOfMovementId String?
 

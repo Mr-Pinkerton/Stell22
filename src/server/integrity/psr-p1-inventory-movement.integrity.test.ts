@@ -169,6 +169,25 @@ describe.skipIf(!enabled)("PSR-P1 InventoryMovement SHADOW schema", () => {
       WHERE table_name = 'InventoryMovement' AND column_name = 'authority'
     `);
     expect(def[0]?.column_default ?? "").toContain("SHADOW");
+
+    const recordedAt = await db.$queryRaw<
+      Array<{
+        data_type: string;
+        datetime_precision: number | null;
+        column_default: string | null;
+        is_nullable: string;
+      }>
+    >(Prisma.sql`
+      SELECT data_type, datetime_precision, column_default, is_nullable
+      FROM information_schema.columns
+      WHERE table_schema = 'public'
+        AND table_name = 'InventoryMovement'
+        AND column_name = 'recordedAt'
+    `);
+    expect(recordedAt[0]?.data_type).toBe("timestamp with time zone");
+    expect(recordedAt[0]?.datetime_precision).toBe(3);
+    expect(recordedAt[0]?.is_nullable).toBe("NO");
+    expect((recordedAt[0]?.column_default ?? "").toUpperCase()).toContain("CURRENT_TIMESTAMP");
   });
 
   it("accepts valid SHADOW RAIL_LOT receipt and SHADOW rehearsal epoch", async () => {
