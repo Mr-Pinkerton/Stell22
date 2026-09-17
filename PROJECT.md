@@ -52,7 +52,7 @@ Last verified production application SHA:
 
 Evidence: GitHub Production Deploy run `35204366279` SUCCESS (2026-09-17, `workflow_dispatch`; `headSha` = `0686d0036da52cc32aaff531c91f1dd2ded899ec`).
 
-A later documentation merge of PSR-P0-CORR (`audit/08.03`) advanced GitHub `main` to `bd82aa0e0f4785cee316d282ef55eb593aadca3b`. The production **application** remains `0686d0036da52cc32aaff531c91f1dd2ded899ec` until a **separate** production deploy. This cycle’s application-code base remains that SHA. A later documentation merge of PSR-P0-CORE (`audit/08.04`) will advance GitHub `main` again and will **not** deploy application code.
+GitHub `main` after the PSR-P0-CORE docs merge is `b11c37df94be8aee0fb4d0e9a466182924e29fc7`. The production **application** remains `0686d0036da52cc32aaff531c91f1dd2ded899ec` until a **separate** production deploy. This cycle’s application-code base remains that SHA. A later documentation merge of PSR-P1 schema contract (`audit/08.05`) will advance GitHub `main` again and will **not** deploy application code. Historical docs-merge SHA `bd82aa0` (08.03) is not rewritten.
 
 That deploy includes:
 
@@ -88,7 +88,7 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: PSR-P0 COMPLETE / ACCEPTED as an architecture/design contract only` (`audit/08.03` + `audit/08.04`; **not** runtime; **no** schema/code implementation started)
+`ACTIVE MODE: PSR-P0 COMPLETE / ACCEPTED as an architecture/design contract only` (`audit/08.03` + `audit/08.04`; **not** runtime). PSR-P1 schema contract **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.05`). Prisma/migration **not** started.
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
@@ -106,11 +106,13 @@ PSR-P0-CORR (`audit/08.03-psr-p0-correction-history-contract.md`): **ACCEPTED DE
 
 PSR-P0-CORE = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.04`; canonical through the reviewed docs merge). Closes remaining PRE-SCHEMA questions. Canonical design; **not** runtime implementation.
 
+PSR-P1 schema contract = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.05`; canonical through the reviewed docs merge). Independent Review #1 = **PASS WITH NON-BLOCKING FINDINGS** (P0=0, P1=0). Exact `InventoryMovement` schema frozen. Prisma/migration **NOT STARTED**. Canonical design; **not** runtime implementation. Implementation is **not** authorized by the Independent Review cycle.
+
 `PSR-Q-001` / `PSR-Q-002` / `PSR-Q-005` / `PSR-Q-007` / `PSR-Q-008` = **CLOSED / ACCEPTED**.
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT after reviewed merge of `08.04`: PSR-P1 InventoryMovement schema in **SHADOW**. PSR-P1 is still **NOT STARTED**. Does **not** mean dual-write, authoritative ledger, production deploy, paper removal, `production_cost_flow` activation, or Correction Center. `PSR-Q-003` / `Q4` / `Q6` remain later-timing.
+NEXT after reviewed merge of `08.05`: PSR-P1 Prisma/migration of empty `InventoryMovement` in **SHADOW**, only after a separate implementation prompt. Does **not** mean dual-write, authoritative ledger, production deploy, paper removal, `production_cost_flow` activation, or Correction Center. `PSR-Q-003` / `Q4` / `Q6` remain later-timing.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -284,17 +286,17 @@ Application/main BASE at ARCH-2 acceptance: `71a01b40008cf6da7cbc843b3b0dbaa31cf
 
 Forward-looking architecture so Stell22 can become the only warehouse/production operational source of truth. PSR namespace. **Not** a reopen of AUDIT 1. Architecture contract accepted; **not** implementation complete.
 
-Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`: **DECIDED / ACCEPTED** 2026-09-17 in `audit/08.03` (`ProductionOperationMutation`). Remainder + `PSR-Q-002` / `Q5` / `Q7` / `Q8` / `PSR-DESIGN-002`: **CLOSED / ACCEPTED** 2026-09-17 in `audit/08.04`. PSR-P0 = **COMPLETE / ACCEPTED** as architecture/design contract only. PSR-P1 InventoryMovement = **NEXT after reviewed merge of `08.04`** (schema in SHADOW).
+Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`: **DECIDED / ACCEPTED** 2026-09-17 in `audit/08.03` (`ProductionOperationMutation`). Remainder + `PSR-Q-002` / `Q5` / `Q7` / `Q8` / `PSR-DESIGN-002`: **CLOSED / ACCEPTED** 2026-09-17 in `audit/08.04`. PSR-P0 = **COMPLETE / ACCEPTED** as architecture/design contract only. PSR-P1 schema contract: **ACCEPTED DESIGN / NOT IMPLEMENTED** 2026-09-17 in `audit/08.05`. Prisma/migration **NOT STARTED**.
 
 ## 13. Current next step
 
-`NEXT = reviewed merge of audit/08.04, then PSR-P1 InventoryMovement schema in SHADOW.`
+`NEXT = reviewed merge of audit/08.05, then a separate PSR-P1 implementation prompt: empty InventoryMovement Prisma/migration in SHADOW.`
 
 PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime.
 
-PSR-P1 does **not** mean dual-write, authoritative ledger, production deploy, paper removal, `production_cost_flow` activation, or Correction Center.
+PSR-P1 schema contract = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`08.05`). Prisma/migration still **NOT STARTED**. Does **not** mean dual-write, authoritative ledger, production deploy, paper removal, `production_cost_flow` activation, or Correction Center.
 
-Do **not** implement InventoryMovement / dual-write / cutover until that package is separately accepted after `08.04` merge.
+Do **not** implement InventoryMovement Prisma/dual-write/cutover from this file. Wait for reviewed merge of `08.05` and a separate implementation prompt.
 
 Do **not** implement `ProductionOperationMutation` schema or Correction Center in this documentation cycle.
 
@@ -523,3 +525,44 @@ After every significant delivery action record:
 | Correction Center / Cancellation | **not implemented** / cancellation **DEFERRED** |
 | Deploy | **NO** |
 | Next | Reviewed merge of `08.04`. Then PSR-P1 InventoryMovement schema in SHADOW. Not dual-write. Not deploy. |
+
+## 26. Journal — PSR-P1 InventoryMovement schema contract
+
+| | |
+| --- | --- |
+| Date | 2026-09-17 |
+| Stage | PSR-P1 / InventoryMovement exact schema contract |
+| BASE GitHub `main` | `b11c37df94be8aee0fb4d0e9a466182924e29fc7` |
+| Application / production | `0686d0036da52cc32aaff531c91f1dd2ded899ec` |
+| Result | `audit/08.05-psr-p1-inventory-movement-schema-contract.md` created. Exact enums/model/no-FK/partial indexes/CHECKs/snapshots frozen. **ACCEPTED DESIGN / NOT IMPLEMENTED.** |
+| PSR-P0 | **COMPLETE / ACCEPTED** as architecture/design contract only (unchanged) |
+| PSR-P1 schema contract | **ACCEPTED DESIGN / NOT IMPLEMENTED** |
+| PSR-P1 Prisma/migration | **NOT STARTED** |
+| Application / schema | unchanged |
+| `production_cost_flow` | unchanged / INACTIVE |
+| AUDIT 1 | COMPLETE / REVIEWED |
+| AUDIT 2 | **NOT STARTED** |
+| INC-001 | OPEN |
+| Correction Center / Cancellation | **not implemented** / cancellation **DEFERRED** |
+| Deploy | **NO** |
+| Next | Reviewed merge of `08.05`. Then a separate implementation prompt: empty InventoryMovement table in SHADOW. Not dual-write. Not deploy. |
+
+## 27. Journal — PSR-P1 Independent Review #1 schema-contract corrections
+
+| | |
+| --- | --- |
+| Date | 2026-09-17 |
+| Stage | PSR-P1 schema contract — Independent Review #1 disposition |
+| BASE GitHub `main` | `b11c37df94be8aee0fb4d0e9a466182924e29fc7` |
+| Application / production | `0686d0036da52cc32aaff531c91f1dd2ded899ec` |
+| Review verdict | **PASS WITH NON-BLOCKING FINDINGS**. P0=0. P1=0. |
+| Result | ChatGPT resolved schema-shaping items into `audit/08.05`: SHADOW may carry rehearsal `epochId`; AUTHORITATIVE-only opening UNIQUE indexes; reversal remains partial/multi/chain without self-FK; snapshot keys-present/null-ok; identity length + MANUAL reason CHECKs; no-money snapshot rule. R-03 proposed UNIQUE/self-FK/1:1 full reversal **rejected**. Writer items R-04…R-07/R-10/R-11 recorded as PSR-P2 preconditions. R-06 also current runtime DI finding; **no new DI number allocated**. |
+| PSR-P1 schema contract | **ACCEPTED DESIGN / NOT IMPLEMENTED** |
+| PSR-P1 Prisma/migration | **NOT STARTED**. Implementation **not** authorized. |
+| Application / schema | unchanged |
+| `production_cost_flow` | unchanged / INACTIVE |
+| AUDIT 1 | COMPLETE / REVIEWED |
+| AUDIT 2 | **NOT STARTED** |
+| INC-001 | OPEN |
+| Deploy | **NO** |
+| Next | Reviewed merge of `08.05`. Then a separate implementation prompt: empty InventoryMovement table in SHADOW. Not dual-write. Not deploy. |
