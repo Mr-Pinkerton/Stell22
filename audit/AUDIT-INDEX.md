@@ -16,17 +16,17 @@ Do not import Woodveri door-manufacturing entities or workflows.
 | Repository | `Mr-Pinkerton/Stell22` |
 | Branch | `main` is canonical. |
 | Application-code checkpoint | `92532e818df41160b434caac2c6d94933e93d810` — `Merge pull request #7 from Mr-Pinkerton/feat/psr-p1-inventory-movement-shadow-schema`. Production Deploy `35228794988` SUCCESS. PSR-P1 empty SHADOW schema deployed; `InventoryMovement` rows = 0. Prior prod SHA `0686d00` (deploy `35204366279`) is **historical**. Containment SHA `3608b36` remains in the running tree. |
-| Docs on `main` | AUDIT 1 artifact `08.01` (`COMPLETE / REVIEWED`). ARCH-2 artifact `08.02` (`ACCEPTED / REVIEWED`). PSR-P0-CORR artifact `08.03` (`ACCEPTED DESIGN / NOT IMPLEMENTED`). PSR-P0-CORE artifact `08.04` (`ACCEPTED DESIGN / NOT IMPLEMENTED`). PSR-P1 schema contract `08.05` (**ACCEPTED DESIGN**; historical **NOT IMPLEMENTED** at contract creation preserved). PSR-P1 closeout `08.06` (`COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY`). INDEX/PROJECT as last merged. `08.07` general preconditions are on feature branch `feat/psr-p2-general-preconditions` (**PR #9 OPEN**) until reviewed merge. |
+| Docs on `main` | AUDIT 1 artifact `08.01` (`COMPLETE / REVIEWED`). ARCH-2 artifact `08.02` (`ACCEPTED / REVIEWED`). PSR-P0-CORR artifact `08.03` (`ACCEPTED DESIGN / NOT IMPLEMENTED`). PSR-P0-CORE artifact `08.04` (`ACCEPTED DESIGN / NOT IMPLEMENTED`). PSR-P1 schema contract `08.05` (**ACCEPTED DESIGN**; historical **NOT IMPLEMENTED** at contract creation preserved). PSR-P1 closeout `08.06` (`COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY`). PSR-P2 general preconditions `08.07` (`ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / NOT DEPLOYED`; Canonical? **YES** after PR #9). INDEX/PROJECT as last merged. GitHub `main` = `3f89fffb8dc5842027420095bd3c85a07a85e284`. |
 | ARCH-2 | `audit/08.02-primary-system-readiness-architecture.md` — **`ACCEPTED / REVIEWED`**. Independent Review #1 = REQUEST CHANGES (R1…R6 CLOSED/PASS). Independent Review #2 = REQUEST CHANGES (R7…R8 CLOSED/PASS). Independent Review #3 = **PASS / ACCEPT** (new blockers = 0). Architecture contract accepted; **not** full PSR implementation complete. `PSR-Q-001` / `Q2` / `Q5` / `Q7` / `Q8` = **CLOSED / ACCEPTED** in `08.04` (design only). |
 | PSR-P0 | **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime. Correction Center **not** implemented. Cancellation **DEFERRED / NOT IMPLEMENTED**. |
 | PSR-P1 | **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`08.06`). Schema contract `08.05` remains **ACCEPTED DESIGN** (do not rewrite its historical **NOT IMPLEMENTED** header). Empty unused SHADOW-capable table; production row count at P1 closeout = **0**; no runtime writers. |
-| PSR-P2 general preconditions | `PSR-Q-004` / R-07 / R-10 / R-11 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / COMMITTED ON FEATURE BRANCH / PR #9 OPEN / NOT MERGED / NOT DEPLOYED** (`audit/08.07`, Canonical? **NO**). Dual-write **NOT STARTED**. R-04 / R-05 / R-06 remain open. |
+| PSR-P2 general preconditions | `PSR-Q-004` / R-07 / R-10 / R-11 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / NOT DEPLOYED** (`audit/08.07`, Canonical? **YES**; PR #9 **MERGED**, merge `3f89fff`, post-merge CI `35250490823` SUCCESS). Dual-write **NOT STARTED**. R-04 / R-05 / R-06 remain OPEN. |
 | Audit program | STEP 0 recovery **COMPLETE**. **AUDIT 1 = COMPLETE / REVIEWED** (not reopened). **ARCH-2 = ACCEPTED / REVIEWED** (architecture contract). Not a new AUDIT 1 defect count. **AUDIT 2 is NOT started.** |
 | Production incident | **`INC-001` = `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`**. Finding **`INC-001-F1` P1 / CONFIRMED**. Generic TORCOVKA delete `CONTAINED IN PRODUCTION`. Package data **not** corrected. `ARCH-P1-001` unrelated to INC-001. |
 | `production_cost_flow` | inactive (delivery state; see `PROJECT.md`) |
 | `ARCH-P1-001` | **OPEN / CONFIRMED**. Scope = `production_cost_flow` **ACTIVE** UPAKOVKA quantity-edit path. Inactive `prepareUpakovkaEdit` already unions old ∪ current refs. Not fixed. |
 
-Always verify current `main` HEAD before relying on git SHA. Production **application** SHA `92532e8` after Production Deploy `35228794988`. Historical SHA `0686d00` / `71a01b4` / docs-merge SHAs `bd82aa0` (08.03) / `b11c37d` (08.04) / `2f8ec8d` (08.05) are not rewritten.
+Always verify current `main` HEAD before relying on git SHA. GitHub `main` = `3f89fffb8dc5842027420095bd3c85a07a85e284` (PR #9 merge). Production **application** SHA remains `92532e8` after Production Deploy `35228794988` — intentionally different from GitHub `main`. Historical SHA `394f753` (pre-PR-#9 `main`) / `0686d00` / `71a01b4` / docs-merge SHAs `bd82aa0` (08.03) / `b11c37d` (08.04) / `2f8ec8d` (08.05) are not rewritten.
 
 `08.01` = current-system architecture audit. `08.02` = accepted primary-system readiness architecture contract. They answer different questions. Do not treat 08.02 as a reopen of AUDIT 1. `ACCEPTED / REVIEWED` does **not** mean full PSR implementation complete, paper removable, or `production_cost_flow` active. PSR-P1 empty SHADOW schema **is** deployed (`08.06`); that is not primary-system readiness.
 
@@ -157,7 +157,7 @@ No `audit/01.16*` or `audit/01.17*`.
 | `audit/08.04-psr-p0-core-contract.md` | PSR-P0 remaining PRE-SCHEMA | Architecture contract | App `0686d00`; GitHub main at creation `bd82aa0` | `ACCEPTED DESIGN / NOT IMPLEMENTED` | YES | PSR-P0-CORE. Closes Q1 remainder, Q2, Q5, Q7, Q8 and DESIGN-001/002. PSR-P0 **COMPLETE / ACCEPTED** as design contract only. Canonical design; **not** runtime implementation. |
 | `audit/08.05-psr-p1-inventory-movement-schema-contract.md` | PSR-P1 InventoryMovement schema | Architecture contract | App `0686d00` at contract creation; GitHub main at creation `b11c37d` | `ACCEPTED DESIGN` (historical **NOT IMPLEMENTED** header preserved) | YES | PSR-P1 schema contract. Independent Review #1 = **PASS WITH NON-BLOCKING FINDINGS** (P0=0, P1=0). Exact enums/model/no-FK/partial indexes/CHECKs/snapshots. AUTHORITATIVE-only opening UNIQUEs. SHADOW may carry rehearsal `epochId`. Do not rewrite contract-creation **NOT IMPLEMENTED**. Current implementation/deploy: `08.06`. |
 | `audit/08.06-psr-p1-deployment-closeout.md` | PSR-P1 InventoryMovement SHADOW deploy | Closeout / evidence | App/main `92532e8`; deploy `35228794988` | `COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY` | YES | PR #7 merged. Migration `20260917150000_psr_p1_inventory_movement_shadow` applied. Table exists. Row count = 0. No runtime writers. Historical P1 closeout. Later general preconditions: `08.07`. |
-| `audit/08.07-psr-p2-pre-dual-write-general-preconditions.md` | PSR-P2 general preconditions | Contract + local implementation | App `92532e8`; GitHub main `394f753` | `ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / COMMITTED ON FEATURE BRANCH / PR #9 OPEN / NOT MERGED / NOT DEPLOYED` | NO | Feature branch `feat/psr-p2-general-preconditions`. Not on GitHub `main`. Closes architecture for `PSR-Q-004`, R-07, R-10, R-11. Dual-write **NOT STARTED**. R-04/R-05/R-06 remain open. Production not queried. |
+| `audit/08.07-psr-p2-pre-dual-write-general-preconditions.md` | PSR-P2 general preconditions | Contract + implementation | App `92532e8`; GitHub main `3f89fff` (PR #9 merge). Historical pre-merge main `394f753`. | `ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / NOT DEPLOYED` | YES | PR #9 **MERGED**. Post-merge CI **SUCCESS** `35250490823`. Closes architecture for `PSR-Q-004`, R-07, R-10, R-11. Package **NOT DEPLOYED**. Dual-write **NOT STARTED**. R-04/R-05/R-06 remain OPEN. Production not queried. |
 
 ### D.8 Production incidents
 
@@ -193,7 +193,7 @@ No `audit/01.16*` or `audit/01.17*`.
 
 `08.06` is **PSR-P1 SHADOW schema deployment closeout**. Status = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY**. Empty unused table. No runtime writers. Historical P1 closeout; do not rewrite.
 
-`08.07` is **PSR-P2 general pre-dual-write preconditions** on feature branch `feat/psr-p2-general-preconditions` (Canonical? **NO** until merge). Architecture for `PSR-Q-004` / R-07 / R-10 / R-11 = **CLOSED**. Implementation **VERIFIED / COMMITTED ON FEATURE BRANCH / PR #9 OPEN / NOT MERGED / NOT DEPLOYED**. Dual-write **NOT STARTED**.
+`08.07` is **PSR-P2 general pre-dual-write preconditions**, now canonical on GitHub `main` after PR #9 (Canonical? **YES**). Architecture for `PSR-Q-004` / R-07 / R-10 / R-11 = **CLOSED**. Implementation **VERIFIED / MERGED TO main / NOT DEPLOYED**. Merge commit `3f89fffb8dc5842027420095bd3c85a07a85e284`. Post-merge CI **SUCCESS** `35250490823`. Dual-write **NOT STARTED**. The earlier feature-branch / PR-open status is **historical**.
 
 ---
 
@@ -266,7 +266,7 @@ Artifacts: `audit/08.03-psr-p0-correction-history-contract.md` (correction histo
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-`PSR-Q-004` = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / COMMITTED ON FEATURE BRANCH / PR #9 OPEN / NOT MERGED / NOT DEPLOYED** (`audit/08.07`, Canonical? **NO**). `PSR-Q-003` / `Q6` remain later-timing (`Q3` before physical recon / P4; `Q6` before FINAL epoch / P6).
+`PSR-Q-004` = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / NOT DEPLOYED** (`audit/08.07`, Canonical? **YES**). `PSR-Q-003` / `Q6` remain later-timing (`Q3` before physical recon / P4; `Q6` before FINAL epoch / P6).
 
 Correction Center **not** implemented. Cancellation **DEFERRED / NOT IMPLEMENTED**.
 
@@ -278,7 +278,7 @@ Status: **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY**. Schema cont
 
 Artifacts: `audit/08.05-psr-p1-inventory-movement-schema-contract.md` (exact schema) and `audit/08.06-psr-p1-deployment-closeout.md` (implementation/deploy evidence). Production table exists. Row count = **0**. No runtime writers.
 
-`PSR-Q-004` / R-07 / R-10 / R-11 architecture = **CLOSED**; implementation **VERIFIED / COMMITTED ON FEATURE BRANCH / PR #9 OPEN / NOT MERGED / NOT DEPLOYED** (`audit/08.07`, Canonical? **NO**). PSR-P2 dual-write **NOT STARTED**. Close R-04 / R-05 / R-06 before their contour dual-write. Not dual-write, not OPENING_BALANCE data, not AUTHORITATIVE rows, not projection change, not Correction Center.
+`PSR-Q-004` / R-07 / R-10 / R-11 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / NOT DEPLOYED** (`audit/08.07`, Canonical? **YES**). PSR-P2 dual-write **NOT STARTED**. NEXT = **PSR-P2 GENERAL PRECONDITIONS — PRODUCTION PREFLIGHT / DEPLOYMENT DECISION** (not dual-write; separate owner authorization required before deploy). R-04 / R-05 / R-06 remain OPEN before their contour dual-write. Not dual-write, not OPENING_BALANCE data, not AUTHORITATIVE rows, not projection change, not Correction Center.
 
 ### INC-001 — TORCOVKA whole-package production incident
 
