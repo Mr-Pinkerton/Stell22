@@ -201,7 +201,7 @@ export async function findOzonSupplyKeysByExternalIds(
 export async function applyOzonSupplyCancellation(
   db: SupplyDb,
   key: SupplyKey,
-): Promise<{ restored: number; closed: boolean }> {
+): Promise<{ restored: number; closed: boolean; generation: number }> {
   await lockSuppliesInOrder(db, [key]);
   const supply = await db.supply.findUnique({
     where: {
@@ -212,14 +212,14 @@ export async function applyOzonSupplyCancellation(
       },
     },
   });
-  if (!supply) return { restored: 0, closed: false };
+  if (!supply) return { restored: 0, closed: false, generation: 0 };
 
   const decision = evaluateOzonSupplyCancellation({
     stockAccountingOpen: supply.stockAccountingOpen,
     deductedQty: supply.deductedQty,
   });
   if (decision.action === "noop") {
-    return { restored: 0, closed: false };
+    return { restored: 0, closed: false, generation: supply.stockAccountingGeneration };
   }
 
   if (decision.restoreQty > 0 && supply.productId) {
@@ -250,5 +250,9 @@ export async function applyOzonSupplyCancellation(
     },
   });
 
-  return { restored: decision.restoreQty, closed: true };
+  return {
+    restored: decision.restoreQty,
+    closed: true,
+    generation: supply.stockAccountingGeneration,
+  };
 }

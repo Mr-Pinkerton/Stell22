@@ -153,5 +153,10 @@ describe("R-04 marketplace-sync wiring", () => {
     expect(src).toContain("isOzonCancelledInThisSync");
     expect(src).toContain("applyOzonSupplyCancellation");
     expect(src).not.toMatch(/deductedQty:\s*\{\s*gt:\s*0\s*\}/);
+    expect(src).toMatch(/if \(isOzonCancelledInThisSync[\s\S]*return false/);
+    expect(src).toMatch(/if \(result\.closed\)/);
+    expect(src).not.toMatch(/result\.closed && result\.restored > 0/);
+    expect(src).toMatch(/restored: result\.restored/);
+    expect(src).toMatch(/generation: result\.generation/);
   });
 });

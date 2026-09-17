@@ -93,7 +93,7 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: PSR-P2 R-04 IMPLEMENTATION / NOT DEPLOYED` (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 = **DEPLOYED DORMANT** on production `de2e1c0`. PSR-P2 dual-write **NOT STARTED**. R-05 / R-06 remain OPEN.
+`ACTIVE MODE: R-04 DELIVERY / NOT DEPLOYED` (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 = **DEPLOYED DORMANT** on production `de2e1c0`. PSR-P2 dual-write **NOT STARTED**. R-05 / R-06 remain OPEN.
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
@@ -117,7 +117,7 @@ PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT = **HEAD REVIEW OF R-04** (`audit/08.08`), then a separately authorized merge/deploy. This NEXT is **not** dual-write and **not** a SUPPLY SHADOW writer. R-05/R-06 remain OPEN before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center.
+NEXT = **R-04 DELIVERY — PR #11 MERGE / PRODUCTION PREFLIGHT / DEPLOYMENT DECISION** (`audit/08.08`). If PR #11 is still unmerged, merge is the next repository step after final review. After merge, production preflight/deploy decision is next. This NEXT is **not** SUPPLY SHADOW dual-write. SHADOW gate remains inactive. InventoryMovement writer remains 0. R-05/R-06 remain OPEN before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -642,4 +642,4 @@ After every significant delivery action record:
 | R-05 / R-06 | remain OPEN |
 | AUDIT 2 | **NOT STARTED** |
 | INC-001 | OPEN |
-| Next | **HEAD REVIEW OF R-04**. Not dual-write. Not a SUPPLY SHADOW writer. Not a deploy from this file. |
+| Next | **R-04 DELIVERY — PR #11 MERGE / PRODUCTION PREFLIGHT / DEPLOYMENT DECISION**. Not SUPPLY SHADOW dual-write. SHADOW gate inactive. InventoryMovement writer 0. R-05 / R-06 remain OPEN. Not a deploy from this file. |

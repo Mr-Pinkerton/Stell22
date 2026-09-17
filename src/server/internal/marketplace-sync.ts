@@ -585,7 +585,7 @@ export async function syncMarketplacesAsUserInternal(userId: string): Promise<Sy
     // (deductedQty=0, open=true) тоже закрывается.
     for (const key of cancelRows) {
       const result = await applyOzonSupplyCancellation(tx, key);
-      if (result.closed && result.restored > 0) {
+      if (result.closed) {
         restoredTotal += result.restored;
         await writeChangeLog(
           {
@@ -595,6 +595,7 @@ export async function syncMarketplacesAsUserInternal(userId: string): Promise<Sy
               event: "gp_restore_cancelled",
               sku: key.sku,
               restored: result.restored,
+              generation: result.generation,
             },
           },
           tx,

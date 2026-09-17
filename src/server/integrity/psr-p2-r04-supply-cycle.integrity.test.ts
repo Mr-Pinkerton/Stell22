@@ -378,6 +378,8 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
     const first = await cancel();
     const second = await cancel();
     expect(first.restored).toBe(10);
+    expect(first.closed).toBe(true);
+    expect(first.generation).toBe(1);
     expect(second.restored).toBe(0);
     expect(second.closed).toBe(false);
     s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-c" } });
@@ -468,7 +470,19 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
     expect(s.stockAccountingOpen).toBe(true);
   });
 
-  it("F cancel vs deduct race serializes on Supply lock", async () => {
+  it("F concurrent cancel/deduct serializes physical stock mutation without double deduct/restore", async () => {
+    // Proven: Supply FOR UPDATE serializes ProductStock mutation. No double
+    // deduct, no over-restore, no negative stock.
+    //
+    // Legal serialized outcomes:
+    // A. Deduct first, cancel later: closed cycle, watermarks 0, stock restored to 10, gen 1.
+    // B. Deduct wins the lock and cancel is a no-op because no cycle was open yet:
+    //    open cycle, deductedQty 10, stock 0, gen 1. Cancellation is not
+    //    "logically lost" as a cycle-identity failure: a stale/out-of-order
+    //    SHIPPED observation may temporarily leave an open cycle after an
+    //    earlier cancellation observation. The persistent Ozon cancellation
+    //    poll is responsible for later closing that same generation.
+    // Same-sync cancel-wins is a different invariant (test G).
     const { product } = await seedProduct(prismaA, `f-${Date.now()}`);
     await prismaA.productStock.create({ data: { productId: product.id, quantity: 10 } });
     await prismaA.supply.create({
@@ -494,16 +508,23 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
     ]);
     const s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-f" } });
     const stock = await prismaA.productStock.findUniqueOrThrow({ where: { productId: product.id } });
-    const deductedLike = s.stockAccountingOpen && s.deductedQty === 10;
+    const deductedLike =
+      s.stockAccountingOpen &&
+      s.deductedQty === 10 &&
+      s.shortfallQty === 0 &&
+      stock.quantity === 0 &&
+      s.stockAccountingGeneration === 1;
     const cancelledLike =
-      !s.stockAccountingOpen && s.deductedQty === 0 && s.shortfallQty === 0 && stock.quantity === 10;
+      !s.stockAccountingOpen &&
+      s.deductedQty === 0 &&
+      s.shortfallQty === 0 &&
+      stock.quantity === 10 &&
+      s.stockAccountingGeneration === 1;
     expect(deductedLike || cancelledLike).toBe(true);
-    expect(stock.quantity === 0 || stock.quantity === 10).toBe(true);
-    expect(s.stockAccountingGeneration).toBeGreaterThanOrEqual(1);
-    if (cancelledLike) expect(s.stockAccountingGeneration).toBe(1);
+    expect([0, 10]).toContain(stock.quantity);
   });
 
-  it("G same-sync SHIPPED + cancelled ID: cancel wins, no new cycle", async () => {
+  it("G same-sync SHIPPED + cancelled ID: cancellation wins; no deduction/new cycle", async () => {
     const { product } = await seedProduct(prismaA, `g-${Date.now()}`);
     await prismaA.productStock.create({ data: { productId: product.id, quantity: 10 } });
     await prismaA.supply.create({
