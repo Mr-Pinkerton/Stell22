@@ -122,6 +122,47 @@ enum NotificationTone {
   INFO
 }
 
+// PSR-P1 SHADOW ledger only. Unused empty table. No writers in this package.
+enum InventoryMovementKind {
+  OPENING_BALANCE
+  RECEIPT
+  CONSUMPTION
+  PRODUCTION_OUTPUT
+  ADJUSTMENT
+  REVERSAL
+}
+
+enum InventoryStockDomain {
+  RAIL_LOT
+  BLANK
+  DETAIL
+  NOMENCLATURE
+  PRODUCT
+}
+
+enum InventoryMovementAuthority {
+  SHADOW
+  AUTHORITATIVE
+}
+
+enum InventoryMovementActorKind {
+  USER
+  EMPLOYEE
+  SYSTEM
+}
+
+enum InventoryMovementCausationKind {
+  PRODUCTION_OPERATION
+  PRODUCTION_OPERATION_MUTATION
+  INVENTORY
+  SIMPLE_PURCHASE
+  BATCH
+  RAIL_LOT
+  SUPPLY
+  MANUAL
+  SYSTEM
+}
+
 // ============================= ПОЛЬЗОВАТЕЛИ =================================
 
 model User {
@@ -651,6 +692,85 @@ model InventoryLine {
   deviation    Int
   deviationSum Decimal   @db.Decimal(14, 2) // материал + ЗП
   costEvents   CostEvent[]
+}
+
+// Physical quantity/provenance ledger (PSR-P1 SHADOW). Distinct from model Inventory
+// (physical-count document). causationKind = INVENTORY means that count document
+// caused a movement; it does not make this row part of the Inventory aggregate.
+//
+// NO Prisma relations / SQL FKs to User, Employee, Material, Detail,
+// NomenclatureItem, Product, Batch, RailLot, ProductionOperation, Inventory,
+// SimplePurchase, Supply. reversalOfMovementId is a bare String? — no self-FK.
+//
+// Raw SQL (Prisma cannot express WHERE / CHECK) lives in
+// prisma/migrations/20260917150000_psr_p1_inventory_movement_shadow:
+//   lookup: InventoryMovement_railLotId_recordedAt_idx
+//           InventoryMovement_blank_pool_recordedAt_idx
+//           InventoryMovement_detail_pool_recordedAt_idx
+//           InventoryMovement_nomenclatureId_recordedAt_idx
+//           InventoryMovement_productId_recordedAt_idx
+//           InventoryMovement_userId_recordedAt_idx
+//           InventoryMovement_employeeId_recordedAt_idx
+//           InventoryMovement_reversalOfMovementId_recordedAt_idx
+//   AUTHORITATIVE OPENING_BALANCE UNIQUE:
+//           InventoryMovement_opening_railLot_authoritative_key
+//           InventoryMovement_opening_blank_authoritative_key
+//           InventoryMovement_opening_detail_authoritative_key
+//           InventoryMovement_opening_nomenclature_authoritative_key
+//           InventoryMovement_opening_product_authoritative_key
+//   CHECKs: quantityDelta_nonzero, kind_sign, actor_shape, authority_epoch,
+//           stock_target_shape, targetSnapshot_object, causationSnapshot_object,
+//           supply_causation_snapshot, nonblank_required, identity_length,
+//           reversal_shape, manual_reason.
+// Quantity/provenance only. No monetary columns. No writers in PSR-P1.
+model InventoryMovement {
+  id String @id @default(cuid())
+
+  kind          InventoryMovementKind
+  stockDomain   InventoryStockDomain
+  quantityDelta Int
+
+  authority InventoryMovementAuthority @default(SHADOW)
+  epochId   String?
+
+  causationKind     InventoryMovementCausationKind
+  causationId       String
+  effectKey         String
+  causationSnapshot Json?
+
+  actorKind            InventoryMovementActorKind
+  userId               String?
+  employeeId           String?
+  systemActorKey       String?
+  actorDisplaySnapshot String
+  reason               String?
+
+  effectiveAt DateTime
+  recordedAt  DateTime @default(now())
+
+  reversalOfMovementId String?
+
+  railLotId String?
+
+  materialId String?
+  lengthM    Decimal? @db.Decimal(12, 4)
+  detailType RailType?
+  sort       Sort?
+
+  detailId      String?
+  torcevayaDone Boolean?
+  ploskostDone  Boolean?
+
+  nomenclatureId String?
+  productId      String?
+
+  targetSnapshot Json
+
+  @@unique([causationKind, causationId, effectKey])
+
+  @@index([authority, stockDomain, epochId, recordedAt])
+  @@index([recordedAt])
+  @@index([effectiveAt])
 }
 
 // ============================= ФИНАНСЫ ======================================
