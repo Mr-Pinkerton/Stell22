@@ -604,7 +604,7 @@ After every significant delivery action record:
 | Stage | PSR-P2 general preconditions implementation |
 | BASE GitHub `main` | `394f753dd4e04ea5d2b345894041f63e70818d2d` (**historical pre-merge / work start**) |
 | Production application | `92532e818df41160b434caac2c6d94933e93d810` (**unchanged**; intentionally different from current GitHub `main`) |
-| Result | `audit/08.07-psr-p2-pre-dual-write-general-preconditions.md`. Architecture **CLOSED**. Implementation **VERIFIED / MERGED TO main / NOT DEPLOYED**. PR #9 **MERGED**. Merge commit / GitHub `main` = `3f89fffb8dc5842027420095bd3c85a07a85e284`. Post-merge CI **SUCCESS** `35250490823`. |
+| Result | `audit/08.07-psr-p2-pre-dual-write-general-preconditions.md`. Architecture **CLOSED**. Implementation **VERIFIED / MERGED TO main / NOT DEPLOYED**. PR #9 **MERGED**. PR #9 implementation merge checkpoint = `3f89fffb8dc5842027420095bd3c85a07a85e284`. Post-merge CI **SUCCESS** `35250490823`. Always verify current GitHub `main` HEAD. |
 | Historical packaging | Feature-branch / PR-open state (`COMMITTED ON FEATURE BRANCH / PR #9 OPEN`) is **historical**. Do not treat it as current. |
 | Q4 | Setting `inventory_movement_shadow_write`; writer = SHARED TX lock; ON/OFF = same EXCLUSIVE control lock as reset via transaction-only setter + maintenance CLI; not wired into physical writers |
 | R-07 | New migration `recordedAt TIMESTAMPTZ(3)`; P1 migration not rewritten; empty-table guard |

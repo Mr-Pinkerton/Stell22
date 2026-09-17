@@ -117,7 +117,7 @@ Status vocabulary: `ACTIVE`, `COMPLETE`, `COMPLETE / REVIEWED`, `ACCEPTED / REVI
 | `audit/01.10-terminal-idempotency-review.md` | Terminal | Review | `16015d5ece9af8514a0ec3dc9c0fb913c15ced48` | `COMPLETE` | YES | DI-007 / DI-008. |
 | `audit/01.13-terminal-idempotency-remediation-plan.md` | Terminal | Plan | `16015d5e…` | `IMPLEMENTED` | YES | DI-007 / DI-008 closed in production. |
 | `audit/01.11-terminal-draft-persistence-review.md` | Terminal | Review | `16015d5e…` | `COMPLETE` | YES | Draft persistence. |
-| `audit/01.12-terminal-draft-persistence-remediation-plan.md` | Terminal UX | Plan | `16015d5e…` | `IMPLEMENTED` | YES | Shipped `64fa9fa` / follow-ups. |
+| `audit/01.12-terminal-draft-persistence-remediation-plan.md` | Terminal | Plan | `16015d5e…` | `IMPLEMENTED` | YES | Shipped `64fa9fa` / follow-ups. |
 | `audit/01.14-torcovka-admin-approval-review.md` | TORCOVKA | Review | `327b4ae6e54c15b37314d93b2b0c33563274d877` | `COMPLETE` | YES | EXTREME 4-digit approval. |
 | `audit/01.15-torcovka-admin-approval-remediation-plan.md` | TORCOVKA | Plan | `4db2c96e1369a4ec3024814efdc4e270021c6619` | `IMPLEMENTED` | YES | Shipped `8240f4d`. |
 | `audit/01.18-payment-operation-uniqueness-review.md` | Payroll | Review | `8240f4d611ac2c8b04834ebd239374199f764fc7` | `COMPLETE` | YES | DI-014 closed in production (`060629e`). |
