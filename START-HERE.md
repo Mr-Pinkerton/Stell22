@@ -24,15 +24,23 @@ Never import door-specific entities, routes, WIP assumptions, or business rules 
 
 ## Application / main checkpoint
 
+`92532e818df41160b434caac2c6d94933e93d810`
+
+`Merge pull request #7 from Mr-Pinkerton/feat/psr-p1-inventory-movement-shadow-schema`
+
+This SHA is the current production **application** checkpoint and was deployed (Production Deploy `35228794988` SUCCESS). PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`). `InventoryMovement` exists and is empty (row count = 0). No runtime writers. `production_cost_flow` remains INACTIVE (existing canonical delivery state; no fresh live query in this closeout).
+
+Always verify current `main` HEAD.
+
+Prior production application checkpoint (**historical**, do not rewrite):
+
 `0686d0036da52cc32aaff531c91f1dd2ded899ec`
 
 `Merge pull request #3 from Mr-Pinkerton/feat/ops-corr-01-traceability-v1`
 
-This SHA is the current production **application** checkpoint and was deployed (Production Deploy `35204366279` SUCCESS). Schema/migrations = none in that deploy. `production_cost_flow` remains INACTIVE.
+Production Deploy `35204366279` SUCCESS (2026-09-17). GitHub `main` later received PSR-P0-CORE (`b11c37d`) and PSR-P1 schema-contract (`08.05`) docs merges before the PSR-P1 implementation merge `92532e8`. Those docs merges did **not** themselves deploy application code.
 
-GitHub `main` after the PSR-P0-CORE docs merge is `b11c37df94be8aee0fb4d0e9a466182924e29fc7`. The production application remains `0686d0036da52cc32aaff531c91f1dd2ded899ec` until a **separate** production deploy. A later documentation merge of PSR-P1 schema contract (`audit/08.05`) will advance GitHub `main` again and will **not** deploy application code. Always verify current `main` HEAD; do not treat `0686d00`, `bd82aa0`, or `b11c37d` as deployed application code after a later docs merge.
-
-Prior production application checkpoint (**historical**, do not rewrite):
+Earlier production application checkpoint (**historical**, do not rewrite):
 
 `71a01b40008cf6da7cbc843b3b0dbaa31cf01853`
 
@@ -50,7 +58,7 @@ Independent Review #1 = REQUEST CHANGES (R1…R6 CLOSED/PASS). Independent Revie
 
 `ACCEPTED / REVIEWED` means the architecture **contract** is accepted. It does **not** mean PSR implementation complete, primary-system readiness achieved, ledger deployed, paper removable, or `production_cost_flow` active.
 
-**NEXT after reviewed merge of `audit/08.05` = separate PSR-P1 implementation prompt: empty InventoryMovement Prisma/migration in SHADOW.** PSR-P1 schema contract = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.05`; Independent Review #1 = **PASS WITH NON-BLOCKING FINDINGS**, P0=0, P1=0; canonical through the reviewed docs merge). Prisma/migration **NOT STARTED**. Implementation is **not** authorized by the Independent Review cycle. PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`audit/08.03` + `audit/08.04`). `PSR-Q-001` / `Q2` / `Q5` / `Q7` / `Q8` and `PSR-DESIGN-001` / `002` = **CLOSED / ACCEPTED**. PSR-P1 does **not** mean dual-write, authoritative ledger, deploy, paper removal, `production_cost_flow` activation, or Correction Center. Do not implement Correction Center / `ProductionOperationMutation` / InventoryMovement Prisma from this file alone.
+**NEXT = PSR-P2 PRE-DUAL-WRITE CONTRACT / PRECONDITIONS.** PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract-creation status **ACCEPTED DESIGN / NOT IMPLEMENTED** is preserved there). Independent Review #1 = **PASS WITH NON-BLOCKING FINDINGS**, P0=0, P1=0. Current implementation/deploy = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`). Empty unused SHADOW-capable table; row count = **0**; no runtime writers. PSR-P2 **NOT STARTED**. PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`audit/08.03` + `audit/08.04`). `PSR-Q-001` / `Q2` / `Q5` / `Q7` / `Q8` and `PSR-DESIGN-001` / `002` = **CLOSED / ACCEPTED**. Close `PSR-Q-004`, R-10, R-11 before PSR-P2; R-07 before movement writers; R-04/R-05/R-06 before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean dual-write, authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center. Do not implement Correction Center / `ProductionOperationMutation` / dual-write from this file alone.
 
 Historical documentation recovery checkpoint (no longer current on main):
 
@@ -68,9 +76,9 @@ INC-001 containment SHA (still in the running tree):
 
 ## Current work mode
 
-The project on `main`: production application at `0686d00`; GitHub `main` at this docs cycle `b11c37d`; AUDIT 1 complete; ARCH-2 architecture **ACCEPTED / REVIEWED**; PSR-P0-CORR **ACCEPTED DESIGN / NOT IMPLEMENTED**; PSR-P0-CORE = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.04`; canonical through the reviewed docs merge); PSR-P1 schema contract = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.05`; Independent Review #1 = **PASS WITH NON-BLOCKING FINDINGS**, P0=0, P1=0; canonical through the reviewed docs merge); PSR-P0 **COMPLETE / ACCEPTED** as design contract only; INC-001 open; AUDIT 2 not started.
+The project on `main`: production application at `92532e8`; AUDIT 1 complete; ARCH-2 architecture **ACCEPTED / REVIEWED**; PSR-P0-CORR **ACCEPTED DESIGN / NOT IMPLEMENTED**; PSR-P0-CORE = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.04`); PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical **NOT IMPLEMENTED** at contract creation preserved); PSR-P1 implementation/deploy = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`); PSR-P0 **COMPLETE / ACCEPTED** as design contract only; PSR-P2 **NOT STARTED**; INC-001 open; AUDIT 2 not started.
 
-**NEXT after reviewed merge of `08.05` = separate PSR-P1 implementation prompt: empty InventoryMovement Prisma/migration in SHADOW.** Prisma/migration **NOT STARTED**. Do not implement dual-write, Correction Center schema, or deploy from this file.
+**NEXT = PSR-P2 PRE-DUAL-WRITE CONTRACT / PRECONDITIONS.** Not dual-write implementation. Do not implement dual-write, Correction Center schema, or a further production deploy from this file.
 
 AUDIT 1 remains `COMPLETE / REVIEWED`. Do not reopen it.
 

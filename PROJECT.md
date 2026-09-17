@@ -46,24 +46,27 @@ Branch: `main`
 
 Last verified production application SHA:
 
-`0686d0036da52cc32aaff531c91f1dd2ded899ec`
+`92532e818df41160b434caac2c6d94933e93d810`
 
-`Merge pull request #3 from Mr-Pinkerton/feat/ops-corr-01-traceability-v1`
+`Merge pull request #7 from Mr-Pinkerton/feat/psr-p1-inventory-movement-shadow-schema`
 
-Evidence: GitHub Production Deploy run `35204366279` SUCCESS (2026-09-17, `workflow_dispatch`; `headSha` = `0686d0036da52cc32aaff531c91f1dd2ded899ec`).
-
-GitHub `main` after the PSR-P0-CORE docs merge is `b11c37df94be8aee0fb4d0e9a466182924e29fc7`. The production **application** remains `0686d0036da52cc32aaff531c91f1dd2ded899ec` until a **separate** production deploy. This cycle’s application-code base remains that SHA. A later documentation merge of PSR-P1 schema contract (`audit/08.05`) will advance GitHub `main` again and will **not** deploy application code. Historical docs-merge SHA `bd82aa0` (08.03) is not rewritten.
+Evidence: GitHub Production Deploy run `35228794988` SUCCESS (2026-09-17, `workflow_dispatch`; `headSha` = `92532e818df41160b434caac2c6d94933e93d810`). Closeout: `audit/08.06-psr-p1-deployment-closeout.md`.
 
 That deploy includes:
 
+- PSR-P1 empty `InventoryMovement` SHADOW schema (`20260917150000_psr_p1_inventory_movement_shadow`); production row count = **0**;
 - OPS-CORR-01 Production Traceability v1 (PR #3);
 - INC-001 generic TORCOVKA-delete containment (`3608b36`, still in effect);
 - UI filter work;
 - TORCOVKA BlankStock length canonicalization and railsTaken correction hardening (PR #1).
 
-Schema / migrations: **none** in the Traceability v1 / this documentation cycle.
+PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY**. No runtime `InventoryMovement` writers. PSR-P2 **NOT STARTED**.
 
 Prior documented production application SHA:
+
+`0686d0036da52cc32aaff531c91f1dd2ded899ec` — `Merge pull request #3 from Mr-Pinkerton/feat/ops-corr-01-traceability-v1`. Production Deploy `35204366279` SUCCESS (2026-09-17). **Historical.** Do not rewrite.
+
+Earlier documented production application SHA:
 
 `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` — `Merge pull request #1 from Mr-Pinkerton/integration/p2025-di020`. Production Deploy `34635510843` SUCCESS (2026-09-11). **Historical.** Do not rewrite.
 
@@ -88,13 +91,13 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: PSR-P0 COMPLETE / ACCEPTED as an architecture/design contract only` (`audit/08.03` + `audit/08.04`; **not** runtime). PSR-P1 schema contract **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.05`). Prisma/migration **not** started.
+`ACTIVE MODE: PSR-P1 COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY` (`audit/08.06`). Schema contract remains `audit/08.05` (**ACCEPTED DESIGN** at contract creation; do not rewrite that historical header). PSR-P0 remains **COMPLETE / ACCEPTED** as an architecture/design contract only (`audit/08.03` + `audit/08.04`; **not** runtime). PSR-P2 **NOT STARTED**.
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
 `AUDIT 2 — FINANCE & MONEY INTEGRITY` is **NOT STARTED**. It remains `NEXT AFTER INC-001`. ARCH-2 does **not** silently start AUDIT 2.
 
-INC-001 remains `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`. Containment is still in production on `0686d00` (first deployed at `3608b36`). Do not treat ARCH-2 / PSR-P0-CORR as a production-data fix. Do not automatically invert INV-047 (generic TORCOVKA delete returning rails).
+INC-001 remains `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`. Containment is still in production on `92532e8` (first deployed at `3608b36`). Do not treat ARCH-2 / PSR-P0-CORR as a production-data fix. Do not automatically invert INV-047 (generic TORCOVKA delete returning rails).
 
 **ARCH-2 / Primary-System Readiness** (`audit/08.02-primary-system-readiness-architecture.md`): **`ACCEPTED / REVIEWED`**.
 
@@ -106,13 +109,13 @@ PSR-P0-CORR (`audit/08.03-psr-p0-correction-history-contract.md`): **ACCEPTED DE
 
 PSR-P0-CORE = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.04`; canonical through the reviewed docs merge). Closes remaining PRE-SCHEMA questions. Canonical design; **not** runtime implementation.
 
-PSR-P1 schema contract = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.05`; canonical through the reviewed docs merge). Independent Review #1 = **PASS WITH NON-BLOCKING FINDINGS** (P0=0, P1=0). Exact `InventoryMovement` schema frozen. Prisma/migration **NOT STARTED**. Canonical design; **not** runtime implementation. Implementation is **not** authorized by the Independent Review cycle.
+PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract-creation status **ACCEPTED DESIGN / NOT IMPLEMENTED** is preserved in that file). Independent Review #1 = **PASS WITH NON-BLOCKING FINDINGS** (P0=0, P1=0). Current implementation/deploy = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`). Empty unused SHADOW-capable table in production; row count = **0**. No runtime writers.
 
 `PSR-Q-001` / `PSR-Q-002` / `PSR-Q-005` / `PSR-Q-007` / `PSR-Q-008` = **CLOSED / ACCEPTED**.
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT after reviewed merge of `08.05`: PSR-P1 Prisma/migration of empty `InventoryMovement` in **SHADOW**, only after a separate implementation prompt. Does **not** mean dual-write, authoritative ledger, production deploy, paper removal, `production_cost_flow` activation, or Correction Center. `PSR-Q-003` / `Q4` / `Q6` remain later-timing.
+NEXT = **PSR-P2 PRE-DUAL-WRITE CONTRACT / PRECONDITIONS**. Not dual-write implementation. `PSR-Q-004`, R-10, R-11 before PSR-P2; R-07 before movement writers; R-04/R-05/R-06 before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -124,7 +127,7 @@ Reason: generic TORCOVKA delete reverses produced `BlankStock` but **intentional
 
 Correction of a **live** TORCOVKA must use existing correction actions (`correctTorcovkaRailsTaken`, line quantity edit), not delete.
 
-This rule remains operational. Application containment is **deployed in production** (first at `3608b36`; still present on running `0686d00`): the server rejects generic TORCOVKA delete before any mutation. That does **not** restore `ПАК-40-1280-01-7` and does **not** implement `cancelErroneousTorcovka`. Do not treat containment as a production-data fix. Cancellation remains deferred (`audit/08.03` §9).
+This rule remains operational. Application containment is **deployed in production** (first at `3608b36`; still present on running `92532e8`): the server rejects generic TORCOVKA delete before any mutation. That does **not** restore `ПАК-40-1280-01-7` and does **not** implement `cancelErroneousTorcovka`. Do not treat containment as a production-data fix. Cancellation remains deferred (`audit/08.03` §9).
 
 `ARCH-P1-001` is unrelated to INC-001.
 
@@ -282,27 +285,29 @@ Status: `ACCEPTED / REVIEWED` (Review #1 R1…R6 CLOSED/PASS; Review #2 R7…R8 
 
 Artifact (canonical on `main` after reviewed merge): `audit/08.02-primary-system-readiness-architecture.md`
 
-Application/main BASE at ARCH-2 acceptance: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` (**historical**; docs merge ≠ that-cycle production deploy). Current production application: `0686d00` (see §4).
+Application/main BASE at ARCH-2 acceptance: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` (**historical**; docs merge ≠ that-cycle production deploy). Current production application: `92532e8` (see §4).
 
-Forward-looking architecture so Stell22 can become the only warehouse/production operational source of truth. PSR namespace. **Not** a reopen of AUDIT 1. Architecture contract accepted; **not** implementation complete.
+Forward-looking architecture so Stell22 can become the only warehouse/production operational source of truth. PSR namespace. **Not** a reopen of AUDIT 1. Architecture contract accepted; **not** full PSR implementation complete.
 
-Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`: **DECIDED / ACCEPTED** 2026-09-17 in `audit/08.03` (`ProductionOperationMutation`). Remainder + `PSR-Q-002` / `Q5` / `Q7` / `Q8` / `PSR-DESIGN-002`: **CLOSED / ACCEPTED** 2026-09-17 in `audit/08.04`. PSR-P0 = **COMPLETE / ACCEPTED** as architecture/design contract only. PSR-P1 schema contract: **ACCEPTED DESIGN / NOT IMPLEMENTED** 2026-09-17 in `audit/08.05`. Prisma/migration **NOT STARTED**.
+Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`: **DECIDED / ACCEPTED** 2026-09-17 in `audit/08.03` (`ProductionOperationMutation`). Remainder + `PSR-Q-002` / `Q5` / `Q7` / `Q8` / `PSR-DESIGN-002`: **CLOSED / ACCEPTED** 2026-09-17 in `audit/08.04`. PSR-P0 = **COMPLETE / ACCEPTED** as architecture/design contract only. PSR-P1 schema contract: **ACCEPTED DESIGN** 2026-09-17 in `audit/08.05` (historical **NOT IMPLEMENTED** at contract creation preserved). PSR-P1 implementation/deploy: **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** 2026-09-17 in `audit/08.06`.
 
 ## 13. Current next step
 
-`NEXT = reviewed merge of audit/08.05, then a separate PSR-P1 implementation prompt: empty InventoryMovement Prisma/migration in SHADOW.`
+`NEXT = PSR-P2 PRE-DUAL-WRITE CONTRACT / PRECONDITIONS.`
 
 PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime.
 
-PSR-P1 schema contract = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`08.05`). Prisma/migration still **NOT STARTED**. Does **not** mean dual-write, authoritative ledger, production deploy, paper removal, `production_cost_flow` activation, or Correction Center.
+PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`08.06`). Empty unused SHADOW-capable `InventoryMovement` in production; row count = **0**. No runtime writers.
 
-Do **not** implement InventoryMovement Prisma/dual-write/cutover from this file. Wait for reviewed merge of `08.05` and a separate implementation prompt.
+Does **not** mean dual-write, SHADOW posting, authoritative ledger, `OPENING_BALANCE` data, paper removal, `production_cost_flow` activation, or Correction Center.
+
+Do **not** start PSR-P2 dual-write from this file. Close `PSR-Q-004`, R-10, and R-11 **before PSR-P2**. Close R-07 **before movement writers**. Close R-04 / R-05 / R-06 before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
 
 Do **not** implement `ProductionOperationMutation` schema or Correction Center in this documentation cycle.
 
 Do **not** start AUDIT 2. AUDIT 2 remains `NOT STARTED` / `NEXT AFTER INC-001`.
 
-INC-001 remains OPEN (containment deployed on `0686d00`; physical facts still required before any production-data correction). ARCH-2 / 08.03 / 08.04 do not close it. Cancellation remains deferred.
+INC-001 remains OPEN (containment deployed on `92532e8`; physical facts still required before any production-data correction). ARCH-2 / 08.03 / 08.04 / 08.06 do not close it. Cancellation remains deferred.
 
 When AUDIT 2 starts: audit-only; do not auto-patch findings; `production_cost_flow` stays inactive; activation stays `BLOCKED`.
 
@@ -558,11 +563,33 @@ After every significant delivery action record:
 | Review verdict | **PASS WITH NON-BLOCKING FINDINGS**. P0=0. P1=0. |
 | Result | ChatGPT resolved schema-shaping items into `audit/08.05`: SHADOW may carry rehearsal `epochId`; AUTHORITATIVE-only opening UNIQUE indexes; reversal remains partial/multi/chain without self-FK; snapshot keys-present/null-ok; identity length + MANUAL reason CHECKs; no-money snapshot rule. R-03 proposed UNIQUE/self-FK/1:1 full reversal **rejected**. Writer items R-04…R-07/R-10/R-11 recorded as PSR-P2 preconditions. R-06 also current runtime DI finding; **no new DI number allocated**. |
 | PSR-P1 schema contract | **ACCEPTED DESIGN / NOT IMPLEMENTED** |
-| PSR-P1 Prisma/migration | **NOT STARTED**. Implementation **not** authorized. |
-| Application / schema | unchanged |
-| `production_cost_flow` | unchanged / INACTIVE |
+| Deploy | **NO** |
+| Next | Reviewed merge of `08.05`. Then a separate implementation prompt: empty InventoryMovement table in SHADOW. Not dual-write. Not deploy. |
+
+## 28. Journal — PSR-P1 SHADOW schema implementation and production deploy
+
+| | |
+| --- | --- |
+| Date | 2026-09-17 |
+| Stage | PSR-P1 InventoryMovement SHADOW schema — implemented and deployed empty |
+| Implementation PR | #7 — `feat: add PSR-P1 inventory movement shadow schema` |
+| Reviewed head | `087ed7c5b09937cacf10fe3c110465a08c14de78` |
+| Merge commit / `origin/main` | `92532e818df41160b434caac2c6d94933e93d810` |
+| Post-merge CI | `35227949324` SUCCESS |
+| Production Deploy | `35228794988` SUCCESS (`workflow_dispatch`) |
+| Previous production application | `0686d0036da52cc32aaff531c91f1dd2ded899ec` |
+| Current production application | `92532e818df41160b434caac2c6d94933e93d810` |
+| Migration | `20260917150000_psr_p1_inventory_movement_shadow` — `_prisma_migrations` 1 row; `finished_at` set; `rolled_back_at` NULL; `applied_steps_count` = 1 |
+| `InventoryMovement` | EXISTS; row count = **0** |
+| Catalog | 5 enums PASS; 12 CHECKs PASS; FK 0/0; Prisma + 8 partial + 5 opening UNIQUE indexes PASS |
+| Health | HTTP 200 `{"status":"ok","db":"up"}` |
+| Rollback | **NO** |
+| Manual production mutation | **NO** |
+| Result | **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`) |
+| Runtime writers | **none** |
+| PSR-P2 | **NOT STARTED** |
+| `production_cost_flow` | unchanged canonical delivery state / INACTIVE (no fresh live query in this closeout) |
 | AUDIT 1 | COMPLETE / REVIEWED |
 | AUDIT 2 | **NOT STARTED** |
 | INC-001 | OPEN |
-| Deploy | **NO** |
-| Next | Reviewed merge of `08.05`. Then a separate implementation prompt: empty InventoryMovement table in SHADOW. Not dual-write. Not deploy. |
+| Next | **PSR-P2 PRE-DUAL-WRITE CONTRACT / PRECONDITIONS**. Not dual-write implementation. |
