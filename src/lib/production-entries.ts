@@ -1,8 +1,9 @@
 import type { DateFilterValue } from "@/components/date-filter";
+import { getDefaultDateFilterValue, isDefaultDateFilterValue } from "@/components/date-filter";
 import { matchesDateFilter } from "@/lib/match-date-filter";
 import type { ProductionEntryRow } from "@/mocks/production-fixtures";
 import type { OperationType } from "@/types/domain";
-import { TIME_ZONE } from "@/lib/format";
+import { dayKeyInProjectTz, TIME_ZONE } from "@/lib/format";
 
 export const OPERATION_TYPE_LABEL: Record<OperationType, string> = {
   TORCOVKA: "Торцовка",
@@ -35,6 +36,15 @@ export function getDefaultProductionTableFilters(): ProductionTableFilters {
     operation: PRODUCTION_FILTER_ALL,
     payment: PRODUCTION_FILTER_ALL,
   };
+}
+
+/** «Дата внесения» по умолчанию — За всё время, не текущий месяц. */
+export function getDefaultProductionCreatedAtFilter(): DateFilterValue {
+  return { ...getDefaultDateFilterValue(), allTime: true };
+}
+
+export function isProductionCreatedAtFilterDefault(filter: DateFilterValue): boolean {
+  return isDefaultDateFilterValue(filter, getDefaultProductionCreatedAtFilter());
 }
 
 export function isProductionExtraFiltersDefault(input: ProductionTableFilters): boolean {
@@ -71,6 +81,27 @@ export function filterProductionEntries(
   filter: DateFilterValue,
 ): ProductionEntryRow[] {
   return rows.filter((row) => matchesDateFilter(row.workDate, filter));
+}
+
+/** Фильтр по дате внесения (createdAt) в зоне проекта, не по UTC-календарю. */
+export function filterProductionEntriesByCreatedAt(
+  rows: ProductionEntryRow[],
+  filter: DateFilterValue,
+): ProductionEntryRow[] {
+  return rows.filter((row) =>
+    matchesDateFilter(dayKeyInProjectTz(row.createdAt), filter),
+  );
+}
+
+/** Компактное «количество / основные данные» для строки журнала. */
+export function formatProductionQuantity(
+  row: Pick<ProductionEntryRow, "type" | "quantity" | "productName">,
+): string {
+  const base = `${row.quantity} ${OPERATION_TYPE_UNIT[row.type]}`;
+  if (row.type === "UPAKOVKA" && row.productName) {
+    return `${base} · ${row.productName}`;
+  }
+  return base;
 }
 
 /** Локальные фильтры журнала поверх уже отрезанного периода. */

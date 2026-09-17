@@ -50,6 +50,8 @@ export interface FiltersBarProps extends SectionFilters {
    * Goals передаёт false (только месяц).
    */
   dateAllowRange?: boolean;
+  /** Подпись встроенного DateFilter. Default «Дата», чтобы другие разделы не менялись. */
+  dateLabel?: string;
   /** Предметные controls в той же строке (родитель задаёт семантику). */
   extraFilters?: ReactNode;
   /** Родитель: внешние extra filters отличаются от default. */
@@ -105,6 +107,7 @@ export function FiltersBar({
   onResetExtraFilters,
   dateDefaultValue,
   dateAllowRange = true,
+  dateLabel = "Дата",
 }: FiltersBarProps) {
   const hasAny = search || date || weeks || archive || extraFilters != null;
   const resolvedDateDefault = dateDefaultValue ?? getDefaultDateFilterValue();
@@ -203,7 +206,7 @@ export function FiltersBar({
       )}
       {date && (
         <div className="grid gap-1.5">
-          <Label className="cursor-default">Дата</Label>
+          <Label className="cursor-default">{dateLabel}</Label>
           <div className="flex flex-wrap items-center gap-2">
             <DateFilter
               value={dateFilter}
