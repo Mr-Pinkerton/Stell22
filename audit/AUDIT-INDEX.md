@@ -16,15 +16,16 @@ Do not import Woodveri door-manufacturing entities or workflows.
 | Repository | `Mr-Pinkerton/Stell22` |
 | Branch | `main` is canonical. |
 | Application-code checkpoint | `0686d0036da52cc32aaff531c91f1dd2ded899ec` — `Merge pull request #3 from Mr-Pinkerton/feat/ops-corr-01-traceability-v1`. Production Deploy `35204366279` SUCCESS. Schema/migrations = none. Prior prod SHA `71a01b4` (deploy `34635510843`) is **historical**. Containment SHA `3608b36` remains in the running tree. |
-| Docs on `main` | AUDIT 1 artifact `08.01` (`COMPLETE / REVIEWED`). ARCH-2 artifact `08.02` (`ACCEPTED / REVIEWED`). PSR-P0-CORR artifact `08.03` (`ACCEPTED DESIGN / NOT IMPLEMENTED`). PSR-P0-CORE artifact `08.04` (`ACCEPTED DESIGN / NOT IMPLEMENTED`). INDEX/PROJECT as last merged. |
+| Docs on `main` | AUDIT 1 artifact `08.01` (`COMPLETE / REVIEWED`). ARCH-2 artifact `08.02` (`ACCEPTED / REVIEWED`). PSR-P0-CORR artifact `08.03` (`ACCEPTED DESIGN / NOT IMPLEMENTED`). PSR-P0-CORE artifact `08.04` (`ACCEPTED DESIGN / NOT IMPLEMENTED`). PSR-P1 schema contract `08.05` (`ACCEPTED DESIGN / NOT IMPLEMENTED`). INDEX/PROJECT as last merged. |
 | ARCH-2 | `audit/08.02-primary-system-readiness-architecture.md` — **`ACCEPTED / REVIEWED`**. Independent Review #1 = REQUEST CHANGES (R1…R6 CLOSED/PASS). Independent Review #2 = REQUEST CHANGES (R7…R8 CLOSED/PASS). Independent Review #3 = **PASS / ACCEPT** (new blockers = 0). Architecture contract accepted; **not** implementation complete. `PSR-Q-001` / `Q2` / `Q5` / `Q7` / `Q8` = **CLOSED / ACCEPTED** in `08.04` (design only). |
-| PSR-P0 | **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime. Correction Center **not** implemented. Cancellation **DEFERRED / NOT IMPLEMENTED**. PSR-P1 = **NOT STARTED**. **NEXT after reviewed merge of `08.04`** = InventoryMovement schema in SHADOW. |
+| PSR-P0 | **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime. Correction Center **not** implemented. Cancellation **DEFERRED / NOT IMPLEMENTED**. |
+| PSR-P1 | Schema contract **ACCEPTED DESIGN / NOT IMPLEMENTED** (`08.05`). Independent Review #1 = **PASS WITH NON-BLOCKING FINDINGS** (P0=0, P1=0). Prisma/migration **NOT STARTED**. NEXT after reviewed merge of `08.05` = empty InventoryMovement table in SHADOW, only after a separate implementation prompt. Not dual-write / not deploy. Implementation is **not** authorized by the Independent Review cycle. |
 | Audit program | STEP 0 recovery **COMPLETE**. **AUDIT 1 = COMPLETE / REVIEWED** (not reopened). **ARCH-2 = ACCEPTED / REVIEWED** (architecture contract). Not a new AUDIT 1 defect count. **AUDIT 2 is NOT started.** |
 | Production incident | **`INC-001` = `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`**. Finding **`INC-001-F1` P1 / CONFIRMED**. Generic TORCOVKA delete `CONTAINED IN PRODUCTION`. Package data **not** corrected. `ARCH-P1-001` unrelated to INC-001. |
 | `production_cost_flow` | inactive (delivery state; see `PROJECT.md`) |
 | `ARCH-P1-001` | **OPEN / CONFIRMED**. Scope = `production_cost_flow` **ACTIVE** UPAKOVKA quantity-edit path. Inactive `prepareUpakovkaEdit` already unions old ∪ current refs. Not fixed. |
 
-Always verify current `main` HEAD before relying on git SHA. Production **application** SHA `0686d00` remains until a separate deploy. GitHub `main` at this docs cycle = `bd82aa0` (`08.03` merge). A documentation merge of `08.04` will advance GitHub `main` again and does **not** change the production application. Historical SHA `71a01b4` is not rewritten.
+Always verify current `main` HEAD before relying on git SHA. Production **application** SHA `0686d00` remains until a separate deploy. GitHub `main` at this docs cycle = `b11c37d` (`08.04` merge). A documentation merge of `08.05` will advance GitHub `main` again and does **not** change the production application. Historical SHA `71a01b4` is not rewritten. Historical docs-merge SHA `bd82aa0` (08.03) is not rewritten.
 
 `08.01` = current-system architecture audit. `08.02` = accepted primary-system readiness architecture contract. They answer different questions. Do not treat 08.02 as a reopen of AUDIT 1. `ACCEPTED / REVIEWED` does **not** mean PSR implementation complete, ledger deployed, paper removable, or `production_cost_flow` active.
 
@@ -145,14 +146,15 @@ No `audit/01.16*` or `audit/01.17*`.
 
 ### D.7 AUDIT 1 / ARCH-2 — whole-system architecture (08.xx)
 
-`08.01` and `08.02` are **not** the same audit. `08.01` classifies current-system defects. `08.02` defines primary-system readiness (PSR-*) before Stell22 can be the only warehouse/production SoT. `08.03` is the PSR-P0-CORR production correction-history contract. `08.04` is the PSR-P0-CORE remainder (Q1 remainder, Q2, Q5, Q7, Q8). Do not reopen AUDIT 1 defect counts from 08.02/08.03/08.04.
+`08.01` and `08.02` are **not** the same audit. `08.01` classifies current-system defects. `08.02` defines primary-system readiness (PSR-*) before Stell22 can be the only warehouse/production SoT. `08.03` is the PSR-P0-CORR production correction-history contract. `08.04` is the PSR-P0-CORE remainder (Q1 remainder, Q2, Q5, Q7, Q8). `08.05` is the PSR-P1 InventoryMovement schema contract. Do not reopen AUDIT 1 defect counts from 08.02/08.03/08.04/08.05.
 
 | File | Area | Type | BASE/Snapshot | Status | Canonical? | Notes |
 | ---- | ---- | ---- | ------------- | ------ | ---------- | ----- |
 | `audit/08.01-audit-1-system-architecture.md` | Whole system | Architecture audit | Repo `d1f46e46232499b61f55e754b0bd70ddc5924bca`; app `d9f940e8540801bdb27dd72210193f5e4ab038c3` | `COMPLETE / REVIEWED` | YES | ChatGPT adversarial review accepted. New P0=0. New P1=`ARCH-P1-001` (OPEN / CONFIRMED; ACTIVE-path scope). New P2/P3=0. Simplify=`ARCH-SIMPLIFY-001`. **Do not reopen.** AUDIT 2 is a later finance audit, not started. |
-| `audit/08.02-primary-system-readiness-architecture.md` | Primary-system readiness | Architecture contract | App BASE at acceptance `71a01b4` (**historical**). Current prod app `0686d00`. | `ACCEPTED / REVIEWED` | YES | ARCH-2. Review #1 REQUEST CHANGES → R1…R6 CLOSED/PASS. Review #2 REQUEST CHANGES → R7…R8 CLOSED/PASS. Review #3 **PASS / ACCEPT** (new blockers = 0). Architecture contract accepted; **not** implementation complete. PSR-P0-CORR addendum §24.1. PSR-P0-CORE addendum §24.2. Generic `CommandExecution` not used. |
+| `audit/08.02-primary-system-readiness-architecture.md` | Primary-system readiness | Architecture contract | App BASE at acceptance `71a01b4` (**historical**). Current prod app `0686d00`. | `ACCEPTED / REVIEWED` | YES | ARCH-2. Review #1 REQUEST CHANGES → R1…R6 CLOSED/PASS. Review #2 REQUEST CHANGES → R7…R8 CLOSED/PASS. Review #3 **PASS / ACCEPT** (new blockers = 0). Architecture contract accepted; **not** implementation complete. PSR-P0-CORR addendum §24.1. PSR-P0-CORE addendum §24.2. PSR-P1 schema addendum §24.3. Generic `CommandExecution` not used. |
 | `audit/08.03-psr-p0-correction-history-contract.md` | Production correction history | Architecture contract | App `0686d00`; GitHub main at 08.03 merge `bd82aa0` | `ACCEPTED DESIGN / NOT IMPLEMENTED` | YES | PSR-P0-CORR. Target = `ProductionOperationMutation`. **At 08.03 acceptance:** global `PSR-Q-001` / `PSR-DESIGN-001` = **OPEN / PARTIALLY RESOLVED**. **Subsequently CLOSED / ACCEPTED** by `08.04`. Do not rewrite 08.03 as if it closed global Q1. v1 HOURS delete **must be blocked**. v1 TORCOVKA line-qty **must reject frozen batch**. Schema **not** implemented. Correction Center **not** implemented. Cancellation **DEFERRED**. INC-001 remains OPEN. |
-| `audit/08.04-psr-p0-core-contract.md` | PSR-P0 remaining PRE-SCHEMA | Architecture contract | App `0686d00`; GitHub main at creation `bd82aa0` | `ACCEPTED DESIGN / NOT IMPLEMENTED` | YES | PSR-P0-CORE. Closes Q1 remainder, Q2, Q5, Q7, Q8 and DESIGN-001/002. PSR-P0 **COMPLETE / ACCEPTED** as design contract only. PSR-P1 next after reviewed merge = InventoryMovement schema in SHADOW. Not dual-write / not deploy. Canonical design; **not** runtime implementation. |
+| `audit/08.04-psr-p0-core-contract.md` | PSR-P0 remaining PRE-SCHEMA | Architecture contract | App `0686d00`; GitHub main at creation `bd82aa0` | `ACCEPTED DESIGN / NOT IMPLEMENTED` | YES | PSR-P0-CORE. Closes Q1 remainder, Q2, Q5, Q7, Q8 and DESIGN-001/002. PSR-P0 **COMPLETE / ACCEPTED** as design contract only. Canonical design; **not** runtime implementation. |
+| `audit/08.05-psr-p1-inventory-movement-schema-contract.md` | PSR-P1 InventoryMovement schema | Architecture contract | App `0686d00`; GitHub main at creation `b11c37d` | `ACCEPTED DESIGN / NOT IMPLEMENTED` | YES | PSR-P1 schema contract. Independent Review #1 = **PASS WITH NON-BLOCKING FINDINGS** (P0=0, P1=0). Exact enums/model/no-FK/partial indexes/CHECKs/snapshots. AUTHORITATIVE-only opening UNIQUEs. SHADOW may carry rehearsal `epochId`. Prisma/migration **NOT STARTED**. Not dual-write / not deploy. Canonical design; **not** runtime implementation. |
 
 ### D.8 Production incidents
 
@@ -183,6 +185,8 @@ No `audit/01.16*` or `audit/01.17*`.
 `08.03` is **PSR-P0-CORR** (production correction-history contract). Status = **ACCEPTED DESIGN / NOT IMPLEMENTED**. It is **not** a substitute for 08.02 and does **not** implement schema.
 
 `08.04` is **PSR-P0-CORE**. Status = **ACCEPTED DESIGN / NOT IMPLEMENTED**. Canonical on `main` after this reviewed merge. It does **not** implement InventoryMovement.
+
+`08.05` is **PSR-P1 InventoryMovement schema contract**. Status = **ACCEPTED DESIGN / NOT IMPLEMENTED**. Independent Review #1 = **PASS WITH NON-BLOCKING FINDINGS** (P0=0, P1=0). Canonical on `main` after this reviewed merge. It does **not** implement Prisma/migration.
 
 ---
 
@@ -259,7 +263,15 @@ Artifacts: `audit/08.03-psr-p0-correction-history-contract.md` (correction histo
 
 Correction Center **not** implemented. Cancellation **DEFERRED / NOT IMPLEMENTED**.
 
-NEXT after reviewed merge of `08.04`: PSR-P1 InventoryMovement schema in **SHADOW**. PSR-P1 is still **NOT STARTED**. Not dual-write, not authoritative, not deploy, not paper removal, not `production_cost_flow` activation, not Correction Center. AUDIT 2 not started.
+NEXT after reviewed merge of `08.05`: empty InventoryMovement Prisma/migration in **SHADOW**, only after a separate implementation prompt. Prisma/migration **NOT STARTED**. Not dual-write, not authoritative, not deploy, not paper removal, not `production_cost_flow` activation, not Correction Center. AUDIT 2 not started.
+
+### PSR-P1 — INVENTORY MOVEMENT SCHEMA CONTRACT
+
+Status: **ACCEPTED DESIGN / NOT IMPLEMENTED**. Independent Review #1 = **PASS WITH NON-BLOCKING FINDINGS** (P0=0, P1=0). Prisma/migration **NOT STARTED**.
+
+Artifact: `audit/08.05-psr-p1-inventory-movement-schema-contract.md`. Canonical design after reviewed merge; **not** runtime implementation. Implementation is **not** authorized by the Independent Review cycle.
+
+Empty SHADOW table only after a separate implementation prompt. Not dual-write, not OPENING_BALANCE, not AUTHORITATIVE rows, not projection change, not Correction Center, not deploy.
 
 ### INC-001 — TORCOVKA whole-package production incident
 
