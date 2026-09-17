@@ -3,7 +3,7 @@
 import { Fragment, useMemo, useState, useTransition } from "react";
 import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { DateFilter, getDefaultDateFilterValue, isDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
+import { DateFilter, getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
 import {
   type ProductionEntryRow,
 } from "@/mocks/production-fixtures";
@@ -18,7 +18,9 @@ import {
   filterProductionTableRows,
   formatChangeLogWhen,
   formatProductionQuantity,
+  getDefaultProductionCreatedAtFilter,
   getDefaultProductionTableFilters,
+  isProductionCreatedAtFilterDefault,
   isProductionExtraFiltersDefault,
   OPERATION_TYPE_LABEL,
   OPERATION_TYPE_UNIT,
@@ -281,7 +283,9 @@ interface DetailEditRow {
 
 export function ProductionView({ initialEntries }: { initialEntries: ProductionEntryRow[] }) {
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
-  const [createdAtFilter, setCreatedAtFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
+  const [createdAtFilter, setCreatedAtFilter] = useState<DateFilterValue>(
+    getDefaultProductionCreatedAtFilter,
+  );
   const [employeeFilter, setEmployeeFilter] = useState<string>(PRODUCTION_FILTER_ALL);
   const [operationFilter, setOperationFilter] =
     useState<ProductionOperationFilter>(PRODUCTION_FILTER_ALL);
@@ -325,7 +329,7 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
               { header: "Внёс", key: "employee", width: 28 },
               { header: "Операция", key: "operation", width: 16 },
               { header: "Партия", key: "batch", width: 24 },
-              { header: "Количество", key: "quantityLabel", width: 22 },
+              { header: "Количество", key: "quantity", numFmt: XLSX_FMT.int },
               { header: "Сумма", key: "amount", numFmt: XLSX_FMT.money },
               { header: "Статус", key: "status", width: 16 },
             ],
@@ -335,7 +339,7 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
               employee: r.employeeName,
               operation: OPERATION_TYPE_LABEL[r.type],
               batch: r.batchName ?? "",
-              quantityLabel: formatProductionQuantity(r),
+              quantity: r.quantity,
               amount: r.amount,
               status: r.isPaid ? "Выплачено" : "Не выплачено",
             })),
@@ -450,11 +454,11 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
         }
         extraFiltersDirty={
           !isProductionExtraFiltersDefault(extraFilters) ||
-          !isDefaultDateFilterValue(createdAtFilter)
+          !isProductionCreatedAtFilterDefault(createdAtFilter)
         }
         onResetExtraFilters={() => {
           const defaults = getDefaultProductionTableFilters();
-          setCreatedAtFilter(getDefaultDateFilterValue());
+          setCreatedAtFilter(getDefaultProductionCreatedAtFilter());
           setEmployeeFilter(defaults.employeeId);
           setOperationFilter(defaults.operation);
           setPaymentFilter(defaults.payment);

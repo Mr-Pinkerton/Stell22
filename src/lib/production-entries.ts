@@ -1,4 +1,5 @@
 import type { DateFilterValue } from "@/components/date-filter";
+import { getDefaultDateFilterValue, isDefaultDateFilterValue } from "@/components/date-filter";
 import { matchesDateFilter } from "@/lib/match-date-filter";
 import type { ProductionEntryRow } from "@/mocks/production-fixtures";
 import type { OperationType } from "@/types/domain";
@@ -35,6 +36,15 @@ export function getDefaultProductionTableFilters(): ProductionTableFilters {
     operation: PRODUCTION_FILTER_ALL,
     payment: PRODUCTION_FILTER_ALL,
   };
+}
+
+/** «Дата внесения» по умолчанию — За всё время, не текущий месяц. */
+export function getDefaultProductionCreatedAtFilter(): DateFilterValue {
+  return { ...getDefaultDateFilterValue(), allTime: true };
+}
+
+export function isProductionCreatedAtFilterDefault(filter: DateFilterValue): boolean {
+  return isDefaultDateFilterValue(filter, getDefaultProductionCreatedAtFilter());
 }
 
 export function isProductionExtraFiltersDefault(input: ProductionTableFilters): boolean {

@@ -6,7 +6,9 @@ import {
   filterProductionEntriesByCreatedAt,
   filterProductionTableRows,
   formatProductionQuantity,
+  getDefaultProductionCreatedAtFilter,
   getDefaultProductionTableFilters,
+  isProductionCreatedAtFilterDefault,
   isProductionExtraFiltersDefault,
   productionEmployeeOptions,
   sortProductionEntries,
@@ -280,6 +282,44 @@ describe("filterProductionEntriesByCreatedAt", () => {
     expect(filterProductionEntriesByCreatedAt(byWork, june).map((r) => r.id)).toEqual([
       "june-afternoon",
     ]);
+  });
+});
+
+describe("getDefaultProductionCreatedAtFilter / reset", () => {
+  it("по умолчанию и после reset — За всё время, не текущий месяц", () => {
+    const defaults = getDefaultProductionCreatedAtFilter();
+    expect(defaults.allTime).toBe(true);
+    expect(isProductionCreatedAtFilterDefault(defaults)).toBe(true);
+    expect(
+      isProductionCreatedAtFilterDefault({
+        month: createLocalDate(2026, 8, 1),
+        rangeStart: null,
+        rangeEnd: null,
+        allTime: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("default allTime не отрезает workDate-период по месяцу внесения", () => {
+    const rows = [
+      row({
+        id: "june-work-sept-entry",
+        workDate: "2026-06-15",
+        createdAt: "2026-09-09T13:07:00.000Z",
+      }),
+    ];
+    const juneWork = filterProductionEntries(rows, {
+      allTime: false,
+      month: createLocalDate(2026, 5, 1),
+      rangeStart: null,
+      rangeEnd: null,
+    });
+    expect(juneWork.map((r) => r.id)).toEqual(["june-work-sept-entry"]);
+    expect(
+      filterProductionEntriesByCreatedAt(juneWork, getDefaultProductionCreatedAtFilter()).map(
+        (r) => r.id,
+      ),
+    ).toEqual(["june-work-sept-entry"]);
   });
 });
 
