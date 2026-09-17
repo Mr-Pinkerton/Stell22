@@ -52,7 +52,7 @@ Last verified production application SHA:
 
 Evidence: GitHub Production Deploy run `35204366279` SUCCESS (2026-09-17, `workflow_dispatch`; `headSha` = `0686d0036da52cc32aaff531c91f1dd2ded899ec`).
 
-A later documentation merge of PSR-P0-CORR (`audit/08.03`) will advance GitHub `main`. The production **application** remains `0686d0036da52cc32aaff531c91f1dd2ded899ec` until a **separate** production deploy. This contract’s application-code base remains that SHA.
+A later documentation merge of PSR-P0-CORR (`audit/08.03`) advanced GitHub `main` to `bd82aa0e0f4785cee316d282ef55eb593aadca3b`. The production **application** remains `0686d0036da52cc32aaff531c91f1dd2ded899ec` until a **separate** production deploy. This cycle’s application-code base remains that SHA. A later documentation merge of PSR-P0-CORE (`audit/08.04`) will advance GitHub `main` again and will **not** deploy application code.
 
 That deploy includes:
 
@@ -88,7 +88,7 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: PSR-P0 PARTIAL / NOT COMPLETE` (correction-history contract recorded as ACCEPTED DESIGN / NOT IMPLEMENTED; remaining PRE-SCHEMA questions open; **no** schema/code implementation started)
+`ACTIVE MODE: PSR-P0 COMPLETE / ACCEPTED as an architecture/design contract only` (`audit/08.03` + `audit/08.04`; **not** runtime; **no** schema/code implementation started)
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
@@ -104,11 +104,13 @@ Independent Review #1 = REQUEST CHANGES (R1…R6 **CLOSED / PASS**). Independent
 
 PSR-P0-CORR (`audit/08.03-psr-p0-correction-history-contract.md`): **ACCEPTED DESIGN / NOT IMPLEMENTED**. Target = `ProductionOperationMutation` (CommandExecution not used for this contour). Schema **not** implemented. Correction Center **not** implemented. Cancellation **DEFERRED / NOT IMPLEMENTED**.
 
-`PSR-Q-001` = **OPEN / PARTIALLY RESOLVED**. Production-correction slice = **DECIDED / ACCEPTED**.
+PSR-P0-CORE = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.04`; canonical through the reviewed docs merge). Closes remaining PRE-SCHEMA questions. Canonical design; **not** runtime implementation.
 
-`PSR-DESIGN-001` = **OPEN / PARTIALLY RESOLVED**. Production-correction slice = **ACCEPTED**.
+`PSR-Q-001` / `PSR-Q-002` / `PSR-Q-005` / `PSR-Q-007` / `PSR-Q-008` = **CLOSED / ACCEPTED**.
 
-NEXT: remaining PSR-P0 PRE-SCHEMA questions (`PSR-Q-001` remainder, `Q2`, `Q5`, `Q7`, `Q8`). PSR-P1 InventoryMovement **NOT STARTED / BLOCKED** until Q1, Q2, Q5, Q7, Q8 are fully closed and accepted. **Not** Correction Center implementation in this cycle.
+`PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
+
+NEXT after reviewed merge of `08.04`: PSR-P1 InventoryMovement schema in **SHADOW**. PSR-P1 is still **NOT STARTED**. Does **not** mean dual-write, authoritative ledger, production deploy, paper removal, `production_cost_flow` activation, or Correction Center. `PSR-Q-003` / `Q4` / `Q6` remain later-timing.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -282,21 +284,23 @@ Application/main BASE at ARCH-2 acceptance: `71a01b40008cf6da7cbc843b3b0dbaa31cf
 
 Forward-looking architecture so Stell22 can become the only warehouse/production operational source of truth. PSR namespace. **Not** a reopen of AUDIT 1. Architecture contract accepted; **not** implementation complete.
 
-Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`: **DECIDED / ACCEPTED** 2026-09-17 in `audit/08.03` (`ProductionOperationMutation`). Global `PSR-Q-001` and `PSR-DESIGN-001` remain **OPEN / PARTIALLY RESOLVED**. PSR-P0 overall = **PARTIAL / NOT COMPLETE**. PSR-P1 InventoryMovement **NOT STARTED / BLOCKED** until Q1, Q2, Q5, Q7, Q8 are fully closed.
+Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`: **DECIDED / ACCEPTED** 2026-09-17 in `audit/08.03` (`ProductionOperationMutation`). Remainder + `PSR-Q-002` / `Q5` / `Q7` / `Q8` / `PSR-DESIGN-002`: **CLOSED / ACCEPTED** 2026-09-17 in `audit/08.04`. PSR-P0 = **COMPLETE / ACCEPTED** as architecture/design contract only. PSR-P1 InventoryMovement = **NEXT after reviewed merge of `08.04`** (schema in SHADOW).
 
 ## 13. Current next step
 
-`NEXT = remaining PSR-P0 PRE-SCHEMA questions (Q1 remainder, Q2, Q5, Q7, Q8).`
+`NEXT = reviewed merge of audit/08.04, then PSR-P1 InventoryMovement schema in SHADOW.`
 
-PSR-P0-CORR recorded the production-correction slice (`audit/08.03`, ACCEPTED DESIGN / NOT IMPLEMENTED). PSR-P0 as a whole is **PARTIAL / NOT COMPLETE**. PSR-P1 (`InventoryMovement` schema/migration) remains **NOT STARTED / BLOCKED** until Q1, Q2, Q5, Q7, Q8 are fully closed and accepted.
+PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime.
 
-Do **not** implement InventoryMovement / dual-write / cutover in this cycle.
+PSR-P1 does **not** mean dual-write, authoritative ledger, production deploy, paper removal, `production_cost_flow` activation, or Correction Center.
+
+Do **not** implement InventoryMovement / dual-write / cutover until that package is separately accepted after `08.04` merge.
 
 Do **not** implement `ProductionOperationMutation` schema or Correction Center in this documentation cycle.
 
 Do **not** start AUDIT 2. AUDIT 2 remains `NOT STARTED` / `NEXT AFTER INC-001`.
 
-INC-001 remains OPEN (containment deployed on `0686d00`; physical facts still required before any production-data correction). ARCH-2 / 08.03 do not close it. Cancellation remains deferred.
+INC-001 remains OPEN (containment deployed on `0686d00`; physical facts still required before any production-data correction). ARCH-2 / 08.03 / 08.04 do not close it. Cancellation remains deferred.
 
 When AUDIT 2 starts: audit-only; do not auto-patch findings; `production_cost_flow` stays inactive; activation stays `BLOCKED`.
 
@@ -459,7 +463,7 @@ After every significant delivery action record:
 | INC-001 | OPEN |
 | Production deploy | **NO** |
 | Canonicality | `audit/08.02` on `main` is the canonical ARCH-2 architecture after this reviewed merge |
-| Next | **PSR-P0** (not started in that Review #3 cycle). **Historical journal.** Current next: remaining Q1 remainder, Q2, Q5, Q7, Q8. |
+| Next | **PSR-P0** (not started in that Review #3 cycle). **Historical journal.** Later current next: journal 25 / `audit/08.04`. |
 
 ## 23. Journal — origin/main `0686d00` production deploy (Traceability v1)
 
@@ -498,3 +502,24 @@ After every significant delivery action record:
 | PSR-P1 | **NOT STARTED / BLOCKED** until Q1, Q2, Q5, Q7, Q8 fully closed |
 | Deploy | **NO** |
 | Next | Remaining PSR-P0 PRE-SCHEMA questions. Not InventoryMovement schema. |
+
+## 25. Journal — PSR-P0-CORE remaining PRE-SCHEMA contracts
+
+| | |
+| --- | --- |
+| Date | 2026-09-17 |
+| Stage | PSR-P0-CORE / remaining PRE-SCHEMA contracts |
+| BASE GitHub `main` | `bd82aa0e0f4785cee316d282ef55eb593aadca3b` |
+| Application / production | `0686d0036da52cc32aaff531c91f1dd2ded899ec` |
+| Result | `audit/08.04-psr-p0-core-contract.md` created. Q1 remainder, Q2, Q5, Q7, Q8 and DESIGN-001/002 **CLOSED / ACCEPTED**. **ACCEPTED DESIGN / NOT IMPLEMENTED.** |
+| PSR-P0 | **COMPLETE / ACCEPTED** as architecture/design contract only |
+| PSR-P1 | **NOT STARTED**. **NEXT after reviewed merge** = InventoryMovement schema in SHADOW |
+| `PSR-Q-003` / `Q4` / `Q6` | unchanged later timing |
+| Application / schema | unchanged |
+| `production_cost_flow` | unchanged / INACTIVE |
+| AUDIT 1 | COMPLETE / REVIEWED |
+| AUDIT 2 | **NOT STARTED** |
+| INC-001 | OPEN |
+| Correction Center / Cancellation | **not implemented** / cancellation **DEFERRED** |
+| Deploy | **NO** |
+| Next | Reviewed merge of `08.04`. Then PSR-P1 InventoryMovement schema in SHADOW. Not dual-write. Not deploy. |
