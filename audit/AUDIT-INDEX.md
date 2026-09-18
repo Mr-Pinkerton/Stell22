@@ -302,3 +302,14 @@ Finding: `INC-001-F1` (P1) — after TORCOVKA delete, no application path to res
 Status: `NOT STARTED` (`NEXT AFTER INC-001`)
 
 ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. Do not open as a file until INC-001 production correction is decided. High-level scope: CashFlow, Account/balance, Statement/import, Deal allocations, transfers, Payment/payroll money, corrections/voids, transaction boundaries, idempotency, confirmed/unconfirmed money, reconciliation, Sale vs money where relevant.
+
+---
+### 08.11 — PSR-P2 SHADOW writer contract
+
+- File: `audit/08.11-psr-p2-shadow-writer-contract.md`
+- Scope: architecture/contract only; exhaustive physical-writer matrix; common SHADOW writer/gateway contract; gate/lock ordering; effectKey v1; actor/time/snapshot/retry/diagnostic/CI contracts; phased implementation order.
+- Starting main: `2eb4f6a6d769900481a5c3fd33a76240789d953d`.
+- Status on this branch: **CONTRACT CANDIDATE / INDEPENDENT REVIEW REQUIRED**.
+- Runtime dual-write: **NOT STARTED**.
+- SHADOW activation: **NO**.
+- Production deploy/mutation: **NO / NO**.
