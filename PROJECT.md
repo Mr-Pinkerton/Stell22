@@ -775,3 +775,16 @@ This journal does **not** rewrite §34. §34 remains the historical R-06 impleme
 | AUDIT 2 | **NOT STARTED** |
 | INC-001 | OPEN |
 | Next | **PSR-P2 POST-R06 DUAL-WRITE READINESS / INVENTORY WRITER CONTRACT DECISION**. Not InventoryMovement writer implementation. Not SHADOW activation. Not dual-write activation. Not Correction Center. Not AUDIT 2. |
+
+---
+## PSR-P2 shadow-writer contract freeze — 2026-09-18
+
+Contract candidate: `audit/08.11-psr-p2-shadow-writer-contract.md` on `docs/psr-p2-shadow-writer-contract`.
+
+Starting main: `2eb4f6a6d769900481a5c3fd33a76240789d953d`.
+
+The contract records all verified physical mutation contours and explicitly keeps blocked contours blocked. In particular: Inventory requires one global BlankStock lock set/order; Supply requires the null-product restore guard and a global Supply/ProductStock lock order; R-05 requires explicit READ COMMITTED; SimplePurchase and general production edit/delete paths require retained retry-stable mutation identity; positive-stock Batch deletion cannot bypass the future ledger.
+
+No runtime InventoryMovement writer is introduced by this package. No SHADOW activation. No production deploy or mutation.
+
+NEXT after contract acceptance: **P2-GUARD/CI** (common gate-first gateway/static guards/real PostgreSQL CI), then a separate first-writer package only after that contour's blockers are closed.
