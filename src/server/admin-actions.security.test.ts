@@ -73,7 +73,13 @@ describe("representative admin action boundaries", () => {
     ["purchases", () => createBatch({} as never)],
     ["production", () => deleteProductionOperation("operation-1")],
     ["production-rails-correct", () =>
-      correctTorcovkaRailsTaken({ operationId: "operation-1", newRailsTaken: 1, reason: "test" }),
+      correctTorcovkaRailsTaken({
+        operationId: "operation-1",
+        expectedOldRailsTaken: 2,
+        newRailsTaken: 1,
+        reason: "test",
+        requestId: "req-1",
+      }),
     ],
     ["warehouse", () => conductInventory("inventory-1")],
     ["warehouse-delete-draft", () => deleteInventoryDraft("inventory-1")],

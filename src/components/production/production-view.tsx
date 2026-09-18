@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState, useTransition } from "react";
+import { Fragment, useMemo, useRef, useState, useTransition } from "react";
 import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { DateFilter, getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
@@ -33,6 +33,11 @@ import {
 import { formatIsoDate, formatIsoDateTime, formatLength, formatMoney } from "@/lib/format";
 import { exportXlsx } from "@/lib/export-xlsx";
 import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "@/lib/torcovka-delete-policy";
+import {
+  correctionCommandKey,
+  retainOrMintCorrectionRequestId,
+  shouldRotateCorrectionRequestId,
+} from "@/lib/production-correction-request";
 import { XLSX_FMT } from "@/lib/xlsx-types";
 import { scrollTableYClass } from "@/lib/scroll-classes";
 import { cn } from "@/lib/utils";
@@ -296,6 +301,8 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
   const [correctRow, setCorrectRow] = useState<ProductionEntryRow | null>(null);
   const [newRailsTakenRaw, setNewRailsTakenRaw] = useState("");
   const [correctReason, setCorrectReason] = useState("");
+  const correctionRequestIdRef = useRef<string | null>(null);
+  const correctionBoundKeyRef = useRef<string | null>(null);
   const [, startTransition] = useTransition();
   const [exporting, startExport] = useTransition();
 
@@ -389,7 +396,13 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
     });
   };
 
+  const clearCorrectionRequest = () => {
+    correctionRequestIdRef.current = null;
+    correctionBoundKeyRef.current = null;
+  };
+
   const openCorrect = (row: ProductionEntryRow) => {
+    clearCorrectionRequest();
     setCorrectRow(row);
     setNewRailsTakenRaw("");
     setCorrectReason("");
@@ -406,18 +419,45 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
       toast.error("Укажите причину исправления");
       return;
     }
+    const expectedOldRailsTaken = correctRow.railsTaken;
+    if (expectedOldRailsTaken == null) {
+      toast.error("У операции не указаны пакет и количество реек");
+      return;
+    }
+    const minted = retainOrMintCorrectionRequestId({
+      requestId: correctionRequestIdRef.current,
+      boundKey: correctionBoundKeyRef.current,
+      commandKey: correctionCommandKey({
+        expectedOldRailsTaken,
+        newRailsTaken: next,
+        reason: correctReason,
+      }),
+    });
+    correctionRequestIdRef.current = minted.requestId;
+    correctionBoundKeyRef.current = minted.boundKey;
     startTransition(async () => {
       try {
         const updated = await correctTorcovkaRailsTaken({
           operationId: correctRow.id,
+          expectedOldRailsTaken,
           newRailsTaken: next,
           reason: correctReason,
+          requestId: minted.requestId,
         });
-        setEntries((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
+        setEntries((prev) => prev.map((row) => (row.id === updated.entry.id ? updated.entry : row)));
+        clearCorrectionRequest();
         setCorrectRow(null);
-        toast.success("Количество взятых реек исправлено");
+        toast.success(
+          updated.replayed
+            ? "Исправление уже применено (повтор той же команды)"
+            : "Количество взятых реек исправлено",
+        );
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Ошибка исправления");
+        const message = err instanceof Error ? err.message : "Ошибка исправления";
+        if (shouldRotateCorrectionRequestId(message)) {
+          clearCorrectionRequest();
+        }
+        toast.error(message);
       }
     });
   };
@@ -522,7 +562,10 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
       <FormDialog
         open={correctRow != null}
         onOpenChange={(open) => {
-          if (!open) setCorrectRow(null);
+          if (!open) {
+            clearCorrectionRequest();
+            setCorrectRow(null);
+          }
         }}
         title="Исправить количество фактически взятых реек"
         maxWidth="sm:max-w-lg"

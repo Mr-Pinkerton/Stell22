@@ -66,7 +66,7 @@ That deploy includes:
 - UI filter work;
 - TORCOVKA BlankStock length canonicalization and railsTaken correction hardening (PR #1).
 
-PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY**. No runtime `InventoryMovement` writers. `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Production Deploy `35314440036`). PSR-P2 dual-write **NOT STARTED**.
+PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY**. No runtime `InventoryMovement` writers. `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Production Deploy `35314440036`). R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / NOT DEPLOYED** (`audit/08.09`). PSR-P2 dual-write **NOT STARTED**.
 
 Prior documented production application SHA:
 
@@ -97,7 +97,7 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: PSR-P2 R-05 CORRECTION IDENTITY — RECONNAISSANCE / CONTRACT DECISION`. R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; production `c14a586`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. PSR-P2 dual-write **NOT STARTED**. R-05 / R-06 remain OPEN.
+`ACTIVE MODE: PSR-P2 R-05 PRODUCTION PREFLIGHT / DEPLOYMENT DECISION`. R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / NOT DEPLOYED** (`audit/08.09`). R-04 remains **DEPLOYED** (`audit/08.08`; production `c14a586`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. PSR-P2 dual-write **NOT STARTED**. R-06 remains OPEN.
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
@@ -121,7 +121,7 @@ PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT = **PSR-P2 R-05 CORRECTION IDENTITY — RECONNAISSANCE / CONTRACT DECISION**. This NEXT is **not** SUPPLY SHADOW dual-write, **not** an InventoryMovement writer, **not** R-06, **not** Correction Center implementation, and **not** AUDIT 2. R-04 is no longer an OPEN prerequisite. R-05/R-06 remain OPEN before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center.
+NEXT = **PSR-P2 R-05 PRODUCTION PREFLIGHT / DEPLOYMENT DECISION**. This NEXT is **not** SUPPLY SHADOW dual-write, **not** an InventoryMovement writer, **not** R-06, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. R-05 implementation is **VERIFIED / NOT DEPLOYED** (`audit/08.09`). R-06 remains OPEN before INVENTORY dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -299,7 +299,7 @@ Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`
 
 ## 13. Current next step
 
-`NEXT = PSR-P2 R-05 CORRECTION IDENTITY — RECONNAISSANCE / CONTRACT DECISION.`
+`NEXT = PSR-P2 R-05 PRODUCTION PREFLIGHT / DEPLOYMENT DECISION.`
 
 PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime.
 
@@ -309,15 +309,17 @@ PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`08.06`). 
 
 R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; production `c14a586`; Production Deploy `35314440036`).
 
+R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / NOT DEPLOYED** (`audit/08.09`). `ProductionOperationCorrection` is the retained identity for `correctTorcovkaRailsTaken`. Full `ProductionOperationMutation` remains later.
+
 Does **not** mean dual-write, SHADOW posting, authoritative ledger, `OPENING_BALANCE` data, paper removal, `production_cost_flow` activation, or Correction Center.
 
-This NEXT is **not** SUPPLY SHADOW dual-write, **not** an InventoryMovement writer, **not** R-06, **not** Correction Center implementation, and **not** AUDIT 2. R-04 is no longer an OPEN prerequisite. R-05 / R-06 remain OPEN before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
+This NEXT is **not** SUPPLY SHADOW dual-write, **not** an InventoryMovement writer, **not** R-06, **not** Correction Center implementation, and **not** AUDIT 2. Separate production preflight and owner authorization are required before any production deploy of this package. R-06 remains OPEN before INVENTORY dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
 
-Do **not** implement `ProductionOperationMutation` schema or Correction Center in this documentation cycle.
+Do **not** implement the full `ProductionOperationMutation` schema or Correction Center in this package.
 
 Do **not** start AUDIT 2. AUDIT 2 remains `NOT STARTED` / `NEXT AFTER INC-001`.
 
-INC-001 remains OPEN (containment first deployed at `3608b36` and still in the running tree; physical facts still required before any production-data correction). ARCH-2 / 08.03 / 08.04 / 08.06 / 08.07 / 08.08 do not close it. Cancellation remains deferred.
+INC-001 remains OPEN (containment first deployed at `3608b36` and still in the running tree; physical facts still required before any production-data correction). ARCH-2 / 08.03 / 08.04 / 08.06 / 08.07 / 08.08 / 08.09 do not close it. Cancellation remains deferred.
 
 When AUDIT 2 starts: audit-only; do not auto-patch findings; `production_cost_flow` stays inactive; activation stays `BLOCKED`.
 
@@ -673,3 +675,22 @@ After every significant delivery action record:
 | AUDIT 2 | **NOT STARTED** |
 | INC-001 | OPEN |
 | Next | **PSR-P2 R-05 CORRECTION IDENTITY — RECONNAISSANCE / CONTRACT DECISION**. Not SUPPLY SHADOW dual-write. Not an InventoryMovement writer. Not R-06. Not Correction Center. Not AUDIT 2. |
+
+## 32. Journal — PSR-P2 R-05 correction identity
+
+| | |
+| --- | --- |
+| Date | 2026-09-18 |
+| Stage | PSR-P2 R-05 TORCOVKA railsTaken correction identity |
+| BASE GitHub `main` | `30972dd76a6e84e03bd40d5b7551f10ac89ed4f5` |
+| Production application | `c14a58641d57dfabfce223b2c213db9c86167ca4` (**unchanged** this cycle) |
+| Result | `audit/08.09-psr-p2-r05-correction-identity.md`. Architecture **CLOSED**. Implementation **VERIFIED / NOT DEPLOYED**. Dual-write **NOT STARTED**. No InventoryMovement writer. Not full `ProductionOperationMutation`. |
+| Model | `ProductionOperationCorrection` (scalar IDs, no FK cascade). `requestId` UNIQUE. expected-old CAS. Idempotent replay. |
+| Migration | `20260918120000_psr_p2_r05_production_operation_correction` (empty table, no backfill) |
+| Deploy | **NO** |
+| Production queried | **NO** |
+| `inventory_movement_shadow_write` | ABSENT / inactive |
+| R-06 | remains OPEN |
+| AUDIT 2 | **NOT STARTED** |
+| INC-001 | OPEN |
+| Next | **R-05 PRODUCTION PREFLIGHT / DEPLOYMENT DECISION**. Not R-06. Not dual-write. Not Correction Center. Always verify current GitHub `main` HEAD. |

@@ -66,6 +66,23 @@ export function createIntegrityClients(): { prismaA: PrismaClient; prismaB: Pris
   };
 }
 
+/** ChangeLog.userId FK: correction path now records requireAdmin().id. */
+export const INTEGRITY_ADMIN_USER_ID = "integrity-admin";
+
+export async function ensureIntegrityAdminUser(db: PrismaClient): Promise<void> {
+  await db.user.upsert({
+    where: { id: INTEGRITY_ADMIN_USER_ID },
+    create: {
+      id: INTEGRITY_ADMIN_USER_ID,
+      email: "admin@test.local",
+      passwordHash: "integrity",
+      name: "Admin",
+      role: "ADMIN",
+    },
+    update: {},
+  });
+}
+
 export async function resetIntegrityFinance(db: PrismaClient): Promise<void> {
   await db.$executeRawUnsafe(`
     TRUNCATE TABLE
@@ -103,6 +120,7 @@ export async function resetIntegrityCostFreeze(db: PrismaClient): Promise<void> 
       "OperationNomenclatureLine",
       "OperationDetailLine",
       "TorcovkaApproval",
+      "ProductionOperationCorrection",
       "ProductionOperation",
       "BlankStock",
       "BatchCost",
@@ -121,6 +139,7 @@ export async function resetIntegrityCostFreeze(db: PrismaClient): Promise<void> 
       "Setting"
     RESTART IDENTITY CASCADE
   `);
+  await ensureIntegrityAdminUser(db);
 }
 
 /** Inventory integrity fixtures: documents, stock, production, catalog. */
@@ -134,6 +153,7 @@ export async function resetIntegrityInventory(db: PrismaClient): Promise<void> {
       "OperationNomenclatureLine",
       "OperationDetailLine",
       "TorcovkaApproval",
+      "ProductionOperationCorrection",
       "ProductionOperation",
       "ProductStock",
       "DetailStock",
@@ -163,4 +183,5 @@ export async function resetIntegrityInventory(db: PrismaClient): Promise<void> {
       "Setting"
     RESTART IDENTITY CASCADE
   `);
+  await ensureIntegrityAdminUser(db);
 }
