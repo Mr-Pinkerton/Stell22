@@ -527,4 +527,80 @@ describe.skipIf(!enabled)("PSR-P2 R-05 ProductionOperationCorrection", () => {
       `,
     ).rejects.toSatisfy(isCheckViolation);
   });
+
+  function assertDeterministicReuse(err: unknown) {
+    const text = err instanceof Error ? err.message : String(err);
+    expect(text).toContain("REQUEST_ID_REUSE");
+    expect(text).not.toMatch(/P2002/i);
+    expect(text).not.toMatch(/transaction is aborted/i);
+    expect(text).not.toMatch(/current transaction is aborted/i);
+    expect(text).not.toMatch(/Unique constraint failed/i);
+  }
+
+  async function expectCrossOpSameRequestId(opts: {
+    suffix: string;
+    reasonA: string;
+    reasonB: string;
+  }) {
+    const a = await seedOp(`${opts.suffix}-a`);
+    const b = await seedOp(`${opts.suffix}-b`);
+    const requestId = `r05-cross-${opts.suffix}`;
+    const settled = await withTimeout(
+      Promise.allSettled([
+        correctTorcovkaRailsTaken({
+          operationId: a.op.id,
+          expectedOldRailsTaken: 10,
+          newRailsTaken: 7,
+          reason: opts.reasonA,
+          requestId,
+        }),
+        correctTorcovkaRailsTaken({
+          operationId: b.op.id,
+          expectedOldRailsTaken: 10,
+          newRailsTaken: 7,
+          reason: opts.reasonB,
+          requestId,
+        }),
+      ]),
+      `cross-op ${opts.suffix}`,
+    );
+    const ok = settled.filter((s) => s.status === "fulfilled") as PromiseFulfilledResult<
+      Awaited<ReturnType<typeof correctTorcovkaRailsTaken>>
+    >[];
+    const failed = settled.filter((s) => s.status === "rejected") as PromiseRejectedResult[];
+    expect(ok).toHaveLength(1);
+    expect(failed).toHaveLength(1);
+    assertDeterministicReuse(failed[0]!.reason);
+    expect(await prismaA.productionOperationCorrection.count({ where: { requestId } })).toBe(1);
+    const winnerOpId = ok[0]!.value.operationId;
+    const loser = winnerOpId === a.op.id ? b : a;
+    const winner = winnerOpId === a.op.id ? a : b;
+    const winnerOp = await prismaA.productionOperation.findUniqueOrThrow({ where: { id: winner.op.id } });
+    const loserOp = await prismaA.productionOperation.findUniqueOrThrow({ where: { id: loser.op.id } });
+    const winnerLot = await prismaA.railLot.findUniqueOrThrow({ where: { id: winner.lot.id } });
+    const loserLot = await prismaA.railLot.findUniqueOrThrow({ where: { id: loser.lot.id } });
+    expect(winnerOp.railsTaken).toBe(7);
+    expect(winnerLot.remainingQuantity).toBe(13);
+    expect(loserOp.railsTaken).toBe(10);
+    expect(loserLot.remainingQuantity).toBe(10);
+    expect(await prismaA.changeLog.count({ where: { entityId: winner.op.id } })).toBe(1);
+    expect(await prismaA.changeLog.count({ where: { entityId: loser.op.id } })).toBe(0);
+    expect(await prismaA.inventoryMovement.count()).toBe(0);
+  }
+
+  it("L: concurrent same requestId on different operations is REQUEST_ID_REUSE, not P2002", async () => {
+    await expectCrossOpSameRequestId({
+      suffix: `l-${Date.now()}`,
+      reasonA: "A",
+      reasonB: "B",
+    });
+  });
+
+  it("M: concurrent same requestId / same business values still reuse because operationId binds", async () => {
+    await expectCrossOpSameRequestId({
+      suffix: `m-${Date.now()}`,
+      reasonA: "same",
+      reasonB: "same",
+    });
+  });
 });

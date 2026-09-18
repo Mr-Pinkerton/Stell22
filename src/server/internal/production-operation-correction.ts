@@ -1,10 +1,40 @@
 /** PSR-P2 R-05: retained identity for `correctTorcovkaRailsTaken`. Not Correction Center. */
 
+import type { Prisma } from "@prisma/client";
+
 export const STALE_CORRECTION =
   "STALE_CORRECTION: текущее количество реек не совпадает с ожидаемым";
 
 export const REQUEST_ID_REUSE =
   "REQUEST_ID_REUSE: ключ попытки уже использован для другой команды";
+
+/**
+ * Dedicated two-int advisory namespace for R-05 requestId serialization.
+ * Distinct from R-10 InventoryMovement SHADOW `(8322, 1)`.
+ * key2 = hashtext(requestId); collisions only extra-serialize.
+ */
+export const R05_CORRECTION_REQUEST_LOCK_NAMESPACE = 8325;
+
+export const R05_CORRECTION_REQUEST_LOCK_TX_REQUIRED =
+  "R-05 correction request lock requires an open Prisma transaction client.";
+
+export async function acquireCorrectionRequestLock(
+  tx: Prisma.TransactionClient,
+  requestId: string,
+): Promise<void> {
+  if (typeof (tx as { $transaction?: unknown }).$transaction === "function") {
+    throw new Error(R05_CORRECTION_REQUEST_LOCK_TX_REQUIRED);
+  }
+  await tx.$queryRaw`
+    SELECT 1 AS acquired
+    FROM (
+      SELECT pg_advisory_xact_lock(
+        ${R05_CORRECTION_REQUEST_LOCK_NAMESPACE}::integer,
+        hashtext(${requestId})
+      )
+    ) AS r05_correction_request_lock
+  `;
+}
 
 export interface ProductionOperationCorrectionPayload {
   operationId: string;
