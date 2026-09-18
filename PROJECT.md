@@ -105,7 +105,7 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: PSR-P2 POST-R06 DUAL-WRITE READINESS / INVENTORY WRITER CONTRACT DECISION`. Canonical: `audit/08.10`. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; production `eb02b17`; Production Deploy `35337215903`). R-05 remains **DEPLOYED** (`audit/08.09`). R-04 remains **DEPLOYED** (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. PSR-P2 dual-write **NOT STARTED**. This mode is **not** SHADOW activation, **not** dual-write, **not** an InventoryMovement writer, **not** Correction Center, and **not** AUDIT 2. **NEXT = PSR-P2 POST-R06 DUAL-WRITE READINESS / INVENTORY WRITER CONTRACT DECISION**.
+`ACTIVE MODE: PSR-P2 SHADOW WRITER CONTRACT — INDEPENDENT REVIEW / ACCEPTANCE`. Canonical: `audit/08.10`. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; production `eb02b17`; Production Deploy `35337215903`). R-05 remains **DEPLOYED** (`audit/08.09`). R-04 remains **DEPLOYED** (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. PSR-P2 dual-write **NOT STARTED**. This mode is **not** SHADOW activation, **not** dual-write, **not** an InventoryMovement writer, **not** Correction Center, and **not** AUDIT 2. **NEXT = PSR-P2 SHADOW WRITER CONTRACT — INDEPENDENT REVIEW / ACCEPTANCE**.
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
@@ -129,7 +129,7 @@ PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT = **PSR-P2 POST-R06 DUAL-WRITE READINESS / INVENTORY WRITER CONTRACT DECISION**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). This NEXT is **not** InventoryMovement writer implementation, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. R-05 is **DEPLOYED** (`audit/08.09`). `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center. R-04 / R-05 / R-06 prerequisites are deployed; the INVENTORY writer contract still needs exact `effectKey` / writer transaction / gate / reconciliation frozen before implementation.
+NEXT = **PSR-P2 SHADOW WRITER CONTRACT — INDEPENDENT REVIEW / ACCEPTANCE**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). This NEXT is **not** InventoryMovement writer implementation, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. R-05 is **DEPLOYED** (`audit/08.09`). `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center. R-04 / R-05 / R-06 prerequisites are deployed; the SHADOW writer contract is frozen in `audit/08.11` on the contract branch and now requires independent adversarial review before merge. Dual-write remains NOT STARTED.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -307,7 +307,7 @@ Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`
 
 ## 13. Current next step
 
-`NEXT = PSR-P2 POST-R06 DUAL-WRITE READINESS / INVENTORY WRITER CONTRACT DECISION.`
+`NEXT = PSR-P2 SHADOW WRITER CONTRACT — INDEPENDENT REVIEW / ACCEPTANCE.`
 
 PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime.
 
@@ -774,7 +774,7 @@ This journal does **not** rewrite §34. §34 remains the historical R-06 impleme
 | R-04 | remains **DEPLOYED** |
 | AUDIT 2 | **NOT STARTED** |
 | INC-001 | OPEN |
-| Next | **PSR-P2 POST-R06 DUAL-WRITE READINESS / INVENTORY WRITER CONTRACT DECISION**. Not InventoryMovement writer implementation. Not SHADOW activation. Not dual-write activation. Not Correction Center. Not AUDIT 2. |
+| Next | **PSR-P2 SHADOW WRITER CONTRACT — INDEPENDENT REVIEW / ACCEPTANCE**. Not InventoryMovement writer implementation. Not SHADOW activation. Not dual-write activation. Not Correction Center. Not AUDIT 2. |
 
 ---
 ## PSR-P2 shadow-writer contract freeze — 2026-09-18
