@@ -467,6 +467,25 @@ model ProductionOperation {
   @@index([employeeId, workDate])
 }
 
+// PSR-P2 R-05: retained identity for correctTorcovkaRailsTaken.
+// Scalar IDs only — no Prisma relations / ON DELETE CASCADE.
+// Empty at cutover. Not ProductionOperationMutation. Not InventoryMovement.
+model ProductionOperationCorrection {
+  id                    String   @id @default(cuid())
+  requestId             String   @unique
+  operationId           String
+  adminUserId           String
+  railLotId             String
+  batchId               String
+  expectedOldRailsTaken Int
+  newRailsTaken         Int
+  deltaReturned         Int
+  reason                String
+  recordedAt            DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([operationId, recordedAt])
+}
+
 // One-time EXTREME TORCOVKA admin code (HMAC). UNIQUE(clientRequestId).
 // No FK to ProductionOperation: the Op does not exist until the code is consumed.
 model TorcovkaApproval {

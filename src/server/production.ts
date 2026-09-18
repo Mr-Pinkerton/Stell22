@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
@@ -37,7 +37,17 @@ import {
   type BlankSpec,
 } from "@/server/internal/inventory-integrity";
 import { operationEarning, operationRatesFromSnapshots } from "@/lib/payroll";
+import { requireClientRequestId } from "@/lib/request-id";
 import { assertTorcovkaGenericDeleteAllowed } from "@/lib/torcovka-delete-policy";
+import {
+  STALE_CORRECTION,
+  acquireCorrectionRequestLock,
+  assertCorrectionCommandIntegers,
+  assertCorrectionPayloadMatch,
+  canonicalCorrectionReason,
+  correctionDeltaReturned,
+  type CorrectTorcovkaRailsTakenResult,
+} from "@/server/internal/production-operation-correction";
 import { isOverRailLength } from "@/lib/torcovka";
 import { dayKey } from "@/lib/entries";
 import type {
@@ -596,24 +606,107 @@ export async function deleteProductionOperation(id: string): Promise<void> {
   revalidatePath("/reports");
 }
 
+export type { CorrectTorcovkaRailsTakenResult };
+
+function correctionResultFromRow(
+  row: {
+    id: string;
+    requestId: string;
+    operationId: string;
+    expectedOldRailsTaken: number;
+    newRailsTaken: number;
+    deltaReturned: number;
+    recordedAt: Date;
+  },
+  replayed: boolean,
+): CorrectTorcovkaRailsTakenResult {
+  return {
+    correctionId: row.id,
+    requestId: row.requestId,
+    operationId: row.operationId,
+    oldRailsTaken: row.expectedOldRailsTaken,
+    newRailsTaken: row.newRailsTaken,
+    deltaReturned: row.deltaReturned,
+    recordedAt: row.recordedAt,
+    replayed,
+  };
+}
+
 export async function correctTorcovkaRailsTaken(input: {
   operationId: string;
+  expectedOldRailsTaken: number;
   newRailsTaken: number;
   reason: string;
-}): Promise<ProductionEntryRow> {
-  await requireAdmin();
+  requestId: string;
+}): Promise<CorrectTorcovkaRailsTakenResult & { entry: ProductionEntryRow }> {
+  const admin = await requireAdmin();
   const { operationId } = input;
-  const newRailsTaken = input.newRailsTaken;
-  const reason = input.reason.trim();
+  const requestId = requireClientRequestId(input.requestId);
+  const reason = canonicalCorrectionReason(input.reason);
   if (!reason) throw new Error("Укажите причину исправления");
-  if (!Number.isInteger(newRailsTaken) || newRailsTaken <= 0) {
-    throw new Error("Количество реек должно быть целым и больше нуля");
-  }
+  assertCorrectionCommandIntegers({
+    expectedOldRailsTaken: input.expectedOldRailsTaken,
+    newRailsTaken: input.newRailsTaken,
+  });
+  const expectedOldRailsTaken = input.expectedOldRailsTaken;
+  const newRailsTaken = input.newRailsTaken;
+  const deltaReturned = correctionDeltaReturned(expectedOldRailsTaken, newRailsTaken);
+  const command = {
+    operationId,
+    adminUserId: admin.id,
+    expectedOldRailsTaken,
+    newRailsTaken,
+    reason,
+  };
 
   let enqueueBatchId: string | null = null;
+  const outcome: { value: CorrectTorcovkaRailsTakenResult | null } = { value: null };
 
   await prisma.$transaction(async (tx) => {
+    await acquireCorrectionRequestLock(tx, requestId);
+
+    const applyExisting = (existing: {
+      id: string;
+      requestId: string;
+      operationId: string;
+      adminUserId: string;
+      expectedOldRailsTaken: number;
+      newRailsTaken: number;
+      deltaReturned: number;
+      reason: string;
+      recordedAt: Date;
+    }) => {
+      assertCorrectionPayloadMatch(
+        {
+          operationId: existing.operationId,
+          adminUserId: existing.adminUserId,
+          expectedOldRailsTaken: existing.expectedOldRailsTaken,
+          newRailsTaken: existing.newRailsTaken,
+          reason: existing.reason,
+        },
+        command,
+      );
+      outcome.value = correctionResultFromRow(existing, true);
+    };
+
+    const existing = await tx.productionOperationCorrection.findUnique({
+      where: { requestId },
+    });
+    if (existing) {
+      applyExisting(existing);
+      return;
+    }
+
     await lockProductionOperations(tx, [operationId]);
+
+    const raced = await tx.productionOperationCorrection.findUnique({
+      where: { requestId },
+    });
+    if (raced) {
+      applyExisting(raced);
+      return;
+    }
+
     const op = await tx.productionOperation.findUnique({
       where: { id: operationId },
       include: { lines: true },
@@ -623,11 +716,25 @@ export async function correctTorcovkaRailsTaken(input: {
     if (!op.railLotId || !op.batchId || op.railsTaken == null) {
       throw new Error("У операции не указаны пакет и количество реек");
     }
-    const oldRailsTaken = op.railsTaken;
-    if (!(newRailsTaken < oldRailsTaken)) {
-      throw new Error("Можно только уменьшить количество фактически взятых реек");
-    }
     if (op.isPaid) throw new Error("Нельзя исправить — операция уже выплачена");
+    if (op.railsTaken !== expectedOldRailsTaken) {
+      throw new Error(STALE_CORRECTION);
+    }
+
+    const persistCorrection = async () =>
+      tx.productionOperationCorrection.create({
+        data: {
+          requestId,
+          operationId,
+          adminUserId: admin.id,
+          railLotId: op.railLotId!,
+          batchId: op.batchId!,
+          expectedOldRailsTaken,
+          newRailsTaken,
+          deltaReturned,
+          reason,
+        },
+      });
 
     const costFlowActive = await isCostFlowActive(tx);
     if (costFlowActive) {
@@ -648,9 +755,10 @@ export async function correctTorcovkaRailsTaken(input: {
         throw new Error("Нельзя исправить — себестоимость партии заморожена");
       }
       await assertTorcovkaBlankInventoryBoundary(tx, op.createdAt, requireTorcovkaBlankSpecs(op.lines));
+      const row = await persistCorrection();
       await correctActiveTorcovkaRailsTakenInTx({
         tx,
-        op: { ...op, railsTaken: oldRailsTaken },
+        op: { ...op, railsTaken: expectedOldRailsTaken },
         lot,
         newRailsTaken,
       });
@@ -664,12 +772,15 @@ export async function correctTorcovkaRailsTaken(input: {
         {
           entity: "ProductionOperation",
           entityId: operationId,
+          userId: admin.id,
           newValues: {
             field: "railsTaken",
-            oldRailsTaken,
+            oldRailsTaken: expectedOldRailsTaken,
             newRailsTaken,
-            deltaReturned: oldRailsTaken - newRailsTaken,
+            deltaReturned,
             reason,
+            correctionId: row.id,
+            requestId,
           },
         },
         tx,
@@ -688,12 +799,14 @@ export async function correctTorcovkaRailsTaken(input: {
           {
             entity: "Batch",
             entityId: op.batchId,
-            newValues: { reopened: true, viaOperationId: operationId },
+            userId: admin.id,
+            newValues: { reopened: true, viaOperationId: operationId, correctionId: row.id },
           },
           tx,
         );
       }
       enqueueBatchId = op.batchId;
+      outcome.value = correctionResultFromRow(row, false);
       return;
     }
 
@@ -719,10 +832,11 @@ export async function correctTorcovkaRailsTaken(input: {
 
     await assertTorcovkaBlankInventoryBoundary(tx, op.createdAt, requireTorcovkaBlankSpecs(op.lines));
 
-    const delta = oldRailsTaken - newRailsTaken;
+    const row = await persistCorrection();
+
     await tx.railLot.update({
       where: { id: op.railLotId },
-      data: { remainingQuantity: { increment: delta } },
+      data: { remainingQuantity: { increment: deltaReturned } },
     });
     await tx.productionOperation.update({
       where: { id: operationId },
@@ -732,12 +846,15 @@ export async function correctTorcovkaRailsTaken(input: {
       {
         entity: "ProductionOperation",
         entityId: operationId,
+        userId: admin.id,
         newValues: {
           field: "railsTaken",
-          oldRailsTaken,
+          oldRailsTaken: expectedOldRailsTaken,
           newRailsTaken,
-          deltaReturned: delta,
+          deltaReturned,
           reason,
+          correctionId: row.id,
+          requestId,
         },
       },
       tx,
@@ -757,20 +874,23 @@ export async function correctTorcovkaRailsTaken(input: {
         {
           entity: "Batch",
           entityId: op.batchId,
-          newValues: { reopened: true, viaOperationId: operationId },
+          userId: admin.id,
+          newValues: { reopened: true, viaOperationId: operationId, correctionId: row.id },
         },
         tx,
       );
     }
 
     enqueueBatchId = op.batchId;
+    outcome.value = correctionResultFromRow(row, false);
   });
 
+  if (!outcome.value) throw new Error("Исправление реек не записано");
   if (enqueueBatchId) await enqueueRecalcBatchCosts(enqueueBatchId);
 
   revalidatePath(PATH);
   revalidatePath("/reports");
   revalidatePath("/purchases");
   revalidatePath("/", "layout");
-  return reloadRow(operationId);
+  return { ...outcome.value, entry: await reloadRow(operationId) };
 }

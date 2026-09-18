@@ -4,7 +4,12 @@ vi.mock("next/headers", () => ({
   headers: vi.fn(async () => new Headers()),
 }));
 vi.mock("@/server/session", () => ({
-  requireAdmin: async () => {},
+  requireAdmin: async () => ({
+    id: "integrity-admin",
+    name: "Admin",
+    email: "admin@test.local",
+    role: "ADMIN",
+  }),
   requireTerminalEmployee: async () => {},
 }));
 vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} }));
@@ -611,6 +616,8 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
 
     await correctTorcovkaRailsTaken({
       operationId: op.id,
+      expectedOldRailsTaken: 2,
+      requestId: testReq("t534-corr"),
       newRailsTaken: 1,
       reason: "фактически взяли меньше",
     });

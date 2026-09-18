@@ -4,7 +4,12 @@ vi.mock("next/headers", () => ({
   headers: vi.fn(async () => new Headers()),
 }));
 vi.mock("@/server/session", () => ({
-  requireAdmin: async () => {},
+  requireAdmin: async () => ({
+    id: "integrity-admin",
+    name: "Admin",
+    email: "admin@test.local",
+    role: "ADMIN",
+  }),
   requireTerminalEmployee: async () => {},
 }));
 vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} }));
@@ -834,6 +839,8 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     });
     await correctTorcovkaRailsTaken({
       operationId: op.id,
+      expectedOldRailsTaken: op.railsTaken ?? 10,
+      requestId: `test:r05:${world.suffix}`,
       newRailsTaken: 7,
       reason: "over-entered rails",
     });
@@ -876,7 +883,13 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     });
     const lotMid = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
     await expect(
-      correctTorcovkaRailsTaken({ operationId: op.id, newRailsTaken: 2, reason: "blocked" }),
+      correctTorcovkaRailsTaken({
+        operationId: op.id,
+        expectedOldRailsTaken: op.railsTaken ?? 3,
+        requestId: `test:r05:${world.suffix}-blocked`,
+        newRailsTaken: 2,
+        reason: "blocked",
+      }),
     ).rejects.toThrow(COST_FLOW_VERSION_MISMATCH);
     expect((await prismaA.productionOperation.findUniqueOrThrow({ where: { id: op.id } })).railsTaken).toBe(3);
     const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
@@ -901,7 +914,13 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     });
     const lotMid = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
     await expect(
-      correctTorcovkaRailsTaken({ operationId: op.id, newRailsTaken: 2, reason: "boundary" }),
+      correctTorcovkaRailsTaken({
+        operationId: op.id,
+        expectedOldRailsTaken: op.railsTaken ?? 3,
+        requestId: `test:r05:${world.suffix}-boundary`,
+        newRailsTaken: 2,
+        reason: "boundary",
+      }),
     ).rejects.toThrow(INVENTORY_BOUNDARY);
     expect((await prismaA.productionOperation.findUniqueOrThrow({ where: { id: op.id } })).railsTaken).toBe(3);
     const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
@@ -924,7 +943,13 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     });
     const lotMid = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
     await expect(
-      correctTorcovkaRailsTaken({ operationId: op.id, newRailsTaken: 2, reason: "frozen" }),
+      correctTorcovkaRailsTaken({
+        operationId: op.id,
+        expectedOldRailsTaken: op.railsTaken ?? 3,
+        requestId: `test:r05:${world.suffix}-frozen`,
+        newRailsTaken: 2,
+        reason: "frozen",
+      }),
     ).rejects.toThrow(/заморожена/);
     expect((await prismaA.productionOperation.findUniqueOrThrow({ where: { id: op.id } })).railsTaken).toBe(3);
     const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
@@ -1259,6 +1284,8 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     await expect(
       correctTorcovkaRailsTaken({
         operationId: op.id,
+        expectedOldRailsTaken: op.railsTaken ?? 3,
+        requestId: `test:r05:${world.suffix}-paid-inact`,
         newRailsTaken: 2,
         reason: "paid inactive",
       }),
@@ -1298,6 +1325,8 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     await expect(
       correctTorcovkaRailsTaken({
         operationId: op.id,
+        expectedOldRailsTaken: op.railsTaken ?? 3,
+        requestId: `test:r05:${world.suffix}-bound-inact`,
         newRailsTaken: 2,
         reason: "boundary inactive",
       }),
@@ -1334,6 +1363,8 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     const logsBefore = await prismaA.changeLog.count();
     await correctTorcovkaRailsTaken({
       operationId: op.id,
+      expectedOldRailsTaken: op.railsTaken ?? 10,
+      requestId: `test:r05:${world.suffix}`,
       newRailsTaken: 2,
       reason: "over-entered rails inactive",
     });

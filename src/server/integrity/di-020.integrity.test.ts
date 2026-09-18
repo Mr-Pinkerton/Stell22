@@ -4,7 +4,12 @@ vi.mock("next/headers", () => ({
   headers: vi.fn(async () => new Headers()),
 }));
 vi.mock("@/server/session", () => ({
-  requireAdmin: async () => {},
+  requireAdmin: async () => ({
+    id: "integrity-admin",
+    name: "Admin",
+    email: "admin@test.local",
+    role: "ADMIN",
+  }),
   requireTerminalEmployee: async () => {},
 }));
 vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} }));
@@ -686,6 +691,8 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
     });
     await correctTorcovkaRailsTaken({
       operationId: seeded.op.id,
+      expectedOldRailsTaken: 20,
+      requestId: `test:r05:${Date.now()}-${Math.random().toString(36).slice(2)}`,
       newRailsTaken: 4,
       reason: "ошиблись количеством",
     });
@@ -717,6 +724,8 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
     await expect(
       correctTorcovkaRailsTaken({
         operationId: seeded.op.id,
+        expectedOldRailsTaken: 20,
+        requestId: `test:r05:${Date.now()}-${Math.random().toString(36).slice(2)}`,
         newRailsTaken: 4,
         reason: "too far",
       }),
@@ -748,6 +757,8 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
     await expect(
       correctTorcovkaRailsTaken({
         operationId: seeded.op.id,
+        expectedOldRailsTaken: 20,
+        requestId: `test:r05:${Date.now()}-${Math.random().toString(36).slice(2)}`,
         newRailsTaken: 4,
         reason: "paid ok",
       }),
@@ -788,6 +799,8 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
     await expect(
       correctTorcovkaRailsTaken({
         operationId: seeded.op.id,
+        expectedOldRailsTaken: 20,
+        requestId: `test:r05:${Date.now()}-${Math.random().toString(36).slice(2)}`,
         newRailsTaken: 4,
         reason: "frozen",
       }),
@@ -813,6 +826,8 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
     });
     await correctTorcovkaRailsTaken({
       operationId: depleted.op.id,
+      expectedOldRailsTaken: 20,
+      requestId: `test:r05:depl-${Date.now()}`,
       newRailsTaken: 4,
       reason: "reopen depletion",
     });
@@ -834,6 +849,8 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
     expect(archived.closedAt).not.toBeNull();
     await correctTorcovkaRailsTaken({
       operationId: written.op.id,
+      expectedOldRailsTaken: 20,
+      requestId: `test:r05:wo-${Date.now()}`,
       newRailsTaken: 4,
       reason: "reopen write-off",
     });
@@ -882,6 +899,8 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
       Promise.allSettled([
         correctTorcovkaRailsTaken({
           operationId: seeded.op.id,
+          expectedOldRailsTaken: 20,
+          requestId: `test:r05:${Date.now()}-${Math.random().toString(36).slice(2)}`,
           newRailsTaken: newRails,
           reason: "race submit",
         }),
@@ -942,6 +961,8 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
       Promise.allSettled([
         correctTorcovkaRailsTaken({
           operationId: seeded.op.id,
+          expectedOldRailsTaken: 20,
+          requestId: `test:r05:${Date.now()}-${Math.random().toString(36).slice(2)}`,
           newRailsTaken: newRails,
           reason: "race write-off",
         }),
@@ -1118,6 +1139,8 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
       Promise.allSettled([
         correctTorcovkaRailsTaken({
           operationId: opB.id,
+          expectedOldRailsTaken: 20,
+          requestId: `test:r05:lotb-${Date.now()}`,
           newRailsTaken: 4,
           reason: "different-lot race",
         }),
