@@ -1,6 +1,6 @@
 # Stell22 — Project Journal / Source of Truth
 
-Updated: 2026-09-17
+Updated: 2026-09-18
 
 This file answers three questions:
 
@@ -46,9 +46,13 @@ Branch: `main`
 
 Last verified production application SHA:
 
-`de2e1c015423e7b848f0583c0e75b2abb12733d9`
+`c14a58641d57dfabfce223b2c213db9c86167ca4`
 
-Evidence: GitHub Production Deploy run `35257469956` SUCCESS (2026-09-17, `workflow_dispatch`). PSR-P2 general preconditions (`PSR-Q-004` / R-07 / R-10 / R-11) **DEPLOYED DORMANT**. InventoryMovement rows remain 0. No runtime writers. `inventory_movement_shadow_write` ABSENT. `production_cost_flow` **INACTIVE**.
+Evidence: GitHub Production Deploy run `35314440036` SUCCESS (2026-09-18, `workflow_dispatch`). R-04 Supply cycle identity **DEPLOYED**. Migration `20260917200000_psr_p2_r04_supply_stock_accounting_cycle` **APPLIED**. InventoryMovement rows remain 0. No runtime writers. `inventory_movement_shadow_write` ABSENT. `production_cost_flow` **INACTIVE**. PSR-P2 dual-write **NOT STARTED**. Always verify current GitHub `main` HEAD.
+
+Prior documented production application SHA:
+
+`de2e1c015423e7b848f0583c0e75b2abb12733d9` — Production Deploy `35257469956` SUCCESS (2026-09-17). PSR-P2 general preconditions (`PSR-Q-004` / R-07 / R-10 / R-11) **DEPLOYED DORMANT**. **Historical.** Do not rewrite.
 
 Prior documented production application SHA:
 
@@ -62,7 +66,7 @@ That deploy includes:
 - UI filter work;
 - TORCOVKA BlankStock length canonicalization and railsTaken correction hardening (PR #1).
 
-PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY**. No runtime `InventoryMovement` writers. `PSR-Q-004` / R-07 / R-10 / R-11 = **DEPLOYED DORMANT** (`audit/08.07`; production SHA `de2e1c0`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / NOT DEPLOYED** (`audit/08.08`). PSR-P2 dual-write **NOT STARTED**.
+PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY**. No runtime `InventoryMovement` writers. `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Production Deploy `35314440036`). PSR-P2 dual-write **NOT STARTED**.
 
 Prior documented production application SHA:
 
@@ -93,13 +97,13 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: R-04 DELIVERY / NOT DEPLOYED` (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 = **DEPLOYED DORMANT** on production `de2e1c0`. PSR-P2 dual-write **NOT STARTED**. R-05 / R-06 remain OPEN.
+`ACTIVE MODE: PSR-P2 R-05 CORRECTION IDENTITY — RECONNAISSANCE / CONTRACT DECISION`. R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; production `c14a586`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. PSR-P2 dual-write **NOT STARTED**. R-05 / R-06 remain OPEN.
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
 `AUDIT 2 — FINANCE & MONEY INTEGRITY` is **NOT STARTED**. It remains `NEXT AFTER INC-001`. ARCH-2 does **not** silently start AUDIT 2.
 
-INC-001 remains `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`. Containment is still in production on `92532e8` (first deployed at `3608b36`). Do not treat ARCH-2 / PSR-P0-CORR as a production-data fix. Do not automatically invert INV-047 (generic TORCOVKA delete returning rails).
+INC-001 remains `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`. Containment is still in the running production tree (first deployed at `3608b36`; still present on current application `c14a586`). Do not treat ARCH-2 / PSR-P0-CORR as a production-data fix. Do not automatically invert INV-047 (generic TORCOVKA delete returning rails).
 
 **ARCH-2 / Primary-System Readiness** (`audit/08.02-primary-system-readiness-architecture.md`): **`ACCEPTED / REVIEWED`**.
 
@@ -117,7 +121,7 @@ PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT = **R-04 DELIVERY — PR #11 MERGE / PRODUCTION PREFLIGHT / DEPLOYMENT DECISION** (`audit/08.08`). If PR #11 is still unmerged, merge is the next repository step after final review. After merge, production preflight/deploy decision is next. This NEXT is **not** SUPPLY SHADOW dual-write. SHADOW gate remains inactive. InventoryMovement writer remains 0. R-05/R-06 remain OPEN before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center.
+NEXT = **PSR-P2 R-05 CORRECTION IDENTITY — RECONNAISSANCE / CONTRACT DECISION**. This NEXT is **not** SUPPLY SHADOW dual-write, **not** an InventoryMovement writer, **not** R-06, **not** Correction Center implementation, and **not** AUDIT 2. R-04 is no longer an OPEN prerequisite. R-05/R-06 remain OPEN before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -129,7 +133,7 @@ Reason: generic TORCOVKA delete reverses produced `BlankStock` but **intentional
 
 Correction of a **live** TORCOVKA must use existing correction actions (`correctTorcovkaRailsTaken`, line quantity edit), not delete.
 
-This rule remains operational. Application containment is **deployed in production** (first at `3608b36`; still present on running `92532e8`): the server rejects generic TORCOVKA delete before any mutation. That does **not** restore `ПАК-40-1280-01-7` and does **not** implement `cancelErroneousTorcovka`. Do not treat containment as a production-data fix. Cancellation remains deferred (`audit/08.03` §9).
+This rule remains operational. Application containment is **deployed in production** (first at `3608b36`; still present on current application `c14a586`): the server rejects generic TORCOVKA delete before any mutation. That does **not** restore `ПАК-40-1280-01-7` and does **not** implement `cancelErroneousTorcovka`. Do not treat containment as a production-data fix. Cancellation remains deferred (`audit/08.03` §9).
 
 `ARCH-P1-001` is unrelated to INC-001.
 
@@ -287,7 +291,7 @@ Status: `ACCEPTED / REVIEWED` (Review #1 R1…R6 CLOSED/PASS; Review #2 R7…R8 
 
 Artifact (canonical on `main` after reviewed merge): `audit/08.02-primary-system-readiness-architecture.md`
 
-Application/main BASE at ARCH-2 acceptance: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` (**historical**; docs merge ≠ that-cycle production deploy). Current production application: `92532e8` (see §4).
+Application/main BASE at ARCH-2 acceptance: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` (**historical**; docs merge ≠ that-cycle production deploy). Current production application: see §4.
 
 Forward-looking architecture so Stell22 can become the only warehouse/production operational source of truth. PSR namespace. **Not** a reopen of AUDIT 1. Architecture contract accepted; **not** full PSR implementation complete.
 
@@ -295,23 +299,25 @@ Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`
 
 ## 13. Current next step
 
-`NEXT = PSR-P2 GENERAL PRECONDITIONS — PRODUCTION PREFLIGHT / DEPLOYMENT DECISION.`
+`NEXT = PSR-P2 R-05 CORRECTION IDENTITY — RECONNAISSANCE / CONTRACT DECISION.`
 
 PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime.
 
 PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`08.06`). Empty unused SHADOW-capable `InventoryMovement` in production; row count = **0**. No runtime writers.
 
-`PSR-Q-004` / R-07 / R-10 / R-11 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / NOT DEPLOYED** (`audit/08.07`; Canonical? **YES**; PR #9 merge `3f89fff`; post-merge CI `35250490823` SUCCESS).
+`PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`; Canonical? **YES**; first deployed at `de2e1c0`, run `35257469956`).
+
+R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; production `c14a586`; Production Deploy `35314440036`).
 
 Does **not** mean dual-write, SHADOW posting, authoritative ledger, `OPENING_BALANCE` data, paper removal, `production_cost_flow` activation, or Correction Center.
 
-This NEXT is **not** dual-write and is **not** a deploy. Separate production preflight and owner authorization are required before any production deploy of this package. Do **not** start PSR-P2 dual-write from this file. R-04 / R-05 / R-06 remain OPEN before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
+This NEXT is **not** SUPPLY SHADOW dual-write, **not** an InventoryMovement writer, **not** R-06, **not** Correction Center implementation, and **not** AUDIT 2. R-04 is no longer an OPEN prerequisite. R-05 / R-06 remain OPEN before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
 
 Do **not** implement `ProductionOperationMutation` schema or Correction Center in this documentation cycle.
 
 Do **not** start AUDIT 2. AUDIT 2 remains `NOT STARTED` / `NEXT AFTER INC-001`.
 
-INC-001 remains OPEN (containment deployed on `92532e8`; physical facts still required before any production-data correction). ARCH-2 / 08.03 / 08.04 / 08.06 / 08.07 do not close it. Cancellation remains deferred.
+INC-001 remains OPEN (containment first deployed at `3608b36` and still in the running tree; physical facts still required before any production-data correction). ARCH-2 / 08.03 / 08.04 / 08.06 / 08.07 / 08.08 do not close it. Cancellation remains deferred.
 
 When AUDIT 2 starts: audit-only; do not auto-patch findings; `production_cost_flow` stays inactive; activation stays `BLOCKED`.
 
@@ -643,3 +649,27 @@ After every significant delivery action record:
 | AUDIT 2 | **NOT STARTED** |
 | INC-001 | OPEN |
 | Next | **R-04 DELIVERY — PR #11 MERGE / PRODUCTION PREFLIGHT / DEPLOYMENT DECISION**. Not SUPPLY SHADOW dual-write. SHADOW gate inactive. InventoryMovement writer 0. R-05 / R-06 remain OPEN. Not a deploy from this file. |
+
+## 31. Journal — PSR-P2 R-04 production deployment
+
+| | |
+| --- | --- |
+| Date | 2026-09-18 |
+| Stage | PSR-P2 R-04 production deploy closeout |
+| Production application | `c14a58641d57dfabfce223b2c213db9c86167ca4` |
+| Evidence | Production Deploy run `35314440036` SUCCESS (`workflow_dispatch`). Deploy job `105503362569`. CI/verify `105503012164`. |
+| Prior production | `de2e1c015423e7b848f0583c0e75b2abb12733d9` (**historical**) |
+| Result | `audit/08.08`. R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED**. Migration `20260917200000_psr_p2_r04_supply_stock_accounting_cycle` **APPLIED**. |
+| Schema | `Supply.stockAccountingGeneration` integer NOT NULL DEFAULT 0; `Supply.stockAccountingOpen` boolean NOT NULL DEFAULT false; CHECKs `Supply_stockAccountingGeneration_nonnegative`, `Supply_stockAccountingOpen_generation` |
+| Unique identity | unchanged `UNIQUE(marketplace, externalId, sku)` |
+| InventoryMovement | 0 / 0 / 0; runtime writers **0** |
+| `inventory_movement_shadow_write` | ABSENT / inactive |
+| `production_cost_flow` | **INACTIVE** |
+| Dual-write | **NOT STARTED** |
+| P3009 recovery | **NO** |
+| Rollback | **NO** |
+| R-05 / R-06 | remain OPEN |
+| DI-011 | **DEFERRED BY OWNER** |
+| AUDIT 2 | **NOT STARTED** |
+| INC-001 | OPEN |
+| Next | **PSR-P2 R-05 CORRECTION IDENTITY — RECONNAISSANCE / CONTRACT DECISION**. Not SUPPLY SHADOW dual-write. Not an InventoryMovement writer. Not R-06. Not Correction Center. Not AUDIT 2. |
