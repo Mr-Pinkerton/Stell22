@@ -18,6 +18,9 @@ const RAW_UPDATE =
 const RAW_DELETE =
   /\bDELETE\s+FROM\s+(ONLY\s+)?(?:"InventoryMovement"|\bInventoryMovement\b)/i;
 
+const RAW_TRUNCATE =
+  /\bTRUNCATE\s+(TABLE\s+)?(ONLY\s+)?(?:(?:public\.)?(?:"InventoryMovement"|\bInventoryMovement\b))/i;
+
 /**
  * @param {string} sourceText
  * @param {string} rel
@@ -32,6 +35,9 @@ function findInventoryMovementAppendOnlyViolations(sourceText, rel) {
   }
   if (RAW_DELETE.test(sourceText)) {
     failures.push(`${rel}: forbidden raw SQL DELETE against InventoryMovement`);
+  }
+  if (RAW_TRUNCATE.test(sourceText)) {
+    failures.push(`${rel}: forbidden raw SQL TRUNCATE against InventoryMovement`);
   }
   return failures;
 }
@@ -130,6 +136,20 @@ const createOk = findInventoryMovementAppendOnlyViolations(
 );
 if (createOk.length > 0) {
   fixtureFailures.push("create/createMany must not be forbidden by R-11");
+}
+const truncateHit = findInventoryMovementAppendOnlyViolations(
+  'TRUNCATE TABLE "InventoryMovement"',
+  "fixture-truncate.ts",
+);
+if (!truncateHit.some((item) => item.includes("forbidden raw SQL TRUNCATE"))) {
+  fixtureFailures.push("fail-closed detector missed raw TRUNCATE InventoryMovement");
+}
+const truncateUnquotedHit = findInventoryMovementAppendOnlyViolations(
+  "TRUNCATE ONLY InventoryMovement RESTART IDENTITY",
+  "fixture-truncate-unquoted.ts",
+);
+if (!truncateUnquotedHit.some((item) => item.includes("forbidden raw SQL TRUNCATE"))) {
+  fixtureFailures.push("fail-closed detector missed unquoted TRUNCATE InventoryMovement");
 }
 
 const failures = [...fixtureFailures];
