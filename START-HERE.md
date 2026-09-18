@@ -82,7 +82,7 @@ Independent Review #1 = REQUEST CHANGES (R1…R6 CLOSED/PASS). Independent Revie
 
 `ACCEPTED / REVIEWED` means the architecture **contract** is accepted. It does **not** mean PSR implementation complete, primary-system readiness achieved, ledger deployed, paper removable, or `production_cost_flow` active.
 
-**NEXT = PSR-P2 SHADOW WRITER CONTRACT — INDEPENDENT REVIEW / ACCEPTANCE**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; Production Deploy `35337215903`). This is **not** InventoryMovement writer implementation, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.09`; Production Deploy `35329071777`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Production Deploy `35314440036`). PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract-creation status **ACCEPTED DESIGN / NOT IMPLEMENTED** is preserved there). Current P1 implementation/deploy = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`). PSR-P2 dual-write **NOT STARTED**. PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`audit/08.03` + `audit/08.04`). `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean dual-write, authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center. Do not implement Correction Center / `ProductionOperationMutation` / dual-write from this file alone.
+**NEXT = P2-GUARD/CI IMPLEMENTATION PACKAGE**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; Production Deploy `35337215903`). This is **not** InventoryMovement writer implementation, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.09`; Production Deploy `35329071777`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Production Deploy `35314440036`). PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract-creation status **ACCEPTED DESIGN / NOT IMPLEMENTED** is preserved there). Current P1 implementation/deploy = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`). PSR-P2 dual-write **NOT STARTED**. PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`audit/08.03` + `audit/08.04`). `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean dual-write, authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center. Do not implement Correction Center / `ProductionOperationMutation` / dual-write from this file alone.
 
 Historical documentation recovery checkpoint (no longer current on main):
 
@@ -102,7 +102,7 @@ INC-001 containment SHA (still in the running tree):
 
 The project on `main`: production application = `eb02b17` (Production Deploy `35337215903`). Always verify the current GitHub `main` HEAD before relying on a branch SHA. A later docs-only merge may advance `main`; that merge SHA is **not** a production application SHA. AUDIT 1 complete; ARCH-2 architecture **ACCEPTED / REVIEWED**; PSR-P0-CORR **ACCEPTED DESIGN / NOT IMPLEMENTED**; PSR-P0-CORE = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.04`); PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical **NOT IMPLEMENTED** at contract creation preserved); PSR-P1 implementation/deploy = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`); PSR-P0 **COMPLETE / ACCEPTED** as design contract only; `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`); R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`); R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.09`); R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`); PSR-P2 dual-write **NOT STARTED**; INC-001 open; AUDIT 2 not started.
 
-**NEXT = PSR-P2 SHADOW WRITER CONTRACT — INDEPENDENT REVIEW / ACCEPTANCE**. This is **not** InventoryMovement writer implementation, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. Do not implement dual-write, Correction Center schema, or a production deploy from this file.
+**NEXT = P2-GUARD/CI IMPLEMENTATION PACKAGE**. This is **not** InventoryMovement writer implementation, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. Do not implement dual-write, Correction Center schema, or a production deploy from this file.
 
 AUDIT 1 remains `COMPLETE / REVIEWED`. Do not reopen it.
 
@@ -143,15 +143,15 @@ Source-of-truth hierarchy:
 Chat and Cursor transcripts are working evidence, never the final source of truth.
 
 ---
-## PSR-P2 writer contract candidate — 2026-09-18
+## PSR-P2 writer contract accepted — 2026-09-18
 
-Current GitHub contract branch: `docs/psr-p2-shadow-writer-contract`.
+Accepted contract artifact: `audit/08.11-psr-p2-shadow-writer-contract.md` (PR #17).
 
-New artifact: `audit/08.11-psr-p2-shadow-writer-contract.md`.
+The contract is **ACCEPTED / REVIEWED** as architecture/contract only.
 
 It freezes the exhaustive physical-writer matrix, gate-first transaction contract, effectKey v1, actor/time/snapshot rules, retry/idempotency requirements, reconciliation diagnostics, mandatory PostgreSQL CI, and evidence-driven P2 implementation sequence.
 
-Status remains:
+Runtime status remains:
 
 - **WRITER CONTRACT ONLY**
 - **DUAL-WRITE NOT STARTED**
@@ -159,4 +159,4 @@ Status remains:
 - `production_cost_flow` **INACTIVE**
 - production application checkpoint remains `eb02b17f488ef9ec13a11dcf158fc169b78e3e37`
 
-NEXT after this contract is independently reviewed and merged: a separate **P2-GUARD/CI implementation package**. It must not be conflated with the first physical writer.
+Current NEXT: a separate **P2-GUARD/CI implementation package**. It must not be conflated with the first physical writer.
