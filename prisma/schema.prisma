@@ -1097,6 +1097,11 @@ model Supply {
   // (зафиксировано как «потеря ГП»). Учитывается в идемпотентности, чтобы не
   // пытаться списать недостачу повторно каждую синхронизацию.
   shortfallQty  Int       @default(0)
+  // PSR-P2 R-04 durable stock-accounting cycle. Unique line stays
+  // (marketplace, externalId, sku). generation does not reset on cancel.
+  // 0/false = no post-cutover cycle started. See audit/08.08.
+  stockAccountingGeneration Int     @default(0)
+  stockAccountingOpen       Boolean @default(false)
   status        String    // PENDING / SHIPPED / ACCEPTED (нормализованный)
   warehouseName String?
   createdAt     DateTime  // дата создания заявки/поставки
