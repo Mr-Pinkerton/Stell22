@@ -20,7 +20,7 @@ Do not import Woodveri door-manufacturing entities or workflows.
 | ARCH-2 | `audit/08.02-primary-system-readiness-architecture.md` — **`ACCEPTED / REVIEWED`**. Independent Review #1 = REQUEST CHANGES (R1…R6 CLOSED/PASS). Independent Review #2 = REQUEST CHANGES (R7…R8 CLOSED/PASS). Independent Review #3 = **PASS / ACCEPT** (new blockers = 0). Architecture contract accepted; **not** full PSR implementation complete. `PSR-Q-001` / `Q2` / `Q5` / `Q7` / `Q8` = **CLOSED / ACCEPTED** in `08.04` (design only). |
 | PSR-P0 | **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime. Correction Center **not** implemented. Cancellation **DEFERRED / NOT IMPLEMENTED**. |
 | PSR-P1 | **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`08.06`). Schema contract `08.05` remains **ACCEPTED DESIGN** (do not rewrite its historical **NOT IMPLEMENTED** header). Empty unused SHADOW-capable table; production row count at P1 closeout = **0**; no runtime writers. |
-| PSR-P2 general preconditions | `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`; Canonical? **YES**; first deployed at `de2e1c0`, run `35257469956`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Canonical? **YES**; Production Deploy `35314440036`). R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.09`; Canonical? **YES**; production `27538a5`; Production Deploy `35329071777`). R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; Canonical? **YES**; production `eb02b17`; Production Deploy `35337215903`). **NEXT = PSR-P2 POST-R06 DUAL-WRITE READINESS / INVENTORY WRITER CONTRACT DECISION**. Dual-write **NOT STARTED**. |
+| PSR-P2 general preconditions | `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`; Canonical? **YES**; first deployed at `de2e1c0`, run `35257469956`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Canonical? **YES**; Production Deploy `35314440036`). R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.09`; Canonical? **YES**; production `27538a5`; Production Deploy `35329071777`). R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; Canonical? **YES**; production `eb02b17`; Production Deploy `35337215903`). **NEXT = P2-GUARD/CI IMPLEMENTATION PACKAGE**. Dual-write **NOT STARTED**. |
 | Audit program | STEP 0 recovery **COMPLETE**. **AUDIT 1 = COMPLETE / REVIEWED** (not reopened). **ARCH-2 = ACCEPTED / REVIEWED** (architecture contract). Not a new AUDIT 1 defect count. **AUDIT 2 is NOT started.** |
 | Production incident | **`INC-001` = `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`**. Finding **`INC-001-F1` P1 / CONFIRMED**. Generic TORCOVKA delete `CONTAINED IN PRODUCTION`. Package data **not** corrected. `ARCH-P1-001` unrelated to INC-001. |
 | `production_cost_flow` | inactive (delivery state; see `PROJECT.md`) |
@@ -287,7 +287,7 @@ Status: **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY**. Schema cont
 
 Artifacts: `audit/08.05-psr-p1-inventory-movement-schema-contract.md` (exact schema) and `audit/08.06-psr-p1-deployment-closeout.md` (implementation/deploy evidence). Production table exists. Row count = **0**. No runtime writers.
 
-`PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`, Canonical? **YES**; first deployed at `de2e1c0`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Production Deploy `35314440036`). R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.09`; production `27538a5`; Production Deploy `35329071777`). R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; production `eb02b17`; Production Deploy `35337215903`). **NEXT = PSR-P2 POST-R06 DUAL-WRITE READINESS / INVENTORY WRITER CONTRACT DECISION**. PSR-P2 dual-write **NOT STARTED**. Not dual-write, not OPENING_BALANCE data, not AUTHORITATIVE rows, not Correction Center.
+`PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`, Canonical? **YES**; first deployed at `de2e1c0`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Production Deploy `35314440036`). R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.09`; production `27538a5`; Production Deploy `35329071777`). R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; production `eb02b17`; Production Deploy `35337215903`). **NEXT = P2-GUARD/CI IMPLEMENTATION PACKAGE**. PSR-P2 dual-write **NOT STARTED**. Not dual-write, not OPENING_BALANCE data, not AUTHORITATIVE rows, not Correction Center.
 
 ### INC-001 — TORCOVKA whole-package production incident
 
@@ -302,3 +302,16 @@ Finding: `INC-001-F1` (P1) — after TORCOVKA delete, no application path to res
 Status: `NOT STARTED` (`NEXT AFTER INC-001`)
 
 ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. Do not open as a file until INC-001 production correction is decided. High-level scope: CashFlow, Account/balance, Statement/import, Deal allocations, transfers, Payment/payroll money, corrections/voids, transaction boundaries, idempotency, confirmed/unconfirmed money, reconciliation, Sale vs money where relevant.
+
+---
+### 08.11 — PSR-P2 SHADOW writer contract
+
+- File: `audit/08.11-psr-p2-shadow-writer-contract.md`
+- Scope: architecture/contract only; exhaustive physical-writer matrix; common SHADOW writer/gateway contract; gate/lock ordering; effectKey v1; actor/time/snapshot/retry/diagnostic/CI contracts; phased implementation order.
+- Starting main: `2eb4f6a6d769900481a5c3fd33a76240789d953d`.
+- Status: **ACCEPTED / REVIEWED** architecture/contract only.
+- Runtime dual-write: **NOT STARTED**.
+- SHADOW activation: **NO**.
+- Production deploy/mutation: **NO / NO**.
+- Review disposition: independent adversarial review returned REQUEST CHANGES; accepted findings were closed in the contract; final HEAD review accepted the corrected contract.
+- NEXT: **P2-GUARD/CI IMPLEMENTATION PACKAGE**.
