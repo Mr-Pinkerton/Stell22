@@ -46,9 +46,13 @@ Branch: `main`
 
 Last verified production application SHA:
 
-`27538a5d5777d33fb87d060963a6d07a189cf044`
+`eb02b17f488ef9ec13a11dcf158fc169b78e3e37`
 
-Evidence: GitHub Production Deploy run `35329071777` SUCCESS (2026-09-18, `workflow_dispatch`). R-05 TORCOVKA correction identity **DEPLOYED**. Migration `20260918120000_psr_p2_r05_production_operation_correction` **APPLIED**. `ProductionOperationCorrection` **LIVE**, initial row count **0**, historical backfill **NO**. InventoryMovement rows remain 0. No runtime writers. `inventory_movement_shadow_write` ABSENT. `production_cost_flow` **INACTIVE**. PSR-P2 dual-write **NOT STARTED**. Always verify current GitHub `main` HEAD. A later docs-only merge may advance `main`; that merge SHA is **not** a production application SHA.
+Evidence: GitHub Production Deploy run `35337215903` SUCCESS (2026-09-18, `workflow_dispatch`). R-06 Inventory physical identity **DEPLOYED / POST-DEPLOY VERIFIED**. Migration `20260918130000_psr_p2_r06_inventory_line_identity` **APPLIED**. Index `InventoryLine_inventoryId_refType_refId_key` **LIVE**. InventoryMovement rows remain 0. No runtime writers. `inventory_movement_shadow_write` ABSENT. `production_cost_flow` **INACTIVE**. PSR-P2 dual-write **NOT STARTED**. Always verify current GitHub `main` HEAD. A later docs-only merge may advance `main`; that merge SHA is **not** a production application SHA.
+
+Prior documented production application SHA:
+
+`27538a5d5777d33fb87d060963a6d07a189cf044` — Production Deploy `35329071777` SUCCESS (2026-09-18). R-05 TORCOVKA correction identity **DEPLOYED**. **Historical.** Do not rewrite.
 
 Prior documented production application SHA:
 
@@ -70,7 +74,7 @@ That deploy includes:
 - UI filter work;
 - TORCOVKA BlankStock length canonicalization and railsTaken correction hardening (PR #1).
 
-PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY**. No runtime `InventoryMovement` writers. `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Production Deploy `35314440036`). R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.09`; Production Deploy `35329071777`). PSR-P2 dual-write **NOT STARTED**.
+PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY**. No runtime `InventoryMovement` writers. `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Production Deploy `35314440036`). R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.09`; Production Deploy `35329071777`). R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; Production Deploy `35337215903`). PSR-P2 dual-write **NOT STARTED**.
 
 Prior documented production application SHA:
 
@@ -101,13 +105,13 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: PSR-P2 R-06 INVENTORY IDENTITY — IMPLEMENTATION VERIFIED / NOT DEPLOYED`. Canonical: `audit/08.10`. R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.09`; production `27538a5`; Production Deploy `35329071777`). R-04 remains **DEPLOYED** (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. PSR-P2 dual-write **NOT STARTED**. This mode is **not** SHADOW activation, **not** dual-write, **not** an InventoryMovement writer, **not** Correction Center, and **not** AUDIT 2. **NEXT = R-06 HEAD REVIEW**.
+`ACTIVE MODE: PSR-P2 POST-R06 DUAL-WRITE READINESS / INVENTORY WRITER CONTRACT DECISION`. Canonical: `audit/08.10`. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; production `eb02b17`; Production Deploy `35337215903`). R-05 remains **DEPLOYED** (`audit/08.09`). R-04 remains **DEPLOYED** (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. PSR-P2 dual-write **NOT STARTED**. This mode is **not** SHADOW activation, **not** dual-write, **not** an InventoryMovement writer, **not** Correction Center, and **not** AUDIT 2. **NEXT = PSR-P2 POST-R06 DUAL-WRITE READINESS / INVENTORY WRITER CONTRACT DECISION**.
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
 `AUDIT 2 — FINANCE & MONEY INTEGRITY` is **NOT STARTED**. It remains `NEXT AFTER INC-001`. ARCH-2 does **not** silently start AUDIT 2.
 
-INC-001 remains `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`. Containment is still in the running production tree (first deployed at `3608b36`; still present on current application `27538a5`). Do not treat ARCH-2 / PSR-P0-CORR as a production-data fix. Do not automatically invert INV-047 (generic TORCOVKA delete returning rails).
+INC-001 remains `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`. Containment is still in the running production tree (first deployed at `3608b36`; still present on current application `eb02b17`). Do not treat ARCH-2 / PSR-P0-CORR as a production-data fix. Do not automatically invert INV-047 (generic TORCOVKA delete returning rails).
 
 **ARCH-2 / Primary-System Readiness** (`audit/08.02-primary-system-readiness-architecture.md`): **`ACCEPTED / REVIEWED`**.
 
@@ -125,7 +129,7 @@ PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT = **R-06 HEAD REVIEW**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / NOT DEPLOYED** (`audit/08.10`). This NEXT is **not** SHADOW activation, **not** dual-write, **not** an InventoryMovement writer, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. R-05 is **DEPLOYED** (`audit/08.09`). `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center.
+NEXT = **PSR-P2 POST-R06 DUAL-WRITE READINESS / INVENTORY WRITER CONTRACT DECISION**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). This NEXT is **not** InventoryMovement writer implementation, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. R-05 is **DEPLOYED** (`audit/08.09`). `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center. R-04 / R-05 / R-06 prerequisites are deployed; the INVENTORY writer contract still needs exact `effectKey` / writer transaction / gate / reconciliation frozen before implementation.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -137,7 +141,7 @@ Reason: generic TORCOVKA delete reverses produced `BlankStock` but **intentional
 
 Correction of a **live** TORCOVKA must use existing correction actions (`correctTorcovkaRailsTaken`, line quantity edit), not delete.
 
-This rule remains operational. Application containment is **deployed in production** (first at `3608b36`; still present on current application `27538a5`): the server rejects generic TORCOVKA delete before any mutation. That does **not** restore `ПАК-40-1280-01-7` and does **not** implement `cancelErroneousTorcovka`. Do not treat containment as a production-data fix. Cancellation remains deferred (`audit/08.03` §9).
+This rule remains operational. Application containment is **deployed in production** (first at `3608b36`; still present on current application `eb02b17`): the server rejects generic TORCOVKA delete before any mutation. That does **not** restore `ПАК-40-1280-01-7` and does **not** implement `cancelErroneousTorcovka`. Do not treat containment as a production-data fix. Cancellation remains deferred (`audit/08.03` §9).
 
 `ARCH-P1-001` is unrelated to INC-001.
 
@@ -303,7 +307,7 @@ Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`
 
 ## 13. Current next step
 
-`NEXT = R-06 HEAD REVIEW.`
+`NEXT = PSR-P2 POST-R06 DUAL-WRITE READINESS / INVENTORY WRITER CONTRACT DECISION.`
 
 PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime.
 
@@ -315,11 +319,11 @@ R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOY
 
 R-05 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.09`; production `27538a5`; Production Deploy `35329071777`). `ProductionOperationCorrection` is **LIVE** (initial row count **0**; historical backfill **NO**). Full `ProductionOperationMutation` remains later.
 
-R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / NOT DEPLOYED** (`audit/08.10`). First-class BLANK InventoryLine. Unique `(inventoryId, refType, refId)`. Legacy DRAFT recreate. No InventoryMovement writer.
+R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; production `eb02b17`; Production Deploy `35337215903`). First-class BLANK InventoryLine. Unique `(inventoryId, refType, refId)` **LIVE**. Legacy DRAFT recreate. No InventoryMovement writer. Rollback window immediately after deploy = **PHASE A** (`audit/08.10` §12.1).
 
 Does **not** mean dual-write, SHADOW posting, authoritative ledger, `OPENING_BALANCE` data, paper removal, `production_cost_flow` activation, or Correction Center.
 
-This NEXT is **not** SHADOW activation, **not** dual-write, **not** an InventoryMovement writer, **not** Correction Center implementation, and **not** AUDIT 2. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
+This NEXT is **not** InventoryMovement writer implementation, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center implementation, and **not** AUDIT 2. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
 
 Do **not** implement the full `ProductionOperationMutation` schema or Correction Center in this package.
 
@@ -745,3 +749,29 @@ This journal does **not** rewrite §33. §33 remains the historical R-05 product
 | Production access | **NO** |
 | Deploy | **NO** |
 | Next | **R-06 HEAD REVIEW**. Not InventoryMovement dual-write. Not Correction Center. Not AUDIT 2. |
+
+## 35. Journal — PSR-P2 R-06 production deployment
+
+This journal does **not** rewrite §34. §34 remains the historical R-06 implementation/review status (**NOT DEPLOYED** at that time).
+
+| | |
+| --- | --- |
+| Date | 2026-09-18 |
+| Stage | PSR-P2 R-06 production deploy closeout |
+| Production application | `eb02b17f488ef9ec13a11dcf158fc169b78e3e37` |
+| Evidence | Production Deploy run `35337215903` SUCCESS (`workflow_dispatch`). Resolve `105574729643`. CI/verify `105574756893`. Deploy `105575381753`. |
+| Prior production | `27538a5d5777d33fb87d060963a6d07a189cf044` (**historical**) |
+| Result | `audit/08.10`. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED**. Migration `20260918130000_psr_p2_r06_inventory_line_identity` **APPLIED**. Index `InventoryLine_inventoryId_refType_refId_key` **LIVE**. |
+| Cutover Inventory | total **1** (CONDUCTED **1**, DRAFT **0**, CLOSED **0**). InventoryLine **0**. Historical backfill **NO**. No BLANK document at cutover. |
+| InventoryMovement | 0 / 0 / 0; runtime writers **0**. R-06 deploy did **not** start an InventoryMovement writer. |
+| `inventory_movement_shadow_write` | ABSENT / inactive |
+| `production_cost_flow` | **INACTIVE** |
+| Dual-write | **NOT STARTED** |
+| P3009 recovery | **NO** |
+| Rollback used | **NO** |
+| Rollback window | **PHASE A**. Rollback to `27538a5` currently **SAFE**. Phase B = SAFE BUT DRAFT UNUSABLE FOR CONDUCT. Phase C (first CONDUCTED R-06 BLANK inventory) = **SEMANTICALLY UNSAFE** — do not blindly rollback to `27538a5`. |
+| R-05 | remains **DEPLOYED** |
+| R-04 | remains **DEPLOYED** |
+| AUDIT 2 | **NOT STARTED** |
+| INC-001 | OPEN |
+| Next | **PSR-P2 POST-R06 DUAL-WRITE READINESS / INVENTORY WRITER CONTRACT DECISION**. Not InventoryMovement writer implementation. Not SHADOW activation. Not dual-write activation. Not Correction Center. Not AUDIT 2. |
