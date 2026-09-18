@@ -230,9 +230,10 @@ describe("acquire lock helpers", () => {
 });
 
 describe("no InventoryMovement runtime writers", () => {
-  it("application src has no Prisma InventoryMovement create/mutation except tests", () => {
+  it("only the approved gateway may insert InventoryMovement rows from application src", () => {
     const root = path.join(process.cwd(), "src");
     const hits: string[] = [];
+    const allowed = new Set(["src/server/internal/inventory-movement-shadow-gateway.ts"]);
     const walk = (dir: string) => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const absolute = path.join(dir, entry.name);
@@ -243,9 +244,16 @@ describe("no InventoryMovement runtime writers", () => {
         }
         if (!entry.isFile() || !/\.(ts|tsx)$/.test(entry.name)) continue;
         if (entry.name.includes(".test.")) continue;
+        const rel = path.relative(process.cwd(), absolute).replaceAll("\\", "/");
+        if (allowed.has(rel)) continue;
         const text = fs.readFileSync(absolute, "utf8");
-        if (/\binventoryMovement\s*\.\s*(createMany|create|updateMany|update|deleteMany|delete|upsert)\s*\(/.test(text)) {
-          hits.push(path.relative(process.cwd(), absolute).replaceAll("\\", "/"));
+        if (
+          /\binventoryMovement\s*\.\s*(createMany|create|updateMany|update|deleteMany|delete|upsert)\s*\(/.test(
+            text,
+          ) ||
+          /\bINSERT\s+INTO\s+(?:(?:public\.)?(?:"InventoryMovement"|\bInventoryMovement\b))/i.test(text)
+        ) {
+          hits.push(rel);
         }
       }
     };

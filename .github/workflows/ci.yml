@@ -1,6 +1,7 @@
 name: CI
 
-# Проверяем каждый PR и пуш в main: типы, линтер, тесты, security policy, сборка.
+# Проверяем каждый PR и пуш в main: типы, линтер, тесты, security policy,
+# disposable PostgreSQL integrity suite, сборка.
 # Деплоя здесь нет — production вызывает этот же workflow через workflow_call.
 
 on:
@@ -25,7 +26,21 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: stell22
+          POSTGRES_PASSWORD: stell22
+          POSTGRES_DB: stell22_integrity
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stell22 -d stell22_integrity"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     outputs:
       sha: ${{ steps.show-sha.outputs.sha }}
     steps:
@@ -76,6 +91,15 @@ jobs:
 
       - name: InventoryMovement SHADOW write-gate control policy
         run: npm run security:inventory-movement-shadow-write-control
+
+      - name: InventoryMovement INSERT confinement
+        run: npm run security:inventory-movement-insert-confinement
+
+      - name: PostgreSQL-backed integrity suite
+        env:
+          INTEGRITY_TEST_DATABASE_URL: postgresql://stell22:stell22@127.0.0.1:5432/stell22_integrity?schema=public
+          DATABASE_URL: postgresql://stell22:stell22@127.0.0.1:5432/stell22_integrity?schema=public
+        run: npm run test:integrity:ci
 
       # Сборка без подключения к БД (как в Dockerfile) — ловим ошибки
       # типов и битые страницы до ручного деплоя на прод.

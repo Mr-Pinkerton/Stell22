@@ -105,7 +105,7 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: P2-GUARD/CI IMPLEMENTATION PACKAGE`. Canonical contract: `audit/08.11` (**ACCEPTED / REVIEWED**). R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; production `eb02b17`; Production Deploy `35337215903`). R-05 remains **DEPLOYED** (`audit/08.09`). R-04 remains **DEPLOYED** (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. PSR-P2 dual-write **NOT STARTED**. This mode is **not** SHADOW activation, **not** dual-write, **not** an InventoryMovement writer, **not** Correction Center, and **not** AUDIT 2. **NEXT = P2-GUARD/CI IMPLEMENTATION PACKAGE**.
+`ACTIVE MODE: P2-GUARD/CI IMPLEMENTATION — FEATURE BRANCH / HEAD RE-REVIEW`. Canonical contract: `audit/08.11` (**ACCEPTED / REVIEWED**). Implementation artifact: `audit/08.12` on `feat/psr-p2-guard-ci` (**HEAD REVIEW CORRECTIONS / NOT MERGED / NOT DEPLOYED**). R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; production `eb02b17`; Production Deploy `35337215903`). R-05 remains **DEPLOYED** (`audit/08.09`). R-04 remains **DEPLOYED** (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. PSR-P2 dual-write **NOT STARTED**. This mode is **not** SHADOW activation, **not** dual-write, **not** an InventoryMovement writer, **not** Correction Center, and **not** AUDIT 2. **NEXT = HEAD RE-REVIEW OF PR #18**.
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
@@ -129,7 +129,7 @@ PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT = **P2-GUARD/CI IMPLEMENTATION PACKAGE**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). This NEXT is **not** InventoryMovement writer implementation, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. R-05 is **DEPLOYED** (`audit/08.09`). `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center. R-04 / R-05 / R-06 prerequisites are deployed; the SHADOW writer contract is **ACCEPTED / REVIEWED** in `audit/08.11`; dual-write remains NOT STARTED.
+NEXT = **HEAD RE-REVIEW OF PR #18**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). This NEXT is **not** InventoryMovement writer implementation, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. R-05 is **DEPLOYED** (`audit/08.09`). `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center. R-04 / R-05 / R-06 prerequisites are deployed; the SHADOW writer contract is **ACCEPTED / REVIEWED** in `audit/08.11`; dual-write remains NOT STARTED.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -307,7 +307,7 @@ Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`
 
 ## 13. Current next step
 
-`NEXT = P2-GUARD/CI IMPLEMENTATION PACKAGE.`
+`NEXT = HEAD RE-REVIEW OF PR #18` (`audit/08.12` on `feat/psr-p2-guard-ci`; **HEAD REVIEW CORRECTIONS / NOT MERGED / NOT DEPLOYED**).
 
 PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime.
 
@@ -774,7 +774,7 @@ This journal does **not** rewrite §34. §34 remains the historical R-06 impleme
 | R-04 | remains **DEPLOYED** |
 | AUDIT 2 | **NOT STARTED** |
 | INC-001 | OPEN |
-| Next | **P2-GUARD/CI IMPLEMENTATION PACKAGE**. Not InventoryMovement writer implementation. Not SHADOW activation. Not dual-write activation. Not Correction Center. Not AUDIT 2. |
+| Next | **HEAD RE-REVIEW OF PR #18**. Not InventoryMovement writer implementation. Not SHADOW activation. Not dual-write activation. Not Correction Center. Not AUDIT 2. |
 
 ---
 ## PSR-P2 shadow-writer contract freeze — 2026-09-18
@@ -787,4 +787,22 @@ The contract records all verified physical mutation contours and explicitly keep
 
 No runtime InventoryMovement writer is introduced by this package. No SHADOW activation. No production deploy or mutation.
 
-Current NEXT: **P2-GUARD/CI** (common gate-first gateway/static guards/real PostgreSQL CI), then a separate first-writer package only after that contour's blockers are closed.
+Current NEXT after contract acceptance was **P2-GUARD/CI**. That package is now implemented on `feat/psr-p2-guard-ci` (`audit/08.12`) and is **NOT MERGED / NOT DEPLOYED**. NEXT: **HEAD review of the P2-GUARD/CI PR**. Not the first physical writer.
+
+---
+## PSR-P2 P2-GUARD/CI implementation — 2026-09-18
+
+| | |
+| --- | --- |
+| Date | 2026-09-18 |
+| Stage | PSR-P2 P2-GUARD/CI |
+| BASE GitHub `main` | `71182863c7432b9af490370a66179e060f2ed913` |
+| Production application | `eb02b17f488ef9ec13a11dcf158fc169b78e3e37` (**unchanged**) |
+| Result | `audit/08.12`. Common SHADOW gateway skeleton, INSERT/gate-read/TRUNCATE guards, identity/actor/time helpers, disposable PostgreSQL CI. **NOT MERGED / NOT DEPLOYED**. |
+| Runtime InventoryMovement writers | **0** |
+| Gateway wired to physical paths | **NO** |
+| Schema / migration | **NONE** |
+| SHADOW activation | **NO** |
+| `production_cost_flow` | unchanged / INACTIVE |
+| Production access / mutation / deploy | **NO / NO / NO** |
+| Next | **HEAD RE-REVIEW OF PR #18**. Not Inventory SHADOW writer. Not dual-write. Not Correction Center. Not AUDIT 2. |

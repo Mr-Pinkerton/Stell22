@@ -16,8 +16,20 @@ const RESET_SCRIPT_REL = "scripts/reset-inventory-movement-shadow.ts";
 const SETTING_MUTATION =
   /\bsetting\s*\.\s*(upsert|updateMany|update|createMany|create|deleteMany|delete)\s*\(/;
 
-const RAW_SETTING_MUTATION =
-  /\b(UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+(ONLY\s+)?(?:"Setting"|\bSetting\b)/i;
+const SETTING_READ =
+  /\bsetting\s*\.\s*(findUnique|findFirst|findMany|findUniqueOrThrow|findFirstOrThrow)\s*\(/;
+
+const SETTING_TABLE = '(?:(?:public\\.|\"public\"\\.)?(?:\"Setting\"|\\bSetting\\b))';
+
+const RAW_SETTING_MUTATION = new RegExp(
+  `\\b(UPDATE|INSERT\\s+INTO|DELETE\\s+FROM)\\s+(ONLY\\s+)?${SETTING_TABLE}`,
+  "i",
+);
+
+const RAW_SETTING_READ = new RegExp(
+  `\\bSELECT\\b[\\s\\S]{0,400}\\bFROM\\s+(ONLY\\s+)?${SETTING_TABLE}`,
+  "i",
+);
 
 const UNLOCKED_READ_CALL = /\breadInventoryMovementShadowWriteGate\s*\(/;
 const SETTER_CALL = /\bsetInventoryMovementShadowWriteGate\s*\(/;
@@ -70,9 +82,32 @@ function findUnlockedReadCallViolations(sourceText, rel) {
 function findSetterCallViolations(sourceText, rel) {
   if (!SETTER_CALL.test(sourceText)) return [];
   if (rel === GATE_IMPL_REL || rel === GATE_TEST_REL || rel === CONTROL_CLI_REL) return [];
+  if (rel.startsWith("src/server/integrity/")) return [];
   return [
-    `${rel}: setInventoryMovementShadowWriteGate is allowed only in the dedicated setter, its tests, and the ON/OFF maintenance CLI`,
+    `${rel}: setInventoryMovementShadowWriteGate is allowed only in the dedicated setter, its tests, the ON/OFF maintenance CLI, and integrity fixtures`,
   ];
+}
+
+/**
+ * Ordinary application code must not read the SHADOW gate Setting directly.
+ * Writer-facing code uses isInventoryMovementShadowWriteActiveForWriter(tx).
+ * @param {string} sourceText
+ * @param {string} rel
+ */
+function findDirectSettingReads(sourceText, rel) {
+  const failures = [];
+  if (!referencesProtectedKey(sourceText)) return failures;
+  if (SETTING_READ.test(sourceText)) {
+    failures.push(
+      `${rel}: direct Setting read of ${KEY} is forbidden outside ${GATE_IMPL_REL}`,
+    );
+  }
+  if (RAW_SETTING_READ.test(sourceText)) {
+    failures.push(
+      `${rel}: raw SQL Setting read involving ${KEY} is forbidden outside ${GATE_IMPL_REL}`,
+    );
+  }
+  return failures;
 }
 
 function walkFiles(dir, acc = []) {
@@ -99,6 +134,15 @@ function isMutationAllowed(rel) {
   if (rel === GATE_IMPL_REL) return true;
   if (rel === GATE_TEST_REL) return true;
   if (rel.startsWith("prisma/migrations/")) return true;
+  if (rel.startsWith("src/server/integrity/")) return true;
+  return false;
+}
+
+function isDirectReadAllowed(rel) {
+  if (rel === GATE_IMPL_REL) return true;
+  if (rel === GATE_TEST_REL) return true;
+  if (rel.startsWith("prisma/migrations/")) return true;
+  if (rel.startsWith("src/server/integrity/")) return true;
   return false;
 }
 
@@ -167,20 +211,82 @@ if (!deleteHit.some((item) => item.includes("Setting mutation"))) {
   fixtureFailures.push("fail-closed detector missed setting.delete via INVENTORY_MOVEMENT_SHADOW_WRITE_KEY");
 }
 
-const readOk = findDirectSettingMutations(
+const mutationIgnoresRead = findDirectSettingMutations(
   `await tx.setting.findUnique({ where: { key: "${KEY}" } })`,
   "fixture-read.ts",
 );
-if (readOk.length > 0) {
-  fixtureFailures.push("reading inventory_movement_shadow_write must not be forbidden");
+if (mutationIgnoresRead.length > 0) {
+  fixtureFailures.push("Q4 mutation detector must not treat a Setting read as a mutation");
+}
+
+const directReadHit = findDirectSettingReads(
+  `await tx.setting.findUnique({ where: { key: "${KEY}" } })`,
+  "src/server/warehouse.ts",
+);
+if (!directReadHit.some((item) => item.includes("direct Setting read"))) {
+  fixtureFailures.push("fail-closed detector missed setting.findUnique of inventory_movement_shadow_write");
+}
+
+const findFirstHit = findDirectSettingReads(
+  `await tx.setting.findFirst({ where: { key: ${KEY_IDENT} } })`,
+  "src/server/production.ts",
+);
+if (!findFirstHit.some((item) => item.includes("direct Setting read"))) {
+  fixtureFailures.push("fail-closed detector missed setting.findFirst of inventory_movement_shadow_write");
+}
+
+const rawReadHit = findDirectSettingReads(
+  `SELECT value FROM "Setting" WHERE key = '${KEY}'`,
+  "src/server/terminal.ts",
+);
+if (!rawReadHit.some((item) => item.includes("raw SQL Setting read"))) {
+  fixtureFailures.push("fail-closed detector missed raw SELECT Setting for inventory_movement_shadow_write");
+}
+
+const rawPublicReadHit = findDirectSettingReads(
+  `SELECT value FROM "public"."Setting" WHERE key = '${KEY}'`,
+  "src/server/warehouse.ts",
+);
+if (!rawPublicReadHit.some((item) => item.includes("raw SQL Setting read"))) {
+  fixtureFailures.push('fail-closed detector missed SELECT FROM "public"."Setting"');
+}
+
+const rawPublicMutHit = findDirectSettingMutations(
+  `UPDATE public."Setting" SET value = '{}' WHERE key = '${KEY}'`,
+  "src/server/settings.ts",
+);
+if (!rawPublicMutHit.some((item) => item.includes("raw SQL Setting mutation"))) {
+  fixtureFailures.push('fail-closed detector missed UPDATE public."Setting"');
+}
+
+const rawPublicInsertHit = findDirectSettingMutations(
+  `INSERT INTO "public"."Setting" (key, value) VALUES ('${KEY}', '{}')`,
+  "src/server/warehouse.ts",
+);
+if (!rawPublicInsertHit.some((item) => item.includes("raw SQL Setting mutation"))) {
+  fixtureFailures.push('fail-closed detector missed INSERT INTO "public"."Setting"');
+}
+
+const rawPublicDeleteHit = findDirectSettingMutations(
+  `DELETE FROM public."Setting" WHERE key = '${KEY}'`,
+  "src/server/production.ts",
+);
+if (!rawPublicDeleteHit.some((item) => item.includes("raw SQL Setting mutation"))) {
+  fixtureFailures.push('fail-closed detector missed DELETE FROM public."Setting"');
 }
 
 const writerPath = `import { isInventoryMovementShadowWriteActiveForWriter, ${KEY_IDENT} } from "@/server/internal/inventory-movement-shadow-write";
 await isInventoryMovementShadowWriteActiveForWriter(tx);`;
 const writerMutation = findDirectSettingMutations(writerPath, "src/server/warehouse.ts");
-const writerRead = findUnlockedReadCallViolations(writerPath, "src/server/warehouse.ts");
+const writerUnlocked = findUnlockedReadCallViolations(writerPath, "src/server/warehouse.ts");
 const writerSetter = findSetterCallViolations(writerPath, "src/server/warehouse.ts");
-if (writerMutation.length > 0 || writerRead.length > 0 || writerSetter.length > 0) {
+const writerDirectRead = findDirectSettingReads(writerPath, "src/server/warehouse.ts");
+if (
+  writerMutation.length > 0 ||
+  writerUnlocked.length > 0 ||
+  writerSetter.length > 0 ||
+  writerDirectRead.length > 0
+) {
   fixtureFailures.push("isInventoryMovementShadowWriteActiveForWriter must remain the permitted future writer-facing path");
 }
 
@@ -257,6 +363,9 @@ for (const absolute of collectScanRoots()) {
   if (!isMutationAllowed(rel)) {
     failures.push(...findDirectSettingMutations(sourceText, rel));
   }
+  if (!isDirectReadAllowed(rel)) {
+    failures.push(...findDirectSettingReads(sourceText, rel));
+  }
   failures.push(...findUnlockedReadCallViolations(sourceText, rel));
   failures.push(...findSetterCallViolations(sourceText, rel));
 }
@@ -269,5 +378,6 @@ if (failures.length > 0) {
 
 console.log(
   "InventoryMovement SHADOW write-gate control policy passed: only the coordinated setter " +
-    `may mutate ${KEY}; CLI calls the setter; unlocked read is reset-only.`,
+    `may mutate ${KEY}; ordinary code may not read ${KEY} directly; ` +
+    "CLI calls the setter; unlocked read is reset-only.",
 );
