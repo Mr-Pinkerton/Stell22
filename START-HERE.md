@@ -24,9 +24,15 @@ Never import door-specific entities, routes, WIP assumptions, or business rules 
 
 ## Application / main checkpoint
 
+`c14a58641d57dfabfce223b2c213db9c86167ca4`
+
+This SHA is the current production **application** checkpoint and was deployed (Production Deploy `35314440036` SUCCESS). R-04 Supply cycle identity = **DEPLOYED** (`audit/08.08`). Migration `20260917200000_psr_p2_r04_supply_stock_accounting_cycle` **APPLIED**. `InventoryMovement` exists and is empty. No runtime writers. `inventory_movement_shadow_write` remains ABSENT. `production_cost_flow` remains INACTIVE. PSR-P2 dual-write **NOT STARTED**. Always verify current GitHub `main` HEAD.
+
+Prior production application checkpoint (**historical**, do not rewrite):
+
 `de2e1c015423e7b848f0583c0e75b2abb12733d9`
 
-This SHA is the current production **application** checkpoint and was deployed (Production Deploy `35257469956` SUCCESS). PSR-P2 general preconditions = **DEPLOYED DORMANT** (`audit/08.07`). `InventoryMovement` exists and is empty. No runtime writers. `inventory_movement_shadow_write` remains ABSENT. `production_cost_flow` remains INACTIVE.
+Production Deploy `35257469956` SUCCESS. PSR-P2 general preconditions (`PSR-Q-004` / R-07 / R-10 / R-11) **DEPLOYED DORMANT** (`audit/08.07`).
 
 Always verify current `main` HEAD.
 
@@ -64,7 +70,7 @@ Independent Review #1 = REQUEST CHANGES (R1…R6 CLOSED/PASS). Independent Revie
 
 `ACCEPTED / REVIEWED` means the architecture **contract** is accepted. It does **not** mean PSR implementation complete, primary-system readiness achieved, ledger deployed, paper removable, or `production_cost_flow` active.
 
-**NEXT = R-04 DELIVERY — PR #11 MERGE / PRODUCTION PREFLIGHT / DEPLOYMENT DECISION** (`audit/08.08`; **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / NOT DEPLOYED**). If PR #11 is still unmerged, merge is the next repository step after final review. After merge, production preflight/deploy decision is next. This is **not** SUPPLY SHADOW dual-write. SHADOW gate remains inactive. InventoryMovement writer remains 0. PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract-creation status **ACCEPTED DESIGN / NOT IMPLEMENTED** is preserved there). Current P1 implementation/deploy = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`). `PSR-Q-004` / R-07 / R-10 / R-11 = **DEPLOYED DORMANT** on production `de2e1c0` (`audit/08.07`). PSR-P2 dual-write **NOT STARTED**. PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`audit/08.03` + `audit/08.04`). Remaining: R-05/R-06 OPEN before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean dual-write, authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center. Do not implement Correction Center / `ProductionOperationMutation` / dual-write from this file alone.
+**NEXT = PSR-P2 R-05 CORRECTION IDENTITY — RECONNAISSANCE / CONTRACT DECISION**. This is **not** SUPPLY SHADOW dual-write, **not** an InventoryMovement writer, **not** R-06, **not** Correction Center implementation, and **not** AUDIT 2. R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Production Deploy `35314440036`). PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract-creation status **ACCEPTED DESIGN / NOT IMPLEMENTED** is preserved there). Current P1 implementation/deploy = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`). PSR-P2 dual-write **NOT STARTED**. PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`audit/08.03` + `audit/08.04`). Remaining: R-05/R-06 OPEN before their contour dual-write. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean dual-write, authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center. Do not implement Correction Center / `ProductionOperationMutation` / dual-write from this file alone.
 
 Historical documentation recovery checkpoint (no longer current on main):
 
@@ -82,9 +88,9 @@ INC-001 containment SHA (still in the running tree):
 
 ## Current work mode
 
-The project on `main`: production application = `de2e1c0` (Production Deploy `35257469956`). Always verify the current GitHub `main` HEAD before relying on a branch SHA. AUDIT 1 complete; ARCH-2 architecture **ACCEPTED / REVIEWED**; PSR-P0-CORR **ACCEPTED DESIGN / NOT IMPLEMENTED**; PSR-P0-CORE = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.04`); PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical **NOT IMPLEMENTED** at contract creation preserved); PSR-P1 implementation/deploy = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`); PSR-P0 **COMPLETE / ACCEPTED** as design contract only; `PSR-Q-004` / R-07 / R-10 / R-11 = **DEPLOYED DORMANT** (`audit/08.07`); R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / NOT DEPLOYED** (`audit/08.08`); PSR-P2 dual-write **NOT STARTED**; INC-001 open; AUDIT 2 not started.
+The project on `main`: production application = `c14a586` (Production Deploy `35314440036`). Always verify the current GitHub `main` HEAD before relying on a branch SHA. AUDIT 1 complete; ARCH-2 architecture **ACCEPTED / REVIEWED**; PSR-P0-CORR **ACCEPTED DESIGN / NOT IMPLEMENTED**; PSR-P0-CORE = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.04`); PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical **NOT IMPLEMENTED** at contract creation preserved); PSR-P1 implementation/deploy = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`); PSR-P0 **COMPLETE / ACCEPTED** as design contract only; `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`); R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`); PSR-P2 dual-write **NOT STARTED**; INC-001 open; AUDIT 2 not started.
 
-**NEXT = R-04 DELIVERY — PR #11 MERGE / PRODUCTION PREFLIGHT / DEPLOYMENT DECISION** (`audit/08.08`). If PR #11 is still unmerged, merge is the next repository step after final review. After merge, production preflight/deploy decision is next. This is **not** SUPPLY SHADOW dual-write. SHADOW gate remains inactive. InventoryMovement writer remains 0. Not a deploy from this file. R-05 / R-06 remain OPEN. Do not implement dual-write, Correction Center schema, or a production deploy from this file.
+**NEXT = PSR-P2 R-05 CORRECTION IDENTITY — RECONNAISSANCE / CONTRACT DECISION**. This is **not** SUPPLY SHADOW dual-write, **not** an InventoryMovement writer, **not** R-06, **not** Correction Center implementation, and **not** AUDIT 2. R-05 / R-06 remain OPEN. Do not implement dual-write, Correction Center schema, or a production deploy from this file.
 
 AUDIT 1 remains `COMPLETE / REVIEWED`. Do not reopen it.
 
