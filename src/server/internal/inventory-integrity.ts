@@ -1,6 +1,7 @@
 import { Prisma, type RailType, type Sort } from "@prisma/client";
 import { D } from "@/lib/cost";
 import { isNoPrisadkaDetail, isReady, requiredPrisadki } from "@/lib/detail-stock";
+import { canonicalLengthDecimal } from "@/server/internal/blank-length";
 import {
   planInventoryPhysicalEffects,
   type InventoryPhysicalEffect,
@@ -112,6 +113,132 @@ function uniqueRefs(refs: InventoryRef[]): InventoryRef[] {
 
 function sortedUniqueIds(ids: Iterable<string | null | undefined>): string[] {
   return [...new Set([...ids].filter((id): id is string => Boolean(id)))].sort();
+}
+
+export type InventoryBlankLockLine = {
+  refType: string;
+  refId: string;
+};
+
+export type InventoryBlankLockBlankRow = {
+  id: string;
+  materialId: string;
+  lengthM: Prisma.Decimal | number | string;
+  detailType: RailType;
+  sort: Sort;
+};
+
+export type InventoryBlankLockDetailRow = {
+  id: string;
+  materialId: string;
+  lengthM: Prisma.Decimal | number | string;
+  detailType: RailType;
+  sort: Sort;
+  prisadkaTorcevaya: boolean;
+  prisadkaPloskost: boolean;
+};
+
+export type InventoryBlankLockResolution = {
+  blankRows: InventoryBlankLockBlankRow[];
+  details: InventoryBlankLockDetailRow[];
+};
+
+function canonicalizeInventoryBlankSpec(spec: BlankSpec): BlankSpec {
+  return {
+    materialId: spec.materialId,
+    lengthM: canonicalLengthDecimal(spec.lengthM),
+    detailType: spec.detailType,
+    sort: spec.sort,
+  };
+}
+
+/**
+ * Global Inventory BlankStock lock plan: one canonical physical-tuple set,
+ * independent of input line order. Direct BLANK ids resolve to
+ * (materialId, lengthM, detailType, sort); no-prisadka DETAIL aliases of the
+ * same tuple collapse into that set. Missing BLANK rows are omitted (they
+ * have no physical tuple to lock). Prisadka DETAIL lines do not lock BlankStock.
+ */
+export function planInventoryBlankStockLockSpecs(
+  lines: Iterable<InventoryBlankLockLine>,
+  resolution: InventoryBlankLockResolution,
+): BlankSpec[] {
+  const blanksById = new Map(resolution.blankRows.map((row) => [row.id, row]));
+  const detailsById = new Map(resolution.details.map((row) => [row.id, row]));
+  const specs: BlankSpec[] = [];
+  for (const line of lines) {
+    if (line.refType === "BLANK") {
+      const row = blanksById.get(line.refId);
+      if (!row) continue;
+      specs.push(
+        canonicalizeInventoryBlankSpec({
+          materialId: row.materialId,
+          lengthM: row.lengthM,
+          detailType: row.detailType,
+          sort: row.sort,
+        }),
+      );
+      continue;
+    }
+    if (line.refType !== "DETAIL") continue;
+    const detail = detailsById.get(line.refId);
+    if (!detail) throw new Error("Деталь не найдена");
+    if (!isNoPrisadkaDetail(detail)) continue;
+    specs.push(
+      canonicalizeInventoryBlankSpec({
+        materialId: detail.materialId,
+        lengthM: detail.lengthM,
+        detailType: detail.detailType,
+        sort: detail.sort,
+      }),
+    );
+  }
+  return uniqueSortedBlankSpecs(specs);
+}
+
+export async function loadInventoryBlankLockResolution(
+  tx: Prisma.TransactionClient,
+  lines: Iterable<InventoryBlankLockLine>,
+): Promise<InventoryBlankLockResolution> {
+  const lineList = [...lines];
+  const blankIds = sortedUniqueIds(
+    lineList.filter((line) => line.refType === "BLANK").map((line) => line.refId),
+  );
+  const detailIds = sortedUniqueIds(
+    lineList.filter((line) => line.refType === "DETAIL").map((line) => line.refId),
+  );
+  const [blankRows, details] = await Promise.all([
+    blankIds.length > 0
+      ? tx.blankStock.findMany({
+          where: { id: { in: blankIds } },
+          select: { id: true, materialId: true, lengthM: true, detailType: true, sort: true },
+        })
+      : Promise.resolve([]),
+    detailIds.length > 0
+      ? tx.detail.findMany({
+          where: { id: { in: detailIds } },
+          select: {
+            id: true,
+            materialId: true,
+            lengthM: true,
+            detailType: true,
+            sort: true,
+            prisadkaTorcevaya: true,
+            prisadkaPloskost: true,
+          },
+        })
+      : Promise.resolve([]),
+  ]);
+  return { blankRows, details };
+}
+
+export async function collectInventoryBlankLockSpecs(
+  tx: Prisma.TransactionClient,
+  lines: Iterable<InventoryBlankLockLine>,
+): Promise<BlankSpec[]> {
+  const lineList = [...lines];
+  const resolution = await loadInventoryBlankLockResolution(tx, lineList);
+  return planInventoryBlankStockLockSpecs(lineList, resolution);
 }
 
 export function inventoryDeviationSumDecimal(
@@ -238,11 +365,11 @@ export async function lockBlankSpecs(
 }
 
 /**
- * Inventory stock lock order (R-06):
+ * Inventory stock lock order (inactive path):
  * 1. Detail catalog rows for DETAIL lines (ORDER BY id)
- * 2. BlankStock pools, spec-sorted (materialId, lengthM, detailType, sort)
- *    — BLANK lines lock the referenced pool; leftover no-prisadka DETAIL
- *      aliases still lock that shared spec (legacy DRAFT fail-closed happens first)
+ * 2. One global BlankStock physical set (canonical spec order) via
+ *    collectInventoryBlankLockSpecs → lockBlankSpecs. Creating a missing
+ *    projection row with quantity 0 is lock representation, not a movement.
  * 3. NomenclatureStock ORDER BY nomenclatureId
  * 4. ProductStock ORDER BY productId
  *
@@ -254,29 +381,7 @@ export async function lockInventoryStockRows(
 ): Promise<void> {
   const detailIds = lines.filter((l) => l.refType === "DETAIL").map((l) => l.refId);
   await lockDetails(tx, detailIds);
-
-  const blankSpecs: BlankSpec[] = [];
-  if (detailIds.length > 0) {
-    const details = await tx.detail.findMany({ where: { id: { in: detailIds } } });
-    const byId = new Map(details.map((d) => [d.id, d]));
-    for (const id of detailIds) {
-      const detail = byId.get(id);
-      if (!detail) throw new Error("Деталь не найдена");
-      if (isNoPrisadkaDetail(detail)) {
-        blankSpecs.push({
-          materialId: detail.materialId,
-          lengthM: detail.lengthM,
-          detailType: detail.detailType,
-          sort: detail.sort,
-        });
-      }
-    }
-  }
-  await lockBlankSpecs(tx, blankSpecs);
-  await lockBlankStockByIds(
-    tx,
-    lines.filter((l) => l.refType === "BLANK").map((l) => l.refId),
-  );
+  await lockBlankSpecs(tx, await collectInventoryBlankLockSpecs(tx, lines));
   await lockNomenclatureIds(
     tx,
     lines.filter((l) => l.refType === "NOMENCLATURE").map((l) => l.refId),
