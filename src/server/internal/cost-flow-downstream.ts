@@ -1510,16 +1510,13 @@ async function applyDetailInventoryLine(
     orderBy: { id: "asc" },
   });
   const ready = existing.filter((r) => isReady(detail, r.torcevayaDone, r.ploskostDone));
-  if (deviation === 0) {
-    if (ready.some((r) => r.costVersion === 0 || r.totalValue == null)) {
-      throw new Error("Денежный учёт включён, но складской пул деталей не инициализирован. Операция заблокирована.");
-    }
-    return;
-  }
-  if (ready.length === 0 && deviation > 0) throw new Error(COST_FLOW_EMPTY_SURPLUS_VALUATION);
-  if (ready.length === 0) throw new Error("Недостаточно остатка деталей");
   if (ready.some((r) => r.costVersion === 0 || r.totalValue == null)) {
     throw new Error("Денежный учёт включён, но складской пул деталей не инициализирован. Операция заблокирована.");
+  }
+  if (ready.length === 0) {
+    if (deviation > 0) throw new Error(COST_FLOW_EMPTY_SURPLUS_VALUATION);
+    if (deviation < 0) throw new Error("Недостаточно остатка деталей");
+    return;
   }
 
   const canonSpec: DetailStockSpec = {
@@ -1548,6 +1545,8 @@ async function applyDetailInventoryLine(
       labor: consumed.taken.labor,
     });
   }
+
+  if (deviation === 0) return;
 
   const pool = await tx.detailStock.findUniqueOrThrow({ where: { id: canonId } });
   if (pool.costVersion === 0 || pool.totalValue == null || pool.materialValue == null || pool.laborValue == null) {

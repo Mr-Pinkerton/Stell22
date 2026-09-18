@@ -16,6 +16,8 @@ vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} 
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Prisma } from "@prisma/client";
+import { D } from "@/lib/cost";
+import { isReady } from "@/lib/detail-stock";
 import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
 import {
   ALREADY_CONDUCTED,
@@ -107,6 +109,87 @@ describe.skipIf(!enabled)("PSR-P2 R-06 inventory physical identity", () => {
       },
     });
     return { material, a, b, blank };
+  }
+
+  async function seedTorcvReadyBuckets(args: { monetary: boolean }) {
+    const material = await prismaA.material.create({
+      data: { name: "M-ready", sectionWidthMm: 40, sectionHeightMm: 20 },
+    });
+    const detail = await prismaA.detail.create({
+      data: {
+        name: "Shelf-ready",
+        materialId: material.id,
+        detailNumber: 1,
+        lengthM: new Prisma.Decimal("0.6000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        prisadkaTorcevaya: true,
+        prisadkaPloskost: false,
+      },
+    });
+    const money = (materialValue: string, laborValue: string) =>
+      args.monetary
+        ? {
+            materialValue: new Prisma.Decimal(materialValue),
+            laborValue: new Prisma.Decimal(laborValue),
+            totalValue: new Prisma.Decimal(D(materialValue).plus(laborValue).toFixed()),
+            costVersion: 1,
+          }
+        : {};
+    await prismaA.detailStock.createMany({
+      data: [
+        {
+          detailId: detail.id,
+          torcevayaDone: true,
+          ploskostDone: false,
+          quantity: 4,
+          ...money("400", "40"),
+        },
+        {
+          detailId: detail.id,
+          torcevayaDone: true,
+          ploskostDone: true,
+          quantity: 3,
+          ...money("300", "30"),
+        },
+        {
+          detailId: detail.id,
+          torcevayaDone: false,
+          ploskostDone: false,
+          quantity: 2,
+          ...money("50", "10"),
+        },
+      ],
+    });
+    return { material, detail };
+  }
+
+  function bucketQty(
+    rows: Array<{ torcevayaDone: boolean; ploskostDone: boolean; quantity: number }>,
+    t: boolean,
+    p: boolean,
+  ): number {
+    return rows.find((r) => r.torcevayaDone === t && r.ploskostDone === p)?.quantity ?? 0;
+  }
+
+  function readyMoneyTotals(
+    detail: { prisadkaTorcevaya: boolean; prisadkaPloskost: boolean },
+    rows: Array<{
+      torcevayaDone: boolean;
+      ploskostDone: boolean;
+      quantity: number;
+      materialValue: Prisma.Decimal | null;
+      laborValue: Prisma.Decimal | null;
+      totalValue: Prisma.Decimal | null;
+    }>,
+  ) {
+    const ready = rows.filter((r) => isReady(detail, r.torcevayaDone, r.ploskostDone));
+    return {
+      qty: ready.reduce((s, r) => s + r.quantity, 0),
+      material: ready.reduce((s, r) => s.plus(D(r.materialValue?.toString() ?? 0)), D(0)),
+      labor: ready.reduce((s, r) => s.plus(D(r.laborValue?.toString() ?? 0)), D(0)),
+      total: ready.reduce((s, r) => s.plus(D(r.totalValue?.toString() ?? 0)), D(0)),
+    };
   }
 
   it("shared A/B draft is one BLANK line; inactive conduct 10→7 applies once", async () => {
@@ -245,6 +328,80 @@ describe.skipIf(!enabled)("PSR-P2 R-06 inventory physical identity", () => {
     expect(qty(true, false)).toBe(5);
     expect(qty(true, true)).toBe(0);
     expect(qty(false, false)).toBe(2);
+  });
+
+  it("active DETAIL zero-deviation canonicalizes READY buckets without CostEvents", async () => {
+    await setCostFlowActive(true);
+    const { detail } = await seedTorcvReadyBuckets({ monetary: true });
+    const before = await prismaA.detailStock.findMany({ where: { detailId: detail.id } });
+    const beforeReady = readyMoneyTotals(detail, before);
+    expect(beforeReady.qty).toBe(7);
+    const draft = await createInventoryDraft(false);
+    const line = draft.lines.find((l) => l.refType === "DETAIL" && l.refId === detail.id);
+    expect(line?.accountedQty).toBe(7);
+    expect(line?.actualQty).toBe(7);
+    const conducted = await conductInventory(draft.id);
+    expect(conducted.status).toBe("CONDUCTED");
+    const rows = await prismaA.detailStock.findMany({ where: { detailId: detail.id } });
+    expect(bucketQty(rows, true, false)).toBe(7);
+    expect(bucketQty(rows, true, true)).toBe(0);
+    expect(bucketQty(rows, false, false)).toBe(2);
+    const afterReady = readyMoneyTotals(detail, rows);
+    expect(afterReady.material.equals(beforeReady.material)).toBe(true);
+    expect(afterReady.labor.equals(beforeReady.labor)).toBe(true);
+    expect(afterReady.total.equals(beforeReady.total)).toBe(true);
+    const wip = rows.find((r) => r.torcevayaDone === false && r.ploskostDone === false);
+    expect(wip?.quantity).toBe(2);
+    expect(D(wip?.materialValue?.toString() ?? 0).equals(D(50))).toBe(true);
+    expect(D(wip?.laborValue?.toString() ?? 0).equals(D(10))).toBe(true);
+    expect(await prismaA.costEvent.count({ where: { inventoryId: draft.id } })).toBe(0);
+  });
+
+  it("active DETAIL 7→5 matches effect-plan physical state with one INVENTORY_LOSS", async () => {
+    await setCostFlowActive(true);
+    const { detail } = await seedTorcvReadyBuckets({ monetary: true });
+    const draft = await createInventoryDraft(false);
+    const line = draft.lines.find((l) => l.refType === "DETAIL" && l.refId === detail.id);
+    expect(line?.accountedQty).toBe(7);
+    await updateInventoryLineActual(line!.id, 5);
+    await conductInventory(draft.id);
+    const rows = await prismaA.detailStock.findMany({ where: { detailId: detail.id } });
+    expect(bucketQty(rows, true, false)).toBe(5);
+    expect(bucketQty(rows, true, true)).toBe(0);
+    expect(bucketQty(rows, false, false)).toBe(2);
+    const events = await prismaA.costEvent.findMany({ where: { inventoryId: draft.id } });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.type).toBe("INVENTORY_LOSS");
+    expect(events[0]?.inventoryLineId).toBe(line!.id);
+  });
+
+  it("inactive and active DETAIL multi-ready physical outcomes match for 0 and -2 deviation", async () => {
+    async function conductPhysical(active: boolean, actualQty: number) {
+      await resetIntegrityInventory(prismaA);
+      if (active) await setCostFlowActive(true);
+      const { detail } = await seedTorcvReadyBuckets({ monetary: active });
+      const draft = await createInventoryDraft(false);
+      const line = draft.lines.find((l) => l.refType === "DETAIL" && l.refId === detail.id);
+      expect(line?.accountedQty).toBe(7);
+      if (actualQty !== 7) await updateInventoryLineActual(line!.id, actualQty);
+      await conductInventory(draft.id);
+      const rows = await prismaA.detailStock.findMany({ where: { detailId: detail.id } });
+      return {
+        canon: bucketQty(rows, true, false),
+        otherReady: bucketQty(rows, true, true),
+        wip: bucketQty(rows, false, false),
+      };
+    }
+
+    const inactiveZero = await conductPhysical(false, 7);
+    const activeZero = await conductPhysical(true, 7);
+    expect(activeZero).toEqual(inactiveZero);
+    expect(inactiveZero).toEqual({ canon: 7, otherReady: 0, wip: 2 });
+
+    const inactiveLoss = await conductPhysical(false, 5);
+    const activeLoss = await conductPhysical(true, 5);
+    expect(activeLoss).toEqual(inactiveLoss);
+    expect(inactiveLoss).toEqual({ canon: 5, otherReady: 0, wip: 2 });
   });
 
   it("stale BLANK snapshot does not mutate or conduct", async () => {
