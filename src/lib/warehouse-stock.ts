@@ -7,7 +7,7 @@ import {
 import { productStock } from "@/mocks/warehouse-fixtures";
 import { formatProductSku } from "@/lib/format";
 import { D } from "@/lib/cost";
-import type { NomenclatureType, StockSnapshot } from "@/types/domain";
+import type { NomenclatureType, RailType, Sort, StockSnapshot } from "@/types/domain";
 
 export interface ProductionStockRow {
   id: string;
@@ -30,6 +30,18 @@ export function inventoryDeviation(accountedQty: number, actualQty: number): num
 /** Сумма отклонения (материал + ЗП — в прототипе unitCost × отклонение). */
 export function inventoryDeviationSum(deviation: number, unitCost: number): number {
   return D(deviation).times(D(unitCost)).toDecimalPlaces(2).toNumber();
+}
+
+/** Physical blank-pool label for Inventory BLANK lines (not a catalog Detail). */
+export function formatBlankPoolLabel(args: {
+  materialName: string;
+  lengthM: number;
+  detailType: RailType;
+  sort: Sort;
+}): string {
+  const typeLabel = args.detailType === "POLKA" ? "полка" : "канавка";
+  const sortLabel = args.sort === "SORT1" ? "1 сорт" : "2 сорт";
+  return `${args.materialName} · ${args.lengthM} м · ${typeLabel} · ${sortLabel}`;
 }
 
 export function buildProductStockRows(

@@ -13,6 +13,7 @@ import { lockBatches } from "@/server/internal/finance-operations";
 import { canFreezeBatch, D } from "@/lib/cost";
 import {
   blendedCostPerMeterByMaterial,
+  blankPhysicalUnitCost,
   buildBatchSnapshots,
   buildCostDetailRows,
   buildCostProductRows,
@@ -289,7 +290,21 @@ export async function getUnitCostSnapshot(period: Period | null = getMonthPeriod
     detailUnit.set(d.id, material.plus(work).toDecimalPlaces(2).toNumber());
   }
   const nomenclatureUnit = new Map(ctx.nomenclature.map((n) => [n.id, n.unitPrice]));
-  return { productFull, detailUnit, nomenclatureUnit };
+  const blanks = await prisma.blankStock.findMany({
+    select: { id: true, materialId: true, lengthM: true, sort: true },
+  });
+  const blankUnit = new Map<string, number>();
+  for (const b of blanks) {
+    blankUnit.set(
+      b.id,
+      blankPhysicalUnitCost(
+        { materialId: b.materialId, lengthM: num(b.lengthM), sort: b.sort },
+        perMeterByMaterial,
+        ctx.actualRates,
+      ),
+    );
+  }
+  return { productFull, detailUnit, nomenclatureUnit, blankUnit };
 }
 
 interface BatchSnapshotData {

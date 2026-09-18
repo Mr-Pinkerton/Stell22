@@ -1,6 +1,11 @@
 import { Prisma, type RailType, type Sort } from "@prisma/client";
 import { D } from "@/lib/cost";
-import { isReady, requiredPrisadki } from "@/lib/detail-stock";
+import { isNoPrisadkaDetail, isReady, requiredPrisadki } from "@/lib/detail-stock";
+import {
+  planInventoryPhysicalEffects,
+  type InventoryPhysicalEffect,
+  type InventoryPhysicalPlanInput,
+} from "@/server/internal/inventory-physical-effects";
 
 export const STALE_SNAPSHOT =
   "После начала инвентаризации остаток изменился. Инвентаризацию необходимо обновить/создать заново.";
@@ -8,6 +13,7 @@ export const ALREADY_CONDUCTED = "Инвентаризация уже прове
 export const INVENTORY_BOUNDARY =
   "Нельзя изменить/удалить: после этой операции проведена инвентаризация по затронутому остатку.";
 export const DRAFT_ALREADY_EXISTS = "Черновик инвентаризации уже существует";
+export const LEGACY_INVENTORY_DRAFT_RECREATE = "LEGACY_INVENTORY_DRAFT_RECREATE";
 
 /**
  * BD-16.2: violation of partial UNIQUE Inventory_status_draft_key.
@@ -21,7 +27,10 @@ export function isDraftUniqueViolation(err: unknown): boolean {
   return Array.isArray(meta.target) && meta.target.includes("status");
 }
 
-export type InventoryRef = { refType: "PRODUCT" | "DETAIL" | "NOMENCLATURE"; refId: string };
+export type InventoryRef = {
+  refType: "PRODUCT" | "DETAIL" | "NOMENCLATURE" | "BLANK";
+  refId: string;
+};
 
 export type BlankSpec = {
   materialId: string;
@@ -228,6 +237,17 @@ export async function lockBlankSpecs(
   }
 }
 
+/**
+ * Inventory stock lock order (R-06):
+ * 1. Detail catalog rows for DETAIL lines (ORDER BY id)
+ * 2. BlankStock pools, spec-sorted (materialId, lengthM, detailType, sort)
+ *    — BLANK lines lock the referenced pool; leftover no-prisadka DETAIL
+ *      aliases still lock that shared spec (legacy DRAFT fail-closed happens first)
+ * 3. NomenclatureStock ORDER BY nomenclatureId
+ * 4. ProductStock ORDER BY productId
+ *
+ * BLANK does not lock catalog Detail aliases of the same spec.
+ */
 export async function lockInventoryStockRows(
   tx: Prisma.TransactionClient,
   lines: Array<{ refType: string; refId: string }>,
@@ -242,7 +262,7 @@ export async function lockInventoryStockRows(
     for (const id of detailIds) {
       const detail = byId.get(id);
       if (!detail) throw new Error("Деталь не найдена");
-      if (!detail.prisadkaTorcevaya && !detail.prisadkaPloskost) {
+      if (isNoPrisadkaDetail(detail)) {
         blankSpecs.push({
           materialId: detail.materialId,
           lengthM: detail.lengthM,
@@ -253,6 +273,10 @@ export async function lockInventoryStockRows(
     }
   }
   await lockBlankSpecs(tx, blankSpecs);
+  await lockBlankStockByIds(
+    tx,
+    lines.filter((l) => l.refType === "BLANK").map((l) => l.refId),
+  );
   await lockNomenclatureIds(
     tx,
     lines.filter((l) => l.refType === "NOMENCLATURE").map((l) => l.refId),
@@ -261,6 +285,33 @@ export async function lockInventoryStockRows(
     tx,
     lines.filter((l) => l.refType === "PRODUCT").map((l) => l.refId),
   );
+}
+
+/** Lock existing BlankStock rows by id, ordered by physical spec. Does not create rows. */
+export async function lockBlankStockByIds(
+  tx: Prisma.TransactionClient,
+  ids: Iterable<string | null | undefined>,
+): Promise<void> {
+  const unique = sortedUniqueIds(ids);
+  if (unique.length === 0) return;
+  const rows = await tx.blankStock.findMany({
+    where: { id: { in: unique } },
+    select: { materialId: true, lengthM: true, detailType: true, sort: true },
+  });
+  for (const spec of uniqueSortedBlankSpecs(rows)) {
+    const row = await tx.blankStock.findUniqueOrThrow({
+      where: {
+        materialId_lengthM_detailType_sort: {
+          materialId: spec.materialId,
+          lengthM: toDec(spec.lengthM),
+          detailType: spec.detailType,
+          sort: spec.sort,
+        },
+      },
+      select: { id: true },
+    });
+    await tx.$queryRaw`SELECT id FROM "BlankStock" WHERE id = ${row.id} FOR UPDATE`;
+  }
 }
 
 export async function liveQtyForLine(
@@ -277,8 +328,12 @@ export async function liveQtyForLine(
     });
     return row?.quantity ?? 0;
   }
+  if (line.refType === "BLANK") {
+    const row = await tx.blankStock.findUnique({ where: { id: line.refId } });
+    return row?.quantity ?? 0;
+  }
   const detail = await tx.detail.findUniqueOrThrow({ where: { id: line.refId } });
-  if (!detail.prisadkaTorcevaya && !detail.prisadkaPloskost) {
+  if (isNoPrisadkaDetail(detail)) {
     const blank = await tx.blankStock.findUnique({
       where: {
         materialId_lengthM_detailType_sort: {
@@ -311,6 +366,19 @@ export async function blankSpecToInventoryRefs(
   tx: Prisma.TransactionClient,
   spec: BlankSpec,
 ): Promise<InventoryRef[]> {
+  const refs: InventoryRef[] = [];
+  const blank = await tx.blankStock.findUnique({
+    where: {
+      materialId_lengthM_detailType_sort: {
+        materialId: spec.materialId,
+        lengthM: toDec(spec.lengthM),
+        detailType: spec.detailType,
+        sort: spec.sort,
+      },
+    },
+    select: { id: true },
+  });
+  if (blank) refs.push({ refType: "BLANK", refId: blank.id });
   const details = await tx.detail.findMany({
     where: {
       materialId: spec.materialId,
@@ -322,7 +390,167 @@ export async function blankSpecToInventoryRefs(
     },
     select: { id: true },
   });
-  return details.map((d) => ({ refType: "DETAIL" as const, refId: d.id }));
+  for (const d of details) refs.push({ refType: "DETAIL", refId: d.id });
+  return refs;
+}
+
+/** Pre-R06 DRAFT: DETAIL line pointing at a no-prisadka catalog Detail. Must recreate. */
+export async function assertNotLegacyInventoryDraft(
+  tx: Prisma.TransactionClient,
+  lines: Array<{ refType: string; refId: string }>,
+): Promise<void> {
+  const detailIds = lines.filter((l) => l.refType === "DETAIL").map((l) => l.refId);
+  if (detailIds.length === 0) return;
+  const details = await tx.detail.findMany({ where: { id: { in: detailIds } } });
+  const byId = new Map(details.map((d) => [d.id, d]));
+  for (const id of detailIds) {
+    const detail = byId.get(id);
+    if (!detail) throw new Error("Деталь не найдена");
+    if (isNoPrisadkaDetail(detail)) throw new Error(LEGACY_INVENTORY_DRAFT_RECREATE);
+  }
+}
+
+export async function loadInventoryPhysicalPlanInput(
+  tx: Prisma.TransactionClient,
+  lines: Array<{
+    id: string;
+    refType: string;
+    refId: string;
+    accountedQty: number;
+    actualQty: number;
+  }>,
+): Promise<InventoryPhysicalPlanInput> {
+  const blankIds = lines.filter((l) => l.refType === "BLANK").map((l) => l.refId);
+  const detailIds = lines.filter((l) => l.refType === "DETAIL").map((l) => l.refId);
+  const productIds = lines.filter((l) => l.refType === "PRODUCT").map((l) => l.refId);
+  const nomIds = lines.filter((l) => l.refType === "NOMENCLATURE").map((l) => l.refId);
+
+  const [blanks, details, detailBuckets, products, noms] = await Promise.all([
+    blankIds.length > 0
+      ? tx.blankStock.findMany({ where: { id: { in: blankIds } } })
+      : Promise.resolve([]),
+    detailIds.length > 0 ? tx.detail.findMany({ where: { id: { in: detailIds } } }) : Promise.resolve([]),
+    detailIds.length > 0
+      ? tx.detailStock.findMany({ where: { detailId: { in: detailIds } } })
+      : Promise.resolve([]),
+    productIds.length > 0
+      ? tx.productStock.findMany({ where: { productId: { in: productIds } } })
+      : Promise.resolve([]),
+    nomIds.length > 0
+      ? tx.nomenclatureStock.findMany({ where: { nomenclatureId: { in: nomIds } } })
+      : Promise.resolve([]),
+  ]);
+
+  const detailBucketsByDetailId = new Map<
+    string,
+    Array<{ torcevayaDone: boolean; ploskostDone: boolean; quantity: number }>
+  >();
+  for (const row of detailBuckets) {
+    const list = detailBucketsByDetailId.get(row.detailId) ?? [];
+    list.push({
+      torcevayaDone: row.torcevayaDone,
+      ploskostDone: row.ploskostDone,
+      quantity: row.quantity,
+    });
+    detailBucketsByDetailId.set(row.detailId, list);
+  }
+
+  return {
+    lines,
+    blanksById: new Map(
+      blanks.map((b) => [
+        b.id,
+        {
+          id: b.id,
+          materialId: b.materialId,
+          lengthM: Number(b.lengthM),
+          detailType: b.detailType,
+          sort: b.sort,
+          quantity: b.quantity,
+        },
+      ]),
+    ),
+    detailsById: new Map(
+      details.map((d) => [
+        d.id,
+        {
+          id: d.id,
+          prisadkaTorcevaya: d.prisadkaTorcevaya,
+          prisadkaPloskost: d.prisadkaPloskost,
+        },
+      ]),
+    ),
+    detailBucketsByDetailId,
+    productQtyById: new Map(products.map((p) => [p.productId, p.quantity])),
+    nomenclatureQtyById: new Map(noms.map((n) => [n.nomenclatureId, n.quantity])),
+  };
+}
+
+export function deriveInventoryPhysicalEffects(
+  input: InventoryPhysicalPlanInput,
+): InventoryPhysicalEffect[] {
+  return planInventoryPhysicalEffects(input);
+}
+
+export async function applyInactiveInventoryPhysicalEffects(
+  tx: Prisma.TransactionClient,
+  effects: InventoryPhysicalEffect[],
+): Promise<void> {
+  for (const e of effects) {
+    if (e.stockDomain === "PRODUCT") {
+      await tx.productStock.upsert({
+        where: { productId: e.physicalTarget.productId },
+        create: { productId: e.physicalTarget.productId, quantity: e.afterQty },
+        update: { quantity: e.afterQty },
+      });
+      continue;
+    }
+    if (e.stockDomain === "NOMENCLATURE") {
+      await tx.nomenclatureStock.upsert({
+        where: { nomenclatureId: e.physicalTarget.nomenclatureId },
+        create: { nomenclatureId: e.physicalTarget.nomenclatureId, quantity: e.afterQty },
+        update: { quantity: e.afterQty },
+      });
+      continue;
+    }
+    if (e.stockDomain === "BLANK") {
+      await tx.blankStock.upsert({
+        where: {
+          materialId_lengthM_detailType_sort: {
+            materialId: e.physicalTarget.materialId,
+            lengthM: e.physicalTarget.lengthM,
+            detailType: e.physicalTarget.detailType,
+            sort: e.physicalTarget.sort,
+          },
+        },
+        create: {
+          materialId: e.physicalTarget.materialId,
+          lengthM: e.physicalTarget.lengthM,
+          detailType: e.physicalTarget.detailType,
+          sort: e.physicalTarget.sort,
+          quantity: e.afterQty,
+        },
+        update: { quantity: e.afterQty },
+      });
+      continue;
+    }
+    await tx.detailStock.upsert({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId: e.physicalTarget.detailId,
+          torcevayaDone: e.physicalTarget.torcevayaDone,
+          ploskostDone: e.physicalTarget.ploskostDone,
+        },
+      },
+      create: {
+        detailId: e.physicalTarget.detailId,
+        torcevayaDone: e.physicalTarget.torcevayaDone,
+        ploskostDone: e.physicalTarget.ploskostDone,
+        quantity: e.afterQty,
+      },
+      update: { quantity: e.afterQty },
+    });
+  }
 }
 
 export async function assertInventoryBoundary(

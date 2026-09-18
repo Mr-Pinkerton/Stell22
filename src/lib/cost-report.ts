@@ -123,6 +123,20 @@ export function blankWorkCost(sort: Sort, rates: AvgRates): Decimal {
   return sort === "SORT1" ? rates.torcovkaSort1 : rates.torcovkaSort2;
 }
 
+/**
+ * Inventory BLANK unit cost: blended ₽/м × length + torcovka labor.
+ * Independent of catalog Detail.id — shared A/B specs share one cost.
+ */
+export function blankPhysicalUnitCost(
+  spec: { materialId: string; lengthM: number; sort: Sort },
+  perMeterByMaterial: Map<string, CostPerMeter>,
+  rates: AvgRates,
+): number {
+  const pm = perMeterByMaterial.get(spec.materialId);
+  const perM = pm ? (spec.sort === "SORT1" ? pm.sort1 : pm.sort2) : ZERO;
+  return perM.times(D(spec.lengthM)).plus(blankWorkCost(spec.sort, rates)).toDecimalPlaces(2).toNumber();
+}
+
 // --------------------------- распределение партий ---------------------------
 
 export interface BatchCostSnapshot {

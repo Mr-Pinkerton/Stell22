@@ -14,6 +14,8 @@ export interface UnitCostSnapshot {
   productFull: Map<string, number>;
   detailUnit: Map<string, number>;
   nomenclatureUnit: Map<string, number>;
+  /** BlankStock.id → material + torcovka labor for that physical spec/sort. */
+  blankUnit: Map<string, number>;
 }
 
 export async function getCostReport(

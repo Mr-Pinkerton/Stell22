@@ -35,7 +35,7 @@ export interface ShipmentRow {
   status: ShipmentStatus;
 }
 
-export type InventoryRefType = "DETAIL" | "PRODUCT" | "NOMENCLATURE";
+export type InventoryRefType = "BLANK" | "DETAIL" | "PRODUCT" | "NOMENCLATURE";
 
 export interface InventoryLineRow {
   id: string;

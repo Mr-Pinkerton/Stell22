@@ -3,6 +3,7 @@ import {
   averageRates,
   blendedCostPerMeter,
   blendedCostPerMeterByMaterial,
+  blankPhysicalUnitCost,
   buildBatchSnapshots,
   buildCostDetailRows,
   buildCostProductRows,
@@ -16,6 +17,7 @@ import {
   sortSharesToPercents,
   type ProducedLine,
 } from "./cost-report";
+import { D } from "@/lib/cost";
 import type { Batch, Detail, Employee, NomenclatureItem, Product, RailLot } from "@/types/domain";
 
 const employees: Employee[] = [
@@ -99,6 +101,20 @@ describe("detailWorkCost", () => {
     expect(detailWorkCost(dA, r).toNumber()).toBe(6.5); // 4.5 + 2 (торцевая)
     expect(detailWorkCost(dB, r).toNumber()).toBe(4.5); // только торцовка S1
     expect(detailWorkCost(dC, r).toNumber()).toBe(5); // 3 (S2) + 2 (плоскость)
+  });
+});
+
+describe("blankPhysicalUnitCost", () => {
+  it("identical for two catalog Details sharing the same physical spec", () => {
+    const r = averageRates(employees);
+    const perMeter = new Map([
+      ["mat-1", { sort1: D(10), sort2: D(8) }],
+    ]);
+    const spec = { materialId: "mat-1", lengthM: 1.2, sort: "SORT1" as const };
+    const a = blankPhysicalUnitCost(spec, perMeter, r);
+    const b = blankPhysicalUnitCost({ ...spec }, perMeter, r);
+    expect(a).toBe(b);
+    expect(a).toBe(D(10).times(1.2).plus(r.torcovkaSort1).toDecimalPlaces(2).toNumber());
   });
 });
 
