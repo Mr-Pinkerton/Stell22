@@ -141,3 +141,22 @@ Source-of-truth hierarchy:
 `GitHub main code + committed audit docs` -> `PROJECT.md` -> `AUDIT-INDEX.md` -> Library snapshot -> chat/Cursor transcript.
 
 Chat and Cursor transcripts are working evidence, never the final source of truth.
+
+---
+## PSR-P2 writer contract candidate — 2026-09-18
+
+Current GitHub contract branch: `docs/psr-p2-shadow-writer-contract`.
+
+New artifact: `audit/08.11-psr-p2-shadow-writer-contract.md`.
+
+It freezes the exhaustive physical-writer matrix, gate-first transaction contract, effectKey v1, actor/time/snapshot rules, retry/idempotency requirements, reconciliation diagnostics, mandatory PostgreSQL CI, and evidence-driven P2 implementation sequence.
+
+Status remains:
+
+- **WRITER CONTRACT ONLY**
+- **DUAL-WRITE NOT STARTED**
+- **SHADOW NOT ACTIVATED**
+- `production_cost_flow` **INACTIVE**
+- production application checkpoint remains `eb02b17f488ef9ec13a11dcf158fc169b78e3e37`
+
+NEXT after this contract is independently reviewed and merged: a separate **P2-GUARD/CI implementation package**. It must not be conflated with the first physical writer.
