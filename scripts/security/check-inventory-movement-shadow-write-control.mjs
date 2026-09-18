@@ -19,11 +19,17 @@ const SETTING_MUTATION =
 const SETTING_READ =
   /\bsetting\s*\.\s*(findUnique|findFirst|findMany|findUniqueOrThrow|findFirstOrThrow)\s*\(/;
 
-const RAW_SETTING_MUTATION =
-  /\b(UPDATE|INSERT\s+INTO|DELETE\s+FROM)\s+(ONLY\s+)?(?:"Setting"|\bSetting\b)/i;
+const SETTING_TABLE = '(?:(?:public\\.|\"public\"\\.)?(?:\"Setting\"|\\bSetting\\b))';
 
-const RAW_SETTING_READ =
-  /\bSELECT\b[\s\S]{0,400}\bFROM\s+(ONLY\s+)?(?:"Setting"|\bSetting\b)/i;
+const RAW_SETTING_MUTATION = new RegExp(
+  `\\b(UPDATE|INSERT\\s+INTO|DELETE\\s+FROM)\\s+(ONLY\\s+)?${SETTING_TABLE}`,
+  "i",
+);
+
+const RAW_SETTING_READ = new RegExp(
+  `\\bSELECT\\b[\\s\\S]{0,400}\\bFROM\\s+(ONLY\\s+)?${SETTING_TABLE}`,
+  "i",
+);
 
 const UNLOCKED_READ_CALL = /\breadInventoryMovementShadowWriteGate\s*\(/;
 const SETTER_CALL = /\bsetInventoryMovementShadowWriteGate\s*\(/;
@@ -235,6 +241,38 @@ const rawReadHit = findDirectSettingReads(
 );
 if (!rawReadHit.some((item) => item.includes("raw SQL Setting read"))) {
   fixtureFailures.push("fail-closed detector missed raw SELECT Setting for inventory_movement_shadow_write");
+}
+
+const rawPublicReadHit = findDirectSettingReads(
+  `SELECT value FROM "public"."Setting" WHERE key = '${KEY}'`,
+  "src/server/warehouse.ts",
+);
+if (!rawPublicReadHit.some((item) => item.includes("raw SQL Setting read"))) {
+  fixtureFailures.push('fail-closed detector missed SELECT FROM "public"."Setting"');
+}
+
+const rawPublicMutHit = findDirectSettingMutations(
+  `UPDATE public."Setting" SET value = '{}' WHERE key = '${KEY}'`,
+  "src/server/settings.ts",
+);
+if (!rawPublicMutHit.some((item) => item.includes("raw SQL Setting mutation"))) {
+  fixtureFailures.push('fail-closed detector missed UPDATE public."Setting"');
+}
+
+const rawPublicInsertHit = findDirectSettingMutations(
+  `INSERT INTO "public"."Setting" (key, value) VALUES ('${KEY}', '{}')`,
+  "src/server/warehouse.ts",
+);
+if (!rawPublicInsertHit.some((item) => item.includes("raw SQL Setting mutation"))) {
+  fixtureFailures.push('fail-closed detector missed INSERT INTO "public"."Setting"');
+}
+
+const rawPublicDeleteHit = findDirectSettingMutations(
+  `DELETE FROM public."Setting" WHERE key = '${KEY}'`,
+  "src/server/production.ts",
+);
+if (!rawPublicDeleteHit.some((item) => item.includes("raw SQL Setting mutation"))) {
+  fixtureFailures.push('fail-closed detector missed DELETE FROM public."Setting"');
 }
 
 const writerPath = `import { isInventoryMovementShadowWriteActiveForWriter, ${KEY_IDENT} } from "@/server/internal/inventory-movement-shadow-write";

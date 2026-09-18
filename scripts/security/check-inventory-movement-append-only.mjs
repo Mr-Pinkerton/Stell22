@@ -12,14 +12,16 @@ const REQUIRED_SHADOW_DELETE_SQL =
 const PRISMA_MUTATION =
   /\binventoryMovement\s*\.\s*(updateMany|update|deleteMany|delete|upsert)\s*\(/;
 
-const RAW_UPDATE =
-  /\bUPDATE\s+(ONLY\s+)?(?:"InventoryMovement"|\bInventoryMovement\b)/i;
+const IM_TABLE = '(?:(?:public\\.|\"public\"\\.)?(?:\"InventoryMovement\"|\\bInventoryMovement\\b))';
 
-const RAW_DELETE =
-  /\bDELETE\s+FROM\s+(ONLY\s+)?(?:"InventoryMovement"|\bInventoryMovement\b)/i;
+const RAW_UPDATE = new RegExp(`\\bUPDATE\\s+(ONLY\\s+)?${IM_TABLE}`, "i");
 
-const RAW_TRUNCATE =
-  /\bTRUNCATE\s+(TABLE\s+)?(ONLY\s+)?(?:(?:public\.)?(?:"InventoryMovement"|\bInventoryMovement\b))/i;
+const RAW_DELETE = new RegExp(`\\bDELETE\\s+FROM\\s+(ONLY\\s+)?${IM_TABLE}`, "i");
+
+const RAW_TRUNCATE = new RegExp(
+  `\\bTRUNCATE\\s+(TABLE\\s+)?(ONLY\\s+)?${IM_TABLE}`,
+  "i",
+);
 
 /**
  * @param {string} sourceText
@@ -150,6 +152,27 @@ const truncateUnquotedHit = findInventoryMovementAppendOnlyViolations(
 );
 if (!truncateUnquotedHit.some((item) => item.includes("forbidden raw SQL TRUNCATE"))) {
   fixtureFailures.push("fail-closed detector missed unquoted TRUNCATE InventoryMovement");
+}
+const updatePublicHit = findInventoryMovementAppendOnlyViolations(
+  'UPDATE public."InventoryMovement" SET "effectKey" = \'x\'',
+  "fixture-update-public.ts",
+);
+if (!updatePublicHit.some((item) => item.includes("forbidden raw SQL UPDATE"))) {
+  fixtureFailures.push('fail-closed detector missed UPDATE public."InventoryMovement"');
+}
+const deletePublicHit = findInventoryMovementAppendOnlyViolations(
+  'DELETE FROM "public"."InventoryMovement"',
+  "fixture-delete-public.ts",
+);
+if (!deletePublicHit.some((item) => item.includes("forbidden raw SQL DELETE"))) {
+  fixtureFailures.push('fail-closed detector missed DELETE FROM "public"."InventoryMovement"');
+}
+const truncatePublicHit = findInventoryMovementAppendOnlyViolations(
+  'TRUNCATE TABLE "public"."InventoryMovement"',
+  "fixture-truncate-public.ts",
+);
+if (!truncatePublicHit.some((item) => item.includes("forbidden raw SQL TRUNCATE"))) {
+  fixtureFailures.push('fail-closed detector missed TRUNCATE "public"."InventoryMovement"');
 }
 
 const failures = [...fixtureFailures];

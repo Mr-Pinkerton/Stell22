@@ -9,10 +9,11 @@ import {
   type MovementActorSnapshot,
 } from "@/server/internal/inventory-movement-actor";
 import {
+  assertP2ShadowMovementEffect,
   canonicalizeMovementTarget,
   compareEffectKey,
   effectKeyV1,
-  isMovementEffectRole,
+  InventoryMovementIdentityError,
   type MovementEffect,
 } from "@/server/internal/inventory-movement-identity";
 import { utcNaiveTimestampString } from "@/server/internal/inventory-movement-time";
@@ -57,37 +58,33 @@ function requireNonblank(value: string, message: string): string {
   return value;
 }
 
-function assertKindSign(kind: InventoryMovementKind, quantityDelta: number): void {
-  if (kind === "REVERSAL") {
-    throw new InventoryMovementShadowGatewayError(
-      "Common SHADOW gateway does not insert REVERSAL rows",
-    );
-  }
-  if (
-    (kind === "RECEIPT" || kind === "PRODUCTION_OUTPUT" || kind === "OPENING_BALANCE") &&
-    quantityDelta <= 0
-  ) {
-    throw new InventoryMovementShadowGatewayError(`${kind} requires quantityDelta > 0`);
-  }
-  if (kind === "CONSUMPTION" && quantityDelta >= 0) {
-    throw new InventoryMovementShadowGatewayError("CONSUMPTION requires quantityDelta < 0");
-  }
-}
-
 function prepareEffects(effects: readonly MovementEffect[]): PreparedRow[] {
   const prepared: PreparedRow[] = [];
   for (const effect of effects) {
-    if (!isMovementEffectRole(effect.role)) {
-      throw new InventoryMovementShadowGatewayError("Unknown movement effect role");
-    }
     if (!Number.isInteger(effect.quantityDelta) || !Number.isFinite(effect.quantityDelta)) {
       throw new InventoryMovementShadowGatewayError("quantityDelta must be a finite integer");
     }
+    try {
+      assertP2ShadowMovementEffect(effect);
+    } catch (err) {
+      if (err instanceof InventoryMovementIdentityError) {
+        throw new InventoryMovementShadowGatewayError(err.message);
+      }
+      throw err;
+    }
     if (effect.quantityDelta === 0) continue;
-    assertKindSign(effect.kind, effect.quantityDelta);
     const canonical = canonicalizeMovementTarget(effect.target);
+    let effectKey: string;
+    try {
+      effectKey = effectKeyV1(effect.role, canonical.targetHashV1, effect.qualifier);
+    } catch (err) {
+      if (err instanceof InventoryMovementIdentityError) {
+        throw new InventoryMovementShadowGatewayError(err.message);
+      }
+      throw err;
+    }
     prepared.push({
-      effectKey: effectKeyV1(effect.role, canonical.targetHashV1, effect.qualifier),
+      effectKey,
       kind: effect.kind,
       quantityDelta: effect.quantityDelta,
       canonical,

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { InventoryMovementKind, InventoryStockDomain } from "@prisma/client";
+import type { InventoryStockDomain } from "@prisma/client";
 import { canonicalLengthFixed4 } from "@/server/internal/blank-length";
 import type { RailType, Sort } from "@/types/domain";
 
@@ -13,6 +13,27 @@ export const MOVEMENT_EFFECT_ROLES = [
 ] as const;
 
 export type MovementEffectRole = (typeof MOVEMENT_EFFECT_ROLES)[number];
+
+export const MOVEMENT_EFFECT_KIND_BY_ROLE = {
+  receipt: "RECEIPT",
+  consume: "CONSUMPTION",
+  output: "PRODUCTION_OUTPUT",
+  adjust: "ADJUSTMENT",
+  writeoff: "ADJUSTMENT",
+  restore: "ADJUSTMENT",
+} as const;
+
+export const EFFECT_KEY_MAX_LENGTH = 200;
+
+export const INVENTORY_MOVEMENT_IDENTITY_INVALID =
+  "InventoryMovement effect identity is invalid.";
+
+export class InventoryMovementIdentityError extends Error {
+  constructor(message = INVENTORY_MOVEMENT_IDENTITY_INVALID) {
+    super(message);
+    this.name = "InventoryMovementIdentityError";
+  }
+}
 
 export type MovementTarget =
   | { stockDomain: "RAIL_LOT"; railLotId: string }
@@ -32,13 +53,19 @@ export type MovementTarget =
   | { stockDomain: "NOMENCLATURE"; nomenclatureId: string }
   | { stockDomain: "PRODUCT"; productId: string };
 
-export type MovementEffect = {
-  role: MovementEffectRole;
-  kind: InventoryMovementKind;
+type MovementEffectBase = {
   quantityDelta: number;
   target: MovementTarget;
   qualifier?: string;
 };
+
+export type MovementEffect =
+  | ({ role: "receipt"; kind: "RECEIPT" } & MovementEffectBase)
+  | ({ role: "consume"; kind: "CONSUMPTION" } & MovementEffectBase)
+  | ({ role: "output"; kind: "PRODUCTION_OUTPUT" } & MovementEffectBase)
+  | ({ role: "adjust"; kind: "ADJUSTMENT" } & MovementEffectBase)
+  | ({ role: "writeoff"; kind: "ADJUSTMENT" } & MovementEffectBase)
+  | ({ role: "restore"; kind: "ADJUSTMENT" } & MovementEffectBase);
 
 export type CanonicalMovementTarget = {
   stockDomain: InventoryStockDomain;
@@ -210,8 +237,47 @@ export function effectKeyV1(
   qualifier?: string,
 ): string {
   const base = `imfx1:${role}:${targetHash}`;
-  if (qualifier === undefined || qualifier === "") return base;
-  return `${base}:${qualifier}`;
+  const key = qualifier === undefined || qualifier === "" ? base : `${base}:${qualifier}`;
+  if (!key.trim()) {
+    throw new InventoryMovementIdentityError("effectKey must be nonblank");
+  }
+  if (key.length > EFFECT_KEY_MAX_LENGTH) {
+    throw new InventoryMovementIdentityError(
+      `effectKey exceeds ${EFFECT_KEY_MAX_LENGTH} characters`,
+    );
+  }
+  return key;
+}
+
+export function assertP2ShadowMovementEffect(effect: {
+  role: string;
+  kind: string;
+  quantityDelta: number;
+}): void {
+  if (effect.kind === "OPENING_BALANCE" || effect.kind === "REVERSAL") {
+    throw new InventoryMovementIdentityError(
+      `P2 SHADOW gateway rejects ${effect.kind}`,
+    );
+  }
+  if (!isMovementEffectRole(effect.role)) {
+    throw new InventoryMovementIdentityError("Unknown movement effect role");
+  }
+  const expectedKind = MOVEMENT_EFFECT_KIND_BY_ROLE[effect.role];
+  if (effect.kind !== expectedKind) {
+    throw new InventoryMovementIdentityError(
+      `role ${effect.role} requires kind ${expectedKind}`,
+    );
+  }
+  if (effect.quantityDelta === 0) return;
+  if (effect.role === "receipt" || effect.role === "output") {
+    if (!(effect.quantityDelta > 0)) {
+      throw new InventoryMovementIdentityError(`${effect.role} requires quantityDelta > 0`);
+    }
+  } else if (effect.role === "consume") {
+    if (!(effect.quantityDelta < 0)) {
+      throw new InventoryMovementIdentityError("consume requires quantityDelta < 0");
+    }
+  }
 }
 
 export function compareEffectKey(a: string, b: string): number {

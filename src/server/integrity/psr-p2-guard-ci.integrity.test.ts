@@ -372,6 +372,53 @@ describe.skipIf(!enabled)("PSR-P2-GUARD/CI SHADOW gateway", () => {
         WHERE "causationId" = 'batch-tz'
       `;
       expect(stored[0]?.naive).toBe(utcNaiveTimestampString(instant));
+      const row = await tx.inventoryMovement.findFirst({
+        where: { causationId: "batch-tz" },
+      });
+      expect(row?.effectiveAt.toISOString()).toBe(instant.toISOString());
+      expect(row?.effectiveAt.getTime()).toBe(instant.getTime());
     }, txOpts);
+  });
+
+  it("B: invalid role/kind fails closed without inserting", async () => {
+    await expect(
+      db.$transaction(async (tx) => {
+        await setInventoryMovementShadowWriteGate(tx, true);
+        return appendShadowInventoryMovements(tx, {
+          effectiveAt: new Date("2026-09-18T12:00:00.000Z"),
+          actor,
+          causation: { causationKind: "BATCH", causationId: "batch-kind-mismatch" },
+          effects: [
+            {
+              role: "consume",
+              kind: "ADJUSTMENT",
+              quantityDelta: -5,
+              target: { stockDomain: "RAIL_LOT", railLotId: "lot-mismatch" },
+            } as never,
+          ],
+        });
+      }, txOpts),
+    ).rejects.toThrow(/consume requires kind CONSUMPTION|role consume/);
+    expect(await db.inventoryMovement.count()).toBe(0);
+
+    await expect(
+      db.$transaction(async (tx) => {
+        await setInventoryMovementShadowWriteGate(tx, true);
+        return appendShadowInventoryMovements(tx, {
+          effectiveAt: new Date("2026-09-18T12:00:00.000Z"),
+          actor,
+          causation: { causationKind: "BATCH", causationId: "batch-opening" },
+          effects: [
+            {
+              role: "receipt",
+              kind: "OPENING_BALANCE",
+              quantityDelta: 5,
+              target: { stockDomain: "RAIL_LOT", railLotId: "lot-opening" },
+            } as never,
+          ],
+        });
+      }, txOpts),
+    ).rejects.toThrow(/OPENING_BALANCE/);
+    expect(await db.inventoryMovement.count()).toBe(0);
   });
 });

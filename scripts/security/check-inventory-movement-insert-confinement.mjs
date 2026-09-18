@@ -7,6 +7,9 @@ const root = process.cwd();
 const GATEWAY_IMPL_REL = "src/server/internal/inventory-movement-shadow-gateway.ts";
 const GATEWAY_TEST_REL = "src/server/internal/inventory-movement-shadow-gateway.test.ts";
 const CHECKER_REL = "scripts/security/check-inventory-movement-insert-confinement.mjs";
+const APPEND_ONLY_CHECKER_REL = "scripts/security/check-inventory-movement-append-only.mjs";
+
+const IM_TABLE = '(?:(?:public\\.|\"public\"\\.)?(?:\"InventoryMovement\"|\\bInventoryMovement\\b))';
 
 const PRISMA_CREATE =
   /\binventoryMovement\s*\.\s*(createMany|create)\s*\(/;
@@ -14,8 +17,7 @@ const PRISMA_CREATE =
 const PRISMA_CREATE_ALIAS =
   /\binventoryMovement\s*\[\s*['"`]create(Many)?['"`]\s*\]/;
 
-const RAW_INSERT =
-  /\bINSERT\s+INTO\s+(?:(?:public\.)?(?:"InventoryMovement"|\bInventoryMovement\b))/i;
+const RAW_INSERT = new RegExp(`\\bINSERT\\s+INTO\\s+${IM_TABLE}`, "i");
 
 /**
  * @param {string} sourceText
@@ -56,7 +58,7 @@ function isInsertAllowed(rel) {
   if (rel === GATEWAY_IMPL_REL) return true;
   if (rel === GATEWAY_TEST_REL) return true;
   if (rel === CHECKER_REL) return true;
-  if (rel.startsWith("scripts/security/")) return true;
+  if (rel === APPEND_ONLY_CHECKER_REL) return true;
   if (rel.startsWith("src/server/integrity/")) return true;
   if (rel.startsWith("prisma/migrations/")) return true;
   return false;
@@ -111,6 +113,40 @@ const rawUnquotedHit = findInventoryMovementInsertViolations(
 );
 if (!rawUnquotedHit.some((item) => item.includes("raw INSERT"))) {
   fixtureFailures.push("fail-closed detector missed unquoted INSERT INTO InventoryMovement");
+}
+
+const rawPublicQuotedHit = findInventoryMovementInsertViolations(
+  'INSERT INTO "public"."InventoryMovement" ("id") VALUES (\'x\')',
+  "src/server/warehouse.ts",
+);
+if (!rawPublicQuotedHit.some((item) => item.includes("raw INSERT"))) {
+  fixtureFailures.push('fail-closed detector missed INSERT INTO "public"."InventoryMovement"');
+}
+
+const rawPublicUnquotedHit = findInventoryMovementInsertViolations(
+  'INSERT INTO public."InventoryMovement" (id) VALUES (\'x\')',
+  "src/server/production.ts",
+);
+if (!rawPublicUnquotedHit.some((item) => item.includes("raw INSERT"))) {
+  fixtureFailures.push('fail-closed detector missed INSERT INTO public."InventoryMovement"');
+}
+
+if (isInsertAllowed("scripts/security/rogue-writer.mjs")) {
+  fixtureFailures.push("scripts/security/** must not be a blanket INSERT allowlist");
+}
+const rogueCreate = findInventoryMovementInsertViolations(
+  "await tx.inventoryMovement.create({ data: row })",
+  "scripts/security/rogue-writer.mjs",
+);
+if (!rogueCreate.some((item) => item.includes("create/createMany"))) {
+  fixtureFailures.push("fail-closed detector missed rogue scripts/security inventoryMovement.create");
+}
+const rogueInsert = findInventoryMovementInsertViolations(
+  'INSERT INTO "InventoryMovement" ("id") VALUES (\'x\')',
+  "scripts/security/rogue-writer.mjs",
+);
+if (!rogueInsert.some((item) => item.includes("raw INSERT"))) {
+  fixtureFailures.push("fail-closed detector missed rogue scripts/security raw INSERT");
 }
 
 const failures = [...fixtureFailures];

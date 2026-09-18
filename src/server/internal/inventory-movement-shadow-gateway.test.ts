@@ -134,6 +134,86 @@ describe("appendShadowInventoryMovements", () => {
     expect(forwardKeys[0] < forwardKeys[1]).toBe(true);
   });
 
+  it("rejects role/kind mismatches and P6/reversal kinds", async () => {
+    const active = fakeTx({ settingValue: { version: 1, active: true } });
+    await expect(
+      appendShadowInventoryMovements(active, {
+        effectiveAt,
+        actor,
+        causation,
+        effects: [
+          {
+            role: "consume",
+            kind: "ADJUSTMENT",
+            quantityDelta: -5,
+            target: { stockDomain: "RAIL_LOT", railLotId: "lot-1" },
+          } as unknown as MovementEffect,
+        ],
+      }),
+    ).rejects.toBeInstanceOf(InventoryMovementShadowGatewayError);
+    await expect(
+      appendShadowInventoryMovements(active, {
+        effectiveAt,
+        actor,
+        causation,
+        effects: [
+          {
+            role: "adjust",
+            kind: "RECEIPT",
+            quantityDelta: 5,
+            target: { stockDomain: "RAIL_LOT", railLotId: "lot-1" },
+          } as unknown as MovementEffect,
+        ],
+      }),
+    ).rejects.toBeInstanceOf(InventoryMovementShadowGatewayError);
+    await expect(
+      appendShadowInventoryMovements(active, {
+        effectiveAt,
+        actor,
+        causation,
+        effects: [
+          {
+            role: "receipt",
+            kind: "OPENING_BALANCE",
+            quantityDelta: 5,
+            target: { stockDomain: "RAIL_LOT", railLotId: "lot-1" },
+          } as unknown as MovementEffect,
+        ],
+      }),
+    ).rejects.toThrow(/OPENING_BALANCE/);
+    await expect(
+      appendShadowInventoryMovements(active, {
+        effectiveAt,
+        actor,
+        causation,
+        effects: [
+          {
+            role: "adjust",
+            kind: "REVERSAL",
+            quantityDelta: -1,
+            target: { stockDomain: "RAIL_LOT", railLotId: "lot-1" },
+          } as unknown as MovementEffect,
+        ],
+      }),
+    ).rejects.toThrow(/REVERSAL/);
+  });
+
+  it("rejects an oversized effectKey qualifier before insert", async () => {
+    const inserts: unknown[] = [];
+    await expect(
+      appendShadowInventoryMovements(
+        fakeTx({ settingValue: { version: 1, active: true }, inserts }),
+        {
+          effectiveAt,
+          actor,
+          causation,
+          effects: [{ ...railReceipt("lot-1"), qualifier: "q".repeat(200) }],
+        },
+      ),
+    ).rejects.toBeInstanceOf(InventoryMovementShadowGatewayError);
+    expect(inserts).toEqual([]);
+  });
+
   it("rejects non-integer quantityDelta", async () => {
     await expect(
       appendShadowInventoryMovements(

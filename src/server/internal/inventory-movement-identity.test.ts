@@ -3,9 +3,12 @@ import { Decimal } from "decimal.js";
 import { describe, expect, it } from "vitest";
 import { canonicalLengthFixed4 } from "@/server/internal/blank-length";
 import {
+  assertP2ShadowMovementEffect,
   canonicalizeMovementTarget,
   compareEffectKey,
+  EFFECT_KEY_MAX_LENGTH,
   effectKeyV1,
+  InventoryMovementIdentityError,
   targetHashV1,
   targetKeyV1,
 } from "@/server/internal/inventory-movement-identity";
@@ -70,6 +73,57 @@ describe("effectKeyV1", () => {
     const hash = "ab".repeat(32);
     expect(effectKeyV1("adjust", hash)).toBe(`imfx1:adjust:${hash}`);
     expect(effectKeyV1("restore", hash, "g=1")).toBe(`imfx1:restore:${hash}:g=1`);
+  });
+
+  it("rejects an oversized qualifier before any insert", () => {
+    const hash = "ab".repeat(32);
+    expect(() => effectKeyV1("adjust", hash, "q".repeat(EFFECT_KEY_MAX_LENGTH))).toThrow(
+      InventoryMovementIdentityError,
+    );
+    expect(() => effectKeyV1("adjust", hash, "q".repeat(EFFECT_KEY_MAX_LENGTH))).toThrow(
+      /exceeds 200/,
+    );
+  });
+});
+
+describe("assertP2ShadowMovementEffect", () => {
+  it("allows the frozen role/kind pairs", () => {
+    expect(() =>
+      assertP2ShadowMovementEffect({ role: "receipt", kind: "RECEIPT", quantityDelta: 1 }),
+    ).not.toThrow();
+    expect(() =>
+      assertP2ShadowMovementEffect({ role: "consume", kind: "CONSUMPTION", quantityDelta: -1 }),
+    ).not.toThrow();
+    expect(() =>
+      assertP2ShadowMovementEffect({ role: "output", kind: "PRODUCTION_OUTPUT", quantityDelta: 1 }),
+    ).not.toThrow();
+    expect(() =>
+      assertP2ShadowMovementEffect({ role: "adjust", kind: "ADJUSTMENT", quantityDelta: -2 }),
+    ).not.toThrow();
+    expect(() =>
+      assertP2ShadowMovementEffect({ role: "writeoff", kind: "ADJUSTMENT", quantityDelta: -3 }),
+    ).not.toThrow();
+    expect(() =>
+      assertP2ShadowMovementEffect({ role: "restore", kind: "ADJUSTMENT", quantityDelta: 4 }),
+    ).not.toThrow();
+  });
+
+  it("rejects consume+ADJUSTMENT and adjust+RECEIPT", () => {
+    expect(() =>
+      assertP2ShadowMovementEffect({ role: "consume", kind: "ADJUSTMENT", quantityDelta: -5 }),
+    ).toThrow(InventoryMovementIdentityError);
+    expect(() =>
+      assertP2ShadowMovementEffect({ role: "adjust", kind: "RECEIPT", quantityDelta: 5 }),
+    ).toThrow(InventoryMovementIdentityError);
+  });
+
+  it("rejects OPENING_BALANCE and REVERSAL", () => {
+    expect(() =>
+      assertP2ShadowMovementEffect({ role: "receipt", kind: "OPENING_BALANCE", quantityDelta: 5 }),
+    ).toThrow(/OPENING_BALANCE/);
+    expect(() =>
+      assertP2ShadowMovementEffect({ role: "adjust", kind: "REVERSAL", quantityDelta: -1 }),
+    ).toThrow(/REVERSAL/);
   });
 });
 
