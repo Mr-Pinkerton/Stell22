@@ -652,18 +652,6 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     const blank = await prismaA.blankStock.findFirstOrThrow({
       where: { materialId: world.material.id, lengthM: new Prisma.Decimal("1.8000") },
     });
-    const detNoPris = await prismaA.detail.create({
-      data: {
-        name: `blank-det-${world.suffix}`,
-        materialId: world.material.id,
-        detailNumber: 9,
-        lengthM: new Prisma.Decimal("1.8000"),
-        detailType: "POLKA",
-        sort: "SORT1",
-        prisadkaTorcevaya: false,
-        prisadkaPloskost: false,
-      },
-    });
     const shortageDoc = await prismaA.inventory.create({
       data: {
         date: new Date(),
@@ -671,8 +659,8 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
         lines: {
           create: [
             {
-              refType: "DETAIL",
-              refId: detNoPris.id,
+              refType: "BLANK",
+              refId: blank.id,
               accountedQty: 1,
               actualQty: 0,
               deviation: 0,
@@ -697,8 +685,8 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
         lines: {
           create: [
             {
-              refType: "DETAIL",
-              refId: detNoPris.id,
+              refType: "BLANK",
+              refId: blank.id,
               accountedQty: 0,
               actualQty: 1,
               deviation: 0,
@@ -1581,18 +1569,6 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
   }, async () => {
     await setCostFlowActive(true);
     const world = await seedChain();
-    const detNoPris = await prismaA.detail.create({
-      data: {
-        name: `blank-abs-${world.suffix}`,
-        materialId: world.material.id,
-        detailNumber: 8,
-        lengthM: new Prisma.Decimal("1.8000"),
-        detailType: "POLKA",
-        sort: "SORT1",
-        prisadkaTorcevaya: false,
-        prisadkaPloskost: false,
-      },
-    });
     const existingBlank = await prismaA.blankStock.findFirst({
       where: {
         materialId: world.material.id,
@@ -1602,6 +1578,19 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       },
     });
     expect(existingBlank).toBeNull();
+    const zeroPool = await prismaA.blankStock.create({
+      data: {
+        materialId: world.material.id,
+        lengthM: new Prisma.Decimal("1.8000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        quantity: 0,
+        materialValue: new Prisma.Decimal(0),
+        laborValue: new Prisma.Decimal(0),
+        totalValue: new Prisma.Decimal(0),
+        costVersion: 1,
+      },
+    });
     const doc = await prismaA.inventory.create({
       data: {
         date: new Date(),
@@ -1609,8 +1598,8 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
         lines: {
           create: [
             {
-              refType: "DETAIL",
-              refId: detNoPris.id,
+              refType: "BLANK",
+              refId: zeroPool.id,
               accountedQty: 0,
               actualQty: 0,
               deviation: 0,

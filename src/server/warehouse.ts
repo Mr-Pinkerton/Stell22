@@ -8,7 +8,8 @@ import { requireAdmin } from "@/server/session";
 import {
   blankKey,
   buildStockSnapshot,
-  normalizeReadyBuckets,
+  isNoPrisadkaDetail,
+  isReady,
   type BlankStockRow as RawBlankRow,
   type DetailStockRow as RawStockRow,
 } from "@/lib/detail-stock";
@@ -17,7 +18,11 @@ import type { UnitCostSnapshot } from "@/server/cost";
 import { getUnitCostSnapshot } from "@/server/internal/cost";
 import type { Detail } from "@/types/domain";
 import type { ProductionStockRow, DetailStockRow } from "@/lib/warehouse-stock";
-import { inventoryDeviation, inventoryDeviationSum } from "@/lib/warehouse-stock";
+import {
+  formatBlankPoolLabel,
+  inventoryDeviation,
+  inventoryDeviationSum,
+} from "@/lib/warehouse-stock";
 import {
   applyActiveInventoryConduct,
   lockActiveInventoryWriteSet,
@@ -26,11 +31,18 @@ import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import {
   ALREADY_CONDUCTED,
   DRAFT_ALREADY_EXISTS,
+  applyInactiveInventoryPhysicalEffects,
   assertLiveEqualsAccounted,
+  assertNotLegacyInventoryDraft,
+  blankSpecSortKey,
+  deriveInventoryPhysicalEffects,
   inventoryDeviationSumDecimal,
   isDraftUniqueViolation,
+  loadInventoryPhysicalPlanInput,
   lockInventoryForUpdate,
   lockInventoryStockRows,
+  uniqueSortedBlankSpecs,
+  type BlankSpec,
 } from "@/server/internal/inventory-integrity";
 import type {
   InventoryDocRow,
@@ -115,12 +127,15 @@ export async function getWarehouseStock(): Promise<WarehouseStock> {
     .filter((b) => b.quantity > 0)
     .map((b) => {
       const len = num(b.lengthM);
-      const typeLabel = b.detailType === "POLKA" ? "полка" : "канавка";
-      const sortLabel = b.sort === "SORT1" ? "1 сорт" : "2 сорт";
       const matLabel = materialName.get(b.materialId) ?? "—";
       return {
         id: blankKey(b.materialId, len, b.detailType, b.sort),
-        name: `${matLabel} · ${len} м · ${typeLabel} · ${sortLabel}`,
+        name: formatBlankPoolLabel({
+          materialName: matLabel,
+          lengthM: len,
+          detailType: b.detailType,
+          sort: b.sort,
+        }),
         quantity: b.quantity,
       };
     })
@@ -181,6 +196,7 @@ function unitCostFromSnapshot(
 ): number {
   if (refType === "PRODUCT") return valuation.productFull.get(refId) ?? 0;
   if (refType === "NOMENCLATURE") return valuation.nomenclatureUnit.get(refId) ?? 0;
+  if (refType === "BLANK") return valuation.blankUnit.get(refId) ?? 0;
   return valuation.detailUnit.get(refId) ?? 0; // DETAIL: материал + работа
 }
 
@@ -196,6 +212,17 @@ async function serializeDoc(
       if (l.refType === "PRODUCT") {
         const p = await prisma.product.findUnique({ where: { id: l.refId } });
         name = p?.name ?? l.refId;
+      } else if (l.refType === "BLANK") {
+        const b = await prisma.blankStock.findUnique({ where: { id: l.refId } });
+        if (b) {
+          const mat = await prisma.material.findUnique({ where: { id: b.materialId } });
+          name = formatBlankPoolLabel({
+            materialName: mat?.name ?? "—",
+            lengthM: num(b.lengthM),
+            detailType: b.detailType,
+            sort: b.sort,
+          });
+        }
       } else if (l.refType === "DETAIL") {
         const d = await prisma.detail.findUnique({ where: { id: l.refId } });
         name = d?.name ?? l.refId;
@@ -244,59 +271,131 @@ export async function getInventoryDocs(): Promise<InventoryDocRow[]> {
  * Черновик инвентаризации с авто-заполнением учётных остатков из БД.
  *
  * `includeAllActive` — режим ПЕРВИЧНОЙ инвентаризации: в черновик попадают все
- * активные изделия/детали/номенклатура, включая позиции с нулевым учётным
- * остатком. Так можно вписать фактические количества «с нуля» при старте
- * учёта. В обычном режиме (сверка) берутся только позиции с остатком > 0.
+ * активные изделия, уникальные физические пулы заготовок (no-prisadka spec),
+ * готовые детали с присадкой и номенклатура, включая позиции с нулевым учётным
+ * остатком. Для отсутствующего BlankStock по такому spec создаётся строка qty=0.
+ * В обычном режиме (сверка) берутся только позиции с остатком > 0.
  */
 export async function createInventoryDraft(includeAllActive = false): Promise<InventoryDocRow> {
   await requireAdmin();
-  const existing = await prisma.inventory.findFirst({ where: { status: "DRAFT" } });
-  if (existing) throw new Error(DRAFT_ALREADY_EXISTS);
 
-  const stock = await getWarehouseStock();
   type Line = { refType: InventoryRefType; refId: string; accounted: number };
-  const lines: Line[] = [];
-  for (const p of stock.products)
-    if (includeAllActive || p.quantity > 0)
-      lines.push({ refType: "PRODUCT", refId: p.id, accounted: p.quantity });
-
-  if (includeAllActive) {
-    // stock.details содержит только детали с движением на складе; для первичной
-    // инвентаризации нужны ВСЕ активные детали (в т.ч. без остатка).
-    const activeDetails = await prisma.detail.findMany({
-      where: { status: "ACTIVE" },
-      select: { id: true },
-    });
-    const readyById = new Map(stock.details.map((d) => [d.id, d.ready]));
-    for (const d of activeDetails)
-      lines.push({ refType: "DETAIL", refId: d.id, accounted: readyById.get(d.id) ?? 0 });
-  } else {
-    for (const d of stock.details)
-      if (d.ready > 0) lines.push({ refType: "DETAIL", refId: d.id, accounted: d.ready });
-  }
-
-  for (const n of [...stock.fasteners, ...stock.packaging, ...stock.other])
-    if (includeAllActive || n.quantity > 0)
-      lines.push({ refType: "NOMENCLATURE", refId: n.id, accounted: n.quantity });
-
   let doc;
+  let lineCount = 0;
   try {
-    doc = await prisma.inventory.create({
-      data: {
-        date: new Date(),
-        status: "DRAFT",
-        lines: {
-          create: lines.map((l) => ({
-            refType: l.refType,
-            refId: l.refId,
-            accountedQty: l.accounted,
-            actualQty: l.accounted,
-            deviation: 0,
-            deviationSum: 0,
+    doc = await prisma.$transaction(async (tx) => {
+      const existing = await tx.inventory.findFirst({ where: { status: "DRAFT" } });
+      if (existing) throw new Error(DRAFT_ALREADY_EXISTS);
+
+      const [products, productStock, details, detailStock, items, nomStock] = await Promise.all([
+        tx.product.findMany({ where: { status: "ACTIVE" } }),
+        tx.productStock.findMany(),
+        tx.detail.findMany({ where: { status: "ACTIVE" } }),
+        tx.detailStock.findMany(),
+        tx.nomenclatureItem.findMany({ where: { status: "ACTIVE" } }),
+        tx.nomenclatureStock.findMany(),
+      ]);
+
+      const productQty = new Map(productStock.map((s) => [s.productId, s.quantity]));
+      const nomQty = new Map(nomStock.map((n) => [n.nomenclatureId, n.quantity]));
+      const bucketsByDetail = new Map<string, typeof detailStock>();
+      for (const row of detailStock) {
+        const list = bucketsByDetail.get(row.detailId) ?? [];
+        list.push(row);
+        bucketsByDetail.set(row.detailId, list);
+      }
+
+      const lines: Line[] = [];
+      for (const p of [...products].sort((a, b) => a.id.localeCompare(b.id))) {
+        const qty = productQty.get(p.id) ?? 0;
+        if (includeAllActive || qty > 0) {
+          lines.push({ refType: "PRODUCT", refId: p.id, accounted: qty });
+        }
+      }
+
+      const noPrisadka = details.filter(isNoPrisadkaDetail);
+      const prisadkaDetails = details.filter((d) => !isNoPrisadkaDetail(d));
+      const specByKey = new Map<string, BlankSpec>();
+      for (const d of noPrisadka) {
+        const spec: BlankSpec = {
+          materialId: d.materialId,
+          lengthM: d.lengthM,
+          detailType: d.detailType,
+          sort: d.sort,
+        };
+        specByKey.set(blankSpecSortKey(spec), spec);
+      }
+      const specs = uniqueSortedBlankSpecs(specByKey.values());
+
+      if (includeAllActive && specs.length > 0) {
+        await tx.blankStock.createMany({
+          data: specs.map((spec) => ({
+            materialId: spec.materialId,
+            lengthM: spec.lengthM,
+            detailType: spec.detailType,
+            sort: spec.sort,
+            quantity: 0,
           })),
+          skipDuplicates: true,
+        });
+      }
+
+      const blankRows =
+        specs.length === 0
+          ? []
+          : await tx.blankStock.findMany({
+              where: {
+                OR: specs.map((spec) => ({
+                  materialId: spec.materialId,
+                  lengthM: spec.lengthM,
+                  detailType: spec.detailType,
+                  sort: spec.sort,
+                })),
+              },
+            });
+      const blankByKey = new Map(blankRows.map((b) => [blankSpecSortKey(b), b]));
+      for (const spec of specs) {
+        const row = blankByKey.get(blankSpecSortKey(spec));
+        const qty = row?.quantity ?? 0;
+        if (!row) continue;
+        if (!includeAllActive && qty <= 0) continue;
+        lines.push({ refType: "BLANK", refId: row.id, accounted: qty });
+      }
+
+      for (const d of [...prisadkaDetails].sort((a, b) => a.id.localeCompare(b.id))) {
+        const ready = (bucketsByDetail.get(d.id) ?? [])
+          .filter((r) => isReady(d, r.torcevayaDone, r.ploskostDone))
+          .reduce((sum, r) => sum + r.quantity, 0);
+        if (includeAllActive || ready > 0) {
+          lines.push({ refType: "DETAIL", refId: d.id, accounted: ready });
+        }
+      }
+
+      for (const n of [...items].sort((a, b) => a.id.localeCompare(b.id))) {
+        const qty = nomQty.get(n.id) ?? 0;
+        if (includeAllActive || qty > 0) {
+          lines.push({ refType: "NOMENCLATURE", refId: n.id, accounted: qty });
+        }
+      }
+
+      lineCount = lines.length;
+      return tx.inventory.create({
+        data: {
+          date: new Date(),
+          status: "DRAFT",
+          lines: {
+            create: lines.map((l) => ({
+              refType: l.refType,
+              refId: l.refId,
+              accountedQty: l.accounted,
+              actualQty: l.accounted,
+              deviation: 0,
+              deviationSum: 0,
+            })),
+          },
         },
-      },
-      include: { lines: true },
+        include: { lines: true },
+      });
     });
   } catch (err) {
     if (isDraftUniqueViolation(err)) throw new Error(DRAFT_ALREADY_EXISTS);
@@ -305,7 +404,7 @@ export async function createInventoryDraft(includeAllActive = false): Promise<In
   await writeChangeLog({
     entity: "Inventory",
     entityId: doc.id,
-    newValues: { status: "DRAFT", lines: lines.length },
+    newValues: { status: "DRAFT", lines: lineCount },
   });
   revalidatePath(PATH);
   return serializeDoc(doc, await getUnitCostSnapshot());
@@ -367,6 +466,8 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
       });
       if (!doc) throw new Error("Инвентаризация не найдена");
 
+      await assertNotLegacyInventoryDraft(tx, doc.lines);
+
       const costFlowActive = await isCostFlowActive(tx);
       if (costFlowActive) {
         await lockActiveInventoryWriteSet(tx, doc.lines);
@@ -375,10 +476,16 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
       }
       await assertLiveEqualsAccounted(tx, doc.lines);
 
+      const effects = deriveInventoryPhysicalEffects(
+        await loadInventoryPhysicalPlanInput(tx, doc.lines),
+      );
+
       const valuation = await getUnitCostSnapshot();
 
       if (costFlowActive) {
         await applyActiveInventoryConduct(tx, doc);
+      } else {
+        await applyInactiveInventoryPhysicalEffects(tx, effects);
       }
 
       for (const line of doc.lines) {
@@ -387,67 +494,6 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
           deviation,
           unitCostFromSnapshot(valuation, line.refType, line.refId),
         );
-
-        if (!costFlowActive) {
-          if (line.refType === "PRODUCT") {
-            await tx.productStock.upsert({
-              where: { productId: line.refId },
-              create: { productId: line.refId, quantity: line.actualQty },
-              update: { quantity: line.actualQty },
-            });
-          } else if (line.refType === "NOMENCLATURE") {
-            await tx.nomenclatureStock.upsert({
-              where: { nomenclatureId: line.refId },
-              create: { nomenclatureId: line.refId, quantity: line.actualQty },
-              update: { quantity: line.actualQty },
-            });
-          } else {
-            const detail = await tx.detail.findUniqueOrThrow({ where: { id: line.refId } });
-            if (!detail.prisadkaTorcevaya && !detail.prisadkaPloskost) {
-              await tx.blankStock.upsert({
-                where: {
-                  materialId_lengthM_detailType_sort: {
-                    materialId: detail.materialId,
-                    lengthM: detail.lengthM,
-                    detailType: detail.detailType,
-                    sort: detail.sort,
-                  },
-                },
-                create: {
-                  materialId: detail.materialId,
-                  lengthM: detail.lengthM,
-                  detailType: detail.detailType,
-                  sort: detail.sort,
-                  quantity: line.actualQty,
-                },
-                update: { quantity: line.actualQty },
-              });
-            } else {
-              const existing = await tx.detailStock.findMany({
-                where: { detailId: line.refId },
-                select: { torcevayaDone: true, ploskostDone: true },
-              });
-              for (const w of normalizeReadyBuckets(detail, existing, line.actualQty)) {
-                await tx.detailStock.upsert({
-                  where: {
-                    detailId_torcevayaDone_ploskostDone: {
-                      detailId: line.refId,
-                      torcevayaDone: w.torcevayaDone,
-                      ploskostDone: w.ploskostDone,
-                    },
-                  },
-                  create: {
-                    detailId: line.refId,
-                    torcevayaDone: w.torcevayaDone,
-                    ploskostDone: w.ploskostDone,
-                    quantity: w.quantity,
-                  },
-                  update: { quantity: w.quantity },
-                });
-              }
-            }
-          }
-        }
 
         await tx.inventoryLine.update({
           where: { id: line.id },
@@ -471,6 +517,26 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
         tx,
       );
       for (const line of doc.lines) {
+        const newValues: Record<string, unknown> = {
+          inventoryId: docId,
+          refType: line.refType,
+          refId: line.refId,
+          after: line.actualQty,
+          delta: line.actualQty - line.accountedQty,
+        };
+        if (line.refType === "BLANK") {
+          const blank = await tx.blankStock.findUnique({ where: { id: line.refId } });
+          newValues.blankStockId = line.refId;
+          if (blank) {
+            newValues.materialId = blank.materialId;
+            newValues.lengthM = num(blank.lengthM);
+            newValues.detailType = blank.detailType;
+            newValues.sort = blank.sort;
+            newValues.before = line.accountedQty;
+            newValues.after = line.actualQty;
+            newValues.delta = line.actualQty - line.accountedQty;
+          }
+        }
         await writeChangeLog(
           {
             entity: "InventoryLine",
@@ -481,13 +547,7 @@ export async function conductInventory(docId: string): Promise<InventoryDocRow> 
               refId: line.refId,
               before: line.accountedQty,
             },
-            newValues: {
-              inventoryId: docId,
-              refType: line.refType,
-              refId: line.refId,
-              after: line.actualQty,
-              delta: line.actualQty - line.accountedQty,
-            },
+            newValues,
           },
           tx,
         );

@@ -703,14 +703,16 @@ model InventoryLine {
   id           String    @id @default(cuid())
   inventoryId  String
   inventory    Inventory @relation(fields: [inventoryId], references: [id])
-  // ссылка на номенклатуру (деталь/изделие/крепёж) — храним тип+id
-  refType      String    // DETAIL / PRODUCT / NOMENCLATURE
+  // physically countable target — type+id; DB remains String
+  refType      String    // BLANK / DETAIL / PRODUCT / NOMENCLATURE
   refId        String
   accountedQty Int
   actualQty    Int
   deviation    Int
   deviationSum Decimal   @db.Decimal(14, 2) // материал + ЗП
   costEvents   CostEvent[]
+
+  @@unique([inventoryId, refType, refId])
 }
 
 // Physical quantity/provenance ledger (PSR-P1 SHADOW). Distinct from model Inventory

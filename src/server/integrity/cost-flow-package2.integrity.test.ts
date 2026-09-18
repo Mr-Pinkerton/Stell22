@@ -661,6 +661,16 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
         prisadkaPloskost: false,
       },
     });
+    const blank = await prismaA.blankStock.findUniqueOrThrow({
+      where: {
+        materialId_lengthM_detailType_sort: {
+          materialId: args.materialId,
+          lengthM: new Prisma.Decimal(args.lengthM),
+          detailType: args.detailType ?? "POLKA",
+          sort: args.sort ?? "SORT1",
+        },
+      },
+    });
     await delay(30);
     const doc = await prismaA.inventory.create({
       data: {
@@ -669,8 +679,8 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
         lines: {
           create: [
             {
-              refType: "DETAIL",
-              refId: detail.id,
+              refType: "BLANK",
+              refId: blank.id,
               accountedQty: args.accountedQty,
               actualQty: args.accountedQty,
               deviation: 0,

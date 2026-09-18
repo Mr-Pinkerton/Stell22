@@ -1,7 +1,7 @@
 import { Prisma, type RailType, type Sort } from "@prisma/client";
 import { D, type Num } from "@/lib/cost";
 import { canExactMonetaryReverse, q6 } from "@/lib/cost-foundation";
-import { allocate, isReady, requiredPrisadki } from "@/lib/detail-stock";
+import { allocate, isNoPrisadkaDetail, isReady, requiredPrisadki } from "@/lib/detail-stock";
 import { ensureAndLockActiveBlankPools } from "@/server/internal/cost-flow-raw";
 import {
   COST_FLOW_PRE_CUTOVER_REVERSE,
@@ -32,14 +32,17 @@ import {
   type DetailStockSpec,
 } from "@/server/internal/cost-flow-pools";
 import {
+  LEGACY_INVENTORY_DRAFT_RECREATE,
   assertInventoryBoundary,
   blankSpecSortKey,
   blankSpecToInventoryRefs,
   collectPrisadkaRefs,
+  lockBlankStockByIds,
   lockDetails,
   prisadkaDestFlags,
   uniqueSortedBlankSpecs,
   type BlankSpec,
+  type InventoryRef,
   type PreparedUpakovkaApply,
 } from "@/server/internal/inventory-integrity";
 
@@ -1129,7 +1132,7 @@ export async function reverseActiveUpakovkaOperation(
   const productPoolId = productIds.get(op.productId);
   if (!productPoolId) throw new Error(COST_FLOW_VERSION_MISMATCH);
 
-  const refs: Array<{ refType: "PRODUCT" | "DETAIL" | "NOMENCLATURE"; refId: string }> = [
+  const refs: InventoryRef[] = [
     { refType: "PRODUCT", refId: op.productId },
   ];
   for (const nl of op.nomenclatureLines) refs.push({ refType: "NOMENCLATURE", refId: nl.nomenclatureId });
@@ -1216,7 +1219,7 @@ export async function lockActiveInventoryWriteSet(
     for (const id of detailIds) {
       const detail = byId.get(id);
       if (!detail) throw new Error("Деталь не найдена");
-      if (!detail.prisadkaTorcevaya && !detail.prisadkaPloskost) {
+      if (isNoPrisadkaDetail(detail)) {
         blankSpecs.push({
           materialId: detail.materialId,
           lengthM: detail.lengthM,
@@ -1241,7 +1244,21 @@ export async function lockActiveInventoryWriteSet(
     }
   }
 
+  const blankIds = lines.filter((l) => l.refType === "BLANK").map((l) => l.refId);
+  if (blankIds.length > 0) {
+    const blanks = await tx.blankStock.findMany({ where: { id: { in: blankIds } } });
+    for (const b of blanks) {
+      blankSpecs.push({
+        materialId: b.materialId,
+        lengthM: b.lengthM,
+        detailType: b.detailType,
+        sort: b.sort,
+      });
+    }
+  }
+
   await ensureAndLockActiveBlankPools(tx, uniqueSortedBlankSpecs(blankSpecs));
+  await lockBlankStockByIds(tx, blankIds);
   await ensureAndLockActiveDetailPools(tx, uniqueSortedDetailStockSpecs(detailSpecs));
   await ensureAndLockActiveNomPools(
     tx,
@@ -1272,13 +1289,14 @@ export async function applyActiveInventoryConduct(
       await applyProductInventoryLine(tx, doc.id, line, deviation);
     } else if (line.refType === "NOMENCLATURE") {
       await applyNomInventoryLine(tx, doc.id, line, deviation);
-    } else {
+    } else if (line.refType === "BLANK") {
+      await applyBlankInventoryLine(tx, doc.id, line, deviation);
+    } else if (line.refType === "DETAIL") {
       const detail = await tx.detail.findUniqueOrThrow({ where: { id: line.refId } });
-      if (!detail.prisadkaTorcevaya && !detail.prisadkaPloskost) {
-        await applyBlankInventoryLine(tx, doc.id, line, detail, deviation);
-      } else {
-        await applyDetailInventoryLine(tx, doc.id, line, detail, deviation);
-      }
+      if (isNoPrisadkaDetail(detail)) throw new Error(LEGACY_INVENTORY_DRAFT_RECREATE);
+      await applyDetailInventoryLine(tx, doc.id, line, detail, deviation);
+    } else {
+      throw new Error(`Неизвестный тип строки инвентаризации: ${line.refType}`);
     }
   }
 }
@@ -1433,26 +1451,10 @@ async function applyNomInventoryLine(
 async function applyBlankInventoryLine(
   tx: Prisma.TransactionClient,
   inventoryId: string,
-  line: { id: string },
-  detail: { materialId: string; lengthM: Prisma.Decimal; detailType: RailType; sort: Sort },
+  line: { id: string; refId: string },
   deviation: number,
 ): Promise<void> {
-  const spec: BlankSpec = {
-    materialId: detail.materialId,
-    lengthM: detail.lengthM,
-    detailType: detail.detailType,
-    sort: detail.sort,
-  };
-  const existing = await tx.blankStock.findUnique({
-    where: {
-      materialId_lengthM_detailType_sort: {
-        materialId: spec.materialId,
-        lengthM: detail.lengthM,
-        detailType: spec.detailType,
-        sort: spec.sort,
-      },
-    },
-  });
+  const existing = await tx.blankStock.findUnique({ where: { id: line.refId } });
   if (deviation === 0) {
     if (existing && (existing.costVersion === 0 || existing.totalValue == null)) {
       throw new Error("Денежный учёт включён, но складской пул заготовок не инициализирован. Операция заблокирована.");
@@ -1508,16 +1510,13 @@ async function applyDetailInventoryLine(
     orderBy: { id: "asc" },
   });
   const ready = existing.filter((r) => isReady(detail, r.torcevayaDone, r.ploskostDone));
-  if (deviation === 0) {
-    if (ready.some((r) => r.costVersion === 0 || r.totalValue == null)) {
-      throw new Error("Денежный учёт включён, но складской пул деталей не инициализирован. Операция заблокирована.");
-    }
-    return;
-  }
-  if (ready.length === 0 && deviation > 0) throw new Error(COST_FLOW_EMPTY_SURPLUS_VALUATION);
-  if (ready.length === 0) throw new Error("Недостаточно остатка деталей");
   if (ready.some((r) => r.costVersion === 0 || r.totalValue == null)) {
     throw new Error("Денежный учёт включён, но складской пул деталей не инициализирован. Операция заблокирована.");
+  }
+  if (ready.length === 0) {
+    if (deviation > 0) throw new Error(COST_FLOW_EMPTY_SURPLUS_VALUATION);
+    if (deviation < 0) throw new Error("Недостаточно остатка деталей");
+    return;
   }
 
   const canonSpec: DetailStockSpec = {
@@ -1546,6 +1545,8 @@ async function applyDetailInventoryLine(
       labor: consumed.taken.labor,
     });
   }
+
+  if (deviation === 0) return;
 
   const pool = await tx.detailStock.findUniqueOrThrow({ where: { id: canonId } });
   if (pool.costVersion === 0 || pool.totalValue == null || pool.materialValue == null || pool.laborValue == null) {

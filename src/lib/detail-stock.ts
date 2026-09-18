@@ -24,6 +24,11 @@ export interface BlankStockRow {
 
 type PrisadkaFlags = Pick<Detail, "prisadkaTorcevaya" | "prisadkaPloskost">;
 
+/** Catalog Detail with no prisadka is not a physical Inventory target — it aliases a BlankStock pool. */
+export function isNoPrisadkaDetail(detail: PrisadkaFlags): boolean {
+  return !detail.prisadkaTorcevaya && !detail.prisadkaPloskost;
+}
+
 /** Ключ заготовки: материал | длина (4 знака) | тип | сорт. */
 export function blankKey(materialId: string, lengthM: number, detailType: RailType, sort: Sort): string {
   return `${materialId}|${lengthM.toFixed(4)}|${detailType}|${sort}`;
