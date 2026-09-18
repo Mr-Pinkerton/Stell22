@@ -129,7 +129,7 @@ PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT = **P2-GUARD/CI IMPLEMENTATION PACKAGE**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). This NEXT is **not** InventoryMovement writer implementation, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. R-05 is **DEPLOYED** (`audit/08.09`). `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center. R-04 / R-05 / R-06 prerequisites are deployed; the SHADOW writer contract is **ACCEPTED / REVIEWED** in `audit/08.11`; dual-write remains NOT STARTED. Dual-write remains NOT STARTED.
+NEXT = **P2-GUARD/CI IMPLEMENTATION PACKAGE**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). This NEXT is **not** InventoryMovement writer implementation, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. R-05 is **DEPLOYED** (`audit/08.09`). `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center. R-04 / R-05 / R-06 prerequisites are deployed; the SHADOW writer contract is **ACCEPTED / REVIEWED** in `audit/08.11`; dual-write remains NOT STARTED.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
