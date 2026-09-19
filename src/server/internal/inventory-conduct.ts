@@ -24,6 +24,8 @@ import { isInventoryMovementShadowWriteActiveForWriter } from "@/server/internal
 import { inventoryPhysicalEffectsToMovementEffects } from "@/server/internal/inventory-physical-effects-to-movement";
 
 export const INVENTORY_DUAL_ACTIVE_UNSUPPORTED = "INVENTORY_DUAL_ACTIVE_UNSUPPORTED";
+export const INVENTORY_SHADOW_GATE_INVARIANT_VIOLATION =
+  "INVENTORY_SHADOW_GATE_INVARIANT_VIOLATION";
 
 export type ConductInventoryUserActor = Extract<MovementActorSnapshot, { actorKind: "USER" }>;
 
@@ -56,6 +58,25 @@ export async function evaluateInventoryShadowSafety(
   const decision = decideInventoryShadowSafety({ shadowWriteActive, costFlowActive });
   if (decision.action === "fail") throw new Error(decision.error);
   return { costFlowActive, shadowWriteActive };
+}
+
+/** Gateway omits quantityDelta=0; expected insert count is the nonzero mapped set. */
+export function expectedShadowMovementInsertCount(
+  effects: readonly { quantityDelta: number }[],
+): number {
+  return effects.filter((effect) => effect.quantityDelta !== 0).length;
+}
+
+/**
+ * Fail closed if an ACTIVE Inventory writer observes an inactive gateway
+ * result or a mismatched insert count. Rolls back the same TX.
+ */
+export function assertInventoryShadowGatewayResult(input: {
+  result: { gateActive: boolean; inserted: number };
+  expectedInserted: number;
+}): void {
+  if (input.result.gateActive && input.result.inserted === input.expectedInserted) return;
+  throw new Error(INVENTORY_SHADOW_GATE_INVARIANT_VIOLATION);
 }
 
 function requireConductUserActor(actor: MovementActorSnapshot): ConductInventoryUserActor {
@@ -118,6 +139,7 @@ export async function conductInventoryInTransaction(
 
   const conductedAt = new Date();
   const valuation = await getUnitCostSnapshot();
+  const movementEffects = inventoryPhysicalEffectsToMovementEffects(effects);
 
   if (costFlowActive) {
     await applyActiveInventoryConduct(tx, doc);
@@ -126,7 +148,8 @@ export async function conductInventoryInTransaction(
   }
 
   if (shadowWriteActive) {
-    await appendShadowInventoryMovements(tx, {
+    const expectedInserted = expectedShadowMovementInsertCount(movementEffects);
+    const result = await appendShadowInventoryMovements(tx, {
       effectiveAt: conductedAt,
       actor,
       causation: {
@@ -139,8 +162,9 @@ export async function conductInventoryInTransaction(
           action: "CONDUCT",
         },
       },
-      effects: inventoryPhysicalEffectsToMovementEffects(effects),
+      effects: movementEffects,
     });
+    assertInventoryShadowGatewayResult({ result, expectedInserted });
   }
 
   for (const line of doc.lines) {

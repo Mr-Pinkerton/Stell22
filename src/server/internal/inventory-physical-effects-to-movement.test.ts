@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   canonicalizeMovementTarget,
@@ -7,6 +10,8 @@ import {
 } from "@/server/internal/inventory-movement-identity";
 import type { InventoryPhysicalEffect } from "@/server/internal/inventory-physical-effects";
 import { inventoryPhysicalEffectsToMovementEffects } from "@/server/internal/inventory-physical-effects-to-movement";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
 function blankEffect(
   overrides: Partial<Extract<InventoryPhysicalEffect, { stockDomain: "BLANK" }>> = {},
@@ -130,5 +135,22 @@ describe("inventoryPhysicalEffectsToMovementEffects", () => {
         ),
       );
     expect(keys([a, b])).toEqual(keys([b, a]));
+  });
+});
+
+describe("inventoryPhysicalEffectsToMovementEffects exhaustiveness", () => {
+  it("maps domains with an exhaustive switch rather than a NOMENCLATURE fallback", () => {
+    const src = readFileSync(
+      path.join(root, "src/server/internal/inventory-physical-effects-to-movement.ts"),
+      "utf8",
+    );
+    expect(src).toContain('switch (effect.stockDomain)');
+    expect(src).toContain('case "BLANK"');
+    expect(src).toContain('case "DETAIL"');
+    expect(src).toContain('case "PRODUCT"');
+    expect(src).toContain('case "NOMENCLATURE"');
+    expect(src).toContain("assertNever");
+    expect(src).toContain("default:");
+    expect(src).not.toMatch(/stockDomain === "NOMENCLATURE"/);
   });
 });

@@ -164,7 +164,7 @@ No `audit/01.16*` or `audit/01.17*`.
 | `audit/08.11-psr-p2-shadow-writer-contract.md` | PSR-P2 SHADOW writer contract | Architecture contract | Starting main `2eb4f6a`; accepted on `7118286` (PR #17) | `ACCEPTED / REVIEWED` | YES | Writer contract only. Dual-write **NOT STARTED**. SHADOW **NOT ACTIVATED**. §15.1 splits P2-GUARD/CI infrastructure tests from writer-specific tests. |
 | `audit/08.12-psr-p2-guard-ci.md` | PSR-P2 P2-GUARD/CI | Implementation | PR #18 merge `643c796`; accepted head `91c7e3e` | `IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED` | YES | Gateway skeleton, static INSERT/gate-read/TRUNCATE guards, disposable PostgreSQL CI. Runtime InventoryMovement physical writers **0**. SHADOW not activated. Not deployed. |
 | `audit/08.13-psr-p2-inventory-writer-prerequisite.md` | PSR-P2 Inventory writer prerequisite | Implementation | PR #20 merge `4dfaae2`; accepted head `1f8b1d6`; post-merge CI `35422069460` | `IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED / INVENTORY WRITER NOT STARTED` | YES after this closeout merge | SHADOW gate-first Inventory TX, temporary SHADOW-active fail-closed, dual-active fail-closed, global BlankStock lock plan, retained USER actor. Runtime writers **0**. No schema/migration. Not the Inventory writer. HEAD PASS. Independent Opus PASS. P0=0 / P1=0 / P2=5. |
-| `audit/08.14-psr-p2-inventory-shadow-writer.md` | PSR-P2 Inventory SHADOW writer | Implementation | Base `ab81d9b`; branch `feat/psr-p2-inventory-shadow-writer` | `IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED / SHADOW NOT ACTIVATED` | NO until reviewed merge | First physical InventoryMovement writer for `conductInventory`. Mapping from `InventoryPhysicalEffect[]`. Temporary `NOT_CONNECTED` block removed. Dual-active fail-closed retained. No schema/migration. SHADOW not activated. P2 globally not complete. |
+| `audit/08.14-psr-p2-inventory-shadow-writer.md` | PSR-P2 Inventory SHADOW writer | Implementation | Base `ab81d9b`; branch `feat/psr-p2-inventory-shadow-writer` | `IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED / SHADOW NOT ACTIVATED` | NO until reviewed merge | First physical InventoryMovement writer for `conductInventory`. Independent Opus **PASS — P0=0 / P1=0 / P2=4**. W1/W4 CLOSED; W2/W3 accepted non-blocking. No schema/migration. SHADOW not activated. P2 globally not complete. |
 
 ### D.8 Production incidents
 
@@ -358,6 +358,7 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Base `origin/main`: `ab81d9b7094d063b3d0ef4ab6ddb117fc18aa878`.
 - Branch: `feat/psr-p2-inventory-shadow-writer`.
 - Status: **IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED / SHADOW NOT ACTIVATED**.
+- Independent Opus: **PASS — P0=0 / P1=0 / P2=4**. W1/W4 CLOSED; W2 accepted non-blocking; W3 accepted pre-existing/non-blocking.
 - Runtime InventoryMovement physical writers: **Inventory conduct only** (not in production).
 - Schema / migration: **NONE**.
 - SHADOW activation: **NO**.

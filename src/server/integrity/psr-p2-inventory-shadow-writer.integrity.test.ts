@@ -218,6 +218,7 @@ describe.skipIf(!enabled)("PSR-P2 Inventory SHADOW writer", () => {
   });
 
   it("BLANK 10→7 SHADOW ACTIVE: one ADJUSTMENT -3 with exact identity", async () => {
+    // W1: one nonzero canonical effect → gateway inserts exactly 1 → conduct commits.
     const { blank } = await seedBlank(10);
     const draft = await createInventoryDraft(false);
     const line = draft.lines.find((l) => l.refType === "BLANK" && l.refId === blank.id);
@@ -339,6 +340,7 @@ describe.skipIf(!enabled)("PSR-P2 Inventory SHADOW writer", () => {
   });
 
   it("zero-delta SHADOW ACTIVE inserts no quantityDelta=0 movement", async () => {
+    // W1: expected 0 → inserted 0 → CONDUCTED still commits.
     const { blank } = await seedBlank(10);
     const draft = await createInventoryDraft(false);
     await setShadowGate(true);
