@@ -160,11 +160,12 @@ describe("Inventory BlankStock lock acquisition source", () => {
   it("inactive Inventory path acquires BlankStock from the global planned spec set once", () => {
     const src = readFileSync(path.join(root, "src/server/internal/inventory-integrity.ts"), "utf8");
     const start = src.indexOf("export async function lockInventoryStockRows");
-    const end = src.indexOf("export async function lockBlankStockByIds");
+    const end = src.indexOf("export async function liveQtyForLine");
     const fn = src.slice(start, end);
     expect(fn).toContain("collectInventoryBlankLockSpecs");
     expect(fn).toContain("lockBlankSpecs");
     expect(fn).not.toContain("lockBlankStockByIds");
+    expect(src).not.toContain("export async function lockBlankStockByIds");
   });
 
   it("ACTIVE Inventory path does not take a second BlankStock id batch after the planned spec set", () => {
@@ -175,5 +176,65 @@ describe("Inventory BlankStock lock acquisition source", () => {
     expect(fn).toContain("collectInventoryBlankLockSpecs");
     expect(fn).toContain("ensureAndLockActiveBlankPools");
     expect(fn).not.toContain("lockBlankStockByIds");
+  });
+});
+
+describe("P2-02 mixed BLANK / no-prisadka DETAIL alias lock plan", () => {
+  const POLKA = "POLKA" as const;
+  const SORT1 = "SORT1" as const;
+  const matA = "mat-a";
+  const blankShort = {
+    id: "blank-short",
+    materialId: matA,
+    lengthM: "1.2000",
+    detailType: POLKA,
+    sort: SORT1,
+  };
+  const aliasDetail = {
+    id: "detail-alias",
+    materialId: matA,
+    lengthM: "1.2000",
+    detailType: POLKA,
+    sort: SORT1,
+    prisadkaTorcevaya: false,
+    prisadkaPloskost: false,
+  };
+  const aliasDetailDup = {
+    id: "detail-alias-2",
+    materialId: matA,
+    lengthM: "1.2",
+    detailType: POLKA,
+    sort: SORT1,
+    prisadkaTorcevaya: false,
+    prisadkaPloskost: false,
+  };
+
+  it("BLANK + no-prisadka DETAIL alias + duplicate tuple + reversed order collapse to one spec", () => {
+    const resolution = {
+      blankRows: [blankShort],
+      details: [aliasDetail, aliasDetailDup],
+    };
+    const forward = planInventoryBlankStockLockSpecs(
+      [
+        { refType: "BLANK", refId: blankShort.id },
+        { refType: "DETAIL", refId: aliasDetail.id },
+        { refType: "DETAIL", refId: aliasDetailDup.id },
+      ],
+      resolution,
+    );
+    const reverse = planInventoryBlankStockLockSpecs(
+      [
+        { refType: "DETAIL", refId: aliasDetailDup.id },
+        { refType: "DETAIL", refId: aliasDetail.id },
+        { refType: "BLANK", refId: blankShort.id },
+      ],
+      resolution,
+    );
+    expect(forward).toHaveLength(1);
+    expect(forward.map(specKey)).toEqual(reverse.map(specKey));
+    expect(canonicalLengthFixed4(String(forward[0]!.lengthM))).toBe("1.2000");
+    expect(specKey(forward[0]!)).toBe(
+      specKey({ materialId: matA, lengthM: "1.2000", detailType: POLKA, sort: SORT1 }),
+    );
   });
 });

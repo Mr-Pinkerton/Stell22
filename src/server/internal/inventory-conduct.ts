@@ -19,44 +19,43 @@ import {
   lockInventoryStockRows,
 } from "@/server/internal/inventory-integrity";
 import type { MovementActorSnapshot } from "@/server/internal/inventory-movement-actor";
+import { appendShadowInventoryMovements } from "@/server/internal/inventory-movement-shadow-gateway";
 import { isInventoryMovementShadowWriteActiveForWriter } from "@/server/internal/inventory-movement-shadow-write";
+import { inventoryPhysicalEffectsToMovementEffects } from "@/server/internal/inventory-physical-effects-to-movement";
 
-export const INVENTORY_SHADOW_WRITER_NOT_CONNECTED = "INVENTORY_SHADOW_WRITER_NOT_CONNECTED";
 export const INVENTORY_DUAL_ACTIVE_UNSUPPORTED = "INVENTORY_DUAL_ACTIVE_UNSUPPORTED";
 
 export type ConductInventoryUserActor = Extract<MovementActorSnapshot, { actorKind: "USER" }>;
 
 export type InventoryShadowSafetyDecision =
   | { action: "proceed" }
-  | { action: "fail"; error: typeof INVENTORY_SHADOW_WRITER_NOT_CONNECTED }
   | { action: "fail"; error: typeof INVENTORY_DUAL_ACTIVE_UNSUPPORTED };
 
 type ConductedInventory = Prisma.InventoryGetPayload<{ include: { lines: true } }>;
 
 /**
  * Inventory SHADOW safety before any business/stock lock or projection write.
- * SHADOW ACTIVE + no writer → fail closed. Dual-active → distinct fail closed.
- * Does not mutate either Setting.
+ * Dual-active → fail closed. SHADOW ACTIVE + cost-flow INACTIVE proceeds to the
+ * writer. Does not mutate either Setting.
  */
 export function decideInventoryShadowSafety(input: {
   shadowWriteActive: boolean;
   costFlowActive: boolean;
 }): InventoryShadowSafetyDecision {
-  if (!input.shadowWriteActive) return { action: "proceed" };
-  if (input.costFlowActive) {
+  if (input.shadowWriteActive && input.costFlowActive) {
     return { action: "fail", error: INVENTORY_DUAL_ACTIVE_UNSUPPORTED };
   }
-  return { action: "fail", error: INVENTORY_SHADOW_WRITER_NOT_CONNECTED };
+  return { action: "proceed" };
 }
 
 export async function evaluateInventoryShadowSafety(
   tx: Prisma.TransactionClient,
-): Promise<{ costFlowActive: boolean }> {
+): Promise<{ costFlowActive: boolean; shadowWriteActive: boolean }> {
   const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
   const costFlowActive = await isCostFlowActive(tx);
   const decision = decideInventoryShadowSafety({ shadowWriteActive, costFlowActive });
   if (decision.action === "fail") throw new Error(decision.error);
-  return { costFlowActive };
+  return { costFlowActive, shadowWriteActive };
 }
 
 function requireConductUserActor(actor: MovementActorSnapshot): ConductInventoryUserActor {
@@ -85,15 +84,14 @@ function unitCostFromSnapshot(
 /**
  * Transaction-local Inventory conduct core.
  * Caller captures authenticated admin OUTSIDE the TX and passes the USER actor.
- * Does not insert InventoryMovement. The actor is the retained causal USER for
- * ChangeLog and the future SHADOW writer PR.
+ * SHADOW-active + cost-flow inactive: projection + InventoryMovement in this TX.
  */
 export async function conductInventoryInTransaction(
   tx: Prisma.TransactionClient,
   input: { docId: string; actor: MovementActorSnapshot },
 ): Promise<ConductedInventory> {
   const actor = requireConductUserActor(input.actor);
-  const { costFlowActive } = await evaluateInventoryShadowSafety(tx);
+  const { costFlowActive, shadowWriteActive } = await evaluateInventoryShadowSafety(tx);
 
   const locked = await lockInventoryForUpdate(tx, input.docId);
   if (!locked) throw new Error("Инвентаризация не найдена");
@@ -118,12 +116,31 @@ export async function conductInventoryInTransaction(
     await loadInventoryPhysicalPlanInput(tx, doc.lines),
   );
 
+  const conductedAt = new Date();
   const valuation = await getUnitCostSnapshot();
 
   if (costFlowActive) {
     await applyActiveInventoryConduct(tx, doc);
   } else {
     await applyInactiveInventoryPhysicalEffects(tx, effects);
+  }
+
+  if (shadowWriteActive) {
+    await appendShadowInventoryMovements(tx, {
+      effectiveAt: conductedAt,
+      actor,
+      causation: {
+        causationKind: "INVENTORY",
+        causationId: input.docId,
+        causationSnapshot: {
+          v: 1,
+          d: "INVENTORY",
+          inventoryId: input.docId,
+          action: "CONDUCT",
+        },
+      },
+      effects: inventoryPhysicalEffectsToMovementEffects(effects),
+    });
   }
 
   for (const line of doc.lines) {
@@ -141,7 +158,7 @@ export async function conductInventoryInTransaction(
 
   const flipped = await tx.inventory.updateMany({
     where: { id: input.docId, status: "DRAFT" },
-    data: { status: "CONDUCTED", date: new Date() },
+    data: { status: "CONDUCTED", date: conductedAt },
   });
   if (flipped.count !== 1) throw new Error(ALREADY_CONDUCTED);
 

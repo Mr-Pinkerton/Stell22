@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { userMovementActorFromAdmin } from "@/server/internal/inventory-movement-actor";
 import {
   INVENTORY_DUAL_ACTIVE_UNSUPPORTED,
-  INVENTORY_SHADOW_WRITER_NOT_CONNECTED,
   decideInventoryShadowSafety,
 } from "@/server/internal/inventory-conduct";
 
@@ -19,17 +18,16 @@ describe("decideInventoryShadowSafety", () => {
     ).toEqual({ action: "proceed" });
   });
 
-  it("fails closed with INVENTORY_SHADOW_WRITER_NOT_CONNECTED when SHADOW is ACTIVE and cost-flow is not", () => {
+  it("lets Inventory proceed when SHADOW is ACTIVE and cost-flow is inactive (writer connected)", () => {
     expect(
       decideInventoryShadowSafety({ shadowWriteActive: true, costFlowActive: false }),
-    ).toEqual({ action: "fail", error: INVENTORY_SHADOW_WRITER_NOT_CONNECTED });
+    ).toEqual({ action: "proceed" });
   });
 
   it("fails closed with INVENTORY_DUAL_ACTIVE_UNSUPPORTED when both gates are ACTIVE", () => {
     expect(
       decideInventoryShadowSafety({ shadowWriteActive: true, costFlowActive: true }),
     ).toEqual({ action: "fail", error: INVENTORY_DUAL_ACTIVE_UNSUPPORTED });
-    expect(INVENTORY_DUAL_ACTIVE_UNSUPPORTED).not.toBe(INVENTORY_SHADOW_WRITER_NOT_CONNECTED);
   });
 });
 
@@ -52,12 +50,19 @@ describe("Inventory USER actor seam", () => {
 describe("Inventory conduct SHADOW gate confinement", () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
-  it("uses only the writer-facing helper and does not call appendShadowInventoryMovements", () => {
+  it("uses only the writer-facing helper and calls appendShadowInventoryMovements after projection", () => {
     const src = readFileSync(path.join(root, "src/server/internal/inventory-conduct.ts"), "utf8");
     expect(src).toContain("isInventoryMovementShadowWriteActiveForWriter");
     expect(src).not.toContain("inventory_movement_shadow_write");
-    expect(src).not.toContain("appendShadowInventoryMovements");
+    expect(src).toContain("appendShadowInventoryMovements");
     expect(src).not.toContain("readInventoryMovementShadowWriteGate");
+    expect(src).not.toContain("INVENTORY_SHADOW_WRITER_NOT_CONNECTED");
+    const applyIdx = src.indexOf("applyInactiveInventoryPhysicalEffects");
+    const appendIdx = src.indexOf("appendShadowInventoryMovements");
+    const flipIdx = src.indexOf("status: \"CONDUCTED\"");
+    expect(applyIdx).toBeGreaterThan(-1);
+    expect(appendIdx).toBeGreaterThan(applyIdx);
+    expect(flipIdx).toBeGreaterThan(appendIdx);
   });
 
   it("server action captures requireAdmin() before the transaction and passes the USER actor", () => {
