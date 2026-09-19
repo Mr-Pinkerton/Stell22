@@ -8,6 +8,7 @@ import {
   resolveSupplyProductBinding,
   uniqueSortedSupplyKeys,
 } from "./supply-deduct";
+import { evaluateOzonSupplyCancellation } from "./supply-accounting-cycle";
 
 describe("supply lock order", () => {
   it("sorts keys by marketplace, externalId, sku", () => {
@@ -80,5 +81,38 @@ describe("resolveSupplyProductBinding", () => {
         liveProductId: "B",
       }),
     ).toEqual({ productId: "A", rebind: false });
+  });
+
+  it("zero-restore cancellation remains allowed without a product binding", () => {
+    expect(
+      evaluateOzonSupplyCancellation({ stockAccountingOpen: true, deductedQty: 0 }),
+    ).toEqual({ action: "close", restoreQty: 0 });
+  });
+
+  it("fail-closed is only for close + restoreQty > 0 + null productId", () => {
+    const src = readFileSync(new URL("./supply-deduct.ts", import.meta.url), "utf8");
+    expect(src).toContain("SUPPLY_CANCEL_PRODUCT_BINDING_REQUIRED");
+    expect(src).toContain("decision.restoreQty > 0 && !supply.productId");
+  });
+});
+
+describe("ACTIVE ProductStock global lock", () => {
+  it("reuses ensureAndLockActiveProductPools for the full target set", () => {
+    const src = readFileSync(new URL("./supply-deduct.ts", import.meta.url), "utf8");
+    expect(src).toContain("ensureAndLockActiveProductPools");
+    expect(src).toMatch(
+      /if\s*\(\s*options\.costFlowActive\s*\)[\s\S]*ensureAndLockActiveProductPools\(/,
+    );
+    expect(src).not.toMatch(
+      /costFlowActive[\s\S]{0,400}createMany\([\s\S]{0,200}costVersion/,
+    );
+    const lockFn = src.slice(src.indexOf("export async function lockSupplyProductStockTargets"));
+    const applyStart = src.indexOf("export async function runSupplySyncAccounting");
+    const orchestrator = src.slice(applyStart);
+    expect(orchestrator.indexOf("lockSupplyProductStockTargets")).toBeGreaterThan(-1);
+    expect(orchestrator.indexOf("lockSupplyProductStockTargets")).toBeLessThan(
+      orchestrator.indexOf("applySupplyDeduction"),
+    );
+    expect(lockFn.startsWith("export async function lockSupplyProductStockTargets")).toBe(true);
   });
 });

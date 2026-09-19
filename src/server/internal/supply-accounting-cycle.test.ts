@@ -145,18 +145,24 @@ describe("R-04 future SUPPLY causal identity (no writer, no effectKey freeze)", 
 
 describe("R-04 marketplace-sync wiring", () => {
   it("locks Ozon cancel rows by identity and excludes cancelled IDs from deduct", () => {
-    const src = fs.readFileSync(
+    const syncSrc = fs.readFileSync(
       path.join(process.cwd(), "src/server/internal/marketplace-sync.ts"),
       "utf8",
     );
-    expect(src).toContain("findOzonSupplyKeysByExternalIds");
-    expect(src).toContain("isOzonCancelledInThisSync");
-    expect(src).toContain("applyOzonSupplyCancellation");
-    expect(src).not.toMatch(/deductedQty:\s*\{\s*gt:\s*0\s*\}/);
-    expect(src).toMatch(/if \(isOzonCancelledInThisSync[\s\S]*return false/);
-    expect(src).toMatch(/if \(result\.closed\)/);
-    expect(src).not.toMatch(/result\.closed && result\.restored > 0/);
-    expect(src).toMatch(/restored: result\.restored/);
-    expect(src).toMatch(/generation: result\.generation/);
+    const deductSrc = fs.readFileSync(
+      path.join(process.cwd(), "src/server/internal/supply-deduct.ts"),
+      "utf8",
+    );
+    expect(syncSrc).toContain("runSupplySyncAccounting");
+    expect(deductSrc).toContain("findOzonSupplyKeysByExternalIds");
+    expect(deductSrc).toContain("isOzonCancelledInThisSync");
+    expect(deductSrc).toContain("applyOzonSupplyCancellation");
+    expect(syncSrc).not.toMatch(/deductedQty:\s*\{\s*gt:\s*0\s*\}/);
+    expect(deductSrc).not.toMatch(/deductedQty:\s*\{\s*gt:\s*0\s*\}/);
+    expect(deductSrc).toMatch(/if \(isOzonCancelledInThisSync[\s\S]*continue/);
+    expect(syncSrc).toMatch(/if \(result\.closed\)/);
+    expect(syncSrc).not.toMatch(/result\.closed && result\.restored > 0/);
+    expect(syncSrc).toMatch(/restored: result\.restored/);
+    expect(syncSrc).toMatch(/generation: result\.generation/);
   });
 });
