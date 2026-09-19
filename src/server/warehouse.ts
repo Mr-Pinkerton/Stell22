@@ -23,24 +23,14 @@ import {
   inventoryDeviation,
   inventoryDeviationSum,
 } from "@/lib/warehouse-stock";
-import {
-  applyActiveInventoryConduct,
-  lockActiveInventoryWriteSet,
-} from "@/server/internal/cost-flow-downstream";
-import { isCostFlowActive } from "@/server/internal/cost-flow-state";
+import { conductInventoryInTransaction } from "@/server/internal/inventory-conduct";
+import { userMovementActorFromAdmin } from "@/server/internal/inventory-movement-actor";
 import {
   ALREADY_CONDUCTED,
   DRAFT_ALREADY_EXISTS,
-  applyInactiveInventoryPhysicalEffects,
-  assertLiveEqualsAccounted,
-  assertNotLegacyInventoryDraft,
   blankSpecSortKey,
-  deriveInventoryPhysicalEffects,
-  inventoryDeviationSumDecimal,
   isDraftUniqueViolation,
-  loadInventoryPhysicalPlanInput,
   lockInventoryForUpdate,
-  lockInventoryStockRows,
   uniqueSortedBlankSpecs,
   type BlankSpec,
 } from "@/server/internal/inventory-integrity";
@@ -452,112 +442,11 @@ export async function updateInventoryLineActual(
  * Этап 10). Сырьё (рейки) в этой инвентаризации не участвует.
  */
 export async function conductInventory(docId: string): Promise<InventoryDocRow> {
-  await requireAdmin();
+  const admin = await requireAdmin();
+  const actor = userMovementActorFromAdmin(admin);
 
   const updated = await prisma.$transaction(
-    async (tx) => {
-      const locked = await lockInventoryForUpdate(tx, docId);
-      if (!locked) throw new Error("Инвентаризация не найдена");
-      if (locked.status !== "DRAFT") throw new Error(ALREADY_CONDUCTED);
-
-      const doc = await tx.inventory.findUnique({
-        where: { id: docId },
-        include: { lines: true },
-      });
-      if (!doc) throw new Error("Инвентаризация не найдена");
-
-      await assertNotLegacyInventoryDraft(tx, doc.lines);
-
-      const costFlowActive = await isCostFlowActive(tx);
-      if (costFlowActive) {
-        await lockActiveInventoryWriteSet(tx, doc.lines);
-      } else {
-        await lockInventoryStockRows(tx, doc.lines);
-      }
-      await assertLiveEqualsAccounted(tx, doc.lines);
-
-      const effects = deriveInventoryPhysicalEffects(
-        await loadInventoryPhysicalPlanInput(tx, doc.lines),
-      );
-
-      const valuation = await getUnitCostSnapshot();
-
-      if (costFlowActive) {
-        await applyActiveInventoryConduct(tx, doc);
-      } else {
-        await applyInactiveInventoryPhysicalEffects(tx, effects);
-      }
-
-      for (const line of doc.lines) {
-        const deviation = line.actualQty - line.accountedQty;
-        const deviationSum = inventoryDeviationSumDecimal(
-          deviation,
-          unitCostFromSnapshot(valuation, line.refType, line.refId),
-        );
-
-        await tx.inventoryLine.update({
-          where: { id: line.id },
-          data: { deviation, deviationSum },
-        });
-      }
-
-      const flipped = await tx.inventory.updateMany({
-        where: { id: docId, status: "DRAFT" },
-        data: { status: "CONDUCTED", date: new Date() },
-      });
-      if (flipped.count !== 1) throw new Error(ALREADY_CONDUCTED);
-
-      await writeChangeLog(
-        {
-          entity: "Inventory",
-          entityId: docId,
-          oldValues: { status: "DRAFT" },
-          newValues: { status: "CONDUCTED", lines: doc.lines.length },
-        },
-        tx,
-      );
-      for (const line of doc.lines) {
-        const newValues: Record<string, unknown> = {
-          inventoryId: docId,
-          refType: line.refType,
-          refId: line.refId,
-          after: line.actualQty,
-          delta: line.actualQty - line.accountedQty,
-        };
-        if (line.refType === "BLANK") {
-          const blank = await tx.blankStock.findUnique({ where: { id: line.refId } });
-          newValues.blankStockId = line.refId;
-          if (blank) {
-            newValues.materialId = blank.materialId;
-            newValues.lengthM = num(blank.lengthM);
-            newValues.detailType = blank.detailType;
-            newValues.sort = blank.sort;
-            newValues.before = line.accountedQty;
-            newValues.after = line.actualQty;
-            newValues.delta = line.actualQty - line.accountedQty;
-          }
-        }
-        await writeChangeLog(
-          {
-            entity: "InventoryLine",
-            entityId: line.id,
-            oldValues: {
-              inventoryId: docId,
-              refType: line.refType,
-              refId: line.refId,
-              before: line.accountedQty,
-            },
-            newValues,
-          },
-          tx,
-        );
-      }
-
-      return tx.inventory.findUniqueOrThrow({
-        where: { id: docId },
-        include: { lines: true },
-      });
-    },
+    async (tx) => conductInventoryInTransaction(tx, { docId, actor }),
     { timeout: 20_000, maxWait: 20_000 },
   );
 

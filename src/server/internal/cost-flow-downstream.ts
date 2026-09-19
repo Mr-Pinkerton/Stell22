@@ -36,8 +36,8 @@ import {
   assertInventoryBoundary,
   blankSpecSortKey,
   blankSpecToInventoryRefs,
+  collectInventoryBlankLockSpecs,
   collectPrisadkaRefs,
-  lockBlankStockByIds,
   lockDetails,
   prisadkaDestFlags,
   uniqueSortedBlankSpecs,
@@ -1211,7 +1211,6 @@ export async function lockActiveInventoryWriteSet(
   const detailIds = [...new Set(lines.filter((l) => l.refType === "DETAIL").map((l) => l.refId))].sort();
   await lockDetails(tx, detailIds);
 
-  const blankSpecs: BlankSpec[] = [];
   const detailSpecs: DetailStockSpec[] = [];
   if (detailIds.length > 0) {
     const details = await tx.detail.findMany({ where: { id: { in: detailIds } } });
@@ -1219,15 +1218,7 @@ export async function lockActiveInventoryWriteSet(
     for (const id of detailIds) {
       const detail = byId.get(id);
       if (!detail) throw new Error("Деталь не найдена");
-      if (isNoPrisadkaDetail(detail)) {
-        blankSpecs.push({
-          materialId: detail.materialId,
-          lengthM: detail.lengthM,
-          detailType: detail.detailType,
-          sort: detail.sort,
-        });
-        continue;
-      }
+      if (isNoPrisadkaDetail(detail)) continue;
       const rows = await tx.detailStock.findMany({ where: { detailId: id } });
       for (const row of rows) {
         detailSpecs.push({
@@ -1244,21 +1235,8 @@ export async function lockActiveInventoryWriteSet(
     }
   }
 
-  const blankIds = lines.filter((l) => l.refType === "BLANK").map((l) => l.refId);
-  if (blankIds.length > 0) {
-    const blanks = await tx.blankStock.findMany({ where: { id: { in: blankIds } } });
-    for (const b of blanks) {
-      blankSpecs.push({
-        materialId: b.materialId,
-        lengthM: b.lengthM,
-        detailType: b.detailType,
-        sort: b.sort,
-      });
-    }
-  }
-
-  await ensureAndLockActiveBlankPools(tx, uniqueSortedBlankSpecs(blankSpecs));
-  await lockBlankStockByIds(tx, blankIds);
+  const blankSpecs = await collectInventoryBlankLockSpecs(tx, lines);
+  await ensureAndLockActiveBlankPools(tx, blankSpecs);
   await ensureAndLockActiveDetailPools(tx, uniqueSortedDetailStockSpecs(detailSpecs));
   await ensureAndLockActiveNomPools(
     tx,

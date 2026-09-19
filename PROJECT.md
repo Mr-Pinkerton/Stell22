@@ -105,7 +105,7 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: PSR-P2 INVENTORY WRITER PREREQUISITE — NOT STARTED`. Canonical contract: `audit/08.11` (**ACCEPTED / REVIEWED**). P2-GUARD/CI: `audit/08.12` (**IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED**; PR #18; accepted head `91c7e3e`; merge `643c796`; post-merge CI `35373616566`). R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; production `eb02b17`; Production Deploy `35337215903`). R-05 remains **DEPLOYED** (`audit/08.09`). R-04 remains **DEPLOYED** (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. PSR-P2 dual-write **NOT STARTED**. This mode is **not** SHADOW activation, **not** dual-write, **not** an InventoryMovement writer, **not** Correction Center, and **not** AUDIT 2. **NEXT = PSR-P2 INVENTORY WRITER PREREQUISITE PACKAGE**.
+`ACTIVE MODE: PSR-P2 INVENTORY WRITER PREREQUISITE — IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED / INVENTORY WRITER NOT STARTED`. Canonical contract: `audit/08.11` (**ACCEPTED / REVIEWED**). P2-GUARD/CI: `audit/08.12` (**IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED**; PR #18; accepted head `91c7e3e`; merge `643c796`; post-merge CI `35373616566`). Prerequisite implementation: `audit/08.13` on `feat/psr-p2-inventory-writer-prereq`. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; production `eb02b17`; Production Deploy `35337215903`). R-05 remains **DEPLOYED** (`audit/08.09`). R-04 remains **DEPLOYED** (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. PSR-P2 dual-write **NOT STARTED**. This mode is **not** SHADOW activation, **not** dual-write, **not** an InventoryMovement writer, **not** Correction Center, and **not** AUDIT 2. **NEXT = HEAD REVIEW OF INVENTORY WRITER PREREQUISITE PR**.
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
@@ -129,7 +129,7 @@ PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT = **PSR-P2 INVENTORY WRITER PREREQUISITE PACKAGE**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). This NEXT is **not** the first Inventory physical writer, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center / full `ProductionOperationMutation`, and **not** AUDIT 2. R-05 is **DEPLOYED** (`audit/08.09`). `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6. Does **not** mean authoritative ledger, paper removal, `production_cost_flow` activation, or Correction Center. R-04 / R-05 / R-06 prerequisites are deployed; the SHADOW writer contract is **ACCEPTED / REVIEWED** in `audit/08.11`; dual-write remains NOT STARTED.
+NEXT = **HEAD REVIEW OF INVENTORY WRITER PREREQUISITE PR**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). This NEXT is HEAD review of the Inventory writer prerequisite PR (`audit/08.13`). It is **not** the first Inventory physical writer, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center implementation, and **not** AUDIT 2. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -307,7 +307,7 @@ Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`
 
 ## 13. Current next step
 
-`NEXT = PSR-P2 INVENTORY WRITER PREREQUISITE PACKAGE`. P2-GUARD/CI = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED** (`audit/08.12`; PR #18; merge `643c796`; post-merge CI `35373616566`; **NOT DEPLOYED**). First Inventory physical writer remains **NOT STARTED**.
+NEXT = **HEAD REVIEW OF INVENTORY WRITER PREREQUISITE PR**. P2-GUARD/CI = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED** (`audit/08.12`; PR #18; merge `643c796`; post-merge CI `35373616566`; **NOT DEPLOYED**). Inventory writer prerequisite = **IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED / INVENTORY WRITER NOT STARTED** (`audit/08.13`; branch `feat/psr-p2-inventory-writer-prereq`). First Inventory physical writer remains **NOT STARTED**.
 
 PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime.
 
@@ -323,7 +323,7 @@ R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOY
 
 Does **not** mean dual-write, SHADOW posting, authoritative ledger, `OPENING_BALANCE` data, paper removal, `production_cost_flow` activation, or Correction Center.
 
-This NEXT records the Inventory writer prerequisite only (global BlankStock lock set, dual-active fail-closed, Inventory USER actor from retained `requireAdmin()`, `08.11` §15.1 writer proofs). It is **not** the first Inventory physical writer, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center implementation, and **not** AUDIT 2. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
+This NEXT is HEAD review of the Inventory writer prerequisite PR (`audit/08.13`). It is **not** the first Inventory physical writer, **not** SHADOW activation, **not** dual-write activation, **not** Correction Center implementation, and **not** AUDIT 2. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
 
 Do **not** implement the full `ProductionOperationMutation` schema or Correction Center in this package.
 
@@ -810,4 +810,25 @@ Current NEXT after contract acceptance was **P2-GUARD/CI**. That package is now 
 | Post-merge CI | `35373616566` SUCCESS |
 | Next | **PSR-P2 INVENTORY WRITER PREREQUISITE PACKAGE**. Not the first Inventory physical writer. Not dual-write. Not Correction Center. Not AUDIT 2. |
 
-The prerequisite package (not started here) is: (1) one precomputed global deterministic BlankStock lock set and one acquisition pass; (2) dual-active fail-closed when `inventory_movement_shadow_write` and `production_cost_flow` are both ACTIVE; (3) explicit USER actor from retained Inventory `requireAdmin()`; (4) writer-specific PostgreSQL proofs from `audit/08.11` §15.1.
+The prerequisite package is recorded in `audit/08.13` on `feat/psr-p2-inventory-writer-prereq`: (1) one precomputed global deterministic BlankStock lock set and one acquisition pass; (2) dual-active fail-closed when `inventory_movement_shadow_write` and `production_cost_flow` are both ACTIVE; (3) explicit USER actor from retained Inventory `requireAdmin()`; (4) writer-prerequisite PostgreSQL proofs possible without a movement writer. **NOT MERGED. NOT DEPLOYED. INVENTORY WRITER NOT STARTED.** NEXT: **HEAD REVIEW OF INVENTORY WRITER PREREQUISITE PR**.
+
+## 36. Journal — PSR-P2 Inventory writer prerequisite (feature branch)
+
+This journal does **not** rewrite §35. §35 remains the P2-GUARD/CI merge closeout.
+
+| | |
+| --- | --- |
+| Date | 2026-09-18 |
+| Stage | PSR-P2 Inventory writer prerequisite |
+| BASE GitHub `main` | `6a1eeaf6ad7f39803f0ddf193e2ac232531636a9` |
+| Production application | `eb02b17f488ef9ec13a11dcf158fc169b78e3e37` (**unchanged**) |
+| Branch | `feat/psr-p2-inventory-writer-prereq` |
+| Result | `audit/08.13`. SHADOW gate-first Inventory TX, temporary SHADOW-active fail-closed, dual-active fail-closed, global BlankStock lock plan, retained USER actor. **IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED / INVENTORY WRITER NOT STARTED**. |
+| Runtime InventoryMovement writers | **0** |
+| `appendShadowInventoryMovements` from Inventory | **NO** |
+| Schema / migration | **NONE** |
+| SHADOW activation | **NO** |
+| Dual-write | **NOT STARTED** |
+| `production_cost_flow` | unchanged / INACTIVE |
+| Production access / mutation / deploy | **NO / NO / NO** |
+| Next | **HEAD REVIEW OF INVENTORY WRITER PREREQUISITE PR**. Not the Inventory writer. Not SHADOW activation. Not merge. Not deploy. |
