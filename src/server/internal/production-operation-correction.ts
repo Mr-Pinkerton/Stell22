@@ -100,3 +100,27 @@ export function assertCorrectionPayloadMatch(
     throw new Error(REQUEST_ID_REUSE);
   }
 }
+
+export function correctionResultFromRow(
+  row: {
+    id: string;
+    requestId: string;
+    operationId: string;
+    expectedOldRailsTaken: number;
+    newRailsTaken: number;
+    deltaReturned: number;
+    recordedAt: Date;
+  },
+  replayed: boolean,
+): CorrectTorcovkaRailsTakenResult {
+  return {
+    correctionId: row.id,
+    requestId: row.requestId,
+    operationId: row.operationId,
+    oldRailsTaken: row.expectedOldRailsTaken,
+    newRailsTaken: row.newRailsTaken,
+    deltaReturned: row.deltaReturned,
+    recordedAt: row.recordedAt,
+    replayed,
+  };
+}

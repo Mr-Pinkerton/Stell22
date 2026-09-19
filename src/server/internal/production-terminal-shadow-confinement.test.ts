@@ -76,12 +76,15 @@ describe("terminal production SHADOW writer confinement", () => {
     expect(production).not.toContain("{ costFlowActive }");
   });
 
-  it("does not connect blocked admin/edit/delete/R-05 contours", () => {
+  it("does not connect blocked admin edit/delete contours", () => {
     const production = read("src/server/production.ts");
     expect(production).not.toContain("appendProductionShadowMovements");
     expect(production).not.toContain("appendShadowInventoryMovements");
     expect(production).toContain("export async function updateProductionLineQuantity");
     expect(production).toContain("export async function deleteProductionOperation");
-    expect(production).toContain("export async function correctTorcovkaRailsTaken");
+    const qty = production.slice(production.indexOf("export async function updateProductionLineQuantity"));
+    const del = production.slice(production.indexOf("export async function deleteProductionOperation"));
+    expect(qty).not.toContain("appendR05CorrectionShadowMovement");
+    expect(del).not.toContain("appendR05CorrectionShadowMovement");
   });
 });

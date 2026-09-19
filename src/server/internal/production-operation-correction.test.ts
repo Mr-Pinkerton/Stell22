@@ -107,19 +107,46 @@ describe("R-05 requestId advisory lock", () => {
     expect(sql.join("")).not.toMatch(/8322/);
   });
 
-  it("pins production.ts: requestId lock before op FOR UPDATE and create; no P2002 recovery SELECT", () => {
+  it("pins production.ts: retained USER actor, READ COMMITTED, TX helper; no P2002 recovery SELECT", () => {
     const src = fs.readFileSync(path.join(process.cwd(), "src/server/production.ts"), "utf8");
     const action = src.slice(src.indexOf("export async function correctTorcovkaRailsTaken"));
-    const lockAt = action.indexOf("acquireCorrectionRequestLock");
-    const lookupAt = action.indexOf("productionOperationCorrection.findUnique");
-    const opLockAt = action.indexOf("lockProductionOperations");
-    const createAt = action.indexOf("productionOperationCorrection.create");
-    expect(lockAt).toBeGreaterThan(-1);
-    expect(lookupAt).toBeGreaterThan(lockAt);
-    expect(opLockAt).toBeGreaterThan(lookupAt);
-    expect(createAt).toBeGreaterThan(opLockAt);
+    expect(action.indexOf("const admin = await requireAdmin()")).toBeGreaterThan(-1);
+    expect(action.indexOf("userMovementActorFromAdmin(admin)")).toBeGreaterThan(
+      action.indexOf("const admin = await requireAdmin()"),
+    );
+    expect(action).toMatch(/isolationLevel:\s*Prisma\.TransactionIsolationLevel\.ReadCommitted/);
+    expect(action).toContain("correctTorcovkaRailsTakenInTransaction");
+    expect(action).not.toContain("appendShadowInventoryMovements");
+    expect(action).not.toContain("appendR05CorrectionShadowMovement");
     expect(action).not.toMatch(/P2002/);
     expect(action).not.toMatch(/isRequestIdUniqueConflict/);
     expect(action).not.toMatch(/PrismaClientKnownRequestError/);
+  });
+
+  it("pins TX body: SHARED gate before request lock, request lock before op FOR UPDATE and create; no P2002 recovery", () => {
+    const src = fs.readFileSync(
+      path.join(process.cwd(), "src/server/internal/correct-torcovka-rails-taken-tx.ts"),
+      "utf8",
+    );
+    const fn = src.slice(src.indexOf("export async function correctTorcovkaRailsTakenInTransaction"));
+    const gateAt = fn.indexOf("isInventoryMovementShadowWriteActiveForWriter");
+    const lockAt = fn.indexOf("acquireCorrectionRequestLock");
+    const lookupAt = fn.indexOf("productionOperationCorrection.findUnique");
+    const opLockAt = fn.indexOf("lockProductionOperations");
+    const createAt = fn.indexOf("productionOperationCorrection.create");
+    const appendAt = fn.indexOf("appendR05CorrectionShadowMovement");
+    const changeLogAt = fn.indexOf("writeChangeLog");
+    expect(gateAt).toBeGreaterThan(-1);
+    expect(lockAt).toBeGreaterThan(gateAt);
+    expect(lookupAt).toBeGreaterThan(lockAt);
+    expect(opLockAt).toBeGreaterThan(lookupAt);
+    expect(createAt).toBeGreaterThan(opLockAt);
+    expect(appendAt).toBeGreaterThan(createAt);
+    expect(changeLogAt).toBeGreaterThan(appendAt);
+    expect(fn).not.toMatch(/P2002/);
+    expect(fn).not.toMatch(/isRequestIdUniqueConflict/);
+    expect(fn).not.toMatch(/PrismaClientKnownRequestError/);
+    expect(fn).not.toContain('inventory_movement_shadow_write');
+    expect(fn).not.toContain("appendShadowInventoryMovements");
   });
 });
