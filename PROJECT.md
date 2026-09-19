@@ -48,7 +48,7 @@ Last verified production application SHA:
 
 `eb02b17f488ef9ec13a11dcf158fc169b78e3e37`
 
-Evidence: GitHub Production Deploy run `35337215903` SUCCESS (2026-09-18, `workflow_dispatch`). R-06 Inventory physical identity **DEPLOYED / POST-DEPLOY VERIFIED**. Migration `20260918130000_psr_p2_r06_inventory_line_identity` **APPLIED**. Index `InventoryLine_inventoryId_refType_refId_key` **LIVE**. InventoryMovement rows remain 0. No runtime writers. `inventory_movement_shadow_write` ABSENT. `production_cost_flow` **INACTIVE**. PSR-P2 dual-write **NOT STARTED**. Always verify current GitHub `main` HEAD. A later docs-only merge may advance `main`; that merge SHA is **not** a production application SHA.
+Evidence: GitHub Production Deploy run `35337215903` SUCCESS (2026-09-18, `workflow_dispatch`). R-06 Inventory physical identity **DEPLOYED / POST-DEPLOY VERIFIED**. Migration `20260918130000_psr_p2_r06_inventory_line_identity` **APPLIED**. Index `InventoryLine_inventoryId_refType_refId_key` **LIVE**. InventoryMovement rows remain 0. Production has **no deployed runtime writers**. Source/main Inventory `conductInventory` writer is **CONNECTED / MERGED / NOT DEPLOYED** (`audit/08.14`). `inventory_movement_shadow_write` ABSENT in production. `production_cost_flow` **INACTIVE**. PSR-P2 dual-write **NOT STARTED**. Always verify current GitHub `main` HEAD. A later docs-only merge may advance `main`; that merge SHA is **not** a production application SHA.
 
 Prior documented production application SHA:
 
@@ -105,7 +105,7 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: PSR-P2 INVENTORY SHADOW WRITER — IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED / SHADOW NOT ACTIVATED`. Canonical contract: `audit/08.11` (**ACCEPTED / REVIEWED**). Writer implementation: `audit/08.14` (branch `feat/psr-p2-inventory-shadow-writer`). P2-GUARD/CI: `audit/08.12` (**IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED**; PR #18; accepted head `91c7e3e`; merge `643c796`; post-merge CI `35373616566`). Prerequisite closeout: `audit/08.13` (PR #20; accepted head `1f8b1d6`; merge `4dfaae2`; post-merge CI `35422069460`). R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; production `eb02b17`; Production Deploy `35337215903`). R-05 remains **DEPLOYED** (`audit/08.09`). R-04 remains **DEPLOYED** (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. PSR-P2 dual-write **NOT STARTED**. This mode is **not** SHADOW activation, **not** dual-write, **not** Correction Center, and **not** AUDIT 2. **NEXT = HEAD REVIEW OF INVENTORY SHADOW WRITER PR**.
+`ACTIVE MODE: PSR-P2 INVENTORY SHADOW WRITER — IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED / SHADOW NOT ACTIVATED`. Canonical contract: `audit/08.11` (**ACCEPTED / REVIEWED**). Writer closeout: `audit/08.14` (PR #22; accepted head `c58131c`; merge `2fd138e`; accepted CI `35427250317`; post-merge CI `35427681739`). P2-GUARD/CI: `audit/08.12` (**IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED**; PR #18; accepted head `91c7e3e`; merge `643c796`; post-merge CI `35373616566`). Prerequisite closeout: `audit/08.13` (PR #20; accepted head `1f8b1d6`; merge `4dfaae2`; post-merge CI `35422069460`). R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; production `eb02b17`; Production Deploy `35337215903`). R-05 remains **DEPLOYED** (`audit/08.09`). R-04 remains **DEPLOYED** (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. Source/main connected physical InventoryMovement contour = **Inventory conduct only**. Production writer currently live = **NO**. PSR-P2 dual-write **NOT STARTED**. This mode is **not** SHADOW activation, **not** dual-write, **not** Correction Center, and **not** AUDIT 2. **NEXT = PSR-P2 NORMAL TERMINAL PRODUCTION SHADOW WRITERS PACKAGE**.
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
@@ -123,13 +123,13 @@ PSR-P0-CORR (`audit/08.03-psr-p0-correction-history-contract.md`): **ACCEPTED DE
 
 PSR-P0-CORE = **ACCEPTED DESIGN / NOT IMPLEMENTED** (`audit/08.04`; canonical through the reviewed docs merge). Closes remaining PRE-SCHEMA questions. Canonical design; **not** runtime implementation.
 
-PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract-creation status **ACCEPTED DESIGN / NOT IMPLEMENTED** is preserved in that file). Independent Review #1 = **PASS WITH NON-BLOCKING FINDINGS** (P0=0, P1=0). Current implementation/deploy = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`). Empty unused SHADOW-capable table in production; row count = **0**. No runtime writers.
+PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract-creation status **ACCEPTED DESIGN / NOT IMPLEMENTED** is preserved in that file). Independent Review #1 = **PASS WITH NON-BLOCKING FINDINGS** (P0=0, P1=0). Current implementation/deploy = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`audit/08.06`). Empty unused SHADOW-capable table in production; row count = **0**. Production has **no deployed runtime writers**.
 
 `PSR-Q-001` / `PSR-Q-002` / `PSR-Q-005` / `PSR-Q-007` / `PSR-Q-008` = **CLOSED / ACCEPTED**.
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT = **HEAD REVIEW OF INVENTORY SHADOW WRITER PR**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). Inventory writer prerequisite = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED** (`audit/08.13`). Inventory SHADOW writer = **IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED / SHADOW NOT ACTIVATED** (`audit/08.14`). This is **not** SHADOW activation, **not** dual-write activation, **not** Correction Center implementation, and **not** AUDIT 2. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
+NEXT = **PSR-P2 NORMAL TERMINAL PRODUCTION SHADOW WRITERS PACKAGE**. R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). Inventory writer prerequisite = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED** (`audit/08.13`). Inventory SHADOW writer = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED / SHADOW NOT ACTIVATED** (`audit/08.14`). This is **not** SHADOW activation, **not** dual-write activation, **not** Correction Center implementation, and **not** AUDIT 2. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -307,11 +307,11 @@ Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`
 
 ## 13. Current next step
 
-NEXT = **HEAD REVIEW OF INVENTORY SHADOW WRITER PR**. P2-GUARD/CI = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED** (`audit/08.12`; PR #18; merge `643c796`; post-merge CI `35373616566`; **NOT DEPLOYED**). Inventory writer prerequisite = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED** (`audit/08.13`; PR #20; accepted head `1f8b1d6`; merge `4dfaae2`; post-merge CI `35422069460`; **NOT DEPLOYED**). Inventory SHADOW writer = **IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED / SHADOW NOT ACTIVATED** (`audit/08.14`). Runtime P2 globally **NOT COMPLETE**.
+NEXT = **PSR-P2 NORMAL TERMINAL PRODUCTION SHADOW WRITERS PACKAGE**. P2-GUARD/CI = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED** (`audit/08.12`; PR #18; merge `643c796`; post-merge CI `35373616566`; **NOT DEPLOYED**). Inventory writer prerequisite = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED** (`audit/08.13`; PR #20; accepted head `1f8b1d6`; merge `4dfaae2`; post-merge CI `35422069460`; **NOT DEPLOYED**). Inventory SHADOW writer = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED / SHADOW NOT ACTIVATED** (`audit/08.14`; PR #22; accepted head `c58131c`; merge `2fd138e`; accepted CI `35427250317`; post-merge CI `35427681739`; **NOT DEPLOYED**). Source/main connected physical InventoryMovement contour = **Inventory conduct only**. Production writer currently live = **NO**. Runtime P2 globally **NOT COMPLETE**. P3 **NOT STARTED**.
 
 PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime.
 
-PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`08.06`). Empty unused SHADOW-capable `InventoryMovement` in production; row count = **0**. No runtime writers.
+PSR-P1 = **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`08.06`). Empty unused SHADOW-capable `InventoryMovement` in production; row count = **0**. Production has **no deployed runtime writers**. Source/main Inventory `conductInventory` writer is **CONNECTED / MERGED / NOT DEPLOYED**.
 
 `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`; Canonical? **YES**; first deployed at `de2e1c0`, run `35257469956`).
 
@@ -323,7 +323,7 @@ R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOY
 
 Does **not** mean dual-write, SHADOW posting, authoritative ledger, `OPENING_BALANCE` data, paper removal, `production_cost_flow` activation, or Correction Center.
 
-This NEXT is the first physical InventoryMovement writer package (`audit/08.13` §11). It is **not started**. It is **not** SHADOW activation, **not** dual-write activation, **not** Correction Center implementation, and **not** AUDIT 2. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
+This NEXT is the **PSR-P2 NORMAL TERMINAL PRODUCTION SHADOW WRITERS PACKAGE**. It is **not started**. It is **not** SHADOW activation, **not** dual-write activation, **not** Correction Center implementation, and **not** AUDIT 2. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
 
 Do **not** implement the full `ProductionOperationMutation` schema or Correction Center in this package.
 
@@ -861,7 +861,7 @@ This journal does **not** rewrite §36. §36 remains the feature-branch implemen
 | Production access / mutation / deploy | **NO / NO / NO** |
 | Next | **PSR-P2 INVENTORY SHADOW WRITER IMPLEMENTATION PACKAGE**. Not started. Not SHADOW activation. Not deploy. |
 
-The writer implementation is recorded in `audit/08.14`. Feature-branch journal: §38. **NOT MERGED / NOT DEPLOYED / SHADOW NOT ACTIVATED.** NEXT: **HEAD REVIEW OF INVENTORY SHADOW WRITER PR**.
+The writer implementation is recorded in `audit/08.14`. Feature-branch journal: §38. Merge closeout: §39. **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED / SHADOW NOT ACTIVATED.** NEXT: **PSR-P2 NORMAL TERMINAL PRODUCTION SHADOW WRITERS PACKAGE**.
 
 ## 38. Journal — PSR-P2 Inventory SHADOW writer (feature branch)
 
@@ -884,3 +884,33 @@ This journal does **not** rewrite §37. §37 remains the Inventory writer prereq
 | Production access / mutation / deploy | **NO / NO / NO** |
 | Runtime P2 global completeness | **NOT COMPLETE** |
 | Next | **HEAD REVIEW OF INVENTORY SHADOW WRITER PR**. Not merge. Not deploy. Not SHADOW activation. Not the next contour writer. |
+
+## 39. Journal — PSR-P2 Inventory SHADOW writer merge closeout
+
+This journal does **not** rewrite §38. §38 remains the feature-branch implementation record.
+
+| | |
+| --- | --- |
+| Date | 2026-09-19 |
+| Stage | PSR-P2 Inventory SHADOW writer merge closeout |
+| BASE GitHub `main` | `ab81d9b7094d063b3d0ef4ab6ddb117fc18aa878` |
+| Production application | `eb02b17f488ef9ec13a11dcf158fc169b78e3e37` (**unchanged**) |
+| Exact accepted implementation HEAD | `c58131c02484ae49897fa0259ad623af65708b9e` |
+| PR | `#22` |
+| Merge commit | `2fd138e2c7195b63c2e943d0f85f2b9b0050740c` |
+| Accepted PR CI | `35427250317` SUCCESS |
+| Post-merge CI | `35427681739` SUCCESS |
+| HEAD review | **PASS** |
+| Independent Opus review | **PASS — P0=0 / P1=0 / P2=4** (reviewed `28d7247`; no second Opus after W1/W4) |
+| Findings | **P0=0 / P1=0 / P2=4**. W1 CLOSED. W2 accepted non-blocking. W3 accepted pre-existing/non-blocking. W4 CLOSED. |
+| Result | `audit/08.14`. **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED / SHADOW NOT ACTIVATED**. |
+| Runtime InventoryMovement writers | **Inventory conduct only** in source/main; production writer currently live = **NO** |
+| `appendShadowInventoryMovements` from Inventory | **YES** (source/main; not in production) |
+| Schema / migration | **NONE** |
+| SHADOW activation | **NO** |
+| Dual-write | **NOT STARTED** |
+| `production_cost_flow` | unchanged / INACTIVE |
+| Production access / mutation / deploy | **NO / NO / NO** |
+| Runtime P2 global completeness | **NOT COMPLETE** |
+| P3 | **NOT STARTED** |
+| Next | **PSR-P2 NORMAL TERMINAL PRODUCTION SHADOW WRITERS PACKAGE**. Not started. Not SHADOW activation. Not deploy. |
