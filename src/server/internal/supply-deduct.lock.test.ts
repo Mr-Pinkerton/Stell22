@@ -8,6 +8,7 @@ import {
   resolveSupplyProductBinding,
   uniqueSortedSupplyKeys,
 } from "./supply-deduct";
+import { evaluateOzonSupplyCancellation } from "./supply-accounting-cycle";
 
 describe("supply lock order", () => {
   it("sorts keys by marketplace, externalId, sku", () => {
@@ -80,5 +81,17 @@ describe("resolveSupplyProductBinding", () => {
         liveProductId: "B",
       }),
     ).toEqual({ productId: "A", rebind: false });
+  });
+
+  it("zero-restore cancellation remains allowed without a product binding", () => {
+    expect(
+      evaluateOzonSupplyCancellation({ stockAccountingOpen: true, deductedQty: 0 }),
+    ).toEqual({ action: "close", restoreQty: 0 });
+  });
+
+  it("fail-closed is only for close + restoreQty > 0 + null productId", () => {
+    const src = readFileSync(new URL("./supply-deduct.ts", import.meta.url), "utf8");
+    expect(src).toContain("SUPPLY_CANCEL_PRODUCT_BINDING_REQUIRED");
+    expect(src).toContain("decision.restoreQty > 0 && !supply.productId");
   });
 });

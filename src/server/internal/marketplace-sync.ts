@@ -3,15 +3,7 @@ import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { loadStoredApiCredentialsInternal } from "@/server/internal/api-credentials";
 import { writeSystemLog } from "@/server/system-log";
-import {
-  applyOzonSupplyCancellation,
-  applySupplyDeduction,
-  findOzonSupplyKeysByExternalIds,
-  lockSuppliesInOrder,
-  retryOnceOnSyncDeadlock,
-  type SupplyKey,
-} from "@/server/internal/supply-deduct";
-import { isOzonCancelledInThisSync } from "@/server/internal/supply-accounting-cycle";
+import { retryOnceOnSyncDeadlock, runSupplySyncAccounting } from "@/server/internal/supply-deduct";
 import {
   formatMpSyncMessage,
   mpSyncLogLevel,
@@ -503,97 +495,37 @@ export async function syncMarketplacesAsUserInternal(userId: string): Promise<Sy
       });
     }
 
-    for (const s of supplies) {
-      const productId = productIdForRecord(s.marketplace, s.sku);
-      const key = {
-        marketplace_externalId_sku: {
-          marketplace: s.marketplace,
-          externalId: s.externalId,
-          sku: s.sku,
+    const accounting = await runSupplySyncAccounting(tx, {
+      supplies,
+      ozonCancelledExternalIds,
+      productIdFor: productIdForRecord,
+    });
+    deductedTotal = accounting.deductedTotal;
+    shortfallTotal = accounting.shortfallTotal;
+    restoredTotal = accounting.restoredTotal;
+    for (const s of accounting.shortfalls) {
+      await writeChangeLog(
+        {
+          entity: "Supply",
+          entityId: `${s.marketplace}:${s.externalId}:${s.sku}`,
+          newValues: { event: "gp_shortfall", sku: s.sku, shortfall: s.shortfall },
         },
-      };
-
-      await tx.supply.upsert({
-        where: key,
-        create: {
-          marketplace: s.marketplace,
-          externalId: s.externalId,
-          number: s.number,
-          sku: s.sku,
-          productId,
-          quantity: s.quantity,
-          status: s.status,
-          warehouseName: s.warehouseName,
-          createdAt: s.createdAt,
-          acceptedAt: s.acceptedAt,
-        },
-        update: {
-          quantity: s.quantity,
-          status: s.status,
-          acceptedAt: s.acceptedAt,
-          warehouseName: s.warehouseName,
-        },
-      });
+        tx,
+      );
     }
-
-    const cancelledOzonIds = new Set(ozonCancelledExternalIds);
-    const deductKeys: SupplyKey[] = supplies
-      .filter((s) => {
-        const shipped = s.status === "SHIPPED" || s.status === "ACCEPTED";
-        if (!shipped || !productIdForRecord(s.marketplace, s.sku)) return false;
-        if (isOzonCancelledInThisSync(s.marketplace, s.externalId, cancelledOzonIds)) return false;
-        return true;
-      })
-      .map((s) => ({
-        marketplace: s.marketplace,
-        externalId: s.externalId,
-        sku: s.sku,
-      }));
-    const cancelRows = await findOzonSupplyKeysByExternalIds(tx, ozonCancelledExternalIds);
-    await lockSuppliesInOrder(tx, [...deductKeys, ...cancelRows]);
-
-    for (const s of supplies) {
-      const productId = productIdForRecord(s.marketplace, s.sku);
-      const shipped = s.status === "SHIPPED" || s.status === "ACCEPTED";
-      const target = shipped ? s.quantity : 0;
-      if (!(target > 0 && productId)) continue;
-      if (isOzonCancelledInThisSync(s.marketplace, s.externalId, cancelledOzonIds)) continue;
-      const { toRemove, shortfall } = await applySupplyDeduction(tx, {
-        marketplace: s.marketplace,
-        externalId: s.externalId,
-        sku: s.sku,
-        targetQty: target,
-        productId,
-      });
-      deductedTotal += toRemove;
-      if (shortfall > 0) {
-        shortfallTotal += shortfall;
-        await writeChangeLog(
-          {
-            entity: "Supply",
-            entityId: `${s.marketplace}:${s.externalId}:${s.sku}`,
-            newValues: { event: "gp_shortfall", sku: s.sku, shortfall },
-          },
-          tx,
-        );
-      }
-    }
-
     // Восстановление склада производства по отменённым заявкам Ozon: закрываем
     // открытый цикл учёта. Возвращаем только deductedQty; shortfallQty не
     // возвращаем — эти единицы физически не списывались. Полная недостача
     // (deductedQty=0, open=true) тоже закрывается.
-    for (const key of cancelRows) {
-      const result = await applyOzonSupplyCancellation(tx, key);
+    for (const result of accounting.restores) {
       if (result.closed) {
-        restoredTotal += result.restored;
         await writeChangeLog(
           {
             entity: "Supply",
-            entityId: `OZON:${key.externalId}:${key.sku}`,
+            entityId: `OZON:${result.externalId}:${result.sku}`,
             newValues: {
               event: "gp_restore_cancelled",
-              sku: key.sku,
+              sku: result.sku,
               restored: result.restored,
               generation: result.generation,
             },
