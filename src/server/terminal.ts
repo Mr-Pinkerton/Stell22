@@ -12,7 +12,6 @@ import type {
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
-import { archiveBatchIfDepleted } from "@/server/internal/cost";
 import {
   applyPrisadkaPicks,
   applyUpakovkaPrepared,
@@ -22,43 +21,45 @@ import {
   type BlankStockRow,
   type DetailStockRow,
 } from "@/lib/detail-stock";
-import { D } from "@/lib/cost";
-import { lockEmployees, lockRailLots } from "@/server/internal/finance-operations";
+import { employeeMovementActor } from "@/server/internal/inventory-movement-actor";
+import { isInventoryMovementShadowWriteActiveForWriter } from "@/server/internal/inventory-movement-shadow-write";
+import { planProductionShadowMovements } from "@/server/internal/production-movement-plan";
+import { appendProductionShadowMovements } from "@/server/internal/production-shadow-write";
 import {
-  canonicalLengthDecimal,
-  canonicalizeTorcovkaPicks,
-  torcovkaPicksForLog,
-} from "@/server/internal/blank-length";
-import { applyActiveTorcovkaInTx } from "@/server/internal/cost-flow-raw";
-import { isCostFlowActive } from "@/server/internal/cost-flow-state";
-import { blankSpecSortKey, lockDetails, snapshotUpakovkaApply } from "@/server/internal/inventory-integrity";
+  lockUpakovkaPhysicalWriteSet,
+  planUpakovkaPhysicalLockSet,
+} from "@/server/internal/upakovka-lock-plan";
 import {
-  approvalCodeMatches,
-  approvalHmacSecret,
   parseApprovalCode,
   TORCOVKA_APPROVAL_CONSUMED_ORPHAN,
   TORCOVKA_APPROVAL_MAX_ATTEMPTS,
   TORCOVKA_WRONG_CODE_MESSAGE,
 } from "@/lib/torcovka-approval";
 import {
-  computeTorcovkaWasteMetrics,
-  decideTorcovkaSubmit,
   type SubmitTorcovkaResult,
   type TorcovkaPlausibilityAck,
 } from "@/lib/torcovka-plausibility";
-import { updateEventMessage } from "@/server/internal/notification-event";
+import { isCostFlowActive } from "@/server/internal/cost-flow-state";
+import { lockDetails, snapshotUpakovkaApply } from "@/server/internal/inventory-integrity";
+import { canonicalizeTorcovkaPicks } from "@/server/internal/blank-length";
 import {
-  approvalSnapshotDiffers,
+  loadRetainedProductionOperation,
+  lockAndReadRateSnapshots,
+  snapshotFieldsForLog,
+} from "@/server/internal/production-terminal-shared";
+import {
+  submitTorcovkaInTransaction,
+  type TorcovkaTxResult,
+} from "@/server/internal/submit-torcovka-tx";
+import {
   ensurePendingApproval,
   invalidateTorcovkaApprovalIfNotNeeded,
-  lockTorcovkaApprovalByClientRequestId,
-  TORCOVKA_APPROVAL_REDACT_USED,
   type TorcovkaApprovalSnapshot,
 } from "@/server/internal/torcovka-approval";
 import { requireClientRequestId } from "@/lib/request-id";
 import { assertValidHours, HOURS_NO_RATE_MESSAGE, isHourlyRateUnavailable } from "@/lib/hours-input";
 import { upakovkaAvailability } from "@/lib/upakovka-availability";
-import { operationEarning, operationRateSnapshotWrite, operationRatesFromSnapshots } from "@/lib/payroll";
+import { operationEarning, operationRatesFromSnapshots } from "@/lib/payroll";
 import { resolvePinLookup } from "@/lib/terminal-auth";
 import { RateLimiter, retryAfterSeconds } from "@/lib/rate-limit";
 import {
@@ -145,38 +146,6 @@ function logTorcovkaP2025Forensic(payload: {
       // Forensic logging must never replace the original P2025.
     }
   }
-}
-
-function snapshotNumber(value: Prisma.Decimal | number | null): number | null {
-  if (value == null) return null;
-  return typeof value === "object" && "toNumber" in value ? value.toNumber() : Number(value);
-}
-
-function snapshotFieldsForLog(s: ReturnType<typeof operationRateSnapshotWrite>) {
-  return {
-    hourlyRateSnapshot: snapshotNumber(s.hourlyRateSnapshot as Prisma.Decimal | number | null),
-    rateTorcovkaSort1Snapshot: snapshotNumber(
-      s.rateTorcovkaSort1Snapshot as Prisma.Decimal | number | null,
-    ),
-    rateTorcovkaSort2Snapshot: snapshotNumber(
-      s.rateTorcovkaSort2Snapshot as Prisma.Decimal | number | null,
-    ),
-    ratePrisadkaTorcevSnapshot: snapshotNumber(
-      s.ratePrisadkaTorcevSnapshot as Prisma.Decimal | number | null,
-    ),
-    ratePrisadkaPlosktSnapshot: snapshotNumber(
-      s.ratePrisadkaPlosktSnapshot as Prisma.Decimal | number | null,
-    ),
-    rateUpakovkaSnapshot: snapshotNumber(s.rateUpakovkaSnapshot as Prisma.Decimal | number | null),
-    rateSnapshotVersion: s.rateSnapshotVersion,
-  };
-}
-
-async function lockAndReadRateSnapshots(tx: Prisma.TransactionClient, employeeId: string) {
-  await lockEmployees(tx, [employeeId]);
-  const emp = await tx.employee.findUnique({ where: { id: employeeId } });
-  if (!emp) throw new Error("Сотрудник не найден");
-  return operationRateSnapshotWrite(emp);
 }
 
 // ============================ СЕРИАЛИЗАЦИЯ =================================
@@ -454,22 +423,6 @@ export async function terminalLogout(): Promise<void> {
 
 export type { SubmitTorcovkaResult, TorcovkaPlausibilityAck };
 
-type TorcovkaTxResult =
-  | { status: "CREATED_NEW" }
-  | { status: "IDEMPOTENT_REPLAY" }
-  | {
-      status: "ACK_REQUIRED";
-      band: "SUSPICIOUS";
-      railsTaken: number;
-      takenM: string;
-      producedM: string;
-      wastePct: string;
-    }
-  | { status: "APPROVAL_NEEDED"; snapshot: TorcovkaApprovalSnapshot }
-  | { status: "WRONG_CODE"; failedAttempts: number; snapshot: TorcovkaApprovalSnapshot }
-  | { status: "EXPIRED"; snapshot: TorcovkaApprovalSnapshot }
-  | { status: "METRICS_CHANGED"; snapshot: TorcovkaApprovalSnapshot };
-
 export interface TorcovkaInput {
   employeeId: string;
   /** Ключ идемпотентности с клиента (A21): один на попытку операции. */
@@ -486,27 +439,6 @@ export interface TorcovkaInput {
   plausibilityAck?: TorcovkaPlausibilityAck;
   /** Worker-entered 4-digit admin code for EXTREME. Never logged. */
   approvalCode?: string;
-}
-
-function approvalSnapshotFromMetrics(
-  clientRequestId: string,
-  employeeId: string,
-  batchId: string,
-  railLotId: string,
-  railsTaken: number,
-  metrics: ReturnType<typeof computeTorcovkaWasteMetrics>,
-): TorcovkaApprovalSnapshot {
-  return {
-    clientRequestId,
-    employeeId,
-    batchId,
-    railLotId,
-    railsTaken,
-    takenM: metrics.canon.takenM,
-    producedM: metrics.canon.producedM,
-    wasteM: metrics.canon.wasteM,
-    wastePct: metrics.canon.wastePct,
-  };
 }
 
 function publicApprovalRequired(
@@ -556,9 +488,11 @@ async function finishApprovalGate(
 }
 
 export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcovkaResult> {
-  await requireTerminalEmployee(input?.employeeId);
+  const employee = await requireTerminalEmployee(input?.employeeId);
+  const actor = employeeMovementActor(employee);
   const clientRequestId = requireClientRequestId(input.clientRequestId);
-  const { employeeId, batchId, railLotId, railsTaken } = input;
+  const { batchId, railLotId, railsTaken } = input;
+  const employeeId = employee.id;
   const rawPicks = input.picks;
   const picks = canonicalizeTorcovkaPicks(rawPicks);
   if (!employeeId) throw new Error("Не выбран работник");
@@ -568,273 +502,20 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
   if (picks.length === 0) throw new Error("Не выбраны длины заготовок");
   const code = parseApprovalCode(input.approvalCode);
 
-  const txResult: TorcovkaTxResult = await prisma.$transaction(async (tx): Promise<TorcovkaTxResult> => {
-    const existingBeforeLock = await tx.productionOperation.findUnique({
-      where: { clientRequestId },
-      select: { id: true, employeeId: true },
-    });
-    if (existingBeforeLock) {
-      await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, existingBeforeLock.employeeId, {
-        committedOpExists: true,
-      });
-      return { status: "IDEMPOTENT_REPLAY" as const };
-    }
-
-    await lockRailLots(tx, [railLotId]);
-    const existingAfterLock = await tx.productionOperation.findUnique({
-      where: { clientRequestId },
-      select: { id: true, employeeId: true },
-    });
-    if (existingAfterLock) {
-      await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, existingAfterLock.employeeId, {
-        committedOpExists: true,
-      });
-      return { status: "IDEMPOTENT_REPLAY" as const };
-    }
-    const lot = await tx.railLot.findUnique({ where: { id: railLotId } });
-    if (!lot || lot.batchId !== batchId) throw new Error("Пакет реек не найден");
-    const batch = await tx.batch.findUniqueOrThrow({ where: { id: batchId } });
-    const materialId = batch.materialId;
-
-    for (const p of picks) {
-      if (D(p.lengthM).gt(D(lot.lengthM))) {
-        throw new Error("Длина заготовки превышает длину рейки пакета");
-      }
-    }
-
-    const metrics = computeTorcovkaWasteMetrics(railsTaken, lot.lengthM, picks);
-    if (metrics.producedM.gt(metrics.takenM)) {
-      throw new Error("Суммарная длина заготовок превышает длину взятых реек");
-    }
-
-    const snapshot = approvalSnapshotFromMetrics(
-      clientRequestId,
-      employeeId,
-      batchId,
-      railLotId,
-      railsTaken,
-      metrics,
-    );
-
-    const decision = decideTorcovkaSubmit({
-      railsTaken,
-      metrics,
-      ack: input.plausibilityAck,
-    });
-
-    if (decision.status === "ACK_REQUIRED" && decision.band === "SUSPICIOUS") {
-      return {
-        status: "ACK_REQUIRED" as const,
-        band: "SUSPICIOUS" as const,
-        railsTaken: decision.railsTaken,
-        takenM: decision.takenM,
-        producedM: decision.producedM,
-        wastePct: decision.wastePct,
-      };
-    }
-
-    let persist = decision.status === "CREATED" ? decision.persist : null;
-    let approvalMeta: {
-      approvalId: string;
-      generation: number;
-      consumedAt: Date;
-    } | null = null;
-
-    if (decision.status === "ACK_REQUIRED" && decision.band === "EXTREME") {
-      if (code === null) {
-        return { status: "APPROVAL_NEEDED" as const, snapshot };
-      }
-
-      await lockTorcovkaApprovalByClientRequestId(tx, clientRequestId);
-      const approval = await tx.torcovkaApproval.findUnique({
-        where: { clientRequestId },
-      });
-      if (!approval) {
-        return { status: "EXPIRED" as const, snapshot };
-      }
-      if (approval.consumedAt) {
-        throw new Error(TORCOVKA_APPROVAL_CONSUMED_ORPHAN);
-      }
-      if (approval.employeeId !== employeeId) {
-        throw new Error(TORCOVKA_WRONG_CODE_MESSAGE);
-      }
-      const now = new Date();
-      if (approval.expiresAt <= now) {
-        return { status: "EXPIRED" as const, snapshot };
-      }
-      if (approval.failedAttempts >= TORCOVKA_APPROVAL_MAX_ATTEMPTS) {
-        return { status: "EXPIRED" as const, snapshot };
-      }
-      if (approvalSnapshotDiffers(approval, snapshot)) {
-        return { status: "METRICS_CHANGED" as const, snapshot };
-      }
-      if (!approvalCodeMatches(code, approval.codeHash, approvalHmacSecret())) {
-        const updated = await tx.torcovkaApproval.update({
-          where: { clientRequestId },
-          data: { failedAttempts: { increment: 1 } },
-        });
-        return {
-          status: "WRONG_CODE" as const,
-          failedAttempts: updated.failedAttempts,
-          snapshot,
-        };
-      }
-
-      const verified = decideTorcovkaSubmit({
-        railsTaken,
-        metrics,
-        approvalVerified: true,
-      });
-      if (verified.status !== "CREATED") {
-        throw new Error("Не удалось подтвердить высокий отход");
-      }
-      persist = verified.persist;
-      const consumedAt = now;
-      await tx.torcovkaApproval.update({
-        where: { clientRequestId },
-        data: { consumedAt },
-      });
-      await updateEventMessage(approval.notificationKey, TORCOVKA_APPROVAL_REDACT_USED, tx);
-      approvalMeta = {
-        approvalId: approval.id,
-        generation: approval.generation,
-        consumedAt,
-      };
-    }
-
-    if (!persist) {
-      throw new Error("Неверный тип подтверждения отхода");
-    }
-
-    if (!approvalMeta) {
-      await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, employeeId);
-    }
-
-    const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
-    const costFlowActive = await isCostFlowActive(tx);
-
-    let opId: string;
-    if (costFlowActive) {
-      const created = await applyActiveTorcovkaInTx({
-        tx,
+  const txResult: TorcovkaTxResult = await prisma.$transaction(
+    (tx) =>
+      submitTorcovkaInTransaction(tx, {
+        actor,
         employeeId,
         clientRequestId,
         batchId,
         railLotId,
         railsTaken,
         picks,
-        persist,
-        rateSnapshots,
-        lot,
-        materialId,
-      });
-      opId = created.opId;
-    } else {
-      const dec = await tx.railLot.updateMany({
-        where: { id: railLotId, batchId, remainingQuantity: { gte: railsTaken } },
-        data: { remainingQuantity: { decrement: railsTaken } },
-      });
-      if (dec.count === 0) throw new Error("Недостаточно реек в пакете");
-
-      const op = await tx.productionOperation.create({
-        data: {
-          type: "TORCOVKA",
-          employeeId,
-          clientRequestId,
-          batchId,
-          railLotId,
-          railsTaken,
-          torcovkaSubmitAckBand: persist.torcovkaSubmitAckBand,
-          torcovkaSubmitWasteReason: persist.torcovkaSubmitWasteReason,
-          torcovkaSubmitWasteNote: persist.torcovkaSubmitWasteNote,
-          workDate: new Date(),
-          ...rateSnapshots,
-          lines: {
-            create: picks.map((p) => ({
-              quantity: p.quantity,
-              blankLengthM: canonicalLengthDecimal(p.lengthMFixed4),
-              blankType: lot.railType,
-              blankSort: p.sort,
-              blankMaterialId: materialId,
-            })),
-          },
-        },
-      });
-      opId = op.id;
-
-      const sortedBlankPicks = [...picks].sort((a, b) =>
-        blankSpecSortKey({
-          materialId,
-          lengthM: a.lengthM,
-          detailType: lot.railType,
-          sort: a.sort,
-        }).localeCompare(
-          blankSpecSortKey({
-            materialId,
-            lengthM: b.lengthM,
-            detailType: lot.railType,
-            sort: b.sort,
-          }),
-        ),
-      );
-      for (const p of sortedBlankPicks) {
-        const lengthM = canonicalLengthDecimal(p.lengthMFixed4);
-        await tx.blankStock.upsert({
-          where: {
-            materialId_lengthM_detailType_sort: {
-              materialId,
-              lengthM,
-              detailType: lot.railType,
-              sort: p.sort,
-            },
-          },
-          create: {
-            materialId,
-            lengthM,
-            detailType: lot.railType,
-            sort: p.sort,
-            quantity: p.quantity,
-          },
-          update: { quantity: { increment: p.quantity } },
-        });
-      }
-    }
-
-    const changeLogValues: Record<string, unknown> = {
-      type: "TORCOVKA",
-      batchId,
-      railLotId,
-      railsTaken,
-      picks: torcovkaPicksForLog(picks),
-      ...snapshotFieldsForLog(rateSnapshots),
-    };
-    if (approvalMeta) {
-      changeLogValues.approvalRequired = true;
-      changeLogValues.approvalId = approvalMeta.approvalId;
-      changeLogValues.generation = approvalMeta.generation;
-      changeLogValues.consumedAt = approvalMeta.consumedAt.toISOString();
-      changeLogValues.takenM = snapshot.takenM;
-      changeLogValues.producedM = snapshot.producedM;
-      changeLogValues.wasteM = snapshot.wasteM;
-      changeLogValues.wastePct = snapshot.wastePct;
-    }
-
-    await writeChangeLog(
-      {
-        entity: "ProductionOperation",
-        entityId: opId,
-        newValues: changeLogValues,
-      },
-      tx,
-    );
-
-    if (!approvalMeta) {
-      await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, employeeId);
-    }
-
-    await archiveBatchIfDepleted(tx, batchId);
-    return { status: "CREATED_NEW" as const };
-  }).catch((e) => {
+        plausibilityAck: input.plausibilityAck,
+        code,
+      }),
+  ).catch((e) => {
     if (isDuplicateClientRequest(e)) return { status: "IDEMPOTENT_REPLAY" as const };
     if (isPrismaP2025(e)) {
       logTorcovkaP2025Forensic({
@@ -1090,15 +771,17 @@ async function movedReversePrisadkaLine(
 */
 
 export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
-  await requireTerminalEmployee(input?.employeeId);
+  const employee = await requireTerminalEmployee(input?.employeeId);
+  const actor = employeeMovementActor(employee);
   const clientRequestId = requireClientRequestId(input.clientRequestId);
-  const { employeeId } = input;
+  const employeeId = employee.id;
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
   if (picks.length === 0) throw new Error("Не выбраны детали");
 
   await prisma
     .$transaction(async (tx) => {
+      const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
       const existing = await tx.productionOperation.findUnique({
         where: { clientRequestId },
         select: { id: true },
@@ -1110,17 +793,28 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
         picks.map((p) => p.detailId),
       );
       const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
+      const occurredAt = new Date();
       const op = await tx.productionOperation.create({
         data: {
           type: "PRISADKA",
           employeeId,
           clientRequestId,
-          workDate: new Date(),
+          workDate: occurredAt,
           ...rateSnapshots,
         },
       });
 
       await applyPrisadkaPicks(tx, op.id, picks);
+
+      const retained = await loadRetainedProductionOperation(tx, op.id);
+      const plan = planProductionShadowMovements({ kind: "PRISADKA", operation: retained });
+      await appendProductionShadowMovements(tx, {
+        shadowWriteActive,
+        actor,
+        occurredAt,
+        operationId: retained.id,
+        plan,
+      });
 
       await writeChangeLog(
         {
@@ -1386,9 +1080,10 @@ async function movedReverseUpakovkaOperation(
 */
 
 export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
-  await requireTerminalEmployee(input?.employeeId);
+  const employee = await requireTerminalEmployee(input?.employeeId);
+  const actor = employeeMovementActor(employee);
   const clientRequestId = requireClientRequestId(input.clientRequestId);
-  const { employeeId } = input;
+  const employeeId = employee.id;
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
   if (picks.length === 0) throw new Error("Не выбраны изделия");
@@ -1399,6 +1094,7 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
 
   await prisma
     .$transaction(async (tx) => {
+      const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
       const expectedIds = picks.map((p) => `${clientRequestId}:${p.productId}`);
       const existing = await tx.productionOperation.findMany({
         where: { clientRequestId: { in: expectedIds } },
@@ -1418,24 +1114,34 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
           prepared: await snapshotUpakovkaApply(tx, pick.productId),
         });
       }
-      await lockDetails(
-        tx,
-        preparedRows.flatMap((row) => row.prepared.details.map((d) => d.detailId)),
-      );
+      const costFlowActive = await isCostFlowActive(tx);
+      await lockUpakovkaPhysicalWriteSet(tx, planUpakovkaPhysicalLockSet(preparedRows), {
+        costFlowActive,
+      });
       const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
       for (const { pick, prepared } of preparedRows) {
+        const occurredAt = new Date();
         const op = await tx.productionOperation.create({
           data: {
             type: "UPAKOVKA",
             employeeId,
             clientRequestId: `${clientRequestId}:${pick.productId}`,
-            workDate: new Date(),
+            workDate: occurredAt,
             productId: pick.productId,
             productQty: pick.quantity,
             ...rateSnapshots,
           },
         });
-        await applyUpakovkaPrepared(tx, op.id, pick.quantity, prepared);
+        await applyUpakovkaPrepared(tx, op.id, pick.quantity, prepared, { costFlowActive });
+        const retained = await loadRetainedProductionOperation(tx, op.id);
+        const plan = planProductionShadowMovements({ kind: "UPAKOVKA", operation: retained });
+        await appendProductionShadowMovements(tx, {
+          shadowWriteActive,
+          actor,
+          occurredAt,
+          operationId: retained.id,
+          plan,
+        });
         await writeChangeLog(
           {
             entity: "ProductionOperation",

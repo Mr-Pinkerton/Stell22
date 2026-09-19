@@ -10,7 +10,10 @@ vi.mock("@/server/session", () => ({
     email: "admin@test.local",
     role: "ADMIN",
   }),
-  requireTerminalEmployee: async () => {},
+  requireTerminalEmployee: async (expectedEmployeeId?: string) => ({
+    id: expectedEmployeeId ?? "integrity-session-employee",
+    fullName: "Integrity Employee",
+  }),
 }));
 vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} }));
 

@@ -20,7 +20,10 @@ const sessionState = vi.hoisted(() => ({
 
 vi.mock("@/server/session", () => ({
   requireAdmin: async () => sessionState.admin,
-  requireTerminalEmployee: async () => {},
+  requireTerminalEmployee: async (expectedEmployeeId?: string) => ({
+    id: expectedEmployeeId ?? "integrity-session-employee",
+    fullName: "Integrity Employee",
+  }),
 }));
 vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} }));
 
