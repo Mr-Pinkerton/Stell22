@@ -5,7 +5,10 @@ vi.mock("next/headers", () => ({
 }));
 vi.mock("@/server/session", () => ({
   requireAdmin: async () => {},
-  requireTerminalEmployee: async () => {},
+  requireTerminalEmployee: async (expectedEmployeeId?: string) => ({
+    id: expectedEmployeeId ?? "integrity-session-employee",
+    fullName: "Integrity Employee",
+  }),
 }));
 
 const { enqueueMock } = vi.hoisted(() => ({

@@ -174,6 +174,7 @@ export async function applyActiveTorcovkaInTx(args: {
     torcovkaSubmitWasteNote: string | null;
   };
   rateSnapshots: OperationRateSnapshotWrite;
+  occurredAt: Date;
   lot: {
     id: string;
     remainingQuantity: number;
@@ -252,7 +253,7 @@ export async function applyActiveTorcovkaInTx(args: {
       torcovkaSubmitAckBand: args.persist.torcovkaSubmitAckBand,
       torcovkaSubmitWasteReason: args.persist.torcovkaSubmitWasteReason,
       torcovkaSubmitWasteNote: args.persist.torcovkaSubmitWasteNote,
-      workDate: new Date(),
+      workDate: args.occurredAt,
       ...args.rateSnapshots,
       consumedRawValue: money6(consume.consumedRawValue),
       pieceLaborCost: money6(pieceLaborCost),
