@@ -27,7 +27,10 @@ vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
-import { INVENTORY_DUAL_ACTIVE_UNSUPPORTED } from "@/server/internal/inventory-conduct";
+import {
+  INVENTORY_DUAL_ACTIVE_UNSUPPORTED,
+  conductInventoryInTransaction,
+} from "@/server/internal/inventory-conduct";
 import { ALREADY_CONDUCTED, lockInventoryForUpdate } from "@/server/internal/inventory-integrity";
 import {
   canonicalizeMovementTarget,
@@ -270,6 +273,56 @@ describe.skipIf(!enabled)("PSR-P2 Inventory SHADOW writer", () => {
     const persisted = await prismaA.inventory.findUniqueOrThrow({ where: { id: draft.id } });
     expect(utcNaiveTimestampString(row.effectiveAt)).toBe(utcNaiveTimestampString(persisted.date));
     expect(row.recordedAt).toBeInstanceOf(Date);
+  });
+
+  it("non-UTC session: Inventory.date and movement effectiveAt stay the same UTC-naive instant", async () => {
+    const { blank } = await seedBlank(10);
+    const draft = await createInventoryDraft(false);
+    const line = draft.lines.find((l) => l.refType === "BLANK" && l.refId === blank.id);
+    await updateInventoryLineActual(line!.id, 7);
+    await setShadowGate(true);
+    await setCostFlowActive(false);
+    const actor = userMovementActorFromAdmin(sessionState.admin);
+
+    await prismaA.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SET LOCAL TIME ZONE 'America/New_York'`);
+      const tz = await tx.$queryRaw<Array<{ tz: string }>>`
+        SELECT current_setting('TimeZone') AS tz
+      `;
+      expect(tz[0]?.tz).toBe("America/New_York");
+      expect(tz[0]?.tz).not.toMatch(/^UTC$/i);
+      await conductInventoryInTransaction(tx, { docId: draft.id, actor });
+    }, txOpts);
+
+    const naive = await prismaA.$queryRaw<Array<{ inventoryDate: string; effectiveAt: string }>>`
+      SELECT
+        to_char(i."date", 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS "inventoryDate",
+        to_char(m."effectiveAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS') AS "effectiveAt"
+      FROM "Inventory" i
+      JOIN "InventoryMovement" m ON m."causationId" = i.id
+      WHERE i.id = ${draft.id}
+    `;
+    expect(naive).toHaveLength(1);
+    expect(naive[0]!.inventoryDate).toBe(naive[0]!.effectiveAt);
+
+    const inventory = await prismaA.inventory.findUniqueOrThrow({ where: { id: draft.id } });
+    const movement = await prismaA.inventoryMovement.findFirstOrThrow({
+      where: { causationId: draft.id },
+    });
+    expect(naive[0]!.inventoryDate).toBe(utcNaiveTimestampString(inventory.date));
+    expect(naive[0]!.effectiveAt).toBe(utcNaiveTimestampString(movement.effectiveAt));
+    expect(inventory.status).toBe("CONDUCTED");
+    expect(inventory.date.toISOString()).toBe(movement.effectiveAt.toISOString());
+    expect(inventory.date.getTime()).toBe(movement.effectiveAt.getTime());
+    expect(movement.quantityDelta).toBe(-3);
+    expect(movement.kind).toBe("ADJUSTMENT");
+    expect(movement.authority).toBe("SHADOW");
+    expect(movement.causationKind).toBe("INVENTORY");
+    expect(movement.causationId).toBe(draft.id);
+    expect(movement.actorKind).toBe("USER");
+    expect(movement.userId).toBe(INTEGRITY_ADMIN_USER_ID);
+    expect((await prismaA.blankStock.findUniqueOrThrow({ where: { id: blank.id } })).quantity).toBe(7);
+    expect(await prismaA.inventoryMovement.count()).toBe(1);
   });
 
   it("BLANK 10→13 SHADOW ACTIVE is ADJUSTMENT +3 not RECEIPT", async () => {
