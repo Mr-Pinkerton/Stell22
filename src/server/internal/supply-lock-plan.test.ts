@@ -305,6 +305,10 @@ describe("Supply production preflight workflow safety", () => {
     expect(src).toContain("environment: production");
     expect(src).toContain("contents: read");
     expect(src).toContain("BEGIN TRANSACTION READ ONLY");
+    expect(src).toContain("SUPPLY_PREFLIGHT_RESULT=");
+    expect(src).toContain("^SUPPLY_PREFLIGHT_RESULT=[0-9]+,[0-9]+,[0-9]+,[0-9]+$");
+    expect(src).toContain("SUPPLY_PREFLIGHT_RESULT_PARSE_FAILED");
+    expect(withoutComments).not.toContain("awk 'NF { print; exit }'");
     expect(src).toContain("SUPPLY_PREFLIGHT_TOTAL=");
     expect(src).toContain("SUPPLY_PREFLIGHT_DEDUCTED_POSITIVE=");
     expect(src).toContain("SUPPLY_PREFLIGHT_SHORTFALL_ONLY=");
