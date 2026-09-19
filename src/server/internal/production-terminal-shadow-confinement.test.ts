@@ -48,6 +48,32 @@ describe("terminal production SHADOW writer confinement", () => {
     expect(upak.indexOf("appendProductionShadowMovements")).toBeGreaterThan(
       upak.indexOf("applyUpakovkaPrepared"),
     );
+    expect([...upak.matchAll(/isCostFlowActive/g)]).toHaveLength(1);
+    expect(upak).toMatch(
+      /applyUpakovkaPrepared\(\s*tx,\s*op\.id,\s*pick\.quantity,\s*prepared,\s*\{\s*costFlowActive\s*\}\s*\)/,
+    );
+    expect(upak.indexOf("lockUpakovkaPhysicalWriteSet")).toBeGreaterThan(upak.indexOf("isCostFlowActive"));
+
+    const reversal = read("src/server/internal/production-reversal.ts");
+    const applyFn = reversal.slice(reversal.indexOf("export async function applyUpakovkaPrepared"));
+    expect(applyFn).toContain("options?: { costFlowActive: boolean }");
+    expect(applyFn).toMatch(
+      /const costFlowActive = options \? options\.costFlowActive : await isCostFlowActive\(tx\)/,
+    );
+    const pickFn = reversal.slice(
+      reversal.indexOf("export async function applyUpakovkaPick"),
+      reversal.indexOf("export async function applyUpakovkaPrepared"),
+    );
+    expect(pickFn).toMatch(
+      /await applyUpakovkaPrepared\(\s*tx,\s*operationId,\s*quantity,\s*prepared\s*\)/,
+    );
+    expect(pickFn).not.toMatch(
+      /applyUpakovkaPrepared\(\s*tx,\s*operationId,\s*quantity,\s*prepared,\s*\{/,
+    );
+
+    const production = read("src/server/production.ts");
+    expect(production).toMatch(/applyUpakovkaPrepared\(\s*tx,\s*id,\s*newQtyInt,\s*prepared\s*\)/);
+    expect(production).not.toContain("{ costFlowActive }");
   });
 
   it("does not connect blocked admin/edit/delete/R-05 contours", () => {

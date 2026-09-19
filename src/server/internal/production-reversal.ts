@@ -224,13 +224,20 @@ export async function applyUpakovkaPick(
   await applyUpakovkaPrepared(tx, operationId, quantity, prepared);
 }
 
+/**
+ * Apply one retained UPAKOVKA product pick.
+ * Pass `options.costFlowActive` to reuse a transaction-local decision
+ * (terminal submit). Omit it to resolve `production_cost_flow` here.
+ */
 export async function applyUpakovkaPrepared(
   tx: Prisma.TransactionClient,
   operationId: string,
   quantity: number,
   prepared: PreparedUpakovkaApply,
+  options?: { costFlowActive: boolean },
 ): Promise<void> {
-  if (await isCostFlowActive(tx)) {
+  const costFlowActive = options ? options.costFlowActive : await isCostFlowActive(tx);
+  if (costFlowActive) {
     await applyActiveUpakovkaPrepared(tx, operationId, quantity, prepared);
     return;
   }

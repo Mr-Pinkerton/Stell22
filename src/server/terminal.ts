@@ -1132,7 +1132,7 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
             ...rateSnapshots,
           },
         });
-        await applyUpakovkaPrepared(tx, op.id, pick.quantity, prepared);
+        await applyUpakovkaPrepared(tx, op.id, pick.quantity, prepared, { costFlowActive });
         const retained = await loadRetainedProductionOperation(tx, op.id);
         const plan = planProductionShadowMovements({ kind: "UPAKOVKA", operation: retained });
         await appendProductionShadowMovements(tx, {

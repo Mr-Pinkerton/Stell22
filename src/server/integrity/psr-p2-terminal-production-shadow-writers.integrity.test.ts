@@ -33,11 +33,17 @@ vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} 
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Prisma, PrismaClient } from "@prisma/client";
+import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
 import { lockRailLots } from "@/server/internal/finance-operations";
+import {
+  lockDetails,
+  snapshotUpakovkaApply,
+} from "@/server/internal/inventory-integrity";
 import {
   canonicalizeMovementTarget,
   effectKeyV1,
 } from "@/server/internal/inventory-movement-identity";
+import { planUpakovkaPhysicalLockSet } from "@/server/internal/upakovka-lock-plan";
 import { employeeMovementActor } from "@/server/internal/inventory-movement-actor";
 import {
   INVENTORY_MOVEMENT_SHADOW_LOCK_KEY,
@@ -65,8 +71,10 @@ import {
 
 const enabled = Boolean(process.env.INTEGRITY_TEST_DATABASE_URL);
 const txOpts = { maxWait: 20_000, timeout: 20_000 } as const;
-const BARRIER_TIMEOUT_MS = 20_000;
+const BARRIER_TIMEOUT_MS = 25_000;
 const REJECT_ACTOR = "INTEGRITY_REJECT_IM";
+
+const holdOpts = { maxWait: 30_000, timeout: 30_000 } as const;
 
 async function waitUntil(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
   const start = Date.now();
@@ -146,6 +154,42 @@ describe.skipIf(!enabled)("PSR-P2 terminal production SHADOW writers", () => {
       exclusiveGranted: count("ExclusiveLock", true),
       exclusiveWaiting: count("ExclusiveLock", false),
     };
+  }
+
+  async function lockWaiterEvidence(holderPid: number) {
+    const activity = await prismaA.$queryRaw<Array<{ n: number }>>`
+      SELECT count(*)::int AS n
+      FROM pg_stat_activity a
+      WHERE a.datname = current_database()
+        AND a.wait_event_type = 'Lock'
+        AND a.pid <> ${holderPid}
+    `;
+    const locks = await prismaA.$queryRaw<Array<{ n: number }>>`
+      SELECT count(*)::int AS n
+      FROM pg_locks l
+      WHERE NOT l.granted
+        AND l.pid <> ${holderPid}
+        AND (
+          l.relation = '"Detail"'::regclass
+          OR l.locktype = 'transactionid'
+        )
+        AND l.pid IN (
+          SELECT a.pid
+          FROM pg_stat_activity a
+          WHERE a.datname = current_database()
+            AND a.wait_event_type = 'Lock'
+            AND a.pid <> ${holderPid}
+        )
+    `;
+    return { activity: activity[0]?.n ?? 0, locks: locks[0]?.n ?? 0 };
+  }
+
+  function productionOpLogs(
+    logs: Array<{ entity: string; entityId: string; id: string; newValues: unknown }>,
+  ) {
+    return logs
+      .filter((row) => row.entity === "ProductionOperation")
+      .map((row) => ({ id: row.id, entityId: row.entityId, newValues: row.newValues }));
   }
 
   async function bindEmployee(emp: { id: string; fullName: string }) {
@@ -316,18 +360,20 @@ describe.skipIf(!enabled)("PSR-P2 terminal production SHADOW writers", () => {
   }
 
   async function snapshotPhysical() {
-    const [ops, lines, noms, logs, movements, blanks, details, products, railLots] = await Promise.all([
-      prismaA.productionOperation.findMany({ orderBy: { id: "asc" } }),
-      prismaA.operationDetailLine.findMany({ orderBy: { id: "asc" } }),
-      prismaA.operationNomenclatureLine.findMany({ orderBy: { id: "asc" } }),
-      prismaA.changeLog.findMany({ orderBy: { id: "asc" } }),
-      prismaA.inventoryMovement.findMany({ orderBy: { effectKey: "asc" } }),
-      prismaA.blankStock.findMany({ orderBy: { id: "asc" } }),
-      prismaA.detailStock.findMany({ orderBy: { id: "asc" } }),
-      prismaA.productStock.findMany({ orderBy: { productId: "asc" } }),
-      prismaA.railLot.findMany({ orderBy: { id: "asc" } }),
-    ]);
-    return { ops, lines, noms, logs, movements, blanks, details, products, railLots };
+    const [ops, lines, noms, logs, movements, blanks, details, products, railLots, nomenclature] =
+      await Promise.all([
+        prismaA.productionOperation.findMany({ orderBy: { id: "asc" } }),
+        prismaA.operationDetailLine.findMany({ orderBy: { id: "asc" } }),
+        prismaA.operationNomenclatureLine.findMany({ orderBy: { id: "asc" } }),
+        prismaA.changeLog.findMany({ orderBy: { id: "asc" } }),
+        prismaA.inventoryMovement.findMany({ orderBy: { effectKey: "asc" } }),
+        prismaA.blankStock.findMany({ orderBy: { id: "asc" } }),
+        prismaA.detailStock.findMany({ orderBy: { id: "asc" } }),
+        prismaA.productStock.findMany({ orderBy: { productId: "asc" } }),
+        prismaA.railLot.findMany({ orderBy: { id: "asc" } }),
+        prismaA.nomenclatureStock.findMany({ orderBy: { nomenclatureId: "asc" } }),
+      ]);
+    return { ops, lines, noms, logs, movements, blanks, details, products, railLots, nomenclature };
   }
 
   it("SHADOW off: three normal submits keep projection and write 0 movements", async () => {
@@ -645,6 +691,80 @@ describe.skipIf(!enabled)("PSR-P2 terminal production SHADOW writers", () => {
     expect(await prismaA.inventoryMovement.count()).toBe(firstCount);
   });
 
+  it("UPAKOVKA captured cost-flow mode survives a mid-TX Setting flip", async () => {
+    const w = await seedUpakovkaMixed(`mode-u-${Date.now()}`);
+    await setShadowGate(true);
+    await prismaA.setting.upsert({
+      where: { key: PRODUCTION_COST_FLOW_KEY },
+      create: { key: PRODUCTION_COST_FLOW_KEY, value: { version: 1, active: false } },
+      update: { value: { version: 1, active: false } },
+    });
+
+    let holderPid = 0;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let holderLocked!: () => void;
+    const holderReady = new Promise<void>((resolve) => {
+      holderLocked = resolve;
+    });
+    const holder = prismaB.$transaction(async (tx) => {
+      await lockDetails(tx, [w.blankDet.id, w.readyDet.id]);
+      const rows = await tx.$queryRaw<Array<{ pid: unknown }>>`SELECT pg_backend_pid() AS pid`;
+      holderPid = Number(rows[0]?.pid);
+      holderLocked();
+      await held;
+    }, holdOpts);
+    await holderReady;
+
+    const submit = submitUpakovka({
+      employeeId: w.emp.id,
+      clientRequestId: `mode-u-${Date.now()}`,
+      picks: [{ productId: w.products[0]!.id, quantity: 1 }],
+    });
+    try {
+      await waitUntil(async () => {
+        const evidence = await lockWaiterEvidence(holderPid);
+        return evidence.activity >= 1 && evidence.locks >= 1;
+      }, "UPAKOVKA waiter blocked on Detail before apply");
+      await prismaC.setting.upsert({
+        where: { key: PRODUCTION_COST_FLOW_KEY },
+        create: { key: PRODUCTION_COST_FLOW_KEY, value: { version: 1, active: true } },
+        update: { value: { version: 1, active: true } },
+      });
+      const flipped = await prismaA.setting.findUniqueOrThrow({
+        where: { key: PRODUCTION_COST_FLOW_KEY },
+      });
+      expect(flipped.value).toMatchObject({ version: 1, active: true });
+    } finally {
+      release();
+    }
+    await holder;
+    await submit;
+
+    const stillActive = await prismaA.setting.findUniqueOrThrow({
+      where: { key: PRODUCTION_COST_FLOW_KEY },
+    });
+    expect(stillActive.value).toMatchObject({ version: 1, active: true });
+    const product = await prismaA.productStock.findUniqueOrThrow({
+      where: { productId: w.products[0]!.id },
+    });
+    expect(product.quantity).toBe(1);
+    expect(product.costVersion).toBe(0);
+    expect(product.materialValue).toBeNull();
+    expect(product.laborValue).toBeNull();
+    expect(product.nomenclatureValue).toBeNull();
+    expect(product.totalValue).toBeNull();
+    const blank = await prismaA.blankStock.findFirstOrThrow({
+      where: { materialId: w.material.id },
+    });
+    expect(blank.quantity).toBe(38);
+    expect(blank.costVersion).toBe(0);
+    expect(blank.materialValue).toBeNull();
+    expect(await prismaA.productionOperation.count({ where: { type: "UPAKOVKA" } })).toBe(1);
+  }, 35_000);
+
   it("UPAKOVKA reversed-order concurrent requests complete without deadlock", async () => {
     const w = await seedUpakovkaMixed(`conc-u-${Date.now()}`, 2);
     await setShadowGate(true);
@@ -653,27 +773,91 @@ describe.skipIf(!enabled)("PSR-P2 terminal production SHADOW writers", () => {
       { productId: w.products[1]!.id, quantity: 1 },
     ];
     const picksB = [...picksA].reverse();
-    const settled = await Promise.allSettled([
-      submitUpakovka({
-        employeeId: w.emp.id,
-        clientRequestId: `conc-u-a-${Date.now()}`,
-        picks: picksA,
-      }),
-      submitUpakovka({
-        employeeId: w.emp.id,
-        clientRequestId: `conc-u-b-${Date.now()}`,
-        picks: picksB,
-      }),
-    ]);
+    await prismaA.$transaction(async (tx) => {
+      const rowsA = [];
+      for (const pick of picksA) {
+        rowsA.push({ pick, prepared: await snapshotUpakovkaApply(tx, pick.productId) });
+      }
+      const forward = planUpakovkaPhysicalLockSet(rowsA);
+      expect(planUpakovkaPhysicalLockSet([...rowsA].reverse())).toEqual(forward);
+      expect(forward.detailIds).toEqual([w.blankDet.id, w.readyDet.id].sort());
+    });
+
+    let holderPid = 0;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let holderLocked!: () => void;
+    const holderReady = new Promise<void>((resolve) => {
+      holderLocked = resolve;
+    });
+    const holder = prismaB.$transaction(async (tx) => {
+      await lockDetails(tx, [w.blankDet.id, w.readyDet.id]);
+      const rows = await tx.$queryRaw<Array<{ pid: unknown }>>`SELECT pg_backend_pid() AS pid`;
+      holderPid = Number(rows[0]?.pid);
+      holderLocked();
+      await held;
+    }, holdOpts);
+    await holderReady;
+
+    const requestA = submitUpakovka({
+      employeeId: w.emp.id,
+      clientRequestId: `conc-u-a-${Date.now()}`,
+      picks: picksA,
+    });
+    const requestB = submitUpakovka({
+      employeeId: w.emp.id,
+      clientRequestId: `conc-u-b-${Date.now()}`,
+      picks: picksB,
+    });
+    let overlap = { activity: 0, locks: 0 };
+    try {
+      await waitUntil(async () => {
+        overlap = await lockWaiterEvidence(holderPid);
+        return overlap.activity >= 2 && overlap.locks >= 2;
+      }, "expected 2 Detail lock waiters");
+    } finally {
+      release();
+    }
+    expect(overlap.activity).toBeGreaterThanOrEqual(2);
+    expect(overlap.locks).toBeGreaterThanOrEqual(2);
+    const settled = await Promise.allSettled([requestA, requestB]);
+    await holder;
     expect(settled.map((row) => row.status)).toEqual(["fulfilled", "fulfilled"]);
-    expect(await prismaA.productionOperation.count({ where: { type: "UPAKOVKA" } })).toBe(4);
+
+    expect((await prismaA.blankStock.findFirstOrThrow({ where: { materialId: w.material.id } })).quantity).toBe(32);
+    expect(
+      (await prismaA.detailStock.findFirstOrThrow({
+        where: { detailId: w.readyDet.id, torcevayaDone: true, ploskostDone: true },
+      })).quantity,
+    ).toBe(16);
+    expect((await prismaA.nomenclatureStock.findUniqueOrThrow({ where: { nomenclatureId: w.fastener.id } })).quantity).toBe(80);
+    expect((await prismaA.nomenclatureStock.findUniqueOrThrow({ where: { nomenclatureId: w.pack.id } })).quantity).toBe(96);
+    expect((await prismaA.nomenclatureStock.findUniqueOrThrow({ where: { nomenclatureId: w.extra.id } })).quantity).toBe(96);
     expect((await prismaA.productStock.findUniqueOrThrow({ where: { productId: w.products[0]!.id } })).quantity).toBe(2);
     expect((await prismaA.productStock.findUniqueOrThrow({ where: { productId: w.products[1]!.id } })).quantity).toBe(2);
-    const ops = await prismaA.productionOperation.findMany({ where: { type: "UPAKOVKA" } });
+
+    const ops = await prismaA.productionOperation.findMany({
+      where: { type: "UPAKOVKA" },
+      include: { lines: true, nomenclatureLines: true },
+      orderBy: { clientRequestId: "asc" },
+    });
+    expect(ops).toHaveLength(4);
+    const clientRequestIds = ops.map((op) => op.clientRequestId);
+    expect(new Set(clientRequestIds).size).toBe(4);
     for (const op of ops) {
-      expect(await prismaA.inventoryMovement.count({ where: { causationId: op.id } })).toBeGreaterThan(0);
+      const plan = planProductionShadowMovements({ kind: "UPAKOVKA", operation: op });
+      const rows = await prismaA.inventoryMovement.findMany({
+        where: { causationId: op.id },
+        orderBy: { effectKey: "asc" },
+      });
+      expect(rows).toHaveLength(plan.effects.length);
+      expect(rows.every((row) => row.causationId === op.id)).toBe(true);
+      const keys = rows.map((row) => row.effectKey);
+      expect(new Set(keys).size).toBe(keys.length);
     }
-  });
+  }, 35_000);
 
   it("malformed SHADOW gate fails before physical mutation on all three submits", async () => {
     const torc = await seedTorcovka(`bad-${Date.now()}`);
@@ -732,12 +916,34 @@ describe.skipIf(!enabled)("PSR-P2 terminal production SHADOW writers", () => {
         picks: [{ lengthM: 2, sort: "SORT1", quantity: 1 }],
       }),
     ).rejects.toThrow(/integrity reject InventoryMovement insert/);
-    expect((await snapshotPhysical()).ops).toHaveLength(beforeT.ops.length);
-    expect((await prismaA.railLot.findUniqueOrThrow({ where: { id: torc.lot.id } })).remainingQuantity).toBe(10);
+    const afterT = await snapshotPhysical();
+    const torcOpsBefore = beforeT.ops.filter((row) => row.type === "TORCOVKA");
+    const torcOpsAfter = afterT.ops.filter((row) => row.type === "TORCOVKA");
+    const torcOpIds = new Set(torcOpsBefore.map((row) => row.id));
+    expect(torcOpsAfter.map((row) => row.id)).toEqual(torcOpsBefore.map((row) => row.id));
+    expect(afterT.railLots.find((row) => row.id === torc.lot.id)?.remainingQuantity).toBe(10);
+    expect(
+      afterT.blanks
+        .filter((row) => row.materialId === torc.material.id)
+        .map((row) => ({ id: row.id, quantity: row.quantity })),
+    ).toEqual(
+      beforeT.blanks
+        .filter((row) => row.materialId === torc.material.id)
+        .map((row) => ({ id: row.id, quantity: row.quantity })),
+    );
+    expect(afterT.lines.filter((row) => torcOpIds.has(row.operationId))).toEqual(
+      beforeT.lines.filter((row) => torcOpIds.has(row.operationId)),
+    );
+    expect(afterT.noms.filter((row) => torcOpIds.has(row.operationId))).toEqual(
+      beforeT.noms.filter((row) => torcOpIds.has(row.operationId)),
+    );
+    expect(productionOpLogs(afterT.logs)).toEqual(productionOpLogs(beforeT.logs));
+    expect(afterT.movements.filter((row) => row.causationKind === "PRODUCTION_OPERATION")).toHaveLength(0);
 
     const pris = await seedPrisadkaMixed(`rb-p-${Date.now()}`);
     await prismaA.employee.update({ where: { id: pris.emp.id }, data: { fullName: REJECT_ACTOR } });
     await bindEmployee({ id: pris.emp.id, fullName: REJECT_ACTOR });
+    const beforeP = await snapshotPhysical();
     await expect(
       submitPrisadka({
         employeeId: pris.emp.id,
@@ -745,11 +951,53 @@ describe.skipIf(!enabled)("PSR-P2 terminal production SHADOW writers", () => {
         picks: [{ detailId: pris.det.id, kind: "torcev", quantity: 1 }],
       }),
     ).rejects.toThrow(/integrity reject InventoryMovement insert/);
-    expect(await prismaA.productionOperation.count({ where: { type: "PRISADKA" } })).toBe(0);
+    const afterP = await snapshotPhysical();
+    const prisOpsBefore = beforeP.ops.filter((row) => row.type === "PRISADKA");
+    const prisOpIds = new Set(prisOpsBefore.map((row) => row.id));
+    expect(afterP.ops.filter((row) => row.type === "PRISADKA").map((row) => row.id)).toEqual(
+      prisOpsBefore.map((row) => row.id),
+    );
+    expect(
+      afterP.blanks
+        .filter((row) => row.materialId === pris.material.id)
+        .map((row) => ({ id: row.id, quantity: row.quantity })),
+    ).toEqual(
+      beforeP.blanks
+        .filter((row) => row.materialId === pris.material.id)
+        .map((row) => ({ id: row.id, quantity: row.quantity })),
+    );
+    expect(
+      afterP.details
+        .filter((row) => row.detailId === pris.det.id)
+        .map((row) => ({
+          id: row.id,
+          quantity: row.quantity,
+          torcevayaDone: row.torcevayaDone,
+          ploskostDone: row.ploskostDone,
+        })),
+    ).toEqual(
+      beforeP.details
+        .filter((row) => row.detailId === pris.det.id)
+        .map((row) => ({
+          id: row.id,
+          quantity: row.quantity,
+          torcevayaDone: row.torcevayaDone,
+          ploskostDone: row.ploskostDone,
+        })),
+    );
+    expect(afterP.lines.filter((row) => prisOpIds.has(row.operationId))).toEqual(
+      beforeP.lines.filter((row) => prisOpIds.has(row.operationId)),
+    );
+    expect(afterP.noms.filter((row) => prisOpIds.has(row.operationId))).toEqual(
+      beforeP.noms.filter((row) => prisOpIds.has(row.operationId)),
+    );
+    expect(productionOpLogs(afterP.logs)).toEqual(productionOpLogs(beforeP.logs));
+    expect(afterP.movements.filter((row) => row.causationKind === "PRODUCTION_OPERATION")).toHaveLength(0);
 
     const upak = await seedUpakovkaMixed(`rb-u-${Date.now()}`);
     await prismaA.employee.update({ where: { id: upak.emp.id }, data: { fullName: REJECT_ACTOR } });
     await bindEmployee({ id: upak.emp.id, fullName: REJECT_ACTOR });
+    const beforeU = await snapshotPhysical();
     await expect(
       submitUpakovka({
         employeeId: upak.emp.id,
@@ -757,7 +1005,58 @@ describe.skipIf(!enabled)("PSR-P2 terminal production SHADOW writers", () => {
         picks: [{ productId: upak.products[0]!.id, quantity: 1 }],
       }),
     ).rejects.toThrow(/integrity reject InventoryMovement insert/);
-    expect(await prismaA.productionOperation.count({ where: { type: "UPAKOVKA" } })).toBe(0);
+    const afterU = await snapshotPhysical();
+    const upakOpsBefore = beforeU.ops.filter((row) => row.type === "UPAKOVKA");
+    const upakOpIds = new Set(upakOpsBefore.map((row) => row.id));
+    const productIds = upak.products.map((row) => row.id);
+    const nomIds = [upak.fastener.id, upak.pack.id, upak.extra.id];
+    expect(afterU.ops.filter((row) => row.type === "UPAKOVKA").map((row) => row.id)).toEqual(
+      upakOpsBefore.map((row) => row.id),
+    );
+    expect(
+      afterU.blanks
+        .filter((row) => row.materialId === upak.material.id)
+        .map((row) => ({ id: row.id, quantity: row.quantity })),
+    ).toEqual(
+      beforeU.blanks
+        .filter((row) => row.materialId === upak.material.id)
+        .map((row) => ({ id: row.id, quantity: row.quantity })),
+    );
+    expect(
+      afterU.details
+        .filter((row) => row.detailId === upak.blankDet.id || row.detailId === upak.readyDet.id)
+        .map((row) => ({ id: row.id, detailId: row.detailId, quantity: row.quantity })),
+    ).toEqual(
+      beforeU.details
+        .filter((row) => row.detailId === upak.blankDet.id || row.detailId === upak.readyDet.id)
+        .map((row) => ({ id: row.id, detailId: row.detailId, quantity: row.quantity })),
+    );
+    expect(
+      afterU.nomenclature
+        .filter((row) => nomIds.includes(row.nomenclatureId))
+        .map((row) => ({ nomenclatureId: row.nomenclatureId, quantity: row.quantity })),
+    ).toEqual(
+      beforeU.nomenclature
+        .filter((row) => nomIds.includes(row.nomenclatureId))
+        .map((row) => ({ nomenclatureId: row.nomenclatureId, quantity: row.quantity })),
+    );
+    expect(
+      afterU.products
+        .filter((row) => productIds.includes(row.productId))
+        .map((row) => ({ productId: row.productId, quantity: row.quantity })),
+    ).toEqual(
+      beforeU.products
+        .filter((row) => productIds.includes(row.productId))
+        .map((row) => ({ productId: row.productId, quantity: row.quantity })),
+    );
+    expect(afterU.lines.filter((row) => upakOpIds.has(row.operationId))).toEqual(
+      beforeU.lines.filter((row) => upakOpIds.has(row.operationId)),
+    );
+    expect(afterU.noms.filter((row) => upakOpIds.has(row.operationId))).toEqual(
+      beforeU.noms.filter((row) => upakOpIds.has(row.operationId)),
+    );
+    expect(productionOpLogs(afterU.logs)).toEqual(productionOpLogs(beforeU.logs));
+    expect(afterU.movements.filter((row) => row.causationKind === "PRODUCTION_OPERATION")).toHaveLength(0);
     expect(await prismaA.inventoryMovement.count()).toBe(0);
   });
 
