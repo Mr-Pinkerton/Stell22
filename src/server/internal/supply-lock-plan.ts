@@ -50,6 +50,28 @@ export function uniqueSortedSupplyKeys(keys: Iterable<SupplyKey>): SupplyKey[] {
   return out.sort(compareSupplyKeys);
 }
 
+export const SUPPLY_DUPLICATE_IDENTITY_CONFLICT = "SUPPLY_DUPLICATE_IDENTITY_CONFLICT";
+
+function sameInstant(a: Date | null, b: Date | null): boolean {
+  if (a === null && b === null) return true;
+  if (a === null || b === null) return false;
+  return a.getTime() === b.getTime();
+}
+
+export function sameSupplyIdentityPayload(a: IncomingSupply, b: IncomingSupply): boolean {
+  return (
+    a.marketplace === b.marketplace &&
+    a.externalId === b.externalId &&
+    a.sku === b.sku &&
+    a.quantity === b.quantity &&
+    a.status === b.status &&
+    a.number === b.number &&
+    a.warehouseName === b.warehouseName &&
+    sameInstant(a.createdAt, b.createdAt) &&
+    sameInstant(a.acceptedAt, b.acceptedAt)
+  );
+}
+
 export function resolveSupplyProductBinding(input: {
   deductedQty: number;
   shortfallQty: number;
@@ -67,11 +89,24 @@ export function resolveSupplyProductBinding(input: {
   return { productId: live ?? input.boundProductId, rebind: false };
 }
 
-/** Last original-array occurrence wins, then canonical SupplyKey order. */
-export function sortSuppliesForUpsert<T extends SupplyKey>(supplies: readonly T[]): T[] {
-  const lastWins = new Map<string, T>();
-  for (const supply of supplies) lastWins.set(supplyKeyId(supply), supply);
-  return [...lastWins.values()].sort(compareSupplyKeys);
+/**
+ * Canonical incoming snapshot: identical duplicate identities collapse;
+ * conflicting payloads fail closed. Result is input-order independent.
+ */
+export function sortSuppliesForUpsert<T extends IncomingSupply>(supplies: readonly T[]): T[] {
+  const byKey = new Map<string, T>();
+  for (const supply of supplies) {
+    const id = supplyKeyId(supply);
+    const existing = byKey.get(id);
+    if (!existing) {
+      byKey.set(id, supply);
+      continue;
+    }
+    if (!sameSupplyIdentityPayload(existing, supply)) {
+      throw new Error(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+    }
+  }
+  return [...byKey.values()].sort(compareSupplyKeys);
 }
 
 export function incomingSupplyKeys(supplies: readonly SupplyKey[]): SupplyKey[] {

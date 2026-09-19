@@ -1,7 +1,10 @@
 import { Prisma } from "@prisma/client";
 import { computeSupplyDeduction } from "@/lib/supply-stock";
 import { PRODUCTION_COST_FLOW_KEY, parseProductionCostFlowValue } from "@/server/internal/cost-flow-state";
-import { COST_FLOW_QTY_ONLY_WRITER } from "@/server/internal/cost-flow-pools";
+import {
+  COST_FLOW_QTY_ONLY_WRITER,
+  ensureAndLockActiveProductPools,
+} from "@/server/internal/cost-flow-pools";
 import {
   evaluateOzonSupplyCancellation,
   isOzonCancelledInThisSync,
@@ -24,6 +27,7 @@ import {
 export {
   compareSupplyKeys,
   resolveSupplyProductBinding,
+  SUPPLY_DUPLICATE_IDENTITY_CONFLICT,
   uniqueSortedSupplyKeys,
   type SupplyKey,
 } from "@/server/internal/supply-lock-plan";
@@ -80,21 +84,23 @@ async function resolveCostFlowActive(db: SupplyDb, captured?: boolean): Promise<
 
 /**
  * INACTIVE: quantity-0 placeholders then FOR UPDATE by productId ASC.
- * ACTIVE: lock existing rows only — never mint uninitialized monetary pools.
+ * ACTIVE: canonical ensureAndLockActiveProductPools for the full target set.
  */
 export async function lockSupplyProductStockTargets(
-  db: SupplyDb,
+  db: Prisma.TransactionClient,
   productIds: Iterable<string | null | undefined>,
   options: { costFlowActive: boolean },
 ): Promise<void> {
   const unique = uniqueSortedProductIds(productIds);
   if (unique.length === 0) return;
-  if (!options.costFlowActive) {
-    await db.productStock.createMany({
-      data: unique.map((productId) => ({ productId, quantity: 0 })),
-      skipDuplicates: true,
-    });
+  if (options.costFlowActive) {
+    await ensureAndLockActiveProductPools(db, unique);
+    return;
   }
+  await db.productStock.createMany({
+    data: unique.map((productId) => ({ productId, quantity: 0 })),
+    skipDuplicates: true,
+  });
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM "ProductStock" WHERE "productId" IN (${Prisma.join(unique)}) ORDER BY "productId" FOR UPDATE`,
   );
@@ -283,7 +289,7 @@ export type SupplySyncAccountingResult = {
  * full Supply lock set, then full ProductStock lock set, then physical apply.
  */
 export async function runSupplySyncAccounting(
-  tx: SupplyDb,
+  tx: Prisma.TransactionClient,
   input: {
     supplies: IncomingSupply[];
     ozonCancelledExternalIds: string[];

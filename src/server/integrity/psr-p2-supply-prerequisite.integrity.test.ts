@@ -5,8 +5,10 @@ import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
 import {
   applyOzonSupplyCancellation,
   applySupplyDeduction,
+  lockSupplyProductStockTargets,
   runSupplySyncAccounting,
   SUPPLY_CANCEL_PRODUCT_BINDING_REQUIRED,
+  SUPPLY_DUPLICATE_IDENTITY_CONFLICT,
 } from "@/server/internal/supply-deduct";
 import type { IncomingSupply } from "@/server/internal/supply-lock-plan";
 import {
@@ -581,6 +583,216 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
       expect(wbRow.status).toBe("PENDING");
       expect([5, 7]).toContain(ozon.quantity);
       expect([4, 8]).toContain(wbRow.quantity);
+    },
+  );
+
+  function expectInitializedActiveZero(stock: {
+    quantity: number;
+    costVersion: number;
+    materialValue: Prisma.Decimal | null;
+    laborValue: Prisma.Decimal | null;
+    nomenclatureValue: Prisma.Decimal | null;
+    totalValue: Prisma.Decimal | null;
+  }) {
+    expect(stock.quantity).toBe(0);
+    expect(stock.costVersion).toBe(1);
+    expect(stock.materialValue).not.toBeNull();
+    expect(stock.laborValue).not.toBeNull();
+    expect(stock.nomenclatureValue).not.toBeNull();
+    expect(stock.totalValue).not.toBeNull();
+    expect(new Prisma.Decimal(stock.materialValue!).equals(0)).toBe(true);
+    expect(new Prisma.Decimal(stock.laborValue!).equals(0)).toBe(true);
+    expect(new Prisma.Decimal(stock.nomenclatureValue!).equals(0)).toBe(true);
+    expect(new Prisma.Decimal(stock.totalValue!).equals(0)).toBe(true);
+  }
+
+  it("conflicting duplicate identity rolls back before Supply/ProductStock/ChangeLog mutation", async () => {
+    const product = await seedProduct(`dup-${Date.now()}`, "OZ-DUP", "WB-DUP");
+    await prismaA.productStock.create({ data: { productId: product.id, quantity: 12 } });
+    const qty5 = incomingSupply("OZON", "dup-ext", "OZ-DUP", "SHIPPED", 5);
+    const qty10 = incomingSupply("OZON", "dup-ext", "OZ-DUP", "ACCEPTED", 10);
+    const beforeLogs = await prismaA.changeLog.count();
+    const beforeMovements = await prismaA.inventoryMovement.count();
+    const beforeSupplies = await prismaA.supply.count();
+
+    const run = (supplies: IncomingSupply[]) =>
+      prismaA.$transaction(async (tx) => {
+        await runSupplySyncAccounting(tx, {
+          supplies,
+          ozonCancelledExternalIds: [],
+          productIdFor: () => product.id,
+        });
+        await tx.changeLog.create({
+          data: {
+            entity: "Supply",
+            entityId: "OZON:dup-ext:OZ-DUP",
+            newValues: { event: "gp_shortfall" },
+          },
+        });
+      }, txOpts);
+
+    await expect(run([qty5, qty10])).rejects.toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+    await expect(run([qty10, qty5])).rejects.toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+
+    expect(await prismaA.supply.count()).toBe(beforeSupplies);
+    expect(await prismaA.supply.findFirst({ where: { externalId: "dup-ext" } })).toBeNull();
+    const stock = await prismaA.productStock.findUniqueOrThrow({ where: { productId: product.id } });
+    expect(stock.quantity).toBe(12);
+    expect(await prismaA.changeLog.count()).toBe(beforeLogs);
+    expect(await prismaA.inventoryMovement.count()).toBe(beforeMovements);
+  });
+
+  it("ACTIVE missing ProductStock is materialized as a canonical zero pool with full shortfall", async () => {
+    const product = await seedProduct(`miss-${Date.now()}`, "OZ-MISS", "WB-MISS");
+    await setCostFlowActive(true);
+    expect(await prismaA.productStock.findUnique({ where: { productId: product.id } })).toBeNull();
+
+    const result = await prismaA.$transaction(
+      (tx) =>
+        runSupplySyncAccounting(tx, {
+          supplies: [incomingSupply("OZON", "ext-miss", "OZ-MISS", "SHIPPED", 4)],
+          ozonCancelledExternalIds: [],
+          productIdFor: () => product.id,
+        }),
+      txOpts,
+    );
+
+    expect(result.deductedTotal).toBe(0);
+    expect(result.shortfallTotal).toBe(4);
+    const stock = await prismaA.productStock.findUniqueOrThrow({ where: { productId: product.id } });
+    expectInitializedActiveZero(stock);
+    const supply = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-miss" } });
+    expect(supply.deductedQty).toBe(0);
+    expect(supply.shortfallQty).toBe(4);
+    expect(supply.stockAccountingGeneration).toBe(1);
+    expect(supply.stockAccountingOpen).toBe(true);
+    expect(await prismaA.inventoryMovement.count()).toBe(0);
+  });
+
+  it(
+    "ACTIVE missing ProductStock is created and locked during the global phase",
+    { timeout: 40_000 },
+    async () => {
+      const product = await seedProduct(`glock-${Date.now()}`, "OZ-GLOCK", "WB-GLOCK");
+      await setCostFlowActive(true);
+      expect(await prismaA.productStock.findUnique({ where: { productId: product.id } })).toBeNull();
+
+      let blockerPid = 0;
+      let holding = false;
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const overlap = { activity: 0, locks: 0 };
+
+      const holder = prismaA.$transaction(async (tx) => {
+        const pidRows = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+        blockerPid = Number(pidRows[0]?.pid);
+        await lockSupplyProductStockTargets(tx, [product.id], { costFlowActive: true });
+        holding = true;
+        await released;
+      }, holdOpts);
+
+      await waitUntil(() => holding && blockerPid > 0, "global phase holds materialized ProductStock");
+
+      const waiter = prismaB.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '8s'`);
+        await lockSupplyProductStockTargets(tx, [product.id], { costFlowActive: true });
+      }, txOpts);
+
+      await waitUntil(async () => {
+        const seen = await lockWaiters(blockerPid, "ProductStock");
+        const indexLocks = await prismaC.$queryRaw<Array<{ n: number }>>`
+          SELECT count(*)::int AS n
+          FROM pg_locks l
+          JOIN pg_class c ON c.oid = l.relation
+          WHERE NOT l.granted
+            AND l.pid <> ${blockerPid}
+            AND c.relname LIKE ${"ProductStock%"}
+            AND l.pid IN (
+              SELECT a.pid
+              FROM pg_stat_activity a
+              WHERE a.datname = current_database()
+                AND a.wait_event_type = 'Lock'
+                AND a.pid <> ${blockerPid}
+            )
+        `;
+        const waiting = seen.activity >= 1 && (seen.locks >= 1 || (indexLocks[0]?.n ?? 0) >= 1);
+        if (waiting) {
+          overlap.activity = seen.activity;
+          overlap.locks = seen.locks + (indexLocks[0]?.n ?? 0);
+          return true;
+        }
+        return false;
+      }, "second TX waits on globally locked ProductStock");
+      release();
+      await Promise.all([holder, waiter]);
+      expect(overlap.activity).toBeGreaterThanOrEqual(1);
+      expect(overlap.locks).toBeGreaterThanOrEqual(1);
+      const stock = await prismaA.productStock.findUniqueOrThrow({ where: { productId: product.id } });
+      expectInitializedActiveZero(stock);
+    },
+  );
+
+  it(
+    "ACTIVE reversed missing P1/P2 Supply mapping materializes both pools without deadlock",
+    { timeout: 40_000 },
+    async () => {
+      const stamp = Date.now();
+      const p1 = await seedProduct(`am1-${stamp}`, "OZ-AM1", "WB-AM1");
+      const p2 = await seedProduct(`am2-${stamp}`, "OZ-AM2", "WB-AM2");
+      await setCostFlowActive(true);
+      expect(await prismaA.productStock.findUnique({ where: { productId: p1.id } })).toBeNull();
+      expect(await prismaA.productStock.findUnique({ where: { productId: p2.id } })).toBeNull();
+      const productIdFor = (marketplace: string, sku: string) => {
+        if (marketplace === "OZON" && sku === "OZ-AM1") return p1.id;
+        if (marketplace === "OZON" && sku === "OZ-AM2") return p2.id;
+        return null;
+      };
+      const run = (client: typeof prismaA, supplies: IncomingSupply[]) =>
+        client.$transaction(async (tx) => {
+          await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '8s'`);
+          await tx.$executeRawUnsafe(`SET LOCAL deadlock_timeout = '200ms'`);
+          return runSupplySyncAccounting(tx, {
+            supplies,
+            ozonCancelledExternalIds: [],
+            productIdFor,
+          });
+        }, txOpts);
+
+      const [r1, r2] = await Promise.all([
+        run(prismaA, [
+          incomingSupply("OZON", `am-b-${stamp}`, "OZ-AM2", "SHIPPED", 3),
+          incomingSupply("OZON", `am-a-${stamp}`, "OZ-AM1", "SHIPPED", 3),
+        ]),
+        run(prismaB, [
+          incomingSupply("OZON", `am-c-${stamp}`, "OZ-AM1", "SHIPPED", 3),
+          incomingSupply("OZON", `am-d-${stamp}`, "OZ-AM2", "SHIPPED", 3),
+        ]),
+      ]);
+      expect(r1.deductedTotal).toBe(0);
+      expect(r2.deductedTotal).toBe(0);
+      expect(r1.shortfallTotal).toBe(6);
+      expect(r2.shortfallTotal).toBe(6);
+      expectInitializedActiveZero(
+        await prismaA.productStock.findUniqueOrThrow({ where: { productId: p1.id } }),
+      );
+      expectInitializedActiveZero(
+        await prismaA.productStock.findUniqueOrThrow({ where: { productId: p2.id } }),
+      );
+      const supplies = await prismaA.supply.findMany({
+        where: {
+          externalId: { in: [`am-a-${stamp}`, `am-b-${stamp}`, `am-c-${stamp}`, `am-d-${stamp}`] },
+        },
+      });
+      expect(supplies).toHaveLength(4);
+      for (const row of supplies) {
+        expect(row.deductedQty).toBe(0);
+        expect(row.shortfallQty).toBe(3);
+        expect(row.stockAccountingGeneration).toBe(1);
+        expect(row.stockAccountingOpen).toBe(true);
+      }
+      expect(await prismaA.inventoryMovement.count()).toBe(0);
     },
   );
 });

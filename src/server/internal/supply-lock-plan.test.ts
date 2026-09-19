@@ -5,6 +5,7 @@ import {
   incomingSupplyKeys,
   shippedSupplyAccountingKeys,
   sortSuppliesForUpsert,
+  SUPPLY_DUPLICATE_IDENTITY_CONFLICT,
   supplyKeyId,
   unionSupplyAccountingKeys,
   uniqueSortedProductIds,
@@ -39,20 +40,77 @@ function incoming(
 }
 
 describe("canonical Supply upsert order", () => {
-  it("is independent of incoming array order and deduplicates keys", () => {
+  it("is independent of incoming array order and deduplicates identical keys", () => {
     const wb = incoming("WB", "2", "sku-b", "SHIPPED");
     const ozonB = incoming("OZON", "1", "sku-b", "PENDING");
     const ozonA = incoming("OZON", "1", "sku-a", "SHIPPED");
-    const ozonADup = incoming("OZON", "1", "sku-a", "ACCEPTED", 99);
-    const forward = sortSuppliesForUpsert([wb, ozonB, ozonA, ozonADup]);
-    const reversed = sortSuppliesForUpsert([ozonADup, ozonA, ozonB, wb]);
-    expect(forward.map(supplyKeyId)).toEqual(reversed.map(supplyKeyId));
+    const ozonAIdentical = incoming("OZON", "1", "sku-a", "SHIPPED");
+    const forward = sortSuppliesForUpsert([wb, ozonB, ozonA, ozonAIdentical]);
+    const reversed = sortSuppliesForUpsert([ozonAIdentical, ozonA, ozonB, wb]);
+    expect(forward).toEqual(reversed);
     expect(forward.map(supplyKeyId)).toEqual([
       supplyKeyId(ozonA),
       supplyKeyId(ozonB),
       supplyKeyId(wb),
     ]);
     expect(incomingSupplyKeys([wb, ozonA, ozonB])).toEqual(uniqueSortedSupplyKeys([ozonB, wb, ozonA]));
+  });
+});
+
+describe("Supply duplicate identity contract", () => {
+  it("dedupes identical payloads and is independent of input order", () => {
+    const a = incoming("OZON", "1", "sku-a", "SHIPPED", 5);
+    const identicalA: IncomingSupply = {
+      ...a,
+      createdAt: new Date(a.createdAt.getTime()),
+    };
+    const b = incoming("WB", "2", "sku-b", "PENDING", 3);
+    const forward = sortSuppliesForUpsert([a, identicalA, b]);
+    const reversed = sortSuppliesForUpsert([b, a, identicalA]);
+    expect(forward).toEqual(reversed);
+    expect(forward).toHaveLength(2);
+    expect(forward).toEqual([a, b]);
+  });
+
+  it("fails closed on conflicting quantity regardless of order", () => {
+    const qty5 = incoming("OZON", "1", "sku-a", "SHIPPED", 5);
+    const qty10 = incoming("OZON", "1", "sku-a", "SHIPPED", 10);
+    const other = incoming("WB", "2", "sku-b", "PENDING", 1);
+    expect(() => sortSuppliesForUpsert([qty5, qty10, other])).toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+    expect(() => sortSuppliesForUpsert([other, qty10, qty5])).toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+  });
+
+  it("fails closed on conflicting status regardless of order", () => {
+    const pending = incoming("OZON", "1", "sku-a", "PENDING", 5);
+    const shipped = incoming("OZON", "1", "sku-a", "SHIPPED", 5);
+    expect(() => sortSuppliesForUpsert([pending, shipped])).toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+    expect(() => sortSuppliesForUpsert([shipped, pending])).toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+  });
+
+  it("fails closed on conflicting acceptedAt / createdAt regardless of order", () => {
+    const base = incoming("OZON", "1", "sku-a", "SHIPPED", 5);
+    const acceptedConflict: IncomingSupply = {
+      ...base,
+      acceptedAt: new Date("2026-09-02T00:00:00.000Z"),
+    };
+    const createdConflict: IncomingSupply = {
+      ...base,
+      createdAt: new Date("2026-09-03T00:00:00.000Z"),
+    };
+    expect(() => sortSuppliesForUpsert([base, acceptedConflict])).toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+    expect(() => sortSuppliesForUpsert([acceptedConflict, base])).toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+    expect(() => sortSuppliesForUpsert([base, createdConflict])).toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+    expect(() => sortSuppliesForUpsert([createdConflict, base])).toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+  });
+
+  it("fails closed on conflicting number / warehouseName rather than last-wins", () => {
+    const base = incoming("OZON", "1", "sku-a", "SHIPPED", 5);
+    const numberConflict: IncomingSupply = { ...base, number: "A-1" };
+    const warehouseConflict: IncomingSupply = { ...base, warehouseName: "WH-1" };
+    expect(() => sortSuppliesForUpsert([base, numberConflict])).toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+    expect(() => sortSuppliesForUpsert([numberConflict, base])).toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+    expect(() => sortSuppliesForUpsert([base, warehouseConflict])).toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
+    expect(() => sortSuppliesForUpsert([warehouseConflict, base])).toThrow(SUPPLY_DUPLICATE_IDENTITY_CONFLICT);
   });
 });
 
@@ -230,5 +288,36 @@ describe("Supply prerequisite static invariants", () => {
       expect(src).not.toContain("inventory_movement_shadow_write");
       expect(src).not.toMatch(/inventoryMovement\.create/);
     }
+  });
+});
+
+describe("Supply production preflight workflow safety", () => {
+  it("is a read-only SSH SELECT path with no deploy or mutation verbs", () => {
+    const src = readFileSync(
+      new URL("../../../.github/workflows/supply-production-preflight.yml", import.meta.url),
+      "utf8",
+    );
+    const withoutComments = src
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("#"))
+      .join("\n");
+    expect(src).toContain("workflow_dispatch");
+    expect(src).toContain("environment: production");
+    expect(src).toContain("contents: read");
+    expect(src).toContain("BEGIN TRANSACTION READ ONLY");
+    expect(src).toContain("SUPPLY_PREFLIGHT_TOTAL=");
+    expect(src).toContain("SUPPLY_PREFLIGHT_DEDUCTED_POSITIVE=");
+    expect(src).toContain("SUPPLY_PREFLIGHT_SHORTFALL_ONLY=");
+    expect(src).toContain("SUPPLY_PREFLIGHT_OPEN_DEDUCTED_POSITIVE=");
+    expect(src).toContain("SUPPLY_DATA_BLOCKER=");
+    expect(withoutComments).not.toMatch(/\bdeploy\.sh\b/);
+    expect(withoutComments).not.toMatch(/prisma\s+migrate/i);
+    expect(withoutComments).not.toMatch(/\bgit\s+reset\b/);
+    expect(withoutComments).not.toMatch(/docker\s+compose[^\n]*(up|down|restart)/i);
+    expect(withoutComments).not.toMatch(/\b(UPDATE|INSERT|DELETE|TRUNCATE|ALTER|DROP)\b/);
+    expect(src).not.toContain("actions/checkout");
+    expect(src).not.toContain("ci.yml");
+    expect(src).not.toContain("scripts/deploy.sh");
+    expect(src).not.toContain("ci-prod-remote.sh");
   });
 });

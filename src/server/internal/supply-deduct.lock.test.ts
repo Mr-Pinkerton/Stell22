@@ -95,3 +95,24 @@ describe("resolveSupplyProductBinding", () => {
     expect(src).toContain("decision.restoreQty > 0 && !supply.productId");
   });
 });
+
+describe("ACTIVE ProductStock global lock", () => {
+  it("reuses ensureAndLockActiveProductPools for the full target set", () => {
+    const src = readFileSync(new URL("./supply-deduct.ts", import.meta.url), "utf8");
+    expect(src).toContain("ensureAndLockActiveProductPools");
+    expect(src).toMatch(
+      /if\s*\(\s*options\.costFlowActive\s*\)[\s\S]*ensureAndLockActiveProductPools\(/,
+    );
+    expect(src).not.toMatch(
+      /costFlowActive[\s\S]{0,400}createMany\([\s\S]{0,200}costVersion/,
+    );
+    const lockFn = src.slice(src.indexOf("export async function lockSupplyProductStockTargets"));
+    const applyStart = src.indexOf("export async function runSupplySyncAccounting");
+    const orchestrator = src.slice(applyStart);
+    expect(orchestrator.indexOf("lockSupplyProductStockTargets")).toBeGreaterThan(-1);
+    expect(orchestrator.indexOf("lockSupplyProductStockTargets")).toBeLessThan(
+      orchestrator.indexOf("applySupplyDeduction"),
+    );
+    expect(lockFn.startsWith("export async function lockSupplyProductStockTargets")).toBe(true);
+  });
+});

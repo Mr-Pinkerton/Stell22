@@ -22,6 +22,7 @@
     "security:inventory-movement-append-only": "node scripts/security/check-inventory-movement-append-only.mjs",
     "security:inventory-movement-shadow-write-control": "node scripts/security/check-inventory-movement-shadow-write-control.mjs",
     "security:inventory-movement-insert-confinement": "node scripts/security/check-inventory-movement-insert-confinement.mjs",
+    "security:supply-preflight-workflow": "node scripts/security/check-supply-production-preflight-workflow.mjs",
     "psr:reset-shadow-movements": "tsx scripts/reset-inventory-movement-shadow.ts",
     "psr:set-shadow-write": "tsx scripts/set-inventory-movement-shadow-write.ts",
     "db:up": "docker compose up -d",
