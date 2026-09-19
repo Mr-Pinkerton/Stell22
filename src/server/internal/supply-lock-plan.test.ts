@@ -275,19 +275,24 @@ describe("ProductStock target set", () => {
 });
 
 describe("Supply prerequisite static invariants", () => {
-  it("does not add an InventoryMovement writer or SHADOW gate read", () => {
-    const files = [
-      new URL("./supply-deduct.ts", import.meta.url),
-      new URL("./supply-lock-plan.ts", import.meta.url),
-      new URL("./marketplace-sync.ts", import.meta.url),
-    ];
-    for (const file of files) {
-      const src = readFileSync(file, "utf8");
-      expect(src).not.toContain("appendShadowInventoryMovements");
-      expect(src).not.toContain("appendProductionShadowMovements");
-      expect(src).not.toContain("inventory_movement_shadow_write");
-      expect(src).not.toMatch(/inventoryMovement\.create/);
-    }
+  it("keeps lock-plan free of InventoryMovement INSERT and raw SHADOW gate reads", () => {
+    const lockPlan = readFileSync(new URL("./supply-lock-plan.ts", import.meta.url), "utf8");
+    expect(lockPlan).not.toContain("appendShadowInventoryMovements");
+    expect(lockPlan).not.toContain("appendProductionShadowMovements");
+    expect(lockPlan).not.toContain("appendSupplyConsumeShadowMovement");
+    expect(lockPlan).not.toContain("inventory_movement_shadow_write");
+    expect(lockPlan).not.toMatch(/inventoryMovement\.create/);
+
+    const deduct = readFileSync(new URL("./supply-deduct.ts", import.meta.url), "utf8");
+    expect(deduct).not.toContain("appendShadowInventoryMovements");
+    expect(deduct).not.toContain("inventory_movement_shadow_write");
+    expect(deduct).toContain("appendSupplyConsumeShadowMovement");
+    expect(deduct).toContain("appendSupplyRestoreShadowMovement");
+
+    const sync = readFileSync(new URL("./marketplace-sync.ts", import.meta.url), "utf8");
+    expect(sync).not.toContain("appendShadowInventoryMovements");
+    expect(sync).not.toContain("inventory_movement_shadow_write");
+    expect(sync).toContain("isInventoryMovementShadowWriteActiveForWriter");
   });
 });
 

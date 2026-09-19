@@ -3,6 +3,7 @@
  * npx tsx scripts/run-mp-sync.ts
  */
 import { prisma } from "../src/server/db";
+import { userMovementActorFromAdmin } from "../src/server/internal/inventory-movement-actor";
 import { syncMarketplacesAsUserInternal } from "../src/server/internal/marketplace-sync";
 
 if (process.argv.includes("--import-only") || process.env.CLI_IMPORT_SMOKE === "1") {
@@ -13,7 +14,7 @@ if (process.argv.includes("--import-only") || process.env.CLI_IMPORT_SMOKE === "
 async function main() {
   const admin = await prisma.user.findFirst({
     where: { role: "ADMIN" },
-    select: { id: true, email: true },
+    select: { id: true, email: true, name: true },
   });
   if (!admin) {
     console.log("FAIL: нет пользователя ADMIN");
@@ -21,7 +22,8 @@ async function main() {
   }
 
   console.log(`Синхронизация от ${admin.email}…`);
-  const res = await syncMarketplacesAsUserInternal(admin.id);
+  const actor = userMovementActorFromAdmin(admin);
+  const res = await syncMarketplacesAsUserInternal(actor);
 
   console.log(JSON.stringify(res, null, 2));
 

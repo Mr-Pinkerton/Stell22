@@ -63,7 +63,10 @@ export function isOzonCancelledInThisSync(
   return marketplace === "OZON" && cancelledOzonExternalIds.has(externalId);
 }
 
-/** Future SUPPLY consume identity inputs. No effectKey string is frozen. */
+/**
+ * Historical / non-runtime causal facts only.
+ * Canonical consume identity is `supply-shadow-write.ts` (`processedQtyAfter`).
+ */
 export function supplyConsumeCausalIdentity(input: {
   supplyId: string;
   stockAccountingGeneration: number;
@@ -84,7 +87,10 @@ export function supplyConsumeCausalIdentity(input: {
   };
 }
 
-/** Future SUPPLY restore identity inputs. Generation is the closed cycle. */
+/**
+ * Historical / non-runtime causal facts only.
+ * Canonical restore identity is `supply-shadow-write.ts`.
+ */
 export function supplyRestoreCausalIdentity(input: {
   supplyId: string;
   stockAccountingGeneration: number;
