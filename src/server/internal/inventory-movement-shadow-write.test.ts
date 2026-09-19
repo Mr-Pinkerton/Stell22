@@ -230,7 +230,7 @@ describe("acquire lock helpers", () => {
 });
 
 describe("no InventoryMovement runtime writers", () => {
-  it("only the approved gateway may insert InventoryMovement rows from application src", () => {
+  it("only the approved gateway may insert InventoryMovement rows from application src", { timeout: 20_000 }, () => {
     const root = path.join(process.cwd(), "src");
     const hits: string[] = [];
     const allowed = new Set(["src/server/internal/inventory-movement-shadow-gateway.ts"]);

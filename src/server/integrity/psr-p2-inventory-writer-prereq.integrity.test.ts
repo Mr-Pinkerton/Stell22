@@ -1,19 +1,8 @@
 /**
- * PSR-P2 Inventory writer prerequisite proofs.
+ * PSR-P2 Inventory writer prerequisite proofs retained after the writer lands.
  *
- * Covered here (no InventoryMovement writer):
- * - SHADOW-inactive projection conduct
- * - SHADOW-active / writer-absent fail-closed before mutation
- * - dual-active fail-closed before mutation
- * - second-conduct / ALREADY_CONDUCTED projection retry
- * - global BlankStock lock-order concurrency
- * - retained USER actor on ChangeLog
- *
- * Explicitly NOT claimed (next Inventory writer PR):
- * - one movement per canonical InventoryPhysicalEffect
- * - projection + InventoryMovement atomic rollback
- * - SHADOW movement retry / duplicate behavior
- * - exact movement rows produced by Inventory conduct
+ * Writer-specific movement proofs live in
+ * `psr-p2-inventory-shadow-writer.integrity.test.ts`.
  */
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
 vi.mock("next/headers", () => ({
@@ -41,7 +30,6 @@ import { Prisma } from "@prisma/client";
 import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
 import {
   INVENTORY_DUAL_ACTIVE_UNSUPPORTED,
-  INVENTORY_SHADOW_WRITER_NOT_CONNECTED,
 } from "@/server/internal/inventory-conduct";
 import {
   ALREADY_CONDUCTED,
@@ -102,6 +90,7 @@ describe.skipIf(!enabled)("PSR-P2 Inventory writer prerequisite", () => {
   });
 
   afterAll(async () => {
+    await prismaA?.$executeRawUnsafe(`DELETE FROM "InventoryMovement"`).catch(() => {});
     await prismaA?.$disconnect();
     await prismaB?.$disconnect();
   });
@@ -211,25 +200,25 @@ describe.skipIf(!enabled)("PSR-P2 Inventory writer prerequisite", () => {
     expect(header?.userId).toBe(INTEGRITY_ADMIN_USER_ID);
   });
 
-  it("SHADOW ACTIVE without writer fails closed before physical mutation", async () => {
+  it("SHADOW ACTIVE writes projection and SHADOW movements atomically", async () => {
     const { short } = await seedTwoBlankPools();
     const draft = await createInventoryDraft(false);
     const line = draft.lines.find((l) => l.refType === "BLANK" && l.refId === short.id);
     await updateInventoryLineActual(line!.id, 7);
     await setShadowGate(true);
     await setCostFlowActive(false);
-    const before = await snapshotPhysical();
 
-    await expect(conductInventory(draft.id)).rejects.toThrow(INVENTORY_SHADOW_WRITER_NOT_CONNECTED);
-
-    const after = await snapshotPhysical();
-    expect(after).toEqual(before);
-    expect(after.inventories[0]?.status).toBe("DRAFT");
-    expect(after.movements).toBe(0);
-    const gate = await prismaA.setting.findUnique({
-      where: { key: "inventory_movement_shadow_write" },
-    });
-    expect(gate?.value).toMatchObject({ version: 1, active: true });
+    const conducted = await conductInventory(draft.id);
+    expect(conducted.status).toBe("CONDUCTED");
+    const after = await prismaA.blankStock.findUniqueOrThrow({ where: { id: short.id } });
+    expect(after.quantity).toBe(7);
+    expect(await prismaA.inventoryMovement.count()).toBe(1);
+    const movement = await prismaA.inventoryMovement.findFirstOrThrow();
+    expect(movement.causationKind).toBe("INVENTORY");
+    expect(movement.causationId).toBe(draft.id);
+    expect(movement.kind).toBe("ADJUSTMENT");
+    expect(movement.quantityDelta).toBe(-3);
+    expect(movement.authority).toBe("SHADOW");
   });
 
   it("dual-active fails closed with a distinct error before physical mutation", async () => {
@@ -322,6 +311,49 @@ describe.skipIf(!enabled)("PSR-P2 Inventory writer prerequisite", () => {
     });
     expect(afterQty).toEqual(beforeQty);
     expect(await prismaA.inventoryMovement.count()).toBe(0);
+  });
+
+  it("P2-02 mixed BLANK + no-prisadka DETAIL alias reversed order does not deadlock", async () => {
+    const { short, long, materialA, materialZ } = await seedTwoBlankPools();
+    const aliasA = await prismaA.detail.findFirstOrThrow({ where: { materialId: materialA.id } });
+    const aliasZ = await prismaA.detail.findFirstOrThrow({ where: { materialId: materialZ.id } });
+    const linesBA = [
+      { refType: "DETAIL", refId: aliasZ.id },
+      { refType: "BLANK", refId: long.id },
+      { refType: "BLANK", refId: short.id },
+      { refType: "DETAIL", refId: aliasA.id },
+    ];
+    const linesAB = [
+      { refType: "BLANK", refId: short.id },
+      { refType: "DETAIL", refId: aliasA.id },
+      { refType: "BLANK", refId: long.id },
+      { refType: "DETAIL", refId: aliasZ.id },
+    ];
+    const started = { a: false, b: false };
+    const lockTx = async (
+      client: typeof prismaA,
+      lines: Array<{ refType: string; refId: string }>,
+      who: "a" | "b",
+    ) => {
+      return client.$transaction(
+        async (tx) => {
+          await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '8s'`);
+          await tx.$executeRawUnsafe(`SET LOCAL deadlock_timeout = '200ms'`);
+          const specs = await collectInventoryBlankLockSpecs(tx, lines);
+          started[who] = true;
+          await waitUntil(() => started.a && started.b, "mixed blank-alias overlap");
+          await lockBlankSpecs(tx, specs);
+          await new Promise((resolve) => setTimeout(resolve, 250));
+          return specs.map(blankSpecSortKey);
+        },
+        txOpts,
+      );
+    };
+    const settled = await Promise.allSettled([lockTx(prismaA, linesBA, "a"), lockTx(prismaB, linesAB, "b")]);
+    expect(settled.map((row) => row.status)).toEqual(["fulfilled", "fulfilled"]);
+    const plans = settled.map((row) => (row.status === "fulfilled" ? row.value : []));
+    expect(plans[0]).toEqual(plans[1]);
+    expect(plans[0]).toHaveLength(2);
   });
 
   it("retains the authenticated User.id on the Inventory conduct ChangeLog", async () => {

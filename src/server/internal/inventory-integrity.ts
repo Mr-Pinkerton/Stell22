@@ -392,33 +392,6 @@ export async function lockInventoryStockRows(
   );
 }
 
-/** Lock existing BlankStock rows by id, ordered by physical spec. Does not create rows. */
-export async function lockBlankStockByIds(
-  tx: Prisma.TransactionClient,
-  ids: Iterable<string | null | undefined>,
-): Promise<void> {
-  const unique = sortedUniqueIds(ids);
-  if (unique.length === 0) return;
-  const rows = await tx.blankStock.findMany({
-    where: { id: { in: unique } },
-    select: { materialId: true, lengthM: true, detailType: true, sort: true },
-  });
-  for (const spec of uniqueSortedBlankSpecs(rows)) {
-    const row = await tx.blankStock.findUniqueOrThrow({
-      where: {
-        materialId_lengthM_detailType_sort: {
-          materialId: spec.materialId,
-          lengthM: toDec(spec.lengthM),
-          detailType: spec.detailType,
-          sort: spec.sort,
-        },
-      },
-      select: { id: true },
-    });
-    await tx.$queryRaw`SELECT id FROM "BlankStock" WHERE id = ${row.id} FOR UPDATE`;
-  }
-}
-
 export async function liveQtyForLine(
   tx: Prisma.TransactionClient,
   line: { refType: string; refId: string },

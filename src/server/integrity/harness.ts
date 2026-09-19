@@ -86,6 +86,7 @@ export async function ensureIntegrityAdminUser(db: PrismaClient): Promise<void> 
 export async function resetIntegrityFinance(db: PrismaClient): Promise<void> {
   await db.$executeRawUnsafe(`
     TRUNCATE TABLE
+      "InventoryMovement",
       "CashFlow",
       "Statement",
       "Account",
@@ -115,6 +116,7 @@ export async function resetIntegrityFinance(db: PrismaClient): Promise<void> {
 export async function resetIntegrityCostFreeze(db: PrismaClient): Promise<void> {
   await db.$executeRawUnsafe(`
     TRUNCATE TABLE
+      "InventoryMovement",
       "PaymentBatchItem",
       "Payment",
       "OperationNomenclatureLine",
@@ -146,6 +148,7 @@ export async function resetIntegrityCostFreeze(db: PrismaClient): Promise<void> 
 export async function resetIntegrityInventory(db: PrismaClient): Promise<void> {
   await db.$executeRawUnsafe(`
     TRUNCATE TABLE
+      "InventoryMovement",
       "InventoryLine",
       "Inventory",
       "PaymentBatchItem",
