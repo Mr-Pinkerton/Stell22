@@ -22,6 +22,9 @@ const required = [
   "environment: production",
   "contents: read",
   "BEGIN TRANSACTION READ ONLY",
+  "SUPPLY_PREFLIGHT_RESULT=",
+  "^SUPPLY_PREFLIGHT_RESULT=[0-9]+,[0-9]+,[0-9]+,[0-9]+$",
+  "SUPPLY_PREFLIGHT_RESULT_PARSE_FAILED",
   "SUPPLY_PREFLIGHT_TOTAL=",
   "SUPPLY_PREFLIGHT_DEDUCTED_POSITIVE=",
   "SUPPLY_PREFLIGHT_SHORTFALL_ONLY=",
@@ -45,6 +48,9 @@ for (const [pattern, label] of forbidden) {
   if (pattern.test(withoutComments)) failures.push(`${rel}: contains ${label}`);
 }
 
+if (withoutComments.includes("awk 'NF { print; exit }'")) {
+  failures.push(`${rel}: fragile first-non-empty-line parser`);
+}
 if (src.includes("actions/checkout")) failures.push(`${rel}: contains actions/checkout`);
 if (src.includes("ci.yml")) failures.push(`${rel}: contains ci.yml`);
 if (src.includes("scripts/deploy.sh")) failures.push(`${rel}: contains scripts/deploy.sh`);

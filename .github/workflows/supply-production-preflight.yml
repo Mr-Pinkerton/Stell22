@@ -51,23 +51,29 @@ jobs:
               echo "ERROR: docker-compose.prod.yml not found in $APP_DIR" >&2
               exit 1
             fi
-            sql='BEGIN TRANSACTION READ ONLY;
+            sql="BEGIN TRANSACTION READ ONLY;
             SELECT
-              COUNT(*)::text,
-              COUNT(*) FILTER (WHERE "deductedQty" > 0)::text,
-              COUNT(*) FILTER (WHERE "deductedQty" = 0 AND "shortfallQty" > 0)::text,
-              COUNT(*) FILTER (WHERE "stockAccountingOpen" = true AND "deductedQty" > 0)::text
-            FROM "Supply"
-            WHERE "productId" IS NULL
-              AND ("deductedQty" > 0 OR "shortfallQty" > 0);
-            COMMIT;'
-            row="$(printf '%s\n' "$sql" | docker compose -f docker-compose.prod.yml exec -T db \
-              psql -U stell22 -d stell22 -v ON_ERROR_STOP=1 -At -F $'\t')"
-            row="$(printf '%s\n' "$row" | awk 'NF { print; exit }')"
-            IFS=$'\t' read -r total deducted_positive shortfall_only open_deducted_positive <<<"$row"
+              'SUPPLY_PREFLIGHT_RESULT=' ||
+              COUNT(*)::text || ',' ||
+              COUNT(*) FILTER (WHERE \"deductedQty\" > 0)::text || ',' ||
+              COUNT(*) FILTER (WHERE \"deductedQty\" = 0 AND \"shortfallQty\" > 0)::text || ',' ||
+              COUNT(*) FILTER (WHERE \"stockAccountingOpen\" = true AND \"deductedQty\" > 0)::text
+            FROM \"Supply\"
+            WHERE \"productId\" IS NULL
+              AND (\"deductedQty\" > 0 OR \"shortfallQty\" > 0);
+            COMMIT;"
+            raw="$(printf '%s\n' "$sql" | docker compose -f docker-compose.prod.yml exec -T db \
+              psql -U stell22 -d stell22 -v ON_ERROR_STOP=1 -At)"
+            matches="$(printf '%s\n' "$raw" | grep -E '^SUPPLY_PREFLIGHT_RESULT=[0-9]+,[0-9]+,[0-9]+,[0-9]+$' || true)"
+            n="$(printf '%s\n' "$matches" | grep -cE '^SUPPLY_PREFLIGHT_RESULT=[0-9]+,[0-9]+,[0-9]+,[0-9]+$' || true)"
+            if [[ "$n" -ne 1 ]]; then
+              echo "SUPPLY_PREFLIGHT_RESULT_PARSE_FAILED" >&2
+              exit 1
+            fi
+            IFS=',' read -r total deducted_positive shortfall_only open_deducted_positive <<<"${matches#SUPPLY_PREFLIGHT_RESULT=}"
             for value in total deducted_positive shortfall_only open_deducted_positive; do
               if ! [[ "${!value}" =~ ^[0-9]+$ ]]; then
-                echo "ERROR: could not parse ${value} from read-only query" >&2
+                echo "SUPPLY_PREFLIGHT_RESULT_PARSE_FAILED" >&2
                 exit 1
               fi
             done
