@@ -118,7 +118,7 @@ describe("R-04 same-sync conflict: cancellation wins", () => {
   });
 });
 
-describe("R-04 future SUPPLY causal identity (no writer, no effectKey freeze)", () => {
+describe("R-04 historical SUPPLY causal identity helpers (non-runtime)", () => {
   it("pins consume/restore facts under causationKind SUPPLY and Supply.id (I8 / I10)", () => {
     const consume = supplyConsumeCausalIdentity({
       supplyId: "supply-row-1",
