@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import type { Batch as PrismaBatch, RailLot as PrismaRailLot } from "@prisma/client";
+import type { Batch as PrismaBatch, Prisma, RailLot as PrismaRailLot } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
@@ -33,6 +33,17 @@ import {
 } from "@/server/internal/cost-flow-raw";
 import { applyActiveSimplePurchaseReceipt } from "@/server/internal/cost-flow-downstream";
 import { isCostFlowActive } from "@/server/internal/cost-flow-state";
+import { requireClientRequestId } from "@/lib/request-id";
+import {
+  PURCHASE_REPLAY_TARGET_MISSING,
+  assertPurchaseCommandMatch,
+  acquirePurchaseCommandRequestLock,
+  canonicalBatchCreateSnapshot,
+  canonicalSimplePurchaseSnapshot,
+  canonicalWriteOffEffectSnapshot,
+  snapshotJsonValue,
+  writeOffTotalQuantity,
+} from "@/server/internal/purchase-command-identity";
 import type { Material, NomenclatureItem, RailType, Sort } from "@/types/domain";
 
 const PATH = "/purchases";
@@ -226,8 +237,13 @@ function validateBatch(v: BatchFormValues, options?: { requirePackages?: boolean
  * значения игнорируем. Материал без заданного сечения (старые/конфликтные записи)
  * использовать нельзя, пока сечение не проставлено в карточке материала.
  */
-async function resolveMaterialSection(materialId: string): Promise<{ w: number; h: number }> {
-  const m = await prisma.material.findUnique({
+type DbClient = Prisma.TransactionClient | typeof prisma;
+
+async function resolveMaterialSection(
+  materialId: string,
+  db: DbClient = prisma,
+): Promise<{ w: number; h: number }> {
+  const m = await db.material.findUnique({
     where: { id: materialId },
     select: { name: true, sectionWidthMm: true, sectionHeightMm: true },
   });
@@ -238,9 +254,13 @@ async function resolveMaterialSection(materialId: string): Promise<{ w: number; 
   return { w: num(m.sectionWidthMm), h: num(m.sectionHeightMm) };
 }
 
-async function assertUniqueBatchName(name: string, excludeId?: string): Promise<void> {
+async function assertUniqueBatchName(
+  name: string,
+  excludeId?: string,
+  db: DbClient = prisma,
+): Promise<void> {
   const trimmed = name.trim();
-  const existing = await prisma.batch.findFirst({
+  const existing = await db.batch.findFirst({
     where: {
       name: { equals: trimmed, mode: "insensitive" },
       ...(excludeId ? { id: { not: excludeId } } : {}),
@@ -249,24 +269,45 @@ async function assertUniqueBatchName(name: string, excludeId?: string): Promise<
   if (existing) throw new Error(`Партия «${trimmed}» уже существует`);
 }
 
-async function loadUsedPackageCodes(): Promise<Set<string>> {
-  const rows = await prisma.railLot.findMany({
+async function loadUsedPackageCodes(db: DbClient = prisma): Promise<Set<string>> {
+  const rows = await db.railLot.findMany({
     where: { code: { not: null } },
     select: { code: true },
   });
   return new Set(rows.map((r) => r.code as string));
 }
 
-export async function createBatch(values: BatchFormValues): Promise<PurchaseBatchRow> {
-  await requireAdmin();
+export async function createBatch(
+  values: BatchFormValues,
+  requestId: string,
+): Promise<PurchaseBatchRow> {
+  const admin = await requireAdmin();
+  const clientRequestId = requireClientRequestId(requestId);
   validateBatch(values, { requirePackages: true });
-  await assertUniqueBatchName(values.name);
-  const section = await resolveMaterialSection(values.materialId);
+  const snapshot = canonicalBatchCreateSnapshot(values);
 
-  const purchaseDate = parseDate(values.purchaseDate);
-  const usedCodes = await loadUsedPackageCodes();
+  const createdId = await prisma.$transaction(async (tx) => {
+    await acquirePurchaseCommandRequestLock(tx, "batch-create", clientRequestId);
+    const existing = await tx.batchCreationCommand.findUnique({
+      where: { requestId: clientRequestId },
+    });
+    if (existing) {
+      assertPurchaseCommandMatch({
+        storedAdminUserId: existing.adminUserId,
+        incomingAdminUserId: admin.id,
+        storedSnapshot: existing.requestSnapshot,
+        incomingSnapshot: snapshot,
+      });
+      const batch = await tx.batch.findUnique({ where: { id: existing.batchId } });
+      if (!batch) throw new Error(PURCHASE_REPLAY_TARGET_MISSING);
+      return existing.batchId;
+    }
 
-  const created = await prisma.$transaction(async (tx) => {
+    await assertUniqueBatchName(values.name, undefined, tx);
+    const section = await resolveMaterialSection(values.materialId, tx);
+    const purchaseDate = parseDate(values.purchaseDate);
+    const usedCodes = await loadUsedPackageCodes(tx);
+
     const batch = await tx.batch.create({
       data: {
         name: values.name.trim(),
@@ -302,16 +343,33 @@ export async function createBatch(values: BatchFormValues): Promise<PurchaseBatc
     if (await isCostFlowActive(tx)) {
       await initializeCreatedRailLotsInTx(tx, batch);
     }
-    return batch;
+    const command = await tx.batchCreationCommand.create({
+      data: {
+        requestId: clientRequestId,
+        batchId: batch.id,
+        adminUserId: admin.id,
+        requestSnapshot: snapshotJsonValue(snapshot),
+      },
+    });
+    await writeChangeLog(
+      {
+        entity: "Batch",
+        entityId: batch.id,
+        userId: admin.id,
+        newValues: {
+          name: batch.name,
+          purchaseCost: num(batch.purchaseCost),
+          requestId: clientRequestId,
+          commandId: command.id,
+        },
+      },
+      tx,
+    );
+    return batch.id;
   });
 
-  await writeChangeLog({
-    entity: "Batch",
-    entityId: created.id,
-    newValues: { name: created.name, purchaseCost: num(created.purchaseCost) },
-  });
   revalidatePath(PATH);
-  return loadRow(created.id);
+  return loadRow(createdId);
 }
 
 /**
@@ -481,11 +539,29 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
 }
 
 /** Списать остаток партии в отход: обнуляем остатки всех реек (атомарно). */
-export async function writeOffBatchRemainder(id: string): Promise<PurchaseBatchRow> {
-  await requireAdmin();
+export async function writeOffBatchRemainder(
+  id: string,
+  requestId: string,
+): Promise<PurchaseBatchRow> {
+  const admin = await requireAdmin();
+  const clientRequestId = requireClientRequestId(requestId);
   // Чтение остатка, обнуление и запись в журнал — одной транзакцией, чтобы
   // параллельная торцовка не разошлась с журналом.
   await prisma.$transaction(async (tx) => {
+    await acquirePurchaseCommandRequestLock(tx, "batch-writeoff", clientRequestId);
+    const existing = await tx.batchRemainderWriteOff.findUnique({
+      where: { requestId: clientRequestId },
+    });
+    if (existing) {
+      assertPurchaseCommandMatch({
+        storedAdminUserId: existing.adminUserId,
+        incomingAdminUserId: admin.id,
+        storedBatchId: existing.batchId,
+        incomingBatchId: id,
+      });
+      return;
+    }
+
     const lots = await tx.railLot.findMany({
       where: { batchId: id },
       select: { id: true, remainingQuantity: true },
@@ -495,8 +571,25 @@ export async function writeOffBatchRemainder(id: string): Promise<PurchaseBatchR
     const lockedLots = await tx.railLot.findMany({
       where: { batchId: id },
     });
-    const remaining = lockedLots.reduce((s, l) => s + l.remainingQuantity, 0);
+    const snapshot = canonicalWriteOffEffectSnapshot({
+      batchId: id,
+      lots: lockedLots.map((lot) => ({
+        id: lot.id,
+        remainingQuantity: lot.remainingQuantity,
+      })),
+    });
+    const remaining = writeOffTotalQuantity(snapshot);
     if (remaining <= 0) throw new Error("Остаток уже нулевой");
+
+    const command = await tx.batchRemainderWriteOff.create({
+      data: {
+        requestId: clientRequestId,
+        batchId: id,
+        adminUserId: admin.id,
+        totalQuantity: remaining,
+        effectSnapshot: snapshotJsonValue(snapshot),
+      },
+    });
 
     if (await isCostFlowActive(tx)) {
       await applyActiveRawWriteoffInTx(tx, id, lockedLots);
@@ -510,8 +603,14 @@ export async function writeOffBatchRemainder(id: string): Promise<PurchaseBatchR
       {
         entity: "Batch",
         entityId: id,
+        userId: admin.id,
         oldValues: { remainingRails: remaining },
-        newValues: { remainingRails: 0, writeOff: "отход" },
+        newValues: {
+          remainingRails: 0,
+          writeOff: "отход",
+          requestId: clientRequestId,
+          commandId: command.id,
+        },
       },
       tx,
     );
@@ -563,14 +662,39 @@ export interface SimplePurchaseFormValues {
   purchaseDate: string | null;
 }
 
-export async function createSimplePurchase(values: SimplePurchaseFormValues): Promise<void> {
-  await requireAdmin();
+export async function createSimplePurchase(
+  values: SimplePurchaseFormValues,
+  requestId: string,
+): Promise<void> {
+  const admin = await requireAdmin();
+  const clientRequestId = requireClientRequestId(requestId);
   if (!values.nomenclatureId) throw new Error("Выберите номенклатуру");
-  if (!values.quantity || values.quantity <= 0) throw new Error("Укажите количество");
+  if (!values.quantity || values.quantity <= 0 || !Number.isInteger(values.quantity)) {
+    throw new Error("Укажите количество");
+  }
   if (values.unitPrice == null || values.unitPrice < 0) throw new Error("Укажите цену");
+  const snapshot = canonicalSimplePurchaseSnapshot(values);
 
   const qty = values.quantity;
-  const created = await prisma.$transaction(async (tx) => {
+  await prisma.$transaction(async (tx) => {
+    await acquirePurchaseCommandRequestLock(tx, "simple-purchase", clientRequestId);
+    const existing = await tx.simplePurchaseCreationCommand.findUnique({
+      where: { requestId: clientRequestId },
+    });
+    if (existing) {
+      assertPurchaseCommandMatch({
+        storedAdminUserId: existing.adminUserId,
+        incomingAdminUserId: admin.id,
+        storedSnapshot: existing.requestSnapshot,
+        incomingSnapshot: snapshot,
+      });
+      const purchase = await tx.simplePurchase.findUnique({
+        where: { id: existing.simplePurchaseId },
+      });
+      if (!purchase) throw new Error(PURCHASE_REPLAY_TARGET_MISSING);
+      return;
+    }
+
     const purchase = await tx.simplePurchase.create({
       data: {
         nomenclatureId: values.nomenclatureId,
@@ -593,12 +717,28 @@ export async function createSimplePurchase(values: SimplePurchaseFormValues): Pr
         update: { quantity: { increment: qty } },
       });
     }
-    return purchase;
-  });
-  await writeChangeLog({
-    entity: "SimplePurchase",
-    entityId: created.id,
-    newValues: { nomenclatureId: created.nomenclatureId, quantity: created.quantity },
+    const command = await tx.simplePurchaseCreationCommand.create({
+      data: {
+        requestId: clientRequestId,
+        simplePurchaseId: purchase.id,
+        adminUserId: admin.id,
+        requestSnapshot: snapshotJsonValue(snapshot),
+      },
+    });
+    await writeChangeLog(
+      {
+        entity: "SimplePurchase",
+        entityId: purchase.id,
+        userId: admin.id,
+        newValues: {
+          nomenclatureId: purchase.nomenclatureId,
+          quantity: purchase.quantity,
+          requestId: clientRequestId,
+          commandId: command.id,
+        },
+      },
+      tx,
+    );
   });
   revalidatePath(PATH);
 }

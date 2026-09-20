@@ -488,7 +488,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     await setCostFlowActive(true);
     const world = await seedWorld({ remainingValue: "1234.567890" });
     const before = d((await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } })).remainingValue)!;
-    await writeOffBatchRemainder(world.batch.id);
+    await writeOffBatchRemainder(world.batch.id, `test:wo:${world.suffix}`);
     const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
     const events = await prismaA.costEvent.findMany({ where: { batchId: world.batch.id, type: "RAW_WRITEOFF" } });
     expect(lot.remainingQuantity).toBe(0);
@@ -616,7 +616,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
           quantity: 4,
         },
       ],
-    });
+    }, `test:cb:${seq}`);
     const lots = await prismaA.railLot.findMany({ where: { batchId: row.id } });
     const sum = lots.reduce((s, l) => s.plus(d(l.initialValue)!), D(0));
     expect(sum.equals(D(10_000))).toBe(true);
