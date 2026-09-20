@@ -10,6 +10,7 @@ import {
   lockDetails,
   lockNomenclatureIds,
   lockProductIds,
+  prisadkaDestFlags,
   type PreparedUpakovkaApply,
 } from "@/server/internal/inventory-integrity";
 
@@ -33,6 +34,9 @@ export const PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND =
 
 export const QUANTITY_EDIT_BEFORE_SNAPSHOT_INCOMPLETE =
   "QUANTITY_EDIT_BEFORE_SNAPSHOT_INCOMPLETE: before snapshot missing a locked physical target";
+
+export const QUANTITY_EDIT_ACTIVE_TARGET_ESCAPE =
+  "QUANTITY_EDIT_ACTIVE_TARGET_ESCAPE: ACTIVE PRISADKA touched a physical target outside the frozen set";
 
 /**
  * Dedicated two-int advisory namespace for quantity-edit requestId serialization.
@@ -515,11 +519,22 @@ function physicalTargetKey(key: PhysicalKey): string {
 
 function collectLinePhysicalKeys(line: QuantityEditLine, keys: Map<string, PhysicalKey>): void {
   if (line.detailId) {
+    const destFlags = prisadkaDestFlags({
+      detailId: line.detailId,
+      prisadkaTorcevaya: line.prisadkaTorcevaya,
+      sourceIsBlank: line.sourceIsBlank,
+      sourceTorcevayaDone: line.sourceTorcevayaDone,
+      sourcePloskostDone: line.sourcePloskostDone,
+      blankLengthM: null,
+      blankType: null,
+      blankSort: null,
+      blankMaterialId: null,
+    });
     const dest: PhysicalKey = {
       targetType: "DETAIL",
       detailId: line.detailId,
-      torcevayaDone: line.prisadkaTorcevaya,
-      ploskostDone: line.prisadkaPloskost,
+      torcevayaDone: destFlags.destTorcev,
+      ploskostDone: destFlags.destPlosk,
     };
     keys.set(physicalTargetKey(dest), dest);
     if (!line.sourceIsBlank) {
@@ -568,6 +583,11 @@ export function mergePhysicalKeys(...lists: PhysicalKey[][]): PhysicalKey[] {
     for (const key of list) keys.set(physicalTargetKey(key), key);
   }
   return [...keys.values()];
+}
+
+export function uncoveredPhysicalKeys(frozen: PhysicalKey[], used: PhysicalKey[]): PhysicalKey[] {
+  const allowed = new Set(frozen.map(physicalTargetKey));
+  return used.filter((key) => !allowed.has(physicalTargetKey(key)));
 }
 
 export function collectPreparedUpakovkaPhysicalKeys(prepared: PreparedUpakovkaApply): PhysicalKey[] {

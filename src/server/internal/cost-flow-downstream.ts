@@ -199,6 +199,64 @@ const PRISADKA_OUTPUT_CONSUMED =
  * buckets are ensured so a later pick can consume WIP produced by an earlier
  * pick in the same operation.
  */
+export type ActivePrisadkaDetail = PrisadkaJob["detail"];
+
+export type PreparedActivePrisadkaWriteSet = {
+  detailIds: string[];
+  blankSpecs: BlankSpec[];
+  detailSpecs: DetailStockSpec[];
+};
+
+function conservativeActivePrisadkaDetailSpecs(
+  details: ActivePrisadkaDetail[],
+  existing: Array<{ detailId: string; torcevayaDone: boolean; ploskostDone: boolean }>,
+): DetailStockSpec[] {
+  const destSpecs: DetailStockSpec[] = [];
+  for (const row of existing) {
+    destSpecs.push({
+      detailId: row.detailId,
+      torcevayaDone: row.torcevayaDone,
+      ploskostDone: row.ploskostDone,
+    });
+  }
+  for (const detail of details) {
+    destSpecs.push(destSpecOf(detail.id, false, false));
+    if (detail.prisadkaTorcevaya) destSpecs.push(destSpecOf(detail.id, true, false));
+    if (detail.prisadkaPloskost) destSpecs.push(destSpecOf(detail.id, false, true));
+    if (detail.prisadkaTorcevaya && detail.prisadkaPloskost) {
+      destSpecs.push(destSpecOf(detail.id, true, true));
+    }
+  }
+  return uniqueSortedDetailStockSpecs(destSpecs);
+}
+
+/**
+ * Package 2 ACTIVE quantity-edit: lock Detail parents first, then
+ * discover/ensure the complete ACTIVE write-set before any BEFORE snapshot.
+ */
+export async function prepareActivePrisadkaQuantityEdit(
+  tx: Prisma.TransactionClient,
+  details: ActivePrisadkaDetail[],
+): Promise<PreparedActivePrisadkaWriteSet> {
+  const uniqueDetails = [...details]
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .filter((detail, i, all) => i === 0 || detail.id !== all[i - 1]!.id);
+  const detailIds = uniqueDetails.map((d) => d.id);
+  await lockDetails(tx, detailIds);
+  const existing =
+    detailIds.length === 0
+      ? []
+      : await tx.detailStock.findMany({
+          where: { detailId: { in: detailIds } },
+          orderBy: { id: "asc" },
+        });
+  const blankSpecs = uniqueSortedBlankSpecs(uniqueDetails.map(blankSpecOfDetail));
+  const detailSpecs = conservativeActivePrisadkaDetailSpecs(uniqueDetails, existing);
+  await ensureAndLockActiveBlankPools(tx, blankSpecs);
+  await ensureAndLockActiveDetailPools(tx, detailSpecs);
+  return { detailIds, blankSpecs, detailSpecs };
+}
+
 async function lockActivePrisadkaWriteSet(
   tx: Prisma.TransactionClient,
   details: PrisadkaJob["detail"][],

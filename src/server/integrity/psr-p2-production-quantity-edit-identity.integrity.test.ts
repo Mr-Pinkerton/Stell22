@@ -1217,4 +1217,328 @@ describe.skipIf(!enabled)("PSR-P2 Package 2 production quantity-edit identity", 
     });
     expect(replayed.effectSnapshot).toEqual(row.effectSnapshot);
   });
+
+  async function seedActiveTorcevFromBlankWithPloskSource(suffix: string) {
+    const world = await seedWorld(suffix);
+    await prismaA.employee.update({
+      where: { id: world.emp.id },
+      data: { ratePrisadkaPloskt: 4 },
+    });
+    await prismaA.railLot.update({
+      where: { id: world.lot.id },
+      data: {
+        initialValue: new Prisma.Decimal("10000"),
+        remainingValue: new Prisma.Decimal("10000"),
+      },
+    });
+    const both = await prismaA.detail.create({
+      data: {
+        name: `det-actp2a-${suffix}`,
+        materialId: world.material.id,
+        detailNumber: 8,
+        lengthM: new Prisma.Decimal("1.8000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        prisadkaTorcevaya: true,
+        prisadkaPloskost: true,
+      },
+    });
+    await prismaA.setting.upsert({
+      where: { key: PRODUCTION_COST_FLOW_KEY },
+      create: { key: PRODUCTION_COST_FLOW_KEY, value: { version: 1, active: true } },
+      update: { value: { version: 1, active: true } },
+    });
+    await submitTorcovka({
+      employeeId: world.emp.id,
+      batchId: world.batch.id,
+      railLotId: world.lot.id,
+      railsTaken: 2,
+      clientRequestId: `test:qedit:p2a-t:${suffix}`,
+      picks: [{ lengthM: 1.8, sort: "SORT1", quantity: 2 }],
+    });
+    await submitPrisadka({
+      employeeId: world.emp.id,
+      clientRequestId: `test:qedit:p2a-p:${suffix}`,
+      picks: [{ detailId: both.id, kind: "torcev", quantity: 2 }],
+    });
+    const sourceFT = await prismaA.detailStock.upsert({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId: both.id,
+          torcevayaDone: false,
+          ploskostDone: true,
+        },
+      },
+      create: {
+        detailId: both.id,
+        torcevayaDone: false,
+        ploskostDone: true,
+        quantity: 2,
+        materialValue: new Prisma.Decimal("160"),
+        laborValue: new Prisma.Decimal("10"),
+        totalValue: new Prisma.Decimal("170"),
+        costVersion: 1,
+      },
+      update: {
+        quantity: 2,
+        materialValue: new Prisma.Decimal("160"),
+        laborValue: new Prisma.Decimal("10"),
+        totalValue: new Prisma.Decimal("170"),
+        costVersion: 1,
+      },
+    });
+    await prismaA.detailStock.deleteMany({
+      where: {
+        detailId: both.id,
+        torcevayaDone: true,
+        ploskostDone: true,
+        quantity: 0,
+      },
+    });
+    const destTT = await prismaA.detailStock.findUnique({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId: both.id,
+          torcevayaDone: true,
+          ploskostDone: true,
+        },
+      },
+    });
+    const op = await prismaA.productionOperation.findFirstOrThrow({
+      where: { type: "PRISADKA", employeeId: world.emp.id },
+      include: { lines: { orderBy: { id: "asc" } } },
+    });
+    return { world, both, sourceFT, destTT, op };
+  }
+
+  it("P1-02A ACTIVE missing dest true/true is in frozen before snapshot", async () => {
+    const { both, destTT, op } = await seedActiveTorcevFromBlankWithPloskSource(`miss-${seq}`);
+    expect(destTT).toBeNull();
+    const line = op.lines[0]!;
+    const result = await editQty({
+      operationId: op.id,
+      targetLineId: line.id,
+      expectedOldQuantity: line.quantity,
+      newQuantity: 1,
+    });
+    const destAfter = await prismaA.detailStock.findUniqueOrThrow({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId: both.id,
+          torcevayaDone: true,
+          ploskostDone: true,
+        },
+      },
+    });
+    const row = await prismaA.productionOperationQuantityEdit.findUniqueOrThrow({
+      where: { requestId: result.requestId },
+    });
+    const effect = row.effectSnapshot as {
+      physicalAdjustments: Array<{
+        targetType: string;
+        detailId?: string;
+        torcevayaDone?: boolean;
+        ploskostDone?: boolean;
+        quantityDelta: number;
+      }>;
+    };
+    const adj = effect.physicalAdjustments.find(
+      (a) =>
+        a.targetType === "DETAIL" &&
+        a.detailId === both.id &&
+        a.torcevayaDone === true &&
+        a.ploskostDone === true,
+    );
+    expect(adj).toBeTruthy();
+    expect(adj?.quantityDelta).toBe(destAfter.quantity);
+    expect(adj?.quantityDelta).toBe(1);
+  });
+
+  it("P1-02A ACTIVE nonzero source keeps command-only deltas", async () => {
+    const { world, both, sourceFT, op } = await seedActiveTorcevFromBlankWithPloskSource(`nz-${seq}`);
+    const sourceBefore = sourceFT.quantity;
+    expect(sourceBefore).toBe(2);
+    const blankBefore = await prismaA.blankStock.findFirstOrThrow({
+      where: { materialId: world.material.id, lengthM: new Prisma.Decimal("1.8000") },
+    });
+    const destTFBefore = await prismaA.detailStock.findUniqueOrThrow({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId: both.id,
+          torcevayaDone: true,
+          ploskostDone: false,
+        },
+      },
+    });
+    const line = op.lines[0]!;
+    const result = await editQty({
+      operationId: op.id,
+      targetLineId: line.id,
+      expectedOldQuantity: line.quantity,
+      newQuantity: 1,
+    });
+    const sourceAfter = await prismaA.detailStock.findUniqueOrThrow({ where: { id: sourceFT.id } });
+    const destTFAfter = await prismaA.detailStock.findUniqueOrThrow({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId: both.id,
+          torcevayaDone: true,
+          ploskostDone: false,
+        },
+      },
+    });
+    const destTTAfter = await prismaA.detailStock.findUniqueOrThrow({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId: both.id,
+          torcevayaDone: true,
+          ploskostDone: true,
+        },
+      },
+    });
+    const blankAfter = await prismaA.blankStock.findUniqueOrThrow({ where: { id: blankBefore.id } });
+    const row = await prismaA.productionOperationQuantityEdit.findUniqueOrThrow({
+      where: { requestId: result.requestId },
+    });
+    const effect = row.effectSnapshot as {
+      physicalAdjustments: Array<{
+        targetType: string;
+        detailId?: string;
+        torcevayaDone?: boolean;
+        ploskostDone?: boolean;
+        quantityDelta: number;
+      }>;
+    };
+    const sourceAdj = effect.physicalAdjustments.find(
+      (a) =>
+        a.targetType === "DETAIL" &&
+        a.detailId === both.id &&
+        a.torcevayaDone === false &&
+        a.ploskostDone === true,
+    );
+    const destTFAdj = effect.physicalAdjustments.find(
+      (a) =>
+        a.targetType === "DETAIL" &&
+        a.detailId === both.id &&
+        a.torcevayaDone === true &&
+        a.ploskostDone === false,
+    );
+    const destTTAdj = effect.physicalAdjustments.find(
+      (a) =>
+        a.targetType === "DETAIL" &&
+        a.detailId === both.id &&
+        a.torcevayaDone === true &&
+        a.ploskostDone === true,
+    );
+    expect(sourceAfter.quantity).toBe(sourceBefore - 1);
+    expect(sourceAdj?.quantityDelta).toBe(sourceAfter.quantity - sourceBefore);
+    expect(sourceAdj?.quantityDelta).toBe(-1);
+    expect(sourceAdj?.quantityDelta).not.toBe(sourceAfter.quantity);
+    expect(destTFAdj?.quantityDelta).toBe(destTFAfter.quantity - destTFBefore.quantity);
+    expect(destTTAdj?.quantityDelta).toBe(destTTAfter.quantity - 0);
+    expect(blankAfter.quantity - blankBefore.quantity).toBe(
+      effect.physicalAdjustments.find((a) => a.targetType === "BLANK")?.quantityDelta ?? 0,
+    );
+  });
+
+  it("P1-02A ACTIVE Detail parent lock serializes competing stock writer", async () => {
+    const { both, op } = await seedActiveTorcevFromBlankWithPloskSource(`conc-${seq}`);
+    const destTF = await prismaA.detailStock.findUniqueOrThrow({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId: both.id,
+          torcevayaDone: true,
+          ploskostDone: false,
+        },
+      },
+    });
+    const destBefore = destTF.quantity;
+    const line = op.lines[0]!;
+    let started!: Promise<PromiseSettledResult<Awaited<ReturnType<typeof editProductionOperationQuantity>>>[]>;
+    await prismaB.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "Detail" WHERE id = ${both.id} FOR UPDATE`;
+        started = Promise.allSettled([
+          editQty({
+            operationId: op.id,
+            targetLineId: line.id,
+            expectedOldQuantity: line.quantity,
+            newQuantity: 1,
+          }),
+        ]);
+        await waitUntil(async () => {
+          const rows = await tx.$queryRaw<Array<{ n: number }>>`
+            SELECT count(*)::int AS n
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND wait_event_type = 'Lock'
+              AND pid <> pg_backend_pid()
+          `;
+          return (rows[0]?.n ?? 0) >= 1;
+        }, "qedit active detail parent lock wait");
+        await tx.detailStock.upsert({
+          where: {
+            detailId_torcevayaDone_ploskostDone: {
+              detailId: both.id,
+              torcevayaDone: true,
+              ploskostDone: true,
+            },
+          },
+          create: {
+            detailId: both.id,
+            torcevayaDone: true,
+            ploskostDone: true,
+            quantity: 3,
+            materialValue: new Prisma.Decimal("90"),
+            laborValue: new Prisma.Decimal("9"),
+            totalValue: new Prisma.Decimal("99"),
+            costVersion: 1,
+          },
+          update: {
+            quantity: 3,
+            materialValue: new Prisma.Decimal("90"),
+            laborValue: new Prisma.Decimal("9"),
+            totalValue: new Prisma.Decimal("99"),
+            costVersion: 1,
+          },
+        });
+      },
+      { maxWait: 20_000, timeout: 20_000 },
+    );
+    const settled = await withTimeout(started, "qedit active parent lock");
+    expect(settled[0]?.status).toBe("fulfilled");
+    const destTTAfter = await prismaA.detailStock.findUniqueOrThrow({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId: both.id,
+          torcevayaDone: true,
+          ploskostDone: true,
+        },
+      },
+    });
+    const row = await prismaA.productionOperationQuantityEdit.findFirstOrThrow({
+      where: { operationId: op.id },
+    });
+    const effect = row.effectSnapshot as {
+      physicalAdjustments: Array<{
+        targetType: string;
+        detailId?: string;
+        torcevayaDone?: boolean;
+        ploskostDone?: boolean;
+        quantityDelta: number;
+      }>;
+    };
+    const destTTAdj = effect.physicalAdjustments.find(
+      (a) =>
+        a.targetType === "DETAIL" &&
+        a.detailId === both.id &&
+        a.torcevayaDone === true &&
+        a.ploskostDone === true,
+    );
+    expect(destTTAdj).toBeTruthy();
+    expect(destTTAdj?.quantityDelta).toBe(destTTAfter.quantity - 3);
+    expect(destTTAdj?.quantityDelta).not.toBe(destTTAfter.quantity);
+    expect(destTTAdj?.quantityDelta).not.toBe(3);
+    expect(destBefore).toBeGreaterThan(0);
+  });
 });

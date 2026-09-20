@@ -7,6 +7,7 @@ import {
   computeQuantityEditStateFingerprint,
   quantityEditStateFingerprint,
   QUANTITY_EDIT_BEFORE_SNAPSHOT_INCOMPLETE,
+  collectPhysicalKeys,
   derivePhysicalAdjustments,
   sortPhysicalAdjustments,
 } from "./production-quantity-edit";
@@ -99,5 +100,101 @@ describe("quantity-edit snapshots", () => {
     expect(() =>
       assertNoMoneyInQuantityEditContract({ physicalAdjustments: [{ amount: 10 }] }),
     ).toThrow(/monetary field/);
+  });
+
+  it("uses canonical PRISADKA dest for second-stage TORCEVAYA (false/true → true/true)", () => {
+    const keys = collectPhysicalKeys({
+      lines: [
+        {
+          id: "line-st",
+          quantity: 1,
+          detailId: "det-1",
+          blankLengthM: null,
+          blankType: null,
+          blankSort: null,
+          blankMaterialId: null,
+          prisadkaTorcevaya: true,
+          prisadkaPloskost: false,
+          sourceIsBlank: false,
+          sourceTorcevayaDone: false,
+          sourcePloskostDone: true,
+        },
+      ],
+      nomenclatureLines: [],
+    });
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        {
+          targetType: "DETAIL",
+          detailId: "det-1",
+          torcevayaDone: true,
+          ploskostDone: true,
+        },
+        {
+          targetType: "DETAIL",
+          detailId: "det-1",
+          torcevayaDone: false,
+          ploskostDone: true,
+        },
+      ]),
+    );
+    expect(keys).not.toEqual(
+      expect.arrayContaining([
+        {
+          targetType: "DETAIL",
+          detailId: "det-1",
+          torcevayaDone: true,
+          ploskostDone: false,
+        },
+      ]),
+    );
+  });
+
+  it("uses canonical PRISADKA dest for second-stage PLOSKOST (true/false → true/true)", () => {
+    const keys = collectPhysicalKeys({
+      lines: [
+        {
+          id: "line-sp",
+          quantity: 1,
+          detailId: "det-1",
+          blankLengthM: null,
+          blankType: null,
+          blankSort: null,
+          blankMaterialId: null,
+          prisadkaTorcevaya: false,
+          prisadkaPloskost: true,
+          sourceIsBlank: false,
+          sourceTorcevayaDone: true,
+          sourcePloskostDone: false,
+        },
+      ],
+      nomenclatureLines: [],
+    });
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        {
+          targetType: "DETAIL",
+          detailId: "det-1",
+          torcevayaDone: true,
+          ploskostDone: true,
+        },
+        {
+          targetType: "DETAIL",
+          detailId: "det-1",
+          torcevayaDone: true,
+          ploskostDone: false,
+        },
+      ]),
+    );
+    expect(keys).not.toEqual(
+      expect.arrayContaining([
+        {
+          targetType: "DETAIL",
+          detailId: "det-1",
+          torcevayaDone: false,
+          ploskostDone: true,
+        },
+      ]),
+    );
   });
 });

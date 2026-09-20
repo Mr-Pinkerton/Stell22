@@ -2,7 +2,11 @@ import { Prisma } from "@prisma/client";
 import { writeChangeLog } from "@/server/change-log";
 import { D } from "@/lib/cost";
 import { lockProductionOperations } from "@/server/internal/finance-operations";
-import { correctActivePrisadkaLine } from "@/server/internal/cost-flow-downstream";
+import {
+  correctActivePrisadkaLine,
+  prepareActivePrisadkaQuantityEdit,
+  type PreparedActivePrisadkaWriteSet,
+} from "@/server/internal/cost-flow-downstream";
 import { correctActiveTorcovkaLineQuantityInTx } from "@/server/internal/cost-flow-raw";
 import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import type { MovementActorSnapshot } from "@/server/internal/inventory-movement-actor";
@@ -26,6 +30,7 @@ import {
 import { isOverRailLength } from "@/lib/torcovka";
 import type { OperationType } from "@/types/domain";
 import {
+  QUANTITY_EDIT_ACTIVE_TARGET_ESCAPE,
   QUANTITY_EDIT_SHADOW_WRITER_NOT_READY,
   QUANTITY_EDIT_UPAKOVKA_COST_FLOW_NOT_READY,
   STALE_QUANTITY_EDIT,
@@ -42,6 +47,7 @@ import {
   collectExistingDetailStockKeys,
   collectPhysicalKeys,
   collectPreparedUpakovkaPhysicalKeys,
+  uncoveredPhysicalKeys,
   computeQuantityEditStateFingerprint,
   derivePhysicalAdjustments,
   lockQuantityEditPhysicalTargets,
@@ -268,6 +274,7 @@ export async function editProductionOperationQuantityInTransaction(
   const prepared = await prepareQuantityEditMutation(tx, {
     op,
     targetLine,
+    replacedLines,
     newQty: input.newQuantity,
     costFlowActive,
   });
@@ -294,6 +301,29 @@ export async function editProductionOperationQuantityInTransaction(
       nomenclatureLines: { orderBy: { id: "asc" } },
     },
   });
+  if (prepared.activePrisadka) {
+    const afterStock = await tx.detailStock.findMany({
+      where: { detailId: { in: prepared.activePrisadka.detailIds } },
+    });
+    const used = mergePhysicalKeys(
+      collectPhysicalKeys({
+        lines: afterOp.lines
+          .filter((line) => line.detailId && prepared.activePrisadka!.detailIds.includes(line.detailId))
+          .map(asEditLine),
+        nomenclatureLines: [],
+      }),
+      afterStock.map((row) => ({
+        targetType: "DETAIL" as const,
+        detailId: row.detailId,
+        torcevayaDone: row.torcevayaDone,
+        ploskostDone: row.ploskostDone,
+      })),
+    );
+    const escaped = uncoveredPhysicalKeys(unionKeys, used);
+    if (escaped.length > 0) {
+      throw new Error(`${QUANTITY_EDIT_ACTIVE_TARGET_ESCAPE}: ${escaped[0]!.targetType}`);
+    }
+  }
   const afterQty = await snapshotPhysicalQuantities(tx, unionKeys);
   const physicalAdjustments = derivePhysicalAdjustments(unionKeys, beforeQty, afterQty);
   const afterProvenance = captureAfterProvenance(op.type, afterOp, beforeLineIds, replacedLineIds);
@@ -419,6 +449,7 @@ function captureAfterProvenance(
 type PreparedQuantityEdit = {
   upakovka: PreparedUpakovkaApply | null;
   prisadka: PreparedPrisadkaQuantityEdit | null;
+  activePrisadka: PreparedActivePrisadkaWriteSet | null;
 };
 
 async function prepareQuantityEditMutation(
@@ -426,11 +457,12 @@ async function prepareQuantityEditMutation(
   input: {
     op: OpFull;
     targetLine: OpFull["lines"][number] | null;
+    replacedLines: OpFull["lines"];
     newQty: number;
     costFlowActive: boolean;
   },
 ): Promise<PreparedQuantityEdit> {
-  const { op, targetLine, newQty, costFlowActive } = input;
+  const { op, targetLine, replacedLines, newQty, costFlowActive } = input;
   if (op.type === "UPAKOVKA") {
     if (!op.productId) throw new Error("У операции не указано изделие");
     return {
@@ -442,15 +474,31 @@ async function prepareQuantityEditMutation(
         op.nomenclatureLines,
       ),
       prisadka: null,
+      activePrisadka: null,
+    };
+  }
+  if (op.type === "PRISADKA" && targetLine && costFlowActive) {
+    const detailIds = [
+      ...new Set(replacedLines.map((l) => l.detailId).filter((id): id is string => Boolean(id))),
+    ].sort();
+    const details = await tx.detail.findMany({
+      where: { id: { in: detailIds } },
+      orderBy: { id: "asc" },
+    });
+    return {
+      upakovka: null,
+      prisadka: null,
+      activePrisadka: await prepareActivePrisadkaQuantityEdit(tx, details),
     };
   }
   if (op.type === "PRISADKA" && targetLine && !costFlowActive) {
     return {
       upakovka: null,
       prisadka: await planPrisadkaQuantityEdit(tx, op.createdAt, targetLine, newQty),
+      activePrisadka: null,
     };
   }
-  return { upakovka: null, prisadka: null };
+  return { upakovka: null, prisadka: null, activePrisadka: null };
 }
 
 function collectPrisadkaPlanKeys(plan: PreparedPrisadkaQuantityEdit): PhysicalKey[] {
@@ -482,6 +530,24 @@ function collectPrisadkaPlanKeys(plan: PreparedPrisadkaQuantityEdit): PhysicalKe
   return keys;
 }
 
+function collectActivePrisadkaWriteSetKeys(writeSet: PreparedActivePrisadkaWriteSet): PhysicalKey[] {
+  return [
+    ...writeSet.blankSpecs.map((spec) => ({
+      targetType: "BLANK" as const,
+      materialId: spec.materialId,
+      lengthM: canonicalBlankLengthM(spec.lengthM),
+      detailType: spec.detailType,
+      sort: spec.sort,
+    })),
+    ...writeSet.detailSpecs.map((spec) => ({
+      targetType: "DETAIL" as const,
+      detailId: spec.detailId,
+      torcevayaDone: spec.torcevayaDone,
+      ploskostDone: spec.ploskostDone,
+    })),
+  ];
+}
+
 async function collectLockedPhysicalTargets(
   tx: Prisma.TransactionClient,
   input: {
@@ -499,7 +565,12 @@ async function collectLockedPhysicalTargets(
     ? collectPreparedUpakovkaPhysicalKeys(input.prepared.upakovka)
     : input.prepared.prisadka
       ? collectPrisadkaPlanKeys(input.prepared.prisadka)
-      : [];
+      : input.prepared.activePrisadka
+        ? collectActivePrisadkaWriteSetKeys(input.prepared.activePrisadka)
+        : [];
+  if (input.prepared.activePrisadka) {
+    return mergePhysicalKeys(oldKeys, preparedKeys);
+  }
   const detailIds = [
     ...oldKeys.filter((k) => k.targetType === "DETAIL").map((k) => k.detailId),
     ...preparedKeys.filter((k) => k.targetType === "DETAIL").map((k) => k.detailId),
