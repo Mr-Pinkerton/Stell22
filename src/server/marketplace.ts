@@ -3,6 +3,7 @@
 import { prisma } from "@/server/db";
 import { requireAdmin } from "@/server/session";
 import { revalidatePath } from "next/cache";
+import { userMovementActorFromAdmin } from "@/server/internal/inventory-movement-actor";
 import { syncMarketplacesAsUserInternal } from "@/server/internal/marketplace-sync";
 import { saleDatePrismaWhere } from "@/lib/sales-period";
 import type { Period } from "@/lib/dates";
@@ -146,7 +147,8 @@ export interface SyncResult {
 /** Синхронизация маркетплейсов для текущего администратора. */
 export async function syncMarketplaces(): Promise<SyncResult> {
   const admin = await requireAdmin();
-  const result = await syncMarketplacesAsUserInternal(admin.id);
+  const actor = userMovementActorFromAdmin(admin);
+  const result = await syncMarketplacesAsUserInternal(actor);
   revalidatePath("/sales");
   revalidatePath("/warehouse");
   revalidatePath("/reports");

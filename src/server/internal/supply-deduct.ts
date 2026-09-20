@@ -5,6 +5,7 @@ import {
   COST_FLOW_QTY_ONLY_WRITER,
   ensureAndLockActiveProductPools,
 } from "@/server/internal/cost-flow-pools";
+import type { MovementActorSnapshot } from "@/server/internal/inventory-movement-actor";
 import {
   evaluateOzonSupplyCancellation,
   isOzonCancelledInThisSync,
@@ -23,6 +24,14 @@ import {
   type IncomingSupply,
   type SupplyKey,
 } from "@/server/internal/supply-lock-plan";
+import {
+  SUPPLY_SHADOW_CONTEXT_REQUIRED,
+  requireSupplyShadowContext,
+  requireSupplyUserActor,
+  appendSupplyConsumeShadowMovement,
+  appendSupplyRestoreShadowMovement,
+  type SupplyShadowContext,
+} from "@/server/internal/supply-shadow-write";
 
 export {
   compareSupplyKeys,
@@ -116,8 +125,14 @@ async function lockProductStockQty(db: SupplyDb, productId: string): Promise<num
 
 export async function applySupplyDeduction(
   db: SupplyDb,
-  input: SupplyKey & { targetQty: number; productId: string | null; costFlowActive?: boolean },
+  input: SupplyKey & {
+    targetQty: number;
+    productId: string | null;
+    costFlowActive?: boolean;
+    shadow: SupplyShadowContext;
+  },
 ): Promise<{ toRemove: number; shortfall: number }> {
+  const shadow = requireSupplyShadowContext(input.shadow);
   await lockSuppliesInOrder(db, [input]);
   const supply = await db.supply.findUnique({
     where: {
@@ -171,6 +186,7 @@ export async function applySupplyDeduction(
   if (toRemove > 0) {
     const costFlowActive = await resolveCostFlowActive(db, input.costFlowActive);
     if (costFlowActive) throw new Error(COST_FLOW_QTY_ONLY_WRITER);
+    const occurredAt = new Date();
     const updated = await db.productStock.updateMany({
       where: { productId, quantity: { gte: toRemove } },
       data: { quantity: { decrement: toRemove } },
@@ -179,6 +195,25 @@ export async function applySupplyDeduction(
       throw new Error(
         "ProductStock gte failed after FOR UPDATE; refusing available=0 shortfall fallback",
       );
+    }
+    if (shadow.active) {
+      await appendSupplyConsumeShadowMovement(db as Prisma.TransactionClient, {
+        shadowWriteActive: true,
+        actor: shadow.actor,
+        occurredAt,
+        facts: {
+          supplyId: supply.id,
+          marketplace: supply.marketplace,
+          externalId: supply.externalId,
+          sku: supply.sku,
+          productId,
+          stockAccountingGeneration: lifecycle.generation,
+          processedQtyAfter: newDeducted + newShort,
+          deductedQtyAfter: newDeducted,
+          shortfallQtyAfter: newShort,
+          quantityDelta: -toRemove,
+        },
+      });
     }
   }
 
@@ -214,8 +249,12 @@ export async function findOzonSupplyKeysByExternalIds(
 export async function applyOzonSupplyCancellation(
   db: SupplyDb,
   key: SupplyKey,
-  options?: { costFlowActive?: boolean },
+  options: {
+    costFlowActive?: boolean;
+    shadow: SupplyShadowContext;
+  },
 ): Promise<{ restored: number; closed: boolean; generation: number }> {
+  const shadow = requireSupplyShadowContext(options.shadow);
   await lockSuppliesInOrder(db, [key]);
   const supply = await db.supply.findUnique({
     where: {
@@ -241,8 +280,9 @@ export async function applyOzonSupplyCancellation(
   }
 
   if (decision.restoreQty > 0 && supply.productId) {
-    const costFlowActive = await resolveCostFlowActive(db, options?.costFlowActive);
+    const costFlowActive = await resolveCostFlowActive(db, options.costFlowActive);
     if (costFlowActive) throw new Error(COST_FLOW_QTY_ONLY_WRITER);
+    const occurredAt = new Date();
     await db.$queryRaw`
       SELECT id FROM "ProductStock" WHERE "productId" = ${supply.productId} FOR UPDATE
     `;
@@ -251,6 +291,24 @@ export async function applyOzonSupplyCancellation(
       create: { productId: supply.productId, quantity: decision.restoreQty },
       update: { quantity: { increment: decision.restoreQty } },
     });
+    if (shadow.active) {
+      await appendSupplyRestoreShadowMovement(db as Prisma.TransactionClient, {
+        shadowWriteActive: true,
+        actor: shadow.actor,
+        occurredAt,
+        facts: {
+          supplyId: supply.id,
+          marketplace: supply.marketplace,
+          externalId: supply.externalId,
+          sku: supply.sku,
+          productId: supply.productId,
+          stockAccountingGeneration: supply.stockAccountingGeneration,
+          deductedQtyBeforeClose: decision.restoreQty,
+          shortfallQtyBeforeClose: supply.shortfallQty,
+          quantityDelta: decision.restoreQty,
+        },
+      });
+    }
   }
 
   await db.supply.update({
@@ -294,8 +352,18 @@ export async function runSupplySyncAccounting(
     supplies: IncomingSupply[];
     ozonCancelledExternalIds: string[];
     productIdFor: (marketplace: string, sku: string) => string | null;
+    actor: MovementActorSnapshot;
+    shadowWriteActive: boolean;
   },
 ): Promise<SupplySyncAccountingResult> {
+  if (typeof input.shadowWriteActive !== "boolean") {
+    throw new Error(SUPPLY_SHADOW_CONTEXT_REQUIRED);
+  }
+  const actor = requireSupplyUserActor(input.actor);
+  const shadow: SupplyShadowContext = {
+    active: input.shadowWriteActive,
+    actor,
+  };
   const cancelledOzonIds = new Set(input.ozonCancelledExternalIds);
   const incomingSorted = sortSuppliesForUpsert(input.supplies);
   const existingCancelKeys = await findOzonSupplyKeysByExternalIds(tx, input.ozonCancelledExternalIds);
@@ -387,6 +455,7 @@ export async function runSupplySyncAccounting(
       targetQty: target,
       productId: input.productIdFor(key.marketplace, key.sku),
       costFlowActive,
+      shadow,
     });
     deductedTotal += toRemove;
     if (shortfall > 0) {
@@ -401,7 +470,10 @@ export async function runSupplySyncAccounting(
   }
 
   for (const key of cancelKeys) {
-    const result = await applyOzonSupplyCancellation(tx, key, { costFlowActive });
+    const result = await applyOzonSupplyCancellation(tx, key, {
+      costFlowActive,
+      shadow,
+    });
     if (result.closed) {
       restoredTotal += result.restored;
       restores.push({

@@ -31,6 +31,25 @@ function run(label, args, extraEnv = {}) {
 }
 
 run("scripts/run-mp-sync.ts --import-only", ["scripts/run-mp-sync.ts", "--import-only"]);
+
+{
+  const result = spawnSync("npx", ["tsx", "scripts/run-mp-sync.ts"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      DATABASE_URL: process.env.DATABASE_URL ?? "postgresql://nouser:nopass@127.0.0.1:1/nodb",
+    },
+    shell: true,
+  });
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  if (result.status === 0 || !/MP_SYNC_CLI_PHYSICAL_EXECUTION_DISABLED/.test(output)) {
+    failures.push(
+      `scripts/run-mp-sync.ts physical execution must fail closed (exit ${result.status}):\n${output}`,
+    );
+  } else {
+    console.log("OK scripts/run-mp-sync.ts physical execution disabled");
+  }
+}
 run("scripts/fetch-statements.ts import smoke", ["scripts/fetch-statements.ts"], {
   MAIL_IMAP_HOST: "",
   MAIL_IMAP_USER: "",

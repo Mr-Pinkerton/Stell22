@@ -15,10 +15,12 @@ import {
   createIntegrityClients,
   ensureIntegritySchema,
   integrityDatabaseUrl,
+  integritySupplyShadowOff,
   resetIntegrityFinance,
 } from "./harness";
 
 const enabled = Boolean(process.env.INTEGRITY_TEST_DATABASE_URL);
+const shadowOff = integritySupplyShadowOff();
 const txOpts = { maxWait: 20_000, timeout: 20_000 } as const;
 const holdOpts = { maxWait: 30_000, timeout: 30_000 } as const;
 const BARRIER_TIMEOUT_MS = 25_000;
@@ -165,7 +167,7 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
           marketplace: "OZON",
           externalId: "null-bind",
           sku: "OZ-NULL",
-        });
+        }, { shadow: shadowOff });
         await tx.changeLog.create({
           data: {
             entity: "Supply",
@@ -212,7 +214,7 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
         marketplace: "OZON",
         externalId: "zero-restore",
         sku: "OZ-ZERO",
-      }),
+      }, { shadow: shadowOff }),
     );
     expect(result).toEqual({ restored: 0, closed: true, generation: 1 });
     const after = await prismaA.supply.findFirstOrThrow({ where: { externalId: "zero-restore" } });
@@ -247,6 +249,8 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
         supplies: [incomingSupply("OZON", "ext-win", "OZ-WIN", "SHIPPED", 10)],
         ozonCancelledExternalIds: ["ext-win"],
         productIdFor: () => product.id,
+        actor: shadowOff.actor,
+        shadowWriteActive: false,
       }),
     );
     const s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-win" } });
@@ -265,6 +269,8 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
         supplies: [incomingSupply("OZON", "ext-in", "OZ-IN", "SHIPPED", 4)],
         ozonCancelledExternalIds: [],
         productIdFor: () => product.id,
+        actor: shadowOff.actor,
+        shadowWriteActive: false,
       }),
     );
     let s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-in" } });
@@ -277,7 +283,7 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
         marketplace: "OZON",
         externalId: "ext-in",
         sku: "OZ-IN",
-      }),
+      }, { shadow: shadowOff }),
     );
     s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-in" } });
     stock = await prismaA.productStock.findUniqueOrThrow({ where: { productId: product.id } });
@@ -320,6 +326,7 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
           sku: "OZ-ACT",
           targetQty: 3,
           productId: product.id,
+          shadow: shadowOff,
         }),
       ),
     ).rejects.toThrow(COST_FLOW_QTY_ONLY_WRITER);
@@ -363,6 +370,7 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
         sku: "OZ-ACT-E",
         targetQty: 3,
         productId: empty.id,
+        shadow: shadowOff,
       }),
     );
     const shorted = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-act-short" } });
@@ -383,7 +391,7 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
           marketplace: "OZON",
           externalId: "ext-act",
           sku: "OZ-ACT",
-        }),
+        }, { shadow: shadowOff }),
       ),
     ).rejects.toThrow(COST_FLOW_QTY_ONLY_WRITER);
     const afterRestoreFail = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-act" } });
@@ -440,6 +448,8 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
             supplies,
             ozonCancelledExternalIds: [],
             productIdFor,
+            actor: shadowOff.actor,
+            shadowWriteActive: false,
           });
         }, txOpts);
 
@@ -552,6 +562,8 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
             supplies,
             ozonCancelledExternalIds: [],
             productIdFor,
+            actor: shadowOff.actor,
+            shadowWriteActive: false,
           });
         }, txOpts);
 
@@ -621,6 +633,8 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
           supplies,
           ozonCancelledExternalIds: [],
           productIdFor: () => product.id,
+          actor: shadowOff.actor,
+          shadowWriteActive: false,
         });
         await tx.changeLog.create({
           data: {
@@ -653,6 +667,8 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
           supplies: [incomingSupply("OZON", "ext-miss", "OZ-MISS", "SHIPPED", 4)],
           ozonCancelledExternalIds: [],
           productIdFor: () => product.id,
+          actor: shadowOff.actor,
+          shadowWriteActive: false,
         }),
       txOpts,
     );
@@ -757,6 +773,8 @@ describe.skipIf(!enabled)("PSR-P2 Supply writer prerequisite", () => {
             supplies,
             ozonCancelledExternalIds: [],
             productIdFor,
+            actor: shadowOff.actor,
+            shadowWriteActive: false,
           });
         }, txOpts);
 

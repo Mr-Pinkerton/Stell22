@@ -1,9 +1,15 @@
 import { Decimal } from "decimal.js";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { loadStoredApiCredentialsInternal } from "@/server/internal/api-credentials";
+import {
+  type MovementActorSnapshot,
+} from "@/server/internal/inventory-movement-actor";
+import { isInventoryMovementShadowWriteActiveForWriter } from "@/server/internal/inventory-movement-shadow-write";
 import { writeSystemLog } from "@/server/system-log";
 import { retryOnceOnSyncDeadlock, runSupplySyncAccounting } from "@/server/internal/supply-deduct";
+import { requireSupplyUserActor } from "@/server/internal/supply-shadow-write";
 import {
   formatMpSyncMessage,
   mpSyncLogLevel,
@@ -387,11 +393,146 @@ async function persistMpSyncLog(report: MpSyncReport, userId: string): Promise<v
   });
 }
 
+export type PersistMarketplaceSyncInput = {
+  actor: MovementActorSnapshot;
+  sales: NormalizedSale[];
+  supplies: NormalizedSupply[];
+  stocks: NormalizedStock[];
+  ozonCancelledExternalIds: string[];
+  productIdFor: (marketplace: string, sku: string) => string | null;
+  stockReplace: { wb: boolean; ozon: boolean };
+  now: Date;
+  sources: { wb: "api" | "stub"; ozon: "api" | "stub" };
+};
+
+/**
+ * SHADOW-capable marketplace persistence transaction.
+ * Writer-facing gate is the first transactional coordination action.
+ */
+export async function persistMarketplaceSyncInTransaction(
+  tx: Prisma.TransactionClient,
+  input: PersistMarketplaceSyncInput,
+): Promise<{ deductedTotal: number; shortfallTotal: number; restoredTotal: number }> {
+  const actor = requireSupplyUserActor(input.actor);
+  const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
+
+  for (const s of input.sales) {
+    await tx.sale.upsert({
+      where: { marketplace_externalId: { marketplace: s.marketplace, externalId: s.externalId } },
+      create: {
+        marketplace: s.marketplace,
+        externalId: s.externalId,
+        sku: s.sku,
+        productId: input.productIdFor(s.marketplace, s.sku),
+        quantity: s.quantity,
+        revenue: new Decimal(s.revenue).toFixed(2),
+        isReturn: s.isReturn,
+        date: s.date,
+      },
+      update: {
+        quantity: s.quantity,
+        revenue: new Decimal(s.revenue).toFixed(2),
+        isReturn: s.isReturn,
+        date: s.date,
+      },
+    });
+  }
+
+  const accounting = await runSupplySyncAccounting(tx, {
+    supplies: input.supplies,
+    ozonCancelledExternalIds: input.ozonCancelledExternalIds,
+    productIdFor: input.productIdFor,
+    actor,
+    shadowWriteActive,
+  });
+  for (const s of accounting.shortfalls) {
+    await writeChangeLog(
+      {
+        entity: "Supply",
+        entityId: `${s.marketplace}:${s.externalId}:${s.sku}`,
+        newValues: { event: "gp_shortfall", sku: s.sku, shortfall: s.shortfall },
+      },
+      tx,
+    );
+  }
+  // Восстановление склада производства по отменённым заявкам Ozon: закрываем
+  // открытый цикл учёта. Возвращаем только deductedQty; shortfallQty не
+  // возвращаем — эти единицы физически не списывались. Полная недостача
+  // (deductedQty=0, open=true) тоже закрывается.
+  for (const result of accounting.restores) {
+    if (result.closed) {
+      await writeChangeLog(
+        {
+          entity: "Supply",
+          entityId: `OZON:${result.externalId}:${result.sku}`,
+          newValues: {
+            event: "gp_restore_cancelled",
+            sku: result.sku,
+            restored: result.restored,
+            generation: result.generation,
+          },
+        },
+        tx,
+      );
+    }
+  }
+
+  // Остатки — полный снимок, но по каждому МП отдельно: заменяем только те
+  // маркетплейсы, чьи остатки успешно получены. Иначе частичный сбой (напр.
+  // Ozon упал, WB прошёл) стёр бы остатки другого маркетплейса.
+  const replaceMarketplaces: Marketplace[] = [];
+  if (input.stockReplace.wb) replaceMarketplaces.push("WB");
+  if (input.stockReplace.ozon) replaceMarketplaces.push("OZON");
+  if (replaceMarketplaces.length > 0) {
+    await tx.mpStock.deleteMany({ where: { marketplace: { in: replaceMarketplaces } } });
+    const rows = input.stocks.filter((s) => replaceMarketplaces.includes(s.marketplace));
+    if (rows.length > 0) {
+      await tx.mpStock.createMany({
+        data: rows.map((s) => ({
+          marketplace: s.marketplace,
+          sku: s.sku,
+          quantity: s.quantity,
+          syncedAt: input.now,
+        })),
+      });
+    }
+  }
+
+  await writeChangeLog(
+    {
+      entity: "MpStock",
+      entityId: "sync",
+      newValues: {
+        salesAdded: input.sales.length,
+        suppliesAdded: input.supplies.length,
+        stockUpdated: input.stocks.length,
+        deductedFromProduction: accounting.deductedTotal,
+        gpShortfall: accounting.shortfallTotal,
+        restoredFromCancelled: accounting.restoredTotal,
+        at: input.now.toISOString(),
+        sources: input.sources,
+      },
+    },
+    tx,
+  );
+
+  return {
+    deductedTotal: accounting.deductedTotal,
+    shortfallTotal: accounting.shortfallTotal,
+    restoredTotal: accounting.restoredTotal,
+  };
+}
+
 /**
  * Синхронизация с маркетплейсами. При сохранённых ключах — реальные HTTP-вызовы
  * (см. src/lib/wb-api.ts, src/lib/ozon-api.ts); иначе — демо-заглушки.
+ * Current contour is authenticated USER only. Capture actor outside the TX.
  */
-export async function syncMarketplacesAsUserInternal(userId: string): Promise<SyncResult> {
+export async function syncMarketplacesAsUserInternal(
+  actor: MovementActorSnapshot,
+): Promise<SyncResult> {
+  const userActor = requireSupplyUserActor(actor);
+  const userId = userActor.userId;
   const syncStarted = performance.now();
   const now = new Date();
   const since = await getSyncSince();
@@ -473,107 +614,21 @@ export async function syncMarketplacesAsUserInternal(userId: string): Promise<Sy
     shortfallTotal = 0;
     restoredTotal = 0;
     await prisma.$transaction(async (tx) => {
-    for (const s of sales) {
-      await tx.sale.upsert({
-        where: { marketplace_externalId: { marketplace: s.marketplace, externalId: s.externalId } },
-        create: {
-          marketplace: s.marketplace,
-          externalId: s.externalId,
-          sku: s.sku,
-          productId: productIdForRecord(s.marketplace, s.sku),
-          quantity: s.quantity,
-          revenue: new Decimal(s.revenue).toFixed(2),
-          isReturn: s.isReturn,
-          date: s.date,
-        },
-        update: {
-          quantity: s.quantity,
-          revenue: new Decimal(s.revenue).toFixed(2),
-          isReturn: s.isReturn,
-          date: s.date,
-        },
+      const accounting = await persistMarketplaceSyncInTransaction(tx, {
+        actor: userActor,
+        sales,
+        supplies,
+        stocks,
+        ozonCancelledExternalIds,
+        productIdFor: productIdForRecord,
+        stockReplace,
+        now,
+        sources,
       });
-    }
-
-    const accounting = await runSupplySyncAccounting(tx, {
-      supplies,
-      ozonCancelledExternalIds,
-      productIdFor: productIdForRecord,
+      deductedTotal = accounting.deductedTotal;
+      shortfallTotal = accounting.shortfallTotal;
+      restoredTotal = accounting.restoredTotal;
     });
-    deductedTotal = accounting.deductedTotal;
-    shortfallTotal = accounting.shortfallTotal;
-    restoredTotal = accounting.restoredTotal;
-    for (const s of accounting.shortfalls) {
-      await writeChangeLog(
-        {
-          entity: "Supply",
-          entityId: `${s.marketplace}:${s.externalId}:${s.sku}`,
-          newValues: { event: "gp_shortfall", sku: s.sku, shortfall: s.shortfall },
-        },
-        tx,
-      );
-    }
-    // Восстановление склада производства по отменённым заявкам Ozon: закрываем
-    // открытый цикл учёта. Возвращаем только deductedQty; shortfallQty не
-    // возвращаем — эти единицы физически не списывались. Полная недостача
-    // (deductedQty=0, open=true) тоже закрывается.
-    for (const result of accounting.restores) {
-      if (result.closed) {
-        await writeChangeLog(
-          {
-            entity: "Supply",
-            entityId: `OZON:${result.externalId}:${result.sku}`,
-            newValues: {
-              event: "gp_restore_cancelled",
-              sku: result.sku,
-              restored: result.restored,
-              generation: result.generation,
-            },
-          },
-          tx,
-        );
-      }
-    }
-
-    // Остатки — полный снимок, но по каждому МП отдельно: заменяем только те
-    // маркетплейсы, чьи остатки успешно получены. Иначе частичный сбой (напр.
-    // Ozon упал, WB прошёл) стёр бы остатки другого маркетплейса.
-    const replaceMarketplaces: Marketplace[] = [];
-    if (stockReplace.wb) replaceMarketplaces.push("WB");
-    if (stockReplace.ozon) replaceMarketplaces.push("OZON");
-    if (replaceMarketplaces.length > 0) {
-      await tx.mpStock.deleteMany({ where: { marketplace: { in: replaceMarketplaces } } });
-      const rows = stocks.filter((s) => replaceMarketplaces.includes(s.marketplace));
-      if (rows.length > 0) {
-        await tx.mpStock.createMany({
-          data: rows.map((s) => ({
-            marketplace: s.marketplace,
-            sku: s.sku,
-            quantity: s.quantity,
-            syncedAt: now,
-          })),
-        });
-      }
-    }
-
-    await writeChangeLog(
-      {
-        entity: "MpStock",
-        entityId: "sync",
-        newValues: {
-          salesAdded: sales.length,
-          suppliesAdded: supplies.length,
-          stockUpdated: stocks.length,
-          deductedFromProduction: deductedTotal,
-          gpShortfall: shortfallTotal,
-          restoredFromCancelled: restoredTotal,
-          at: now.toISOString(),
-          sources,
-        },
-      },
-      tx,
-    );
-  });
   });
 
   const report: MpSyncReport = {

@@ -2,11 +2,13 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createIntegrityClients,
   ensureIntegritySchema,
+  integritySupplyShadowOff,
   resetIntegrityFinance,
 } from "./harness";
 import { applyOzonSupplyCancellation, applySupplyDeduction } from "@/server/internal/supply-deduct";
 
 const enabled = Boolean(process.env.INTEGRITY_TEST_DATABASE_URL);
+const shadowOff = integritySupplyShadowOff();
 
 describe.skipIf(!enabled)("DI-004 integrity", () => {
   let prismaA: ReturnType<typeof createIntegrityClients>["prismaA"];
@@ -62,6 +64,7 @@ describe.skipIf(!enabled)("DI-004 integrity", () => {
           sku: supply.sku,
           targetQty: 8,
           productId: product.id,
+          shadow: shadowOff,
         }),
       );
 
@@ -111,6 +114,7 @@ describe.skipIf(!enabled)("DI-004 integrity", () => {
         sku: supply.sku,
         targetQty: 8,
         productId: product.id,
+        shadow: shadowOff,
       }),
     );
 
@@ -168,6 +172,7 @@ describe.skipIf(!enabled)("DI-004 integrity", () => {
         sku: supply.sku,
         targetQty: 3,
         productId: live.id,
+        shadow: shadowOff,
       }),
     );
 
@@ -188,7 +193,7 @@ describe.skipIf(!enabled)("DI-004 integrity", () => {
         marketplace: supply.marketplace,
         externalId: supply.externalId,
         sku: supply.sku,
-      }),
+      }, { shadow: shadowOff }),
     );
 
     const restoredA = await prismaA.productStock.findUniqueOrThrow({
