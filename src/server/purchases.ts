@@ -34,6 +34,8 @@ import {
 import { applyActiveSimplePurchaseReceipt } from "@/server/internal/cost-flow-downstream";
 import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import { requireClientRequestId } from "@/lib/request-id";
+import { userMovementActorFromAdmin } from "@/server/internal/inventory-movement-actor";
+import { isInventoryMovementShadowWriteActiveForWriter } from "@/server/internal/inventory-movement-shadow-write";
 import {
   PURCHASE_REPLAY_TARGET_MISSING,
   assertPurchaseCommandMatch,
@@ -44,6 +46,11 @@ import {
   snapshotJsonValue,
   writeOffTotalQuantity,
 } from "@/server/internal/purchase-command-identity";
+import {
+  appendBatchCreateShadowMovements,
+  appendBatchWriteOffShadowMovements,
+  appendSimplePurchaseShadowMovement,
+} from "@/server/internal/raw-purchase-shadow-write";
 import type { Material, NomenclatureItem, RailType, Sort } from "@/types/domain";
 
 const PATH = "/purchases";
@@ -282,11 +289,13 @@ export async function createBatch(
   requestId: string,
 ): Promise<PurchaseBatchRow> {
   const admin = await requireAdmin();
+  const actor = userMovementActorFromAdmin(admin);
   const clientRequestId = requireClientRequestId(requestId);
   validateBatch(values, { requirePackages: true });
   const snapshot = canonicalBatchCreateSnapshot(values);
 
   const createdId = await prisma.$transaction(async (tx) => {
+    const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
     await acquirePurchaseCommandRequestLock(tx, "batch-create", clientRequestId);
     const existing = await tx.batchCreationCommand.findUnique({
       where: { requestId: clientRequestId },
@@ -350,6 +359,12 @@ export async function createBatch(
         adminUserId: admin.id,
         requestSnapshot: snapshotJsonValue(snapshot),
       },
+    });
+    await appendBatchCreateShadowMovements(tx, {
+      shadowWriteActive,
+      actor,
+      command,
+      createdLots: batch.railLots,
     });
     await writeChangeLog(
       {
@@ -544,10 +559,12 @@ export async function writeOffBatchRemainder(
   requestId: string,
 ): Promise<PurchaseBatchRow> {
   const admin = await requireAdmin();
+  const actor = userMovementActorFromAdmin(admin);
   const clientRequestId = requireClientRequestId(requestId);
   // Чтение остатка, обнуление и запись в журнал — одной транзакцией, чтобы
   // параллельная торцовка не разошлась с журналом.
   await prisma.$transaction(async (tx) => {
+    const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
     await acquirePurchaseCommandRequestLock(tx, "batch-writeoff", clientRequestId);
     const existing = await tx.batchRemainderWriteOff.findUnique({
       where: { requestId: clientRequestId },
@@ -599,6 +616,11 @@ export async function writeOffBatchRemainder(
         data: { remainingQuantity: 0 },
       });
     }
+    await appendBatchWriteOffShadowMovements(tx, {
+      shadowWriteActive,
+      actor,
+      command,
+    });
     await writeChangeLog(
       {
         entity: "Batch",
@@ -667,6 +689,7 @@ export async function createSimplePurchase(
   requestId: string,
 ): Promise<void> {
   const admin = await requireAdmin();
+  const actor = userMovementActorFromAdmin(admin);
   const clientRequestId = requireClientRequestId(requestId);
   if (!values.nomenclatureId) throw new Error("Выберите номенклатуру");
   if (!values.quantity || values.quantity <= 0 || !Number.isInteger(values.quantity)) {
@@ -677,6 +700,7 @@ export async function createSimplePurchase(
 
   const qty = values.quantity;
   await prisma.$transaction(async (tx) => {
+    const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
     await acquirePurchaseCommandRequestLock(tx, "simple-purchase", clientRequestId);
     const existing = await tx.simplePurchaseCreationCommand.findUnique({
       where: { requestId: clientRequestId },
@@ -724,6 +748,12 @@ export async function createSimplePurchase(
         adminUserId: admin.id,
         requestSnapshot: snapshotJsonValue(snapshot),
       },
+    });
+    await appendSimplePurchaseShadowMovement(tx, {
+      shadowWriteActive,
+      actor,
+      command,
+      purchase,
     });
     await writeChangeLog(
       {

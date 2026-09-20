@@ -109,7 +109,7 @@ Always establish current HEAD before starting new work.
 
 ## 5. Current work mode
 
-`ACTIVE MODE: PSR-P2 RAW IDENTITY PREREQUISITE — IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED`. Artifact: `audit/08.19`. Production application `0cc8382` (Production Deploy `35502770382`). Connected physical writers = **DEPLOYED DORMANT / SHADOW INACTIVE** (`audit/08.14` Inventory conduct; `audit/08.15` normal TORCOVKA / PRISADKA / UPAKOVKA; `audit/08.16` R-05 correction; `audit/08.18` Supply deduct / Ozon restore). Inventory writer prerequisite `audit/08.13` and Supply prerequisite `audit/08.17` are now in the same production application. Canonical contract: `audit/08.11` (**ACCEPTED / REVIEWED**). R-06 remains **DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). R-05 identity remains **DEPLOYED** (`audit/08.09`). R-04 remains **DEPLOYED** (`audit/08.08`). `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT**. `inventory_movement_shadow_write` ABSENT / INACTIVE. `production_cost_flow` ABSENT / INACTIVE. InventoryMovement rows = **0**. Production dual-write **NOT STARTED**. Ledger **NOT AUTHORITATIVE**. PSR-P2 **NOT COMPLETE**. PSR-P3 **NOT STARTED**. This mode is **not** SHADOW activation, **not** dual-write, **not** Correction Center, and **not** AUDIT 2. **NEXT = PSR-P2 RAW RECEIPT / WRITE-OFF SHADOW WRITERS IMPLEMENTATION PACKAGE**.
+`ACTIVE MODE: PSR-P2 RAW RECEIPT / WRITE-OFF SHADOW WRITERS — IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED / SHADOW NOT ACTIVATED`. Artifact: `audit/08.20`. Branch `feat/psr-p2-raw-shadow-writers`. Base `8374a0f`. Production application `0cc8382` (Production Deploy `35502770382`) **unchanged**. Feature source contours **9**. Production dormant contours **6**. Connected production writers remain **DEPLOYED DORMANT / SHADOW INACTIVE** (`audit/08.14` Inventory conduct; `audit/08.15` normal TORCOVKA / PRISADKA / UPAKOVKA; `audit/08.16` R-05 correction; `audit/08.18` Supply deduct / Ozon restore). Raw identity prerequisite remains **IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.19`). Canonical contract: `audit/08.11` (**ACCEPTED / REVIEWED**), refined for raw causation by `08.19` §8. `inventory_movement_shadow_write` ABSENT / INACTIVE. `production_cost_flow` ABSENT / INACTIVE. InventoryMovement rows = **0**. Production dual-write **NOT STARTED**. Ledger **NOT AUTHORITATIVE**. PSR-P2 **NOT COMPLETE**. PSR-P3 **NOT STARTED**. This mode is **not** SHADOW activation, **not** dual-write, **not** Correction Center, and **not** AUDIT 2. **NEXT = HEAD REVIEW**.
 
 AUDIT 1 (system architecture) remains `COMPLETE / REVIEWED`. **Do not change AUDIT 1 status. Do not reopen AUDIT 1.**
 
@@ -133,7 +133,7 @@ PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT = **PSR-P2 RAW RECEIPT / WRITE-OFF SHADOW WRITERS IMPLEMENTATION PACKAGE**. Raw identity prerequisite = `audit/08.19` (**IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED**; Production Deploy `35502770382`; migration `20260920120000_psr_p2_raw_identity_prerequisite` **APPLIED**; tables LIVE / EMPTY AT CUTOVER). Connected writers = **DEPLOYED DORMANT / SHADOW INACTIVE** (`audit/08.14` / `08.15` / `08.16` / `08.18`). Supply prerequisite = `audit/08.17` (**COMPLETE / DEPLOYED / PRODUCTION PREFLIGHT COMPLETE / TRUSTED**; rerun `35502680346` TOTAL=0 / D=0 / S=0 / O=0 / `SUPPLY_DATA_BLOCKER=NO`). R-06 remains **DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). This is **not** SHADOW activation, **not** dual-write activation, **not** Correction Center implementation, and **not** AUDIT 2. Do not implement the three raw writers from this file. Do not activate SHADOW. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
+NEXT = **HEAD REVIEW** of `audit/08.20`. Raw SHADOW writers are **IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED / SHADOW NOT ACTIVATED** (branch `feat/psr-p2-raw-shadow-writers`; base `8374a0f`; feature source contours **9**; production dormant contours **6**). Raw identity prerequisite = `audit/08.19` (**IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED**; Production Deploy `35502770382`; migration `20260920120000_psr_p2_raw_identity_prerequisite` **APPLIED**; tables LIVE / EMPTY AT CUTOVER). Connected production writers = **DEPLOYED DORMANT / SHADOW INACTIVE** (`audit/08.14` / `08.15` / `08.16` / `08.18`). Supply prerequisite = `audit/08.17` (**COMPLETE / DEPLOYED / PRODUCTION PREFLIGHT COMPLETE / TRUSTED**; rerun `35502680346` TOTAL=0 / D=0 / S=0 / O=0 / `SUPPLY_DATA_BLOCKER=NO`). R-06 remains **DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`). This is **not** SHADOW activation, **not** dual-write activation, **not** Correction Center implementation, and **not** AUDIT 2. Do not merge or deploy from this file. Do not activate SHADOW. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -311,7 +311,7 @@ Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`
 
 ## 13. Current next step
 
-NEXT = **PSR-P2 RAW RECEIPT / WRITE-OFF SHADOW WRITERS IMPLEMENTATION PACKAGE**. Raw identity prerequisite = `audit/08.19` (**IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED**; Production Deploy `35502770382`). Production application `0cc8382`. Connected physical writers = **DEPLOYED DORMANT / SHADOW INACTIVE**. InventoryMovement rows = **0**. Production dual-write **NOT STARTED**. Ledger **NOT AUTHORITATIVE**. Runtime P2 globally **NOT COMPLETE**. P3 **NOT STARTED**.
+NEXT = **HEAD REVIEW** of `audit/08.20`. Feature branch `feat/psr-p2-raw-shadow-writers` implements the three raw SHADOW writers (**NOT MERGED / NOT DEPLOYED / SHADOW NOT ACTIVATED**; source contours **9**; production dormant contours **6**). Raw identity prerequisite = `audit/08.19` (**IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED**; Production Deploy `35502770382`). Production application `0cc8382`. Connected production writers = **DEPLOYED DORMANT / SHADOW INACTIVE**. InventoryMovement rows = **0**. Production dual-write **NOT STARTED**. Ledger **NOT AUTHORITATIVE**. Runtime P2 globally **NOT COMPLETE**. P3 **NOT STARTED**.
 
 PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime.
 
@@ -327,7 +327,7 @@ R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOY
 
 Does **not** mean dual-write, SHADOW posting, authoritative ledger, `OPENING_BALANCE` data, paper removal, `production_cost_flow` activation, or Correction Center.
 
-This NEXT is **PSR-P2 RAW RECEIPT / WRITE-OFF SHADOW WRITERS IMPLEMENTATION PACKAGE**. Raw identity prerequisite is `audit/08.19` (**IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED**). Identity tables are LIVE and empty at cutover. Do not implement `createBatch` / `writeOffBatchRemainder` / `createSimplePurchase` InventoryMovement writers from this file. Do not activate SHADOW. Supply writer closeout is `audit/08.18` (**DEPLOYED DORMANT / SHADOW INACTIVE**). Supply prerequisite remains **COMPLETE / TRUSTED** (`audit/08.17`; latest preflight `35502680346`). R-05 writer is **DEPLOYED DORMANT / SHADOW INACTIVE** (`audit/08.16`). R-05 identity remains **DEPLOYED** (`audit/08.09`). It is **not** SHADOW activation, **not** dual-write activation, **not** Correction Center implementation, and **not** AUDIT 2. Production Supply preflight is **COMPLETE / TRUSTED**. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
+This NEXT is **HEAD REVIEW** of `audit/08.20`. The three raw writers are on `feat/psr-p2-raw-shadow-writers` (**NOT MERGED / NOT DEPLOYED / SHADOW NOT ACTIVATED**). Raw identity prerequisite is `audit/08.19` (**IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED**). Identity tables are LIVE and empty at cutover. Do not merge, deploy, or activate SHADOW from this file. Supply writer closeout is `audit/08.18` (**DEPLOYED DORMANT / SHADOW INACTIVE**). Supply prerequisite remains **COMPLETE / TRUSTED** (`audit/08.17`; latest preflight `35502680346`). R-05 writer is **DEPLOYED DORMANT / SHADOW INACTIVE** (`audit/08.16`). R-05 identity remains **DEPLOYED** (`audit/08.09`). It is **not** SHADOW activation, **not** dual-write activation, **not** Correction Center implementation, and **not** AUDIT 2. Production Supply preflight is **COMPLETE / TRUSTED**. `PSR-Q-003` remains before P4. `PSR-Q-006` remains before P6.
 
 Do **not** implement the full `ProductionOperationMutation` schema or Correction Center in this package.
 
@@ -1166,3 +1166,29 @@ This journal does **not** rewrite §47. §47 remains the implementation/merge cl
 | Production mutation outside normal deployment/migration | **NO** |
 | Result | `audit/08.19` **IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED** |
 | Next | **PSR-P2 RAW RECEIPT / WRITE-OFF SHADOW WRITERS IMPLEMENTATION PACKAGE**. Not SHADOW activation. Not dual-write. Not AUDIT 2. |
+
+## 49. Journal — PSR-P2 raw receipt / write-off SHADOW writers
+
+This journal does **not** rewrite §47–§48. Those remain the identity implementation and production-deploy closeouts.
+
+| | |
+| --- | --- |
+| Date | 2026-09-20 |
+| Stage | PSR-P2 raw receipt / write-off SHADOW writers |
+| BASE GitHub `main` | `8374a0fb4499214e7da6972a82db277bf011850b` |
+| Production application | `0cc8382f307ac1ff7fa881012033f5105e689a23` (**unchanged**) |
+| Production Deploy | `35502770382` (**unchanged**) |
+| Branch | `feat/psr-p2-raw-shadow-writers` |
+| Result | `audit/08.20`. SHADOW writers for `createBatch`, `writeOffBatchRemainder`, `createSimplePurchase`. **IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED / SHADOW NOT ACTIVATED**. |
+| Feature source contours | **9** |
+| Production dormant contours | **6** |
+| Schema / migration | **NO** |
+| SHADOW activation | **NO** |
+| Dual-write | **NOT STARTED** |
+| `production_cost_flow` | unchanged / INACTIVE |
+| Production access / mutation / deploy | **NO / NO / NO** |
+| Runtime P2 global completeness | **NOT COMPLETE** |
+| P3 | **NOT STARTED** |
+| Ledger authoritative | **NO** |
+| Independent Opus | **SKIPPED BY OWNER COST POLICY** |
+| Next | **HEAD REVIEW**. Not merge. Not deploy. Not SHADOW activation. |
