@@ -274,8 +274,10 @@ P2-GUARD/CI historical implementation status = **IMPLEMENTED / MERGED TO MAIN / 
 - Accepted HEAD: `919a427e187f60c83b09658a8ad4a8ecafbd2d82`
 - Merge: `76131ca1a77b8c20d920055be66361bd0ab9f4c4`
 - Current status: **IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED**
-- Production Deploy: `35502770382` SUCCESS
-- Production application checkpoint: `0cc8382f307ac1ff7fa881012033f5105e689a23`
+- Historical identity-prerequisite Production Deploy: `35502770382` SUCCESS
+- Historical identity-prerequisite application: `0cc8382f307ac1ff7fa881012033f5105e689a23`
+- Current production application: `69e0f53993d5b02f27f0fc03682cef492c02d685`
+- Current Production Deploy: `35510094974` SUCCESS
 - Target migration: **APPLIED**
 - Identity tables: LIVE / EMPTY AT CUTOVER
 - Historical backfill: **NO**
