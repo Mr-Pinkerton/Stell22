@@ -23,9 +23,10 @@ import {
   type BlankSpec,
 } from "@/server/internal/inventory-integrity";
 import { operationEarning, operationRatesFromSnapshots } from "@/lib/payroll";
-import { newRequestId, requireClientRequestId } from "@/lib/request-id";
+import { requireClientRequestId } from "@/lib/request-id";
 import { assertPhysicalProductionDeleteAllowed } from "@/lib/production-physical-delete-policy";
 import {
+  PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND,
   assertQuantityEditIntegers,
   computeQuantityEditStateFingerprint,
   normalizeTargetLineId,
@@ -236,16 +237,12 @@ async function reloadRow(id: string): Promise<ProductionEntryRow> {
 }
 
 /**
- * HOURS quantity edit only. Physical A/B/C edits use
- * `editProductionOperationQuantity` (stable line id / CAS / requestId).
- * Existing integrity callers may still reach physical types here: this
- * adapter resolves the current line by id-ordered index, then issues a
- * new retained physical command. It does not accept lineIndex as retained
- * identity.
+ * HOURS quantity edit only. Physical A/B/C must use
+ * `editProductionOperationQuantity` (stable target / CAS / requestId).
  */
 export async function updateProductionLineQuantity(
   id: string,
-  lineIndex: number,
+  _lineIndex: number,
   newQty: number,
 ): Promise<ProductionEntryRow> {
   await requireAdmin();
@@ -253,60 +250,35 @@ export async function updateProductionLineQuantity(
 
   const peek = await prisma.productionOperation.findUnique({
     where: { id },
-    include: {
-      lines: { orderBy: { id: "asc" } },
-      nomenclatureLines: { orderBy: { id: "asc" } },
-    },
+    select: { id: true, type: true },
   });
   if (!peek) throw new Error("Операция не найдена");
-
-  if (peek.type === "HOURS") {
-    await prisma.$transaction(async (tx) => {
-      await lockProductionOperations(tx, [id]);
-      const op = await tx.productionOperation.findUnique({ where: { id } });
-      if (!op) throw new Error("Операция не найдена");
-      if (op.isPaid) throw new Error("Нельзя изменить — операция уже выплачена");
-      if (op.type !== "HOURS") {
-        throw new Error("Редактирование этого типа операции пока недоступно");
-      }
-      const old = num(op.hours);
-      if (old === newQty) return;
-      await tx.productionOperation.update({ where: { id }, data: { hours: newQty } });
-      await writeChangeLog(
-        {
-          entity: "ProductionOperation",
-          entityId: id,
-          newValues: { field: "Количество", oldValue: old, newValue: newQty },
-        },
-        tx,
-      );
-    });
-    revalidatePath(PATH);
-    return reloadRow(id);
+  if (peek.type !== "HOURS") {
+    throw new Error(PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND);
   }
 
-  const newQtyInt = Math.round(newQty);
-  const targetLine = peek.type === "UPAKOVKA" ? null : peek.lines[lineIndex];
-  if (peek.type !== "UPAKOVKA" && !targetLine) throw new Error("Строка не найдена");
-  const expectedOldQuantity = peek.type === "UPAKOVKA" ? (peek.productQty ?? 0) : targetLine!.quantity;
-  const expectedStateFingerprint = computeQuantityEditStateFingerprint({
-    operationId: peek.id,
-    operationType: peek.type,
-    productId: peek.productId,
-    productQty: peek.productQty,
-    line: targetLine,
-    lines: peek.lines,
-    nomenclatureLines: peek.nomenclatureLines,
+  await prisma.$transaction(async (tx) => {
+    await lockProductionOperations(tx, [id]);
+    const op = await tx.productionOperation.findUnique({ where: { id } });
+    if (!op) throw new Error("Операция не найдена");
+    if (op.isPaid) throw new Error("Нельзя изменить — операция уже выплачена");
+    if (op.type !== "HOURS") {
+      throw new Error(PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND);
+    }
+    const old = num(op.hours);
+    if (old === newQty) return;
+    await tx.productionOperation.update({ where: { id }, data: { hours: newQty } });
+    await writeChangeLog(
+      {
+        entity: "ProductionOperation",
+        entityId: id,
+        newValues: { field: "Количество", oldValue: old, newValue: newQty },
+      },
+      tx,
+    );
   });
-  const result = await editProductionOperationQuantity({
-    operationId: id,
-    requestId: newRequestId(),
-    targetLineId: peek.type === "UPAKOVKA" ? null : targetLine!.id,
-    expectedOldQuantity,
-    newQuantity: newQtyInt,
-    expectedStateFingerprint,
-  });
-  return result.entry;
+  revalidatePath(PATH);
+  return reloadRow(id);
 }
 
 export async function editProductionOperationQuantity(

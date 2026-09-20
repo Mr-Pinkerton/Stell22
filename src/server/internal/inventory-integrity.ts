@@ -995,24 +995,21 @@ function logicalReversePrisadka(
   return blankQty;
 }
 
-function simulatePrisadkaApplySteps(
-  kind: "torcev" | "plosk",
-  quantity: number,
-  buckets: SimBucket[],
-): Array<{
+export type PrisadkaApplyStep = {
   sourceIsBlank: boolean;
   sourceTorcevayaDone: boolean;
   sourcePloskostDone: boolean;
   destTorcev: boolean;
   destPlosk: boolean;
-}> {
-  const steps: Array<{
-    sourceIsBlank: boolean;
-    sourceTorcevayaDone: boolean;
-    sourcePloskostDone: boolean;
-    destTorcev: boolean;
-    destPlosk: boolean;
-  }> = [];
+  quantity: number;
+};
+
+function simulatePrisadkaApplySteps(
+  kind: "torcev" | "plosk",
+  quantity: number,
+  buckets: SimBucket[],
+): PrisadkaApplyStep[] {
+  const steps: PrisadkaApplyStep[] = [];
   let left = quantity;
   const partials = buckets
     .filter((b) => b.quantity > 0 && (kind === "torcev" ? !b.torcevayaDone : !b.ploskostDone))
@@ -1034,6 +1031,7 @@ function simulatePrisadkaApplySteps(
       sourcePloskostDone: src.ploskostDone,
       destTorcev,
       destPlosk,
+      quantity: take,
     });
     src.quantity -= take;
     findOrCreateBucket(buckets, destTorcev, destPlosk).quantity += take;
@@ -1048,6 +1046,7 @@ function simulatePrisadkaApplySteps(
       sourcePloskostDone: false,
       destTorcev,
       destPlosk,
+      quantity: left,
     });
   }
   return steps;
@@ -1072,16 +1071,23 @@ function prisadkaApplyStepCovered(
   };
 }
 
+export type PreparedPrisadkaQuantityEdit = {
+  detailId: string;
+  kind: "torcev" | "plosk";
+  blankSpec: BlankSpec;
+  applySteps: PrisadkaApplyStep[];
+};
+
 /**
  * PRISADKA qty edit: lock Detail (+ blank spec), dry-run reverse then apply
  * allocation, boundary on OLD reverse refs ∪ NEW apply refs, before writes.
  */
-export async function preparePrisadkaEdit(
+export async function planPrisadkaQuantityEdit(
   tx: Prisma.TransactionClient,
   occurredAt: Date,
   line: PrisadkaReverseLine & { quantity: number },
   newQty: number,
-): Promise<void> {
+): Promise<PreparedPrisadkaQuantityEdit> {
   if (!line.detailId) throw new Error("Строка присадки без детали");
   const detailId = line.detailId;
   await lockDetails(tx, [detailId]);
@@ -1143,4 +1149,14 @@ export async function preparePrisadkaEdit(
     }
   }
   await assertInventoryBoundary(tx, occurredAt, refs);
+  return { detailId, kind, blankSpec, applySteps };
+}
+
+export async function preparePrisadkaEdit(
+  tx: Prisma.TransactionClient,
+  occurredAt: Date,
+  line: PrisadkaReverseLine & { quantity: number },
+  newQty: number,
+): Promise<void> {
+  await planPrisadkaQuantityEdit(tx, occurredAt, line, newQty);
 }

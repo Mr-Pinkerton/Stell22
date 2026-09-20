@@ -4,6 +4,14 @@ import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { D } from "@/lib/cost";
 import type { OperationType, RailType, Sort } from "@/types/domain";
+import {
+  lockBlankSpecs,
+  lockDetailStocks,
+  lockDetails,
+  lockNomenclatureIds,
+  lockProductIds,
+  type PreparedUpakovkaApply,
+} from "@/server/internal/inventory-integrity";
 
 export const STALE_QUANTITY_EDIT =
   "STALE_QUANTITY_EDIT: текущее состояние операции не совпадает с ожидаемым";
@@ -19,6 +27,12 @@ export const QUANTITY_EDIT_UPAKOVKA_COST_FLOW_NOT_READY =
 
 export const QUANTITY_EDIT_HOURS_NOT_PHYSICAL =
   "HOURS quantity edit is outside ProductionOperationQuantityEdit";
+
+export const PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND =
+  "PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND: правка количества A/B/C только через editProductionOperationQuantity";
+
+export const QUANTITY_EDIT_BEFORE_SNAPSHOT_INCOMPLETE =
+  "QUANTITY_EDIT_BEFORE_SNAPSHOT_INCOMPLETE: before snapshot missing a locked physical target";
 
 /**
  * Dedicated two-int advisory namespace for quantity-edit requestId serialization.
@@ -480,7 +494,7 @@ export function buildUpakovkaProvenance(input: {
   };
 }
 
-type PhysicalKey =
+export type PhysicalKey =
   | { targetType: "BLANK"; materialId: string; lengthM: string; detailType: RailType; sort: Sort }
   | { targetType: "DETAIL"; detailId: string; torcevayaDone: boolean; ploskostDone: boolean }
   | { targetType: "NOMENCLATURE"; nomenclatureId: string }
@@ -548,6 +562,105 @@ export function collectPhysicalKeys(input: {
   return [...keys.values()];
 }
 
+export function mergePhysicalKeys(...lists: PhysicalKey[][]): PhysicalKey[] {
+  const keys = new Map<string, PhysicalKey>();
+  for (const list of lists) {
+    for (const key of list) keys.set(physicalTargetKey(key), key);
+  }
+  return [...keys.values()];
+}
+
+export function collectPreparedUpakovkaPhysicalKeys(prepared: PreparedUpakovkaApply): PhysicalKey[] {
+  const keys = new Map<string, PhysicalKey>();
+  const product: PhysicalKey = { targetType: "PRODUCT", productId: prepared.productId };
+  keys.set(physicalTargetKey(product), product);
+  for (const detail of prepared.details) {
+    if (detail.prisadkaTorcevaya || detail.prisadkaPloskost) {
+      const dest: PhysicalKey = {
+        targetType: "DETAIL",
+        detailId: detail.detailId,
+        torcevayaDone: detail.prisadkaTorcevaya,
+        ploskostDone: detail.prisadkaPloskost,
+      };
+      keys.set(physicalTargetKey(dest), dest);
+    } else {
+      const blank: PhysicalKey = {
+        targetType: "BLANK",
+        materialId: detail.materialId,
+        lengthM: canonicalBlankLengthM(detail.lengthM),
+        detailType: detail.detailType,
+        sort: detail.sort,
+      };
+      keys.set(physicalTargetKey(blank), blank);
+    }
+  }
+  for (const fastener of prepared.fasteners) {
+    const nom: PhysicalKey = { targetType: "NOMENCLATURE", nomenclatureId: fastener.nomenclatureId };
+    keys.set(physicalTargetKey(nom), nom);
+  }
+  if (prepared.packagingId) {
+    const nom: PhysicalKey = { targetType: "NOMENCLATURE", nomenclatureId: prepared.packagingId };
+    keys.set(physicalTargetKey(nom), nom);
+  }
+  for (const extra of prepared.extras) {
+    const nom: PhysicalKey = { targetType: "NOMENCLATURE", nomenclatureId: extra.nomenclatureId };
+    keys.set(physicalTargetKey(nom), nom);
+  }
+  return [...keys.values()];
+}
+
+export async function collectExistingDetailStockKeys(
+  tx: Prisma.TransactionClient,
+  detailIds: Iterable<string>,
+): Promise<PhysicalKey[]> {
+  const unique = [...new Set([...detailIds].filter(Boolean))].sort();
+  if (unique.length === 0) return [];
+  const rows = await tx.detailStock.findMany({
+    where: { detailId: { in: unique } },
+    orderBy: { id: "asc" },
+  });
+  return rows.map((row) => ({
+    targetType: "DETAIL" as const,
+    detailId: row.detailId,
+    torcevayaDone: row.torcevayaDone,
+    ploskostDone: row.ploskostDone,
+  }));
+}
+
+export async function lockQuantityEditPhysicalTargets(
+  tx: Prisma.TransactionClient,
+  keys: PhysicalKey[],
+): Promise<void> {
+  const detailIds = keys.filter((k) => k.targetType === "DETAIL").map((k) => k.detailId);
+  const blanks = keys
+    .filter((k): k is Extract<PhysicalKey, { targetType: "BLANK" }> => k.targetType === "BLANK")
+    .map((k) => ({
+      materialId: k.materialId,
+      lengthM: k.lengthM,
+      detailType: k.detailType,
+      sort: k.sort,
+    }));
+  const noms = keys
+    .filter((k): k is Extract<PhysicalKey, { targetType: "NOMENCLATURE" }> => k.targetType === "NOMENCLATURE")
+    .map((k) => k.nomenclatureId);
+  const products = keys
+    .filter((k): k is Extract<PhysicalKey, { targetType: "PRODUCT" }> => k.targetType === "PRODUCT")
+    .map((k) => k.productId);
+
+  await lockDetails(tx, detailIds);
+  await lockBlankSpecs(tx, blanks);
+  if (detailIds.length > 0) {
+    const stocks = await tx.detailStock.findMany({
+      where: { detailId: { in: [...new Set(detailIds)].sort() } },
+      select: { id: true },
+      orderBy: { id: "asc" },
+    });
+    await lockDetailStocks(tx, stocks.map((s) => s.id));
+  }
+  await lockNomenclatureIds(tx, noms);
+  await lockProductIds(tx, products);
+}
+
 export async function snapshotPhysicalQuantities(
   tx: Prisma.TransactionClient,
   keys: PhysicalKey[],
@@ -605,7 +718,13 @@ export function derivePhysicalAdjustments(
   const adjustments: QuantityEditPhysicalAdjustment[] = [];
   for (const key of keys) {
     const id = physicalTargetKey(key);
-    const quantityDelta = (after.get(id) ?? 0) - (before.get(id) ?? 0);
+    if (!before.has(id)) {
+      throw new Error(`${QUANTITY_EDIT_BEFORE_SNAPSHOT_INCOMPLETE}: ${id}`);
+    }
+    if (!after.has(id)) {
+      throw new Error(`${QUANTITY_EDIT_BEFORE_SNAPSHOT_INCOMPLETE}: after:${id}`);
+    }
+    const quantityDelta = after.get(id)! - before.get(id)!;
     if (quantityDelta === 0) continue;
     if (key.targetType === "BLANK") {
       adjustments.push({ ...key, quantityDelta });

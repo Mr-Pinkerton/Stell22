@@ -33,8 +33,8 @@ import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "@/lib/torcovka-delete-policy";
 import {
   correctTorcovkaRailsTaken,
   deleteProductionOperation,
-  updateProductionLineQuantity,
 } from "@/server/production";
+import { editPhysicalQuantityByLineIndex } from "./physical-quantity-edit-call";
 import { createBatch, updateBatch, writeOffBatchRemainder } from "@/server/purchases";
 import { submitTorcovka } from "@/server/terminal";
 import { createCashFlow } from "@/server/finance";
@@ -747,7 +747,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
       suffix: `invline-${world.suffix}`,
     });
     const blankBefore = await blankOf(world.material.id, 0.6);
-    await expect(updateProductionLineQuantity(op.id, 0, 1)).rejects.toThrow(INVENTORY_BOUNDARY);
+    await expect(editPhysicalQuantityByLineIndex(prismaA,op.id, 0, 1)).rejects.toThrow(INVENTORY_BOUNDARY);
     const blank = await blankOf(world.material.id, 0.6);
     const opAfter = await prismaA.productionOperation.findUniqueOrThrow({
       where: { id: op.id },
@@ -984,7 +984,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     });
     const lotAfterTorc = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
     const consumed = d(op.consumedRawValue)!;
-    await updateProductionLineQuantity(op.id, 0, 1);
+    await editPhysicalQuantityByLineIndex(prismaA,op.id, 0, 1);
     const reduced = await prismaA.productionOperation.findUniqueOrThrow({
       where: { id: op.id },
       include: { lines: true },
@@ -998,7 +998,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     expect(d(blankReduced?.materialValue)!.equals(consumed)).toBe(true);
     expect(await prismaA.costEvent.count({ where: { batchId: world.batch.id } })).toBe(0);
 
-    await updateProductionLineQuantity(op.id, 0, 3);
+    await editPhysicalQuantityByLineIndex(prismaA,op.id, 0, 3);
     const increased = await prismaA.productionOperation.findUniqueOrThrow({
       where: { id: op.id },
       include: { lines: true },
@@ -1006,7 +1006,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     expect(increased.lines[0]?.quantity).toBe(3);
     expect(d(increased.consumedRawValue)!.equals(consumed)).toBe(true);
 
-    await expect(updateProductionLineQuantity(op.id, 0, 4)).rejects.toThrow(
+    await expect(editPhysicalQuantityByLineIndex(prismaA,op.id, 0, 4)).rejects.toThrow(
       /превышает длину взятых реек/,
     );
     expect(
@@ -1035,7 +1035,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     expect(op.lines[0]?.quantity).toBe(4);
     const consumed = d(op.consumedRawValue)!;
     const oldLabor = d(op.pieceLaborCost)!;
-    await updateProductionLineQuantity(op.id, 0, 5);
+    await editPhysicalQuantityByLineIndex(prismaA,op.id, 0, 5);
     const after = await prismaA.productionOperation.findUniqueOrThrow({
       where: { id: op.id },
       include: { lines: { orderBy: { id: "asc" } } },
@@ -1074,7 +1074,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
     expect(s2Index).toBeGreaterThanOrEqual(0);
     const consumed = d(op.consumedRawValue)!;
     const lotBefore = await prismaA.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
-    await updateProductionLineQuantity(op.id, s2Index, 2);
+    await editPhysicalQuantityByLineIndex(prismaA,op.id, s2Index, 2);
     const after = await prismaA.productionOperation.findUniqueOrThrow({
       where: { id: op.id },
       include: { lines: { orderBy: { id: "asc" } } },
@@ -1117,7 +1117,7 @@ describe.skipIf(!enabled)("Package 2 raw wood / TORCOVKA cost flow", () => {
       where: { materialId: world.material.id, lengthM: 0.6, detailType: "POLKA", sort: "SORT1" },
       data: { costVersion: { increment: 1 } },
     });
-    await expect(updateProductionLineQuantity(op.id, 0, 1)).rejects.toThrow(COST_FLOW_VERSION_MISMATCH);
+    await expect(editPhysicalQuantityByLineIndex(prismaA,op.id, 0, 1)).rejects.toThrow(COST_FLOW_VERSION_MISMATCH);
     expect(
       (await prismaA.productionOperation.findUniqueOrThrow({ where: { id: op.id }, include: { lines: true } }))
         .lines[0]?.quantity,

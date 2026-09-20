@@ -9,13 +9,16 @@ import type { MovementActorSnapshot } from "@/server/internal/inventory-movement
 import { isInventoryMovementShadowWriteActiveForWriter } from "@/server/internal/inventory-movement-shadow-write";
 import {
   assertTorcovkaBlankInventoryBoundary,
-  preparePrisadkaEdit,
+  planPrisadkaQuantityEdit,
   prepareTorcovkaBlankMutation,
   prepareUpakovkaEdit,
+  prisadkaDestFlags,
   type BlankSpec,
+  type PreparedPrisadkaQuantityEdit,
+  type PreparedUpakovkaApply,
 } from "@/server/internal/inventory-integrity";
 import {
-  applyPrisadkaPick,
+  applyInactivePrisadkaPreparedSteps,
   applyUpakovkaPrepared,
   reversePrisadkaLine,
   reverseUpakovkaOperation,
@@ -35,11 +38,17 @@ import {
   buildQuantityEditRequestSnapshot,
   buildTorcovkaProvenance,
   buildUpakovkaProvenance,
+  canonicalBlankLengthM,
+  collectExistingDetailStockKeys,
   collectPhysicalKeys,
+  collectPreparedUpakovkaPhysicalKeys,
   computeQuantityEditStateFingerprint,
   derivePhysicalAdjustments,
+  lockQuantityEditPhysicalTargets,
+  mergePhysicalKeys,
   quantityEditResultFromRow,
   snapshotPhysicalQuantities,
+  type PhysicalKey,
   type QuantityEditCommandPayload,
   type QuantityEditLine,
   type QuantityEditNomLine,
@@ -251,19 +260,31 @@ export async function editProductionOperationQuantityInTransaction(
     throw new Error(QUANTITY_EDIT_UPAKOVKA_COST_FLOW_NOT_READY);
   }
 
-  const beforeKeys = collectPhysicalKeys({
-    productId: op.productId,
-    lines: op.lines.map(asEditLine),
-    nomenclatureLines: op.nomenclatureLines.map(asNomLine),
-  });
-  const beforeQty = await snapshotPhysicalQuantities(tx, beforeKeys);
-  const beforeProvenance = captureBeforeProvenance(op, targetLine);
+  const beforeLineIds = new Set(op.lines.map((l) => l.id));
+  const replacedLines = selectReplacedLines(op, targetLine, costFlowActive);
+  const replacedLineIds = new Set(replacedLines.map((l) => l.id));
+  const beforeProvenance = captureBeforeProvenance(op, replacedLines);
 
-  await executePhysicalQuantityEdit(tx, {
+  const prepared = await prepareQuantityEditMutation(tx, {
     op,
     targetLine,
     newQty: input.newQuantity,
     costFlowActive,
+  });
+  const unionKeys = await collectLockedPhysicalTargets(tx, {
+    op,
+    replacedLines,
+    prepared,
+  });
+  await lockQuantityEditPhysicalTargets(tx, unionKeys);
+  const beforeQty = await snapshotPhysicalQuantities(tx, unionKeys);
+
+  await executePreparedQuantityEdit(tx, {
+    op,
+    targetLine,
+    newQty: input.newQuantity,
+    costFlowActive,
+    prepared,
   });
 
   const afterOp = await tx.productionOperation.findUniqueOrThrow({
@@ -273,36 +294,9 @@ export async function editProductionOperationQuantityInTransaction(
       nomenclatureLines: { orderBy: { id: "asc" } },
     },
   });
-  const afterKeys = collectPhysicalKeys({
-    productId: afterOp.productId,
-    lines: afterOp.lines.map(asEditLine),
-    nomenclatureLines: afterOp.nomenclatureLines.map(asNomLine),
-  });
-  const keyById = new Map(beforeKeys.map((k) => [
-    k.targetType === "BLANK"
-      ? `BLANK|${k.materialId}|${k.lengthM}|${k.detailType}|${k.sort}`
-      : k.targetType === "DETAIL"
-        ? `DETAIL|${k.detailId}|${k.torcevayaDone ? "1" : "0"}|${k.ploskostDone ? "1" : "0"}`
-        : k.targetType === "NOMENCLATURE"
-          ? `NOMENCLATURE|${k.nomenclatureId}`
-          : `PRODUCT|${k.productId}`,
-    k,
-  ]));
-  for (const key of afterKeys) {
-    const id =
-      key.targetType === "BLANK"
-        ? `BLANK|${key.materialId}|${key.lengthM}|${key.detailType}|${key.sort}`
-        : key.targetType === "DETAIL"
-          ? `DETAIL|${key.detailId}|${key.torcevayaDone ? "1" : "0"}|${key.ploskostDone ? "1" : "0"}`
-          : key.targetType === "NOMENCLATURE"
-            ? `NOMENCLATURE|${key.nomenclatureId}`
-            : `PRODUCT|${key.productId}`;
-    keyById.set(id, key);
-  }
-  const unionKeys = [...keyById.values()];
   const afterQty = await snapshotPhysicalQuantities(tx, unionKeys);
   const physicalAdjustments = derivePhysicalAdjustments(unionKeys, beforeQty, afterQty);
-  const afterProvenance = captureAfterProvenance(op.type, afterOp, targetLine?.id ?? null);
+  const afterProvenance = captureAfterProvenance(op.type, afterOp, beforeLineIds, replacedLineIds);
   const requestSnapshot = buildQuantityEditRequestSnapshot({
     operationId: op.id,
     targetLineId: input.targetLineId,
@@ -357,12 +351,37 @@ export async function editProductionOperationQuantityInTransaction(
   };
 }
 
-function captureBeforeProvenance(
+function selectReplacedLines(
   op: OpFull,
   targetLine: OpFull["lines"][number] | null,
+  costFlowActive: boolean,
+): OpFull["lines"] {
+  if (op.type !== "PRISADKA" || !targetLine) return targetLine ? [targetLine] : [];
+  if (!costFlowActive) return [targetLine];
+  const dest = prisadkaDestFlags(targetLine);
+  const destKey = `${targetLine.detailId}|${dest.destTorcev ? "1" : "0"}|${dest.destPlosk ? "1" : "0"}`;
+  return op.lines.filter((line) => {
+    if (!line.detailId) return false;
+    const flags = prisadkaDestFlags(line);
+    return `${line.detailId}|${flags.destTorcev ? "1" : "0"}|${flags.destPlosk ? "1" : "0"}` === destKey;
+  });
+}
+
+function captureBeforeProvenance(
+  op: OpFull,
+  replacedLines: OpFull["lines"],
 ): Record<string, unknown> {
-  if (op.type === "TORCOVKA" && targetLine) return buildTorcovkaProvenance(asEditLine(targetLine));
-  if (op.type === "PRISADKA" && targetLine) return buildPrisadkaBeforeProvenance(asEditLine(targetLine));
+  if (op.type === "TORCOVKA" && replacedLines[0]) return buildTorcovkaProvenance(asEditLine(replacedLines[0]));
+  if (op.type === "PRISADKA") {
+    if (replacedLines.length === 1 && replacedLines[0]) {
+      return buildPrisadkaBeforeProvenance(asEditLine(replacedLines[0]));
+    }
+    return {
+      lines: [...replacedLines]
+        .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .map((line) => buildPrisadkaBeforeProvenance(asEditLine(line))),
+    };
+  }
   return buildUpakovkaProvenance({
     productId: op.productId ?? "",
     productQty: op.productQty ?? 0,
@@ -374,15 +393,19 @@ function captureBeforeProvenance(
 function captureAfterProvenance(
   type: OperationType,
   afterOp: OpFull,
-  originalLineId: string | null,
+  beforeLineIds: Set<string>,
+  replacedLineIds: Set<string>,
 ): Record<string, unknown> {
   if (type === "TORCOVKA") {
-    const line = afterOp.lines.find((l) => l.id === originalLineId);
+    const line =
+      afterOp.lines.find((l) => replacedLineIds.has(l.id)) ??
+      afterOp.lines.find((l) => beforeLineIds.has(l.id));
     if (!line) throw new Error("Строка торцовки не найдена после правки");
     return buildTorcovkaProvenance(asEditLine(line));
   }
   if (type === "PRISADKA") {
-    const replacement = afterOp.lines.filter((l) => l.id !== originalLineId);
+    const untouched = new Set([...beforeLineIds].filter((id) => !replacedLineIds.has(id)));
+    const replacement = afterOp.lines.filter((l) => !untouched.has(l.id));
     return buildPrisadkaAfterProvenance(replacement.map(asEditLine));
   }
   return buildUpakovkaProvenance({
@@ -393,7 +416,12 @@ function captureAfterProvenance(
   });
 }
 
-async function executePhysicalQuantityEdit(
+type PreparedQuantityEdit = {
+  upakovka: PreparedUpakovkaApply | null;
+  prisadka: PreparedPrisadkaQuantityEdit | null;
+};
+
+async function prepareQuantityEditMutation(
   tx: Prisma.TransactionClient,
   input: {
     op: OpFull;
@@ -401,20 +429,102 @@ async function executePhysicalQuantityEdit(
     newQty: number;
     costFlowActive: boolean;
   },
-): Promise<void> {
+): Promise<PreparedQuantityEdit> {
   const { op, targetLine, newQty, costFlowActive } = input;
+  if (op.type === "UPAKOVKA") {
+    if (!op.productId) throw new Error("У операции не указано изделие");
+    return {
+      upakovka: await prepareUpakovkaEdit(
+        tx,
+        op.createdAt,
+        op.productId,
+        op.lines,
+        op.nomenclatureLines,
+      ),
+      prisadka: null,
+    };
+  }
+  if (op.type === "PRISADKA" && targetLine && !costFlowActive) {
+    return {
+      upakovka: null,
+      prisadka: await planPrisadkaQuantityEdit(tx, op.createdAt, targetLine, newQty),
+    };
+  }
+  return { upakovka: null, prisadka: null };
+}
+
+function collectPrisadkaPlanKeys(plan: PreparedPrisadkaQuantityEdit): PhysicalKey[] {
+  const keys: PhysicalKey[] = [
+    {
+      targetType: "BLANK",
+      materialId: plan.blankSpec.materialId,
+      lengthM: canonicalBlankLengthM(plan.blankSpec.lengthM),
+      detailType: plan.blankSpec.detailType,
+      sort: plan.blankSpec.sort,
+    },
+  ];
+  for (const step of plan.applySteps) {
+    if (!step.sourceIsBlank) {
+      keys.push({
+        targetType: "DETAIL",
+        detailId: plan.detailId,
+        torcevayaDone: step.sourceTorcevayaDone,
+        ploskostDone: step.sourcePloskostDone,
+      });
+    }
+    keys.push({
+      targetType: "DETAIL",
+      detailId: plan.detailId,
+      torcevayaDone: step.destTorcev,
+      ploskostDone: step.destPlosk,
+    });
+  }
+  return keys;
+}
+
+async function collectLockedPhysicalTargets(
+  tx: Prisma.TransactionClient,
+  input: {
+    op: OpFull;
+    replacedLines: OpFull["lines"];
+    prepared: PreparedQuantityEdit;
+  },
+): Promise<PhysicalKey[]> {
+  const oldKeys = collectPhysicalKeys({
+    productId: input.op.productId,
+    lines: (input.op.type === "UPAKOVKA" ? input.op.lines : input.replacedLines).map(asEditLine),
+    nomenclatureLines: input.op.nomenclatureLines.map(asNomLine),
+  });
+  const preparedKeys = input.prepared.upakovka
+    ? collectPreparedUpakovkaPhysicalKeys(input.prepared.upakovka)
+    : input.prepared.prisadka
+      ? collectPrisadkaPlanKeys(input.prepared.prisadka)
+      : [];
+  const detailIds = [
+    ...oldKeys.filter((k) => k.targetType === "DETAIL").map((k) => k.detailId),
+    ...preparedKeys.filter((k) => k.targetType === "DETAIL").map((k) => k.detailId),
+    ...input.replacedLines.map((l) => l.detailId).filter((id): id is string => Boolean(id)),
+  ];
+  const existingDetailKeys = await collectExistingDetailStockKeys(tx, detailIds);
+  return mergePhysicalKeys(oldKeys, preparedKeys, existingDetailKeys);
+}
+
+async function executePreparedQuantityEdit(
+  tx: Prisma.TransactionClient,
+  input: {
+    op: OpFull;
+    targetLine: OpFull["lines"][number] | null;
+    newQty: number;
+    costFlowActive: boolean;
+    prepared: PreparedQuantityEdit;
+  },
+): Promise<void> {
+  const { op, targetLine, newQty, costFlowActive, prepared } = input;
   const id = op.id;
 
   if (op.type === "UPAKOVKA") {
-    if (!op.productId) throw new Error("У операции не указано изделие");
+    if (!op.productId || !prepared.upakovka) throw new Error("У операции не указано изделие");
     const oldQty = op.productQty ?? 0;
-    const prepared = await prepareUpakovkaEdit(
-      tx,
-      op.createdAt,
-      op.productId,
-      op.lines,
-      op.nomenclatureLines,
-    );
     await reverseUpakovkaOperation(
       tx,
       op.productId,
@@ -425,7 +535,7 @@ async function executePhysicalQuantityEdit(
     );
     await tx.operationDetailLine.deleteMany({ where: { operationId: id } });
     await tx.operationNomenclatureLine.deleteMany({ where: { operationId: id } });
-    await applyUpakovkaPrepared(tx, id, newQty, prepared);
+    await applyUpakovkaPrepared(tx, id, newQty, prepared.upakovka);
     await tx.productionOperation.update({ where: { id }, data: { productQty: newQty } });
     return;
   }
@@ -433,7 +543,6 @@ async function executePhysicalQuantityEdit(
   if (!targetLine) throw new Error("Строка не найдена");
 
   if (op.type === "PRISADKA") {
-    const kind: "torcev" | "plosk" = targetLine.prisadkaTorcevaya ? "torcev" : "plosk";
     if (!targetLine.detailId) throw new Error("Строка присадки без детали");
     const lineIndex = op.lines.findIndex((l) => l.id === targetLine.id);
     if (lineIndex < 0) throw new Error(STALE_QUANTITY_EDIT);
@@ -446,10 +555,10 @@ async function executePhysicalQuantityEdit(
       });
       return;
     }
-    await preparePrisadkaEdit(tx, op.createdAt, targetLine, newQty);
+    if (!prepared.prisadka) throw new Error("План присадки не подготовлен");
     await reversePrisadkaLine(tx, targetLine);
     await tx.operationDetailLine.delete({ where: { id: targetLine.id } });
-    await applyPrisadkaPick(tx, id, targetLine.detailId, kind, newQty);
+    await applyInactivePrisadkaPreparedSteps(tx, id, targetLine.detailId, prepared.prisadka.applySteps);
     return;
   }
 

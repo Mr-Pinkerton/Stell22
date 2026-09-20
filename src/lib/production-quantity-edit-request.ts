@@ -28,6 +28,11 @@ export function retainOrMintQuantityEditRequestId(state: {
   return { requestId: newRequestId(), boundKey: state.commandKey };
 }
 
+/** Serialize UI quantity-edit submits: only one command may be in flight. */
+export function quantityEditUiLocked(isPending: boolean): boolean {
+  return isPending;
+}
+
 export function shouldRotateQuantityEditRequestId(errorMessage: string): boolean {
   return (
     errorMessage.startsWith("STALE_QUANTITY_EDIT") || errorMessage.startsWith("REQUEST_ID_REUSE")

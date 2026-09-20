@@ -73,7 +73,7 @@ describe("terminal production SHADOW writer confinement", () => {
 
     const production = read("src/server/production.ts");
     const qeditTx = read("src/server/internal/production-quantity-edit-tx.ts");
-    expect(qeditTx).toMatch(/applyUpakovkaPrepared\(\s*tx,\s*id,\s*newQty,\s*prepared\s*\)/);
+    expect(qeditTx).toMatch(/applyUpakovkaPrepared\(\s*tx,\s*id,\s*newQty,\s*prepared\.upakovka\s*\)/);
     expect(production).not.toContain("{ costFlowActive }");
     expect(qeditTx).not.toContain("{ costFlowActive }");
   });

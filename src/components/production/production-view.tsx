@@ -43,6 +43,7 @@ import {
 } from "@/lib/production-correction-request";
 import {
   quantityEditCommandKey,
+  quantityEditUiLocked,
   retainOrMintQuantityEditRequestId,
   shouldRotateQuantityEditRequestId,
 } from "@/lib/production-quantity-edit-request";
@@ -315,7 +316,7 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
   const correctionBoundKeyRef = useRef<string | null>(null);
   const quantityEditRequestIdRef = useRef<string | null>(null);
   const quantityEditBoundKeyRef = useRef<string | null>(null);
-  const [, startTransition] = useTransition();
+  const [quantityEditPending, startTransition] = useTransition();
   const [exporting, startExport] = useTransition();
 
   const employeeOptions = useMemo(() => productionEmployeeOptions(entries), [entries]);
@@ -618,6 +619,7 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
                       onDelete={() => handleDelete(row.id)}
                       onCorrect={() => openCorrect(row)}
                       onSaveQuantity={(line, qty) => handleSaveQuantity(row, line, qty)}
+                      quantityEditLocked={quantityEditUiLocked(quantityEditPending)}
                     />
                   ))
                 )}
@@ -696,6 +698,7 @@ function ProductionRowGroup({
   onDelete,
   onCorrect,
   onSaveQuantity,
+  quantityEditLocked,
 }: {
   row: ProductionEntryRow;
   expanded: boolean;
@@ -704,6 +707,7 @@ function ProductionRowGroup({
   onDelete: () => void;
   onCorrect: () => void;
   onSaveQuantity: (line: DetailEditRow, qty: number) => void;
+  quantityEditLocked: boolean;
 }) {
   const editRows = useMemo(() => buildDetailEditRows(row), [row]);
   const [editQty, setEditQty] = useState<Record<number, string>>({});
@@ -823,6 +827,7 @@ function ProductionRowGroup({
               }
               onSaveLine={(line) => onSaveQuantity(line, Number(editQty[line.index]))}
               onCorrect={onCorrect}
+              quantityEditLocked={quantityEditLocked}
             />
           </div>
         </ExpandableDetailRow>
@@ -838,6 +843,7 @@ function ProductionEntryDetail({
   onEditQtyChange,
   onSaveLine,
   onCorrect,
+  quantityEditLocked,
 }: {
   row: ProductionEntryRow;
   editRows: DetailEditRow[];
@@ -845,6 +851,7 @@ function ProductionEntryDetail({
   onEditQtyChange: (index: number, value: string) => void;
   onSaveLine: (line: DetailEditRow) => void;
   onCorrect: () => void;
+  quantityEditLocked: boolean;
 }) {
   const unit = OPERATION_TYPE_UNIT[row.type];
 
@@ -941,7 +948,7 @@ function ProductionEntryDetail({
                       type="button"
                       size="sm"
                       variant={hasChange ? "brand" : "outline"}
-                      disabled={!hasChange}
+                      disabled={!hasChange || quantityEditLocked}
                       className={cn(
                         "h-9 min-w-[5.5rem] rounded-xl px-3",
                         !hasChange &&

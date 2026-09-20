@@ -6,6 +6,8 @@ import {
   buildTorcovkaStateCanonical,
   computeQuantityEditStateFingerprint,
   quantityEditStateFingerprint,
+  QUANTITY_EDIT_BEFORE_SNAPSHOT_INCOMPLETE,
+  derivePhysicalAdjustments,
   sortPhysicalAdjustments,
 } from "./production-quantity-edit";
 
@@ -72,6 +74,16 @@ describe("quantity-edit snapshots", () => {
       expectedStateFingerprint: "qedit-state-v1:abc",
     });
     expect(() => assertNoMoneyInQuantityEditContract(snap)).not.toThrow();
+  });
+
+  it("derivePhysicalAdjustments fails closed when a before snapshot key is missing", () => {
+    expect(() =>
+      derivePhysicalAdjustments(
+        [{ targetType: "PRODUCT", productId: "p1" }],
+        new Map(),
+        new Map([["PRODUCT|p1", 1]]),
+      ),
+    ).toThrow(QUANTITY_EDIT_BEFORE_SNAPSHOT_INCOMPLETE);
   });
 
   it("sorts physical adjustments by targetType then target key and omits zeros upstream", () => {

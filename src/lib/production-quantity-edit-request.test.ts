@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   quantityEditCommandKey,
+  quantityEditUiLocked,
   retainOrMintQuantityEditRequestId,
   shouldRotateQuantityEditRequestId,
 } from "./production-quantity-edit-request";
@@ -47,6 +48,13 @@ describe("retainOrMintQuantityEditRequestId", () => {
     });
     expect(first.requestId).not.toBe("keep-me");
     expect(first.boundKey).toBe("new");
+  });
+});
+
+describe("quantityEditUiLocked", () => {
+  it("blocks a second Save while one quantity-edit command is in flight", () => {
+    expect(quantityEditUiLocked(false)).toBe(false);
+    expect(quantityEditUiLocked(true)).toBe(true);
   });
 });
 

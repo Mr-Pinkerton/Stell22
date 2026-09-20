@@ -10,6 +10,85 @@ import {
 } from "@/server/internal/inventory-integrity";
 import type { RailType, Sort } from "@/types/domain";
 
+export async function applyInactivePrisadkaPreparedSteps(
+  tx: Prisma.TransactionClient,
+  operationId: string,
+  detailId: string,
+  steps: Array<{
+    sourceIsBlank: boolean;
+    sourceTorcevayaDone: boolean;
+    sourcePloskostDone: boolean;
+    destTorcev: boolean;
+    destPlosk: boolean;
+    quantity: number;
+  }>,
+): Promise<void> {
+  const detail = await tx.detail.findUniqueOrThrow({ where: { id: detailId } });
+  for (const step of steps) {
+    if (step.quantity <= 0) continue;
+    if (!step.sourceIsBlank) {
+      const dec = await tx.detailStock.updateMany({
+        where: {
+          detailId,
+          torcevayaDone: step.sourceTorcevayaDone,
+          ploskostDone: step.sourcePloskostDone,
+          quantity: { gte: step.quantity },
+        },
+        data: { quantity: { decrement: step.quantity } },
+      });
+      if (dec.count === 0) throw new Error("Недостаточно остатка деталей для присадки");
+    } else {
+      const dec = await tx.blankStock.updateMany({
+        where: {
+          materialId: detail.materialId,
+          lengthM: detail.lengthM,
+          detailType: detail.detailType,
+          sort: detail.sort,
+          quantity: { gte: step.quantity },
+        },
+        data: { quantity: { decrement: step.quantity } },
+      });
+      if (dec.count === 0) throw new Error("Недостаточно заготовок для присадки");
+    }
+    await tx.detailStock.upsert({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId,
+          torcevayaDone: step.destTorcev,
+          ploskostDone: step.destPlosk,
+        },
+      },
+      create: {
+        detailId,
+        torcevayaDone: step.destTorcev,
+        ploskostDone: step.destPlosk,
+        quantity: step.quantity,
+      },
+      update: { quantity: { increment: step.quantity } },
+    });
+    await tx.operationDetailLine.create({
+      data: {
+        operationId,
+        detailId,
+        quantity: step.quantity,
+        prisadkaTorcevaya: step.destTorcev,
+        prisadkaPloskost: step.destPlosk,
+        sourceIsBlank: step.sourceIsBlank,
+        sourceTorcevayaDone: step.sourceTorcevayaDone,
+        sourcePloskostDone: step.sourcePloskostDone,
+        ...(step.sourceIsBlank
+          ? {
+              blankLengthM: detail.lengthM,
+              blankType: detail.detailType,
+              blankSort: detail.sort,
+              blankMaterialId: detail.materialId,
+            }
+          : {}),
+      },
+    });
+  }
+}
+
 export async function applyPrisadkaPick(
   tx: Prisma.TransactionClient,
   operationId: string,

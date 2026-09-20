@@ -364,7 +364,7 @@ P2-GUARD/CI historical implementation status = **IMPLEMENTED / MERGED TO MAIN / 
 - File: `audit/08.23-psr-p2-production-quantity-edit-identity.md`
 - Status: **IMPLEMENTED / CI VERIFIED / AWAITING HEAD REVIEW / NOT MERGED / NOT DEPLOYED**
 - Starting `origin/main`: `fb22ab7ce2e55cf9ee4aee8026298f488107698c`
-- PR: [#42](https://github.com/Mr-Pinkerton/Stell22/pull/42) **NOT MERGED**. HEAD `789d63b471e98b665d14d098c92c60b2b38efbfa`. Exact-head CI `35531258226` SUCCESS.
+- PR: [#42](https://github.com/Mr-Pinkerton/Stell22/pull/42) **NOT MERGED**. Implementation code `789d63b471e98b665d14d098c92c60b2b38efbfa` (CI `35531258226`). Prior reviewed docs head `e619e52490e647dfda542cff927fe583871ada84` (CI `35531560055`). Final accepted PR HEAD is determined by HEAD review.
 - Current production application: `4508ee1c5d242e679f18e331c35efc679e37c10c`
 - Current Production Deploy: `35524416936` SUCCESS
 - InventoryMovement writer added: **NO**

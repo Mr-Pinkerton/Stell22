@@ -28,6 +28,7 @@ import { CLIENT_REQUEST_ID_REQUIRED, newRequestId } from "@/lib/request-id";
 import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
 import { INVENTORY_MOVEMENT_SHADOW_WRITE_KEY } from "@/server/internal/inventory-movement-shadow-write";
 import {
+  PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND,
   QUANTITY_EDIT_SHADOW_WRITER_NOT_READY,
   QUANTITY_EDIT_UPAKOVKA_COST_FLOW_NOT_READY,
   REQUEST_ID_REUSE,
@@ -830,5 +831,390 @@ describe.skipIf(!enabled)("PSR-P2 Package 2 production quantity-edit identity", 
     expect(result.quantityEditId).toBeNull();
     expect(await prismaA.productionOperationQuantityEdit.count()).toBe(0);
     expect(await quantityChangeLogs(op.id)).toHaveLength(0);
+  });
+
+  it("P1-01 legacy updateProductionLineQuantity fails closed for A/B/C", async () => {
+    const tor = await seedTorcovka(`legacy-a-${seq}`);
+    const pris = await seedPrisadka(`legacy-b-${seq}`);
+    const up = await seedUpakovka(`legacy-c-${seq}`, 1);
+    const torQty = tor.line.quantity;
+    const prisQty = pris.line.quantity;
+    const upQty = up.op.productQty ?? 1;
+    await expect(updateProductionLineQuantity(tor.op.id, 0, 1)).rejects.toThrow(
+      PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND,
+    );
+    await expect(updateProductionLineQuantity(pris.op.id, 0, 1)).rejects.toThrow(
+      PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND,
+    );
+    await expect(updateProductionLineQuantity(up.op.id, 0, 2)).rejects.toThrow(
+      PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND,
+    );
+    expect((await loadOp(tor.op.id)).lines[0]!.quantity).toBe(torQty);
+    expect((await loadOp(pris.op.id)).lines[0]!.quantity).toBe(prisQty);
+    expect((await loadOp(up.op.id)).productQty).toBe(upQty);
+    expect(await prismaA.productionOperationQuantityEdit.count()).toBe(0);
+    expect(await quantityChangeLogs(tor.op.id)).toHaveLength(0);
+    expect(await quantityChangeLogs(pris.op.id)).toHaveLength(0);
+    expect(await quantityChangeLogs(up.op.id)).toHaveLength(0);
+  });
+
+  it("P1-02 PRISADKA new source B keeps exact before→after delta", async () => {
+    const { world, op, line } = await seedPrisadka(`p-src-${seq}`);
+    const sourceB = await prismaA.detailStock.create({
+      data: {
+        detailId: world.detail.id,
+        torcevayaDone: false,
+        ploskostDone: false,
+        quantity: 5,
+      },
+    });
+    const result = await editQty({
+      operationId: op.id,
+      targetLineId: line.id,
+      expectedOldQuantity: line.quantity,
+      newQuantity: 1,
+    });
+    const afterB = await prismaA.detailStock.findUniqueOrThrow({ where: { id: sourceB.id } });
+    expect(afterB.quantity).toBe(4);
+    const row = await prismaA.productionOperationQuantityEdit.findUniqueOrThrow({
+      where: { requestId: result.requestId },
+    });
+    const effect = row.effectSnapshot as {
+      physicalAdjustments: Array<{
+        targetType: string;
+        detailId?: string;
+        torcevayaDone?: boolean;
+        ploskostDone?: boolean;
+        quantityDelta: number;
+      }>;
+    };
+    const adj = effect.physicalAdjustments.find(
+      (a) =>
+        a.targetType === "DETAIL" &&
+        a.detailId === world.detail.id &&
+        a.torcevayaDone === false &&
+        a.ploskostDone === false,
+    );
+    expect(adj?.quantityDelta).toBe(-1);
+    expect(adj?.quantityDelta).not.toBe(4);
+    expect(adj?.quantityDelta).not.toBe(-5);
+  });
+
+  it("P1-02 UPAKOVKA changed current BOM snapshots non-zero new target", async () => {
+    const { world, op } = await seedUpakovka(`u-bom-${seq}`, 1);
+    const extra = await prismaA.detail.create({
+      data: {
+        name: `det-extra-${seq}`,
+        materialId: world.material.id,
+        detailNumber: 2,
+        lengthM: new Prisma.Decimal("1.8000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        prisadkaTorcevaya: true,
+        prisadkaPloskost: false,
+      },
+    });
+    await prismaA.productDetail.create({
+      data: { productId: world.product.id, detailId: extra.id, quantity: 1 },
+    });
+    const extraStock = await prismaA.detailStock.create({
+      data: {
+        detailId: extra.id,
+        torcevayaDone: true,
+        ploskostDone: false,
+        quantity: 7,
+      },
+    });
+    await prismaA.detailStock.updateMany({
+      where: { detailId: world.detail.id, torcevayaDone: true, ploskostDone: false },
+      data: { quantity: { increment: 3 } },
+    });
+    const extraBefore = extraStock.quantity;
+    const productBefore = await prismaA.productStock.findUniqueOrThrow({
+      where: { productId: world.product.id },
+    });
+    const result = await editQty({
+      operationId: op.id,
+      targetLineId: null,
+      expectedOldQuantity: op.productQty ?? 1,
+      newQuantity: 2,
+    });
+    const extraAfter = await prismaA.detailStock.findUniqueOrThrow({ where: { id: extraStock.id } });
+    expect(extraAfter.quantity).toBe(extraBefore - 2);
+    const row = await prismaA.productionOperationQuantityEdit.findUniqueOrThrow({
+      where: { requestId: result.requestId },
+    });
+    const effect = row.effectSnapshot as {
+      physicalAdjustments: Array<{
+        targetType: string;
+        detailId?: string;
+        productId?: string;
+        quantityDelta: number;
+      }>;
+    };
+    const extraAdj = effect.physicalAdjustments.find(
+      (a) => a.targetType === "DETAIL" && a.detailId === extra.id,
+    );
+    expect(extraAdj?.quantityDelta).toBe(-2);
+    expect(extraAdj?.quantityDelta).not.toBe(extraAfter.quantity);
+    const productAdj = effect.physicalAdjustments.find(
+      (a) => a.targetType === "PRODUCT" && a.productId === world.product.id,
+    );
+    expect(productAdj?.quantityDelta).toBe(1);
+    const productAfter = await prismaA.productStock.findUniqueOrThrow({
+      where: { productId: world.product.id },
+    });
+    expect(productAfter.quantity).toBe(productBefore.quantity + 1);
+  });
+
+  it("P1-02 concurrent stock change is not attributed to the quantity edit", async () => {
+    const { op, line } = await seedTorcovka(`conc-${seq}`);
+    const blank = await prismaA.blankStock.findFirstOrThrow();
+    const blankBefore = blank.quantity;
+    let started!: Promise<PromiseSettledResult<Awaited<ReturnType<typeof editProductionOperationQuantity>>>[]>;
+    await prismaB.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "BlankStock" WHERE id = ${blank.id} FOR UPDATE`;
+        started = Promise.allSettled([
+          editQty({
+            operationId: op.id,
+            targetLineId: line.id,
+            expectedOldQuantity: line.quantity,
+            newQuantity: 1,
+          }),
+        ]);
+        await waitUntil(async () => {
+          const rows = await tx.$queryRaw<Array<{ n: number }>>`
+            SELECT count(*)::int AS n
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND wait_event_type = 'Lock'
+              AND pid <> pg_backend_pid()
+          `;
+          return (rows[0]?.n ?? 0) >= 1;
+        }, "qedit blank lock wait");
+        await tx.blankStock.update({
+          where: { id: blank.id },
+          data: { quantity: { increment: 10 } },
+        });
+      },
+      { maxWait: 20_000, timeout: 20_000 },
+    );
+    const settled = await withTimeout(started, "qedit concurrent attribution");
+    expect(settled[0]?.status).toBe("fulfilled");
+    const row = await prismaA.productionOperationQuantityEdit.findFirstOrThrow({
+      where: { operationId: op.id },
+    });
+    const effect = row.effectSnapshot as {
+      physicalAdjustments: Array<{ targetType: string; quantityDelta: number }>;
+    };
+    const blankAdj = effect.physicalAdjustments.find((a) => a.targetType === "BLANK");
+    expect(blankAdj?.quantityDelta).toBe(-1);
+    const blankAfter = await prismaA.blankStock.findUniqueOrThrow({ where: { id: blank.id } });
+    expect(blankAfter.quantity).toBe(blankBefore + 10 - 1);
+  });
+
+  it("P1-03 PRISADKA multi-line provenance excludes untouched pick", async () => {
+    const world = await seedWorld(`p-ml-${seq}`);
+    const extra = await prismaA.detail.create({
+      data: {
+        name: `det-ml-${seq}`,
+        materialId: world.material.id,
+        detailNumber: 2,
+        lengthM: new Prisma.Decimal("1.8000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        prisadkaTorcevaya: true,
+        prisadkaPloskost: false,
+      },
+    });
+    await submitTorcovka({
+      employeeId: world.emp.id,
+      batchId: world.batch.id,
+      railLotId: world.lot.id,
+      railsTaken: 4,
+      clientRequestId: `test:qedit:ml-t:${seq}`,
+      picks: [{ lengthM: 1.8, sort: "SORT1", quantity: 4 }],
+    });
+    await submitPrisadka({
+      employeeId: world.emp.id,
+      clientRequestId: `test:qedit:ml-p:${seq}`,
+      picks: [
+        { detailId: world.detail.id, kind: "torcev", quantity: 2 },
+        { detailId: extra.id, kind: "torcev", quantity: 2 },
+      ],
+    });
+    const op = await prismaA.productionOperation.findFirstOrThrow({
+      where: { type: "PRISADKA", employeeId: world.emp.id },
+      include: { lines: { orderBy: { id: "asc" } } },
+    });
+    const edited = op.lines.find((l) => l.detailId === world.detail.id)!;
+    const untouched = op.lines.find((l) => l.detailId === extra.id)!;
+    const result = await editQty({
+      operationId: op.id,
+      targetLineId: edited.id,
+      expectedOldQuantity: edited.quantity,
+      newQuantity: 1,
+    });
+    const row = await prismaA.productionOperationQuantityEdit.findUniqueOrThrow({
+      where: { requestId: result.requestId },
+    });
+    const effect = row.effectSnapshot as {
+      before: { lineId?: string; lines?: Array<{ lineId: string }> };
+      after: { lines: Array<{ lineId: string }> };
+    };
+    expect(effect.before.lineId).toBe(edited.id);
+    expect(effect.after.lines.every((l) => l.lineId !== untouched.id)).toBe(true);
+    expect(effect.after.lines.every((l) => l.lineId !== edited.id)).toBe(true);
+    expect(effect.after.lines.map((l) => l.lineId)).toEqual(
+      [...effect.after.lines.map((l) => l.lineId)].sort(),
+    );
+    expect(await prismaA.operationDetailLine.count({ where: { id: untouched.id } })).toBe(1);
+    const replay = await editProductionOperationQuantity({
+      operationId: op.id,
+      requestId: result.requestId,
+      targetLineId: edited.id,
+      expectedOldQuantity: edited.quantity,
+      newQuantity: 1,
+      expectedStateFingerprint: row.expectedStateFingerprint,
+    });
+    expect(replay.replayed).toBe(true);
+    expect(await prismaA.productionOperationQuantityEdit.count({ where: { operationId: op.id } })).toBe(1);
+  });
+
+  it("P1-03 PRISADKA ACTIVE dest-sharing group excludes untouched line", async () => {
+    const world = await seedWorld(`p-actg-${seq}`);
+    await prismaA.employee.update({
+      where: { id: world.emp.id },
+      data: { ratePrisadkaPloskt: 4 },
+    });
+    await prismaA.railLot.update({
+      where: { id: world.lot.id },
+      data: {
+        initialValue: new Prisma.Decimal("10000"),
+        remainingValue: new Prisma.Decimal("10000"),
+      },
+    });
+    const both = await prismaA.detail.create({
+      data: {
+        name: `det-actg-both-${seq}`,
+        materialId: world.material.id,
+        detailNumber: 3,
+        lengthM: new Prisma.Decimal("1.8000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        prisadkaTorcevaya: true,
+        prisadkaPloskost: true,
+      },
+    });
+    const extra = await prismaA.detail.create({
+      data: {
+        name: `det-actg-extra-${seq}`,
+        materialId: world.material.id,
+        detailNumber: 4,
+        lengthM: new Prisma.Decimal("1.8000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        prisadkaTorcevaya: true,
+        prisadkaPloskost: false,
+      },
+    });
+    await prismaA.setting.upsert({
+      where: { key: PRODUCTION_COST_FLOW_KEY },
+      create: { key: PRODUCTION_COST_FLOW_KEY, value: { version: 1, active: true } },
+      update: { value: { version: 1, active: true } },
+    });
+    await prismaA.detailStock.create({
+      data: {
+        detailId: both.id,
+        torcevayaDone: true,
+        ploskostDone: false,
+        quantity: 2,
+        materialValue: new Prisma.Decimal("200"),
+        laborValue: new Prisma.Decimal("20"),
+        totalValue: new Prisma.Decimal("220"),
+        costVersion: 1,
+      },
+    });
+    await prismaA.detailStock.create({
+      data: {
+        detailId: both.id,
+        torcevayaDone: false,
+        ploskostDone: true,
+        quantity: 2,
+        materialValue: new Prisma.Decimal("160"),
+        laborValue: new Prisma.Decimal("10"),
+        totalValue: new Prisma.Decimal("170"),
+        costVersion: 1,
+      },
+    });
+    await prismaA.detailStock.create({
+      data: {
+        detailId: extra.id,
+        torcevayaDone: false,
+        ploskostDone: false,
+        quantity: 1,
+        materialValue: new Prisma.Decimal("80"),
+        laborValue: new Prisma.Decimal("8"),
+        totalValue: new Prisma.Decimal("88"),
+        costVersion: 1,
+      },
+    });
+    await submitPrisadka({
+      employeeId: world.emp.id,
+      clientRequestId: `test:qedit:actg-p:${seq}`,
+      picks: [
+        { detailId: both.id, kind: "torcev", quantity: 2 },
+        { detailId: both.id, kind: "plosk", quantity: 2 },
+        { detailId: extra.id, kind: "torcev", quantity: 1 },
+      ],
+    });
+    const op = await prismaA.productionOperation.findFirstOrThrow({
+      where: { type: "PRISADKA", employeeId: world.emp.id },
+      include: { lines: { orderBy: { id: "asc" } } },
+    });
+    const group = op.lines.filter((l) => l.detailId === both.id);
+    const untouched = op.lines.find((l) => l.detailId === extra.id)!;
+    expect(group.length).toBeGreaterThanOrEqual(2);
+    expect(untouched).toBeTruthy();
+    const target = group.find((l) => l.prisadkaTorcevaya)!;
+    const result = await editQty({
+      operationId: op.id,
+      targetLineId: target.id,
+      expectedOldQuantity: target.quantity,
+      newQuantity: 1,
+    });
+    const row = await prismaA.productionOperationQuantityEdit.findUniqueOrThrow({
+      where: { requestId: result.requestId },
+    });
+    const effect = row.effectSnapshot as {
+      before: { lineId?: string; lines?: Array<{ lineId: string }> };
+      after: { lines: Array<{ lineId: string }> };
+    };
+    const beforeIds = (
+      effect.before.lines?.map((l) => l.lineId) ??
+      (effect.before.lineId ? [effect.before.lineId] : [])
+    ).slice().sort();
+    expect(beforeIds).toEqual(group.map((g) => g.id).sort());
+    expect(beforeIds).not.toContain(untouched.id);
+    expect(effect.after.lines.every((l) => l.lineId !== untouched.id)).toBe(true);
+    expect(effect.after.lines.every((l) => !group.some((g) => g.id === l.lineId))).toBe(true);
+    expect(effect.after.lines.map((l) => l.lineId)).toEqual(
+      [...effect.after.lines.map((l) => l.lineId)].sort(),
+    );
+    expect(await prismaA.operationDetailLine.count({ where: { id: untouched.id } })).toBe(1);
+    const replay = await editProductionOperationQuantity({
+      operationId: op.id,
+      requestId: result.requestId,
+      targetLineId: target.id,
+      expectedOldQuantity: target.quantity,
+      newQuantity: 1,
+      expectedStateFingerprint: row.expectedStateFingerprint,
+    });
+    expect(replay.replayed).toBe(true);
+    const replayed = await prismaA.productionOperationQuantityEdit.findUniqueOrThrow({
+      where: { requestId: result.requestId },
+    });
+    expect(replayed.effectSnapshot).toEqual(row.effectSnapshot);
   });
 });
