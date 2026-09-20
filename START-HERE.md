@@ -300,8 +300,10 @@ P2-GUARD/CI historical implementation status = **IMPLEMENTED / MERGED TO MAIN / 
 - Accepted HEAD: `424f1191f093bafda5a8d98a387d0b7da2822324`
 - Implementation PR: #36
 - Merge: `0bf2c77f25b76c183d86bd571ad685e679c577da`
-- Production Deploy: `35510094974` SUCCESS
-- Deployed application: `69e0f53993d5b02f27f0fc03682cef492c02d685`
+- Historical / package Production Deploy: `35510094974` SUCCESS
+- Historical / package deployment application: `69e0f53993d5b02f27f0fc03682cef492c02d685`
+- Current production application: `4508ee1c5d242e679f18e331c35efc679e37c10c`
+- Current Production Deploy: `35524416936` SUCCESS
 - Exact-head CI: `35507221861` SUCCESS
 - Post-merge CI: `35507868236` SUCCESS
 - HEAD review: **PASS** — P0=0 / P1=0 / P2=0

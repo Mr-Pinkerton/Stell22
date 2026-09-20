@@ -169,8 +169,8 @@ No `audit/01.16*` or `audit/01.17*`.
 | `audit/08.16-psr-p2-r05-correction-shadow-writer.md` | PSR-P2 R-05 TORCOVKA correction SHADOW writer | Implementation + current runtime | PR #26 merge `debafda`; accepted head `c9d3c0b`; current prod app `0cc8382` | `DEPLOYED DORMANT / SHADOW INACTIVE` | YES | Historical closeout **NOT DEPLOYED** preserved. Current runtime: R-05 correction writer **DEPLOYED DORMANT**. SHADOW inactive. Dual-write **NOT STARTED**. |
 | `audit/08.17-psr-p2-supply-prerequisite.md` | PSR-P2 Supply writer prerequisite | Implementation + current runtime | PR #28 merge `5fe5f40`; accepted HEAD `8e92dd6`; latest preflight `35502680346` | `COMPLETE / DEPLOYED / PRODUCTION PREFLIGHT COMPLETE / TRUSTED` | YES | Historical closeout **NOT DEPLOYED** preserved. Current runtime: hardening is in production `0cc8382`. Latest preflight TOTAL=0 / D=0 / S=0 / O=0 / `SUPPLY_DATA_BLOCKER=NO`. |
 | `audit/08.18-psr-p2-supply-shadow-writer.md` | PSR-P2 Supply SHADOW writer | Implementation + current runtime | PR #31 merge `164ffca`; accepted head `2e90060`; current prod app `0cc8382` | `DEPLOYED DORMANT / SHADOW INACTIVE` | YES | Historical closeout **NOT DEPLOYED** preserved. Current runtime: Supply deduct / Ozon restore writer **DEPLOYED DORMANT**. SHADOW inactive. Dual-write **NOT STARTED**. |
-| `audit/08.19-psr-p2-raw-identity-prerequisite.md` | PSR-P2 raw receipt / write-off identity | Implementation + deploy closeout | PR #33 merge `76131ca`; accepted head `919a427`; historical identity deploy `35502770382` / `0cc8382`; current prod `69e0f53` / `35510094974` | `IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED` | YES after this closeout merge | Historical implementation **NOT DEPLOYED** preserved. Identity deploy `35502770382` first made tables live. Current production is later application SHA `69e0f53`. Migration APPLIED; tables LIVE / EMPTY AT CUTOVER; historical backfill NO. Connected writers **DEPLOYED DORMANT**. Dual-write **NOT STARTED**. Later writers: `08.20`. |
-| `audit/08.20-psr-p2-raw-shadow-writers.md` | PSR-P2 raw receipt / write-off SHADOW writers | Implementation + deploy closeout | PR #36 merge `0bf2c77`; accepted head `424f119`; Production Deploy `35510094974`; prod app `69e0f53` | `IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED / SHADOW INACTIVE` | YES | Source/`main` contours **9**. Production dormant contours **9**. Application deploy / no new migration. No activation. P2 **NOT COMPLETE**. P3 **NOT STARTED**. Later discovery: `08.21`. |
+| `audit/08.19-psr-p2-raw-identity-prerequisite.md` | PSR-P2 raw receipt / write-off identity | Implementation + deploy closeout | PR #33 merge `76131ca`; accepted head `919a427`; historical identity deploy `35502770382` / `0cc8382`; historical raw-writer deploy `35510094974` / `69e0f53`; current prod `4508ee1` / `35524416936` | `IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED` | YES after this closeout merge | Historical implementation **NOT DEPLOYED** preserved. Identity deploy `35502770382` first made tables live. Current production is later application SHA `4508ee1`. Migration APPLIED; tables LIVE / EMPTY AT CUTOVER; historical backfill NO. Connected writers **DEPLOYED DORMANT**. Dual-write **NOT STARTED**. Later writers: `08.20`. |
+| `audit/08.20-psr-p2-raw-shadow-writers.md` | PSR-P2 raw receipt / write-off SHADOW writers | Implementation + deploy closeout | PR #36 merge `0bf2c77`; accepted head `424f119`; historical package deploy `35510094974` / `69e0f53`; current prod `4508ee1` / `35524416936` | `IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED / SHADOW INACTIVE` | YES | Source/`main` contours **9**. Production dormant contours **9**. Package deploy / no new migration. No activation. P2 **NOT COMPLETE**. P3 **NOT STARTED**. Later discovery: `08.21`. |
 | `audit/08.21-psr-p2-remaining-mutation-destructive-adjudication.md` | PSR-P2 remaining mutation / destructive contours | Discovery + HEAD architecture + independent review | Starting main `289979b0`; discovery HEAD `6f11e38`; adjudicated HEAD `a9567b6`; app `69e0f53` | `DISCOVERY COMPLETE / ARCHITECTURE ACCEPTED / REVIEWED / NO IMPLEMENTATION` | YES | Exhaustive A–H **PASS**. Independent Opus **PASS** P0=0 / P1=0 / P2=4 informational. Architecture unchanged. No runtime. P2 **NOT COMPLETE**. Later implementation: `08.22`. |
 | `audit/08.22-psr-p2-safe-destructive-guards.md` | PSR-P2 Package 1 safe destructive guards | Implementation + deploy closeout | Starting main `6c858db`; PR #40 accepted head `e402328`; merge `4508ee1`; Production Deploy `35524416936`; prod app `4508ee1` | `IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED` | YES after this closeout merge | D/E fail-closed. F preserved. G remaining===0 + locks. H INACTIVE qty===0 / ACTIVE any-row. No writer. No schema. Production remaining uncovered = A/B/C. P2 **NOT COMPLETE**. NEXT = Package 2 identity. |
 
@@ -445,8 +445,10 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Merge: `76131ca1a77b8c20d920055be66361bd0ab9f4c4`
 - Historical identity-prerequisite Production Deploy: `35502770382` SUCCESS
 - Historical identity-prerequisite application: `0cc8382f307ac1ff7fa881012033f5105e689a23`
-- Current production application: `69e0f53993d5b02f27f0fc03682cef492c02d685`
-- Current Production Deploy: `35510094974` SUCCESS
+- Historical raw SHADOW writers production checkpoint: `69e0f53993d5b02f27f0fc03682cef492c02d685`
+- Historical raw SHADOW writers Production Deploy: `35510094974` SUCCESS
+- Current production application: `4508ee1c5d242e679f18e331c35efc679e37c10c`
+- Current Production Deploy: `35524416936` SUCCESS
 - Schema / migration: **APPLIED**. Identity tables LIVE / EMPTY AT CUTOVER. Historical backfill: **NO**.
 - Connected writers: **DEPLOYED DORMANT / SHADOW INACTIVE**
 - Dual-write: **NOT STARTED**.
@@ -463,8 +465,10 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Accepted HEAD: `424f1191f093bafda5a8d98a387d0b7da2822324`
 - Implementation PR: #36
 - Merge: `0bf2c77f25b76c183d86bd571ad685e679c577da`
-- Production Deploy: `35510094974` SUCCESS
-- Deployed application: `69e0f53993d5b02f27f0fc03682cef492c02d685`
+- Historical / package Production Deploy: `35510094974` SUCCESS
+- Historical / package deployment application: `69e0f53993d5b02f27f0fc03682cef492c02d685`
+- Current production application: `4508ee1c5d242e679f18e331c35efc679e37c10c`
+- Current Production Deploy: `35524416936` SUCCESS
 - Exact-head CI: `35507221861` SUCCESS
 - Post-merge CI: `35507868236` SUCCESS
 - HEAD review: **PASS** — P0=0 / P1=0 / P2=0
