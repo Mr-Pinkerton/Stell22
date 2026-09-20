@@ -33,6 +33,7 @@ import {
 } from "@/server/internal/cost-flow-raw";
 import { applyActiveSimplePurchaseReceipt } from "@/server/internal/cost-flow-downstream";
 import { isCostFlowActive } from "@/server/internal/cost-flow-state";
+import { BATCH_NONZERO_REMAINING_DELETE_BLOCKED } from "@/lib/destructive-delete-guards";
 import { requireClientRequestId } from "@/lib/request-id";
 import { userMovementActorFromAdmin } from "@/server/internal/inventory-movement-actor";
 import { isInventoryMovementShadowWriteActiveForWriter } from "@/server/internal/inventory-movement-shadow-write";
@@ -648,24 +649,47 @@ export async function writeOffBatchRemainder(
 
 export async function deleteBatch(id: string): Promise<void> {
   await requireAdmin();
-  if (await isCostFlowActive()) {
-    throw new Error(COST_FLOW_DELETE_BATCH);
-  }
-  const [ops, deals] = await Promise.all([
-    prisma.productionOperation.count({ where: { batchId: id } }),
-    prisma.dealItem.count({ where: { batchId: id } }),
-  ]);
-  if (ops > 0 || deals > 0) {
-    throw new Error("Нельзя удалить: по партии есть движения материала или привязка к сделке.");
-  }
-  const before = await prisma.batch.findUnique({ where: { id } });
-  if (!before) throw new Error("Партия не найдена");
-
-  await prisma.$transaction([
-    prisma.batchCost.deleteMany({ where: { batchId: id } }),
-    prisma.railLot.deleteMany({ where: { batchId: id } }),
-    prisma.batch.delete({ where: { id } }),
-  ]);
+  const before = await retryOnLockSetChange(() =>
+    prisma.$transaction(async (tx) => {
+      const candidateLots = await tx.railLot.findMany({
+        where: { batchId: id },
+        select: { id: true },
+      });
+      const candidateIds = sortedUniqueIds(candidateLots.map((lot) => lot.id));
+      await lockRailLots(tx, candidateIds);
+      await lockBatches(tx, [id]);
+      const batch = await tx.batch.findUnique({ where: { id } });
+      if (!batch) throw new Error("Партия не найдена");
+      const currentLots = await tx.railLot.findMany({
+        where: { batchId: id },
+        select: { id: true },
+      });
+      if (!sameSortedIds(candidateIds, currentLots.map((lot) => lot.id))) {
+        throw new LockSetChangedError();
+      }
+      if (await isCostFlowActive(tx)) {
+        throw new Error(COST_FLOW_DELETE_BATCH);
+      }
+      const [ops, deals] = await Promise.all([
+        tx.productionOperation.count({ where: { batchId: id } }),
+        tx.dealItem.count({ where: { batchId: id } }),
+      ]);
+      if (ops > 0 || deals > 0) {
+        throw new Error("Нельзя удалить: по партии есть движения материала или привязка к сделке.");
+      }
+      const lockedLots = await tx.railLot.findMany({
+        where: { batchId: id },
+        select: { id: true, remainingQuantity: true },
+      });
+      if (lockedLots.some((lot) => lot.remainingQuantity !== 0)) {
+        throw new Error(BATCH_NONZERO_REMAINING_DELETE_BLOCKED);
+      }
+      await tx.batchCost.deleteMany({ where: { batchId: id } });
+      await tx.railLot.deleteMany({ where: { batchId: id } });
+      await tx.batch.delete({ where: { id } });
+      return batch;
+    }),
+  );
   await writeChangeLog({
     entity: "Batch",
     entityId: id,

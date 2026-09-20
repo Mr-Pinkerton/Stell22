@@ -11,7 +11,8 @@ import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
 import { COST_FLOW_QTY_ONLY_WRITER } from "@/server/internal/cost-flow-pools";
 import { isCostFlowActive } from "@/server/internal/cost-flow-state";
-import { lockDetails } from "@/server/internal/inventory-integrity";
+import { lockDetails, lockDetailStocks } from "@/server/internal/inventory-integrity";
+import { DETAIL_NONZERO_STOCK_DELETE_BLOCKED } from "@/lib/destructive-delete-guards";
 import {
   assertUniqueActiveSkus,
   throwFriendlyActiveSkuConflict,
@@ -225,18 +226,28 @@ export async function restoreDetail(id: string): Promise<Detail> {
 
 export async function deleteDetail(id: string): Promise<void> {
   await requireAdmin();
-  const usedInProduct = await prisma.productDetail.count({ where: { detailId: id } });
-  if (usedInProduct > 0) {
-    throw new Error("Нельзя удалить: деталь входит в изделие. Используйте «В архив».");
-  }
 
   await prisma.$transaction(async (tx) => {
     await lockDetails(tx, [id]);
     const before = await tx.detail.findUnique({ where: { id } });
     if (!before) throw new Error("Деталь не найдена");
+    const usedInProduct = await tx.productDetail.count({ where: { detailId: id } });
+    if (usedInProduct > 0) {
+      throw new Error("Нельзя удалить: деталь входит в изделие. Используйте «В архив».");
+    }
+    const stockIds = await tx.detailStock.findMany({
+      where: { detailId: id },
+      select: { id: true },
+    });
+    await lockDetailStocks(
+      tx,
+      stockIds.map((row) => row.id),
+    );
+    const stocks = await tx.detailStock.findMany({ where: { detailId: id } });
     if (await isCostFlowActive(tx)) {
-      const stock = await tx.detailStock.findFirst({ where: { detailId: id } });
-      if (stock) throw new Error(COST_FLOW_QTY_ONLY_WRITER);
+      if (stocks.length > 0) throw new Error(COST_FLOW_QTY_ONLY_WRITER);
+    } else if (stocks.some((row) => row.quantity !== 0)) {
+      throw new Error(DETAIL_NONZERO_STOCK_DELETE_BLOCKED);
     }
     await tx.detailStock.deleteMany({ where: { detailId: id } });
     await tx.detail.delete({ where: { id } });

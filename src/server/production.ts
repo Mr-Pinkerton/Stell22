@@ -37,7 +37,7 @@ import {
 } from "@/server/internal/inventory-integrity";
 import { operationEarning, operationRatesFromSnapshots } from "@/lib/payroll";
 import { requireClientRequestId } from "@/lib/request-id";
-import { assertTorcovkaGenericDeleteAllowed } from "@/lib/torcovka-delete-policy";
+import { assertPhysicalProductionDeleteAllowed } from "@/lib/production-physical-delete-policy";
 import {
   assertCorrectionCommandIntegers,
   canonicalCorrectionReason,
@@ -472,20 +472,12 @@ export async function updateProductionLineQuantity(
 }
 
 /**
- * Удаление операции до выплаты с полной обратной разноской остатков:
- *  - TORCOVKA: снимаем произведённые детали с сырого остатка. Рейки НЕ
- *    возвращаются в пакет — они уже физически распилены (торцовка
- *    необратима), удаление лишь исправляет запись о том, что из них
- *    произвели. Взятые рейки при этом перестают учитываться как «взято»
- *    (операции больше нет), а `remainingQuantity` пакета не меняется — эта
- *    разница автоматически попадает в отчёт «Процент отхода» как списание
- *    сверх произведённого (`writtenOffM`, см. src/server/reports.ts и
- *    src/lib/waste.ts), а не гасится искусственным возвратом целых реек;
- *  - PRISADKA: возврат каждой строки в исходную комбинацию присадки;
- *  - UPAKOVKA: возврат деталей/крепежа/упаковки, снятие изделия со склада;
- *  - HOURS: просто удаление записи (не затрагивает склад).
- * Бросает, если материал уже ушёл дальше по цепочке (упаковка/продажа) —
- * в этом случае удаление невозможно без нарушения cost-integrity.
+ * Удаление операции до выплаты.
+ *  - TORCOVKA / PRISADKA / UPAKOVKA: fail-closed reject after lock/load and
+ *    before any physical reverse (`assertPhysicalProductionDeleteAllowed`).
+ *    Unreachable TORCOVKA reverse code is left in place.
+ *  - HOURS: hard-delete of the hours row (not physical).
+ * Paid operations remain rejected by the paid guard.
  */
 export async function deleteProductionOperation(id: string): Promise<void> {
   await requireAdmin();
@@ -500,7 +492,7 @@ export async function deleteProductionOperation(id: string): Promise<void> {
     });
     if (!op) throw new Error("Операция не найдена");
     if (op.isPaid) throw new Error("Нельзя удалить — операция уже выплачена");
-    assertTorcovkaGenericDeleteAllowed(op.type);
+    assertPhysicalProductionDeleteAllowed(op.type);
 
     if (op.type === "TORCOVKA") {
       const costFlowActive = await isCostFlowActive(tx);
