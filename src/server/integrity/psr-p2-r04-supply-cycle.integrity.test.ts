@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createIntegrityClients,
   ensureIntegritySchema,
+  integritySupplyShadowOff,
   resetIntegrityFinance,
 } from "./harness";
 import {
@@ -13,6 +14,7 @@ import {
 import { isOzonCancelledInThisSync } from "@/server/internal/supply-accounting-cycle";
 
 const enabled = Boolean(process.env.INTEGRITY_TEST_DATABASE_URL);
+const shadowOff = integritySupplyShadowOff();
 
 function isCheckViolation(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
@@ -183,6 +185,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
         sku: product.skuOzon,
         targetQty: 10,
         productId: product.id,
+        shadow: shadowOff,
       }),
     );
     let s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-a" } });
@@ -202,6 +205,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
         sku: product.skuOzon,
         targetQty: 10,
         productId: product.id,
+        shadow: shadowOff,
       }),
     );
     s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-a" } });
@@ -214,7 +218,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
         marketplace: "OZON",
         externalId: "ext-a",
         sku: product.skuOzon,
-      }),
+      }, { shadow: shadowOff }),
     );
     s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-a" } });
     expect(s.stockAccountingGeneration).toBe(1);
@@ -238,6 +242,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
         sku: product.skuOzon,
         targetQty: 10,
         productId: product.id,
+        shadow: shadowOff,
       }),
     );
     s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-a" } });
@@ -269,6 +274,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
         sku: product.skuOzon,
         targetQty: 10,
         productId: product.id,
+        shadow: shadowOff,
       }),
     );
     let s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-b" } });
@@ -290,6 +296,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
         sku: product.skuOzon,
         targetQty: 10,
         productId: product.id,
+        shadow: shadowOff,
       }),
     );
     s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-b" } });
@@ -306,7 +313,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
         marketplace: "OZON",
         externalId: "ext-b",
         sku: product.skuOzon,
-      }),
+      }, { shadow: shadowOff }),
     );
     s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-b" } });
     expect(s.stockAccountingGeneration).toBe(1);
@@ -325,6 +332,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
         sku: product.skuOzon,
         targetQty: 10,
         productId: product.id,
+        shadow: shadowOff,
       }),
     );
     s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-b" } });
@@ -355,6 +363,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
           sku: product.skuOzon,
           targetQty: 10,
           productId: product.id,
+          shadow: shadowOff,
         }),
       );
     await deduct();
@@ -373,7 +382,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
           marketplace: "OZON",
           externalId: "ext-c",
           sku: product.skuOzon,
-        }),
+        }, { shadow: shadowOff }),
       );
     const first = await cancel();
     const second = await cancel();
@@ -417,6 +426,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
         sku: product.skuOzon,
         targetQty: 10,
         productId: product.id,
+        shadow: shadowOff,
       }),
     );
     await prismaA.$transaction((tx) =>
@@ -426,6 +436,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
         sku: product.skuOzon,
         targetQty: 12,
         productId: product.id,
+        shadow: shadowOff,
       }),
     );
     const s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-d" } });
@@ -459,6 +470,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
           sku: product.skuOzon,
           targetQty: 8,
           productId: product.id,
+          shadow: shadowOff,
         }),
       );
     await Promise.all([run(prismaA), run(prismaB)]);
@@ -499,11 +511,11 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
     const key = { marketplace: "OZON", externalId: "ext-f", sku: product.skuOzon };
     await Promise.all([
       prismaA.$transaction((tx) =>
-        applySupplyDeduction(tx, { ...key, targetQty: 10, productId: product.id }),
+        applySupplyDeduction(tx, { ...key, targetQty: 10, productId: product.id, shadow: shadowOff }),
       ),
       prismaB.$transaction(async (tx) => {
         await lockSuppliesInOrder(tx, [key]);
-        return applyOzonSupplyCancellation(tx, key);
+        return applyOzonSupplyCancellation(tx, key, { shadow: shadowOff });
       }),
     ]);
     const s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-f" } });
@@ -552,10 +564,11 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
           ...key,
           targetQty: 10,
           productId: product.id,
+          shadow: shadowOff,
         });
       }
       for (const key of cancelRows) {
-        await applyOzonSupplyCancellation(tx, key);
+        await applyOzonSupplyCancellation(tx, key, { shadow: shadowOff });
       }
     });
 
@@ -589,6 +602,7 @@ describe.skipIf(!enabled)("PSR-P2 R-04 Supply stock-accounting cycle", () => {
         sku: product.skuWb,
         targetQty: 4,
         productId: product.id,
+        shadow: shadowOff,
       }),
     );
     const s = await prismaA.supply.findFirstOrThrow({ where: { externalId: "ext-wb" } });

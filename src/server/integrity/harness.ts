@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
+import { userMovementActorFromAdmin } from "@/server/internal/inventory-movement-actor";
 
 if (!process.env.SESSION_SECRET) {
   process.env.SESSION_SECRET = "stell22-integrity-test-session-secret";
@@ -68,6 +69,17 @@ export function createIntegrityClients(): { prismaA: PrismaClient; prismaB: Pris
 
 /** ChangeLog.userId FK: correction path now records requireAdmin().id. */
 export const INTEGRITY_ADMIN_USER_ID = "integrity-admin";
+
+/** Explicit SHADOW OFF for helper-level integrity tests. Undefined is not OFF. */
+export function integritySupplyShadowOff() {
+  return {
+    active: false as const,
+    actor: userMovementActorFromAdmin({
+      id: INTEGRITY_ADMIN_USER_ID,
+      name: "Admin",
+    }),
+  };
+}
 
 export async function ensureIntegrityAdminUser(db: PrismaClient): Promise<void> {
   await db.user.upsert({

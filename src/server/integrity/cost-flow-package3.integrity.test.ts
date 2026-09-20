@@ -41,6 +41,7 @@ import { conductInventory } from "@/server/warehouse";
 import {
   createIntegrityClients,
   ensureIntegritySchema,
+  integritySupplyShadowOff,
   resetIntegrityInventory,
 } from "./harness";
 
@@ -798,6 +799,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
         sku: `sku-${world.suffix}`,
         targetQty: 1,
         productId: world.product.id,
+        shadow: integritySupplyShadowOff(),
       }),
     ).rejects.toThrow(COST_FLOW_QTY_ONLY_WRITER);
   });

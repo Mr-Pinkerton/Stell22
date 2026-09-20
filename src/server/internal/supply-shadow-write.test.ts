@@ -3,8 +3,10 @@ import { canonicalizeMovementTarget, effectKeyV1 } from "@/server/internal/inven
 import { userMovementActorFromAdmin } from "@/server/internal/inventory-movement-actor";
 import {
   SUPPLY_SHADOW_ACTOR_REQUIRED,
+  SUPPLY_SHADOW_CONTEXT_REQUIRED,
   SUPPLY_SHADOW_GATE_INVARIANT_VIOLATION,
   assertSupplyShadowGatewayResult,
+  requireSupplyShadowContext,
   requireSupplyUserActor,
   supplyConsumeCausationSnapshotV1,
   supplyConsumeEffectKey,
@@ -192,6 +194,29 @@ describe("Supply USER actor seam", () => {
         actorDisplaySnapshot: "Работник",
       }),
     ).toThrow(SUPPLY_SHADOW_ACTOR_REQUIRED);
+  });
+});
+
+describe("Supply SHADOW required context", () => {
+  it("rejects omitted or malformed gate snapshots instead of treating them as OFF", () => {
+    expect(SUPPLY_SHADOW_CONTEXT_REQUIRED).toBe("SUPPLY_SHADOW_CONTEXT_REQUIRED");
+    expect(() => requireSupplyShadowContext(undefined)).toThrow(SUPPLY_SHADOW_CONTEXT_REQUIRED);
+    expect(() => requireSupplyShadowContext(null)).toThrow(SUPPLY_SHADOW_CONTEXT_REQUIRED);
+    expect(() => requireSupplyShadowContext({} as never)).toThrow(SUPPLY_SHADOW_CONTEXT_REQUIRED);
+    expect(() =>
+      requireSupplyShadowContext({
+        actor: userMovementActorFromAdmin({ id: "u1", name: "Admin" }),
+      } as never),
+    ).toThrow(SUPPLY_SHADOW_CONTEXT_REQUIRED);
+  });
+
+  it("accepts an explicit ACTIVE or OFF decision with a USER actor", () => {
+    const actor = userMovementActorFromAdmin({ id: "u1", name: "Admin" });
+    expect(requireSupplyShadowContext({ active: false, actor })).toEqual({
+      active: false,
+      actor,
+    });
+    expect(requireSupplyShadowContext({ active: true, actor }).active).toBe(true);
   });
 });
 

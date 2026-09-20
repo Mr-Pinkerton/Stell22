@@ -12,6 +12,7 @@ import { appendShadowInventoryMovements } from "@/server/internal/inventory-move
 export const SUPPLY_SHADOW_GATE_INVARIANT_VIOLATION =
   "SUPPLY_SHADOW_GATE_INVARIANT_VIOLATION";
 export const SUPPLY_SHADOW_ACTOR_REQUIRED = "SUPPLY_SHADOW_ACTOR_REQUIRED";
+export const SUPPLY_SHADOW_CONTEXT_REQUIRED = "SUPPLY_SHADOW_CONTEXT_REQUIRED";
 export const SUPPLY_CAUSATION_DOMAIN = "SUPPLY" as const;
 export const SUPPLY_CONSUME_TYPE = "CONSUME" as const;
 export const SUPPLY_RESTORE_TYPE = "RESTORE" as const;
@@ -79,6 +80,29 @@ export function requireSupplyUserActor(
     throw new Error(SUPPLY_SHADOW_ACTOR_REQUIRED);
   }
   return actor;
+}
+
+export type SupplyShadowContext = {
+  active: boolean;
+  actor: MovementActorSnapshot;
+};
+
+/**
+ * Explicit outer-gate decision. `undefined` is not OFF.
+ */
+export function requireSupplyShadowContext(
+  shadow: SupplyShadowContext | null | undefined,
+): {
+  active: boolean;
+  actor: Extract<MovementActorSnapshot, { actorKind: "USER" }>;
+} {
+  if (shadow == null || typeof shadow.active !== "boolean") {
+    throw new Error(SUPPLY_SHADOW_CONTEXT_REQUIRED);
+  }
+  return {
+    active: shadow.active,
+    actor: requireSupplyUserActor(shadow.actor),
+  };
 }
 
 export function supplyConsumeQualifier(

@@ -1,47 +1,15 @@
 /**
- * Запуск синхронизации маркетплейсов из CLI (без cookie-сессии).
- * npx tsx scripts/run-mp-sync.ts
+ * Physical marketplace sync from CLI is disabled.
+ * Use the authenticated application action syncMarketplaces().
  */
-import { prisma } from "../src/server/db";
-import { userMovementActorFromAdmin } from "../src/server/internal/inventory-movement-actor";
-import { syncMarketplacesAsUserInternal } from "../src/server/internal/marketplace-sync";
+export const MP_SYNC_CLI_PHYSICAL_EXECUTION_DISABLED =
+  "MP_SYNC_CLI_PHYSICAL_EXECUTION_DISABLED";
 
 if (process.argv.includes("--import-only") || process.env.CLI_IMPORT_SMOKE === "1") {
   console.log("CLI import ok: scripts/run-mp-sync.ts");
   process.exit(0);
 }
 
-async function main() {
-  const admin = await prisma.user.findFirst({
-    where: { role: "ADMIN" },
-    select: { id: true, email: true, name: true },
-  });
-  if (!admin) {
-    console.log("FAIL: нет пользователя ADMIN");
-    process.exit(1);
-  }
-
-  console.log(`Синхронизация от ${admin.email}…`);
-  const actor = userMovementActorFromAdmin(admin);
-  const res = await syncMarketplacesAsUserInternal(actor);
-
-  console.log(JSON.stringify(res, null, 2));
-
-  const lastLog = await prisma.systemLog.findFirst({
-    where: { source: "Маркетплейсы" },
-    orderBy: { createdAt: "desc" },
-    select: { level: true, message: true, details: true, createdAt: true },
-  });
-  if (lastLog) {
-    console.log("\nПоследняя запись SystemLog:");
-    console.log(`  ${lastLog.createdAt.toISOString()} [${lastLog.level}] ${lastLog.message}`);
-  }
-
-  await prisma.$disconnect();
-  process.exit(res.ok ? 0 : 1);
-}
-
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+console.error(MP_SYNC_CLI_PHYSICAL_EXECUTION_DISABLED);
+console.error("Use the authenticated application action syncMarketplaces().");
+process.exit(1);

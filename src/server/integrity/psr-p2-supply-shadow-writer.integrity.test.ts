@@ -19,10 +19,12 @@ import {
 } from "@/server/internal/inventory-movement-shadow-write";
 import { persistMarketplaceSyncInTransaction } from "@/server/internal/marketplace-sync";
 import {
+  applyOzonSupplyCancellation,
   applySupplyDeduction,
   lockSuppliesInOrder,
   SUPPLY_CANCEL_PRODUCT_BINDING_REQUIRED,
 } from "@/server/internal/supply-deduct";
+import { SUPPLY_SHADOW_CONTEXT_REQUIRED } from "@/server/internal/supply-shadow-write";
 import {
   supplyConsumeCausationSnapshotV1,
   supplyConsumeEffectKey,
@@ -900,14 +902,44 @@ describe.skipIf(!enabled)("PSR-P2 Supply SHADOW writer", () => {
     expect((await prismaA.inventoryMovement.findFirstOrThrow()).quantityDelta).toBe(-2);
   });
 
-  it("direct applySupplyDeduction without outer gate snapshot stays movement-silent", async () => {
-    const product = await seedProduct(`dir-${Date.now()}`, "OZ-DIR");
+  it("omitted SHADOW context cannot silently mutate ProductStock", async () => {
+    const product = await seedProduct(`omit-${Date.now()}`, "OZ-OMIT");
     await prismaA.productStock.create({ data: { productId: product.id, quantity: 5 } });
     await prismaA.supply.create({
       data: {
         marketplace: "OZON",
-        externalId: "dir",
-        sku: "OZ-DIR",
+        externalId: "omit",
+        sku: "OZ-OMIT",
+        productId: product.id,
+        quantity: 3,
+        status: "SHIPPED",
+        createdAt: new Date("2026-09-01T00:00:00.000Z"),
+      },
+    });
+    await setShadowGate(true);
+    await expect(
+      prismaA.$transaction(async (tx) => {
+        await applySupplyDeduction(tx, {
+          marketplace: "OZON",
+          externalId: "omit",
+          sku: "OZ-OMIT",
+          targetQty: 3,
+          productId: product.id,
+        } as never);
+      }, txOpts),
+    ).rejects.toThrow(SUPPLY_SHADOW_CONTEXT_REQUIRED);
+    expect((await prismaA.productStock.findUniqueOrThrow({ where: { productId: product.id } })).quantity).toBe(5);
+    expect(await prismaA.inventoryMovement.count()).toBe(0);
+  });
+
+  it("explicit helper SHADOW OFF deducts physically with zero movements", async () => {
+    const product = await seedProduct(`hoff-${Date.now()}`, "OZ-HOFF");
+    await prismaA.productStock.create({ data: { productId: product.id, quantity: 5 } });
+    await prismaA.supply.create({
+      data: {
+        marketplace: "OZON",
+        externalId: "hoff",
+        sku: "OZ-HOFF",
         productId: product.id,
         quantity: 3,
         status: "SHIPPED",
@@ -918,13 +950,93 @@ describe.skipIf(!enabled)("PSR-P2 Supply SHADOW writer", () => {
     await prismaA.$transaction(async (tx) => {
       await applySupplyDeduction(tx, {
         marketplace: "OZON",
-        externalId: "dir",
-        sku: "OZ-DIR",
+        externalId: "hoff",
+        sku: "OZ-HOFF",
         targetQty: 3,
         productId: product.id,
+        shadow: { active: false, actor },
       });
     }, txOpts);
     expect((await prismaA.productStock.findUniqueOrThrow({ where: { productId: product.id } })).quantity).toBe(2);
     expect(await prismaA.inventoryMovement.count()).toBe(0);
+  });
+
+  it("explicit helper SHADOW ACTIVE deducts and writes the consume movement", async () => {
+    const product = await seedProduct(`hon-${Date.now()}`, "OZ-HON");
+    await prismaA.productStock.create({ data: { productId: product.id, quantity: 5 } });
+    await prismaA.supply.create({
+      data: {
+        marketplace: "OZON",
+        externalId: "hon",
+        sku: "OZ-HON",
+        productId: product.id,
+        quantity: 3,
+        status: "SHIPPED",
+        createdAt: new Date("2026-09-01T00:00:00.000Z"),
+      },
+    });
+    await setShadowGate(true);
+    await prismaA.$transaction(async (tx) => {
+      await applySupplyDeduction(tx, {
+        marketplace: "OZON",
+        externalId: "hon",
+        sku: "OZ-HON",
+        targetQty: 3,
+        productId: product.id,
+        shadow: { active: true, actor },
+      });
+    }, txOpts);
+    expect((await prismaA.productStock.findUniqueOrThrow({ where: { productId: product.id } })).quantity).toBe(2);
+    expect(await prismaA.inventoryMovement.count()).toBe(1);
+    expect((await prismaA.inventoryMovement.findFirstOrThrow()).quantityDelta).toBe(-3);
+  });
+
+  it("explicit helper restore OFF/ACTIVE and omitted context follow the same contract", async () => {
+    const product = await seedProduct(`rsth-${Date.now()}`, "OZ-RSTH");
+    await prismaA.productStock.create({ data: { productId: product.id, quantity: 1 } });
+    const key = { marketplace: "OZON" as const, externalId: "rsth", sku: "OZ-RSTH" };
+    await prismaA.supply.create({
+      data: {
+        ...key,
+        productId: product.id,
+        quantity: 4,
+        status: "SHIPPED",
+        deductedQty: 4,
+        shortfallQty: 0,
+        stockAccountingGeneration: 1,
+        stockAccountingOpen: true,
+        createdAt: new Date("2026-09-01T00:00:00.000Z"),
+      },
+    });
+    await setShadowGate(true);
+    await expect(
+      prismaA.$transaction(async (tx) => {
+        await applyOzonSupplyCancellation(tx, key, {} as never);
+      }, txOpts),
+    ).rejects.toThrow(SUPPLY_SHADOW_CONTEXT_REQUIRED);
+    expect((await prismaA.productStock.findUniqueOrThrow({ where: { productId: product.id } })).quantity).toBe(1);
+    expect(await prismaA.inventoryMovement.count()).toBe(0);
+
+    await prismaA.$transaction(async (tx) => {
+      await applyOzonSupplyCancellation(tx, key, { shadow: { active: false, actor } });
+    }, txOpts);
+    expect((await prismaA.productStock.findUniqueOrThrow({ where: { productId: product.id } })).quantity).toBe(5);
+    expect(await prismaA.inventoryMovement.count()).toBe(0);
+
+    await prismaA.supply.update({
+      where: { marketplace_externalId_sku: key },
+      data: {
+        deductedQty: 4,
+        shortfallQty: 0,
+        stockAccountingOpen: true,
+        status: "SHIPPED",
+      },
+    });
+    await prismaA.$transaction(async (tx) => {
+      await applyOzonSupplyCancellation(tx, key, { shadow: { active: true, actor } });
+    }, txOpts);
+    expect((await prismaA.productStock.findUniqueOrThrow({ where: { productId: product.id } })).quantity).toBe(9);
+    expect(await prismaA.inventoryMovement.count()).toBe(1);
+    expect((await prismaA.inventoryMovement.findFirstOrThrow()).quantityDelta).toBe(4);
   });
 });

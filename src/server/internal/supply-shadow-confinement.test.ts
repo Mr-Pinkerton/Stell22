@@ -105,4 +105,35 @@ describe("Supply SHADOW writer confinement", () => {
     expect(read("src/server/terminal.ts")).not.toContain("appendShadowInventoryMovements");
     expect(read("src/server/production.ts")).not.toContain("appendShadowInventoryMovements");
   });
+
+  it("runtime Supply physical helpers stay behind persistMarketplaceSyncInTransaction", () => {
+    const runtime = walkTs("src");
+    expect(
+      runtime.filter((rel) => read(rel).includes("runSupplySyncAccounting(")).sort(),
+    ).toEqual([
+      "src/server/internal/marketplace-sync.ts",
+      "src/server/internal/supply-deduct.ts",
+    ]);
+    expect(
+      runtime.filter((rel) => /applySupplyDeduction\s*\(/.test(read(rel))).sort(),
+    ).toEqual(["src/server/internal/supply-deduct.ts"]);
+    expect(
+      runtime.filter((rel) => /applyOzonSupplyCancellation\s*\(/.test(read(rel))).sort(),
+    ).toEqual(["src/server/internal/supply-deduct.ts"]);
+
+    const persist = read("src/server/internal/marketplace-sync.ts").slice(
+      read("src/server/internal/marketplace-sync.ts").indexOf(
+        "export async function persistMarketplaceSyncInTransaction",
+      ),
+    );
+    expect(persist).toContain("runSupplySyncAccounting(tx,");
+    expect(persist).toContain("shadowWriteActive");
+    expect(persist).toContain("actor");
+
+    const deduct = read("src/server/internal/supply-deduct.ts");
+    expect(deduct).toContain("shadow: SupplyShadowContext");
+    expect(deduct).toContain("requireSupplyShadowContext");
+    expect(deduct).not.toContain("shadowWriteActive?: boolean");
+    expect(deduct).not.toContain("actor?: MovementActorSnapshot");
+  });
 });
