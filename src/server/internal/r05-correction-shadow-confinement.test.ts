@@ -90,6 +90,7 @@ describe("R-05 correction SHADOW writer confinement", () => {
       "src/server/internal/inventory-movement-shadow-gateway.ts",
       "src/server/internal/production-shadow-write.ts",
       "src/server/internal/r05-correction-shadow-write.ts",
+      "src/server/internal/raw-purchase-shadow-write.ts",
       "src/server/internal/supply-shadow-write.ts",
     ]);
     expect(read("src/server/purchases.ts")).not.toContain("appendShadowInventoryMovements");
