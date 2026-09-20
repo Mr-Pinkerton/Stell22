@@ -192,12 +192,23 @@ describe("assertPurchaseCommandMatch", () => {
 
   it("accepts identical admin + snapshot even when JSON object key order differs", () => {
     const snap = canonicalBatchCreateSnapshot(batchValues);
-    const reordered = JSON.parse(JSON.stringify(snap)) as typeof snap;
+    const reordered = {
+      note: snap.note,
+      v: snap.v,
+      d: snap.d,
+      name: snap.name,
+      materialId: snap.materialId,
+      purchaseDateInput: snap.purchaseDateInput,
+      purchaseCost: snap.purchaseCost,
+      priceSort1: snap.priceSort1,
+      priceSort2: snap.priceSort2,
+      rails: snap.rails,
+    };
     expect(() =>
       assertPurchaseCommandMatch({
         storedAdminUserId: "a",
         incomingAdminUserId: "a",
-        storedSnapshot: { note: reordered.note, v: reordered.v, d: reordered.d, ...reordered },
+        storedSnapshot: reordered,
         incomingSnapshot: snap,
       }),
     ).not.toThrow();
