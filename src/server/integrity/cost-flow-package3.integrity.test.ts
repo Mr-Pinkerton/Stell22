@@ -39,6 +39,7 @@ import {
 } from "@/lib/production-physical-delete-policy";
 import { deleteDetail } from "@/server/nomenclature";
 import { deleteProductionOperation, updateProductionLineQuantity } from "@/server/production";
+import { editPhysicalQuantityByLineIndex } from "./physical-quantity-edit-call";
 import { createSimplePurchase } from "@/server/purchases";
 import { submitPrisadka, submitTorcovka, submitUpakovka } from "@/server/terminal";
 import { conductInventory } from "@/server/warehouse";
@@ -344,7 +345,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       },
       data: { quantity: { increment: 2 } },
     });
-    await updateProductionLineQuantity(pris.id, 0, 2);
+    await editPhysicalQuantityByLineIndex(prismaA,pris.id, 0, 2);
     const prisAfter = await prismaA.productionOperation.findUniqueOrThrow({
       where: { id: pris.id },
       include: { lines: true },
@@ -366,7 +367,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       picks: [{ productId: world.product.id, quantity: 1 }],
     });
     const pack = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "UPAKOVKA" } });
-    await updateProductionLineQuantity(pack.id, 0, 2);
+    await editPhysicalQuantityByLineIndex(prismaA,pack.id, 0, 2);
     const packAfter = await prismaA.productionOperation.findUniqueOrThrow({ where: { id: pack.id } });
     expect(packAfter.productQty).toBe(2);
     expect(packAfter.receiptMaterialValue).toBeNull();
@@ -853,7 +854,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       where: { type: "PRISADKA" },
       include: { lines: { orderBy: { id: "asc" } } },
     });
-    await updateProductionLineQuantity(op.id, 0, 2);
+    await editPhysicalQuantityByLineIndex(prismaA,op.id, 0, 2);
     const after = await prismaA.productionOperation.findUniqueOrThrow({
       where: { id: op.id },
       include: { lines: true },
@@ -1283,7 +1284,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     });
     expect(op.lines.some((l) => l.sourceIsBlank)).toBe(true);
     expect(op.lines.some((l) => !l.sourceIsBlank)).toBe(true);
-    await updateProductionLineQuantity(op.id, 0, 2);
+    await editPhysicalQuantityByLineIndex(prismaA,op.id, 0, 2);
     const corrected = await prismaA.productionOperation.findUniqueOrThrow({
       where: { id: op.id },
       include: { lines: true },
@@ -1790,7 +1791,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     });
     const torcevIndex = op.lines.findIndex((l) => l.prisadkaTorcevaya);
     expect(torcevIndex).toBeGreaterThanOrEqual(0);
-    await updateProductionLineQuantity(op.id, torcevIndex, 1);
+    await editPhysicalQuantityByLineIndex(prismaA,op.id, torcevIndex, 1);
 
     const corrected = await prismaA.productionOperation.findUniqueOrThrow({
       where: { id: op.id },
@@ -1918,7 +1919,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       include: { lines: { orderBy: { id: "asc" } } },
     });
     const torcevIndex = op.lines.findIndex((l) => l.prisadkaTorcevaya);
-    await expect(updateProductionLineQuantity(op.id, torcevIndex, 1)).rejects.toThrow(
+    await expect(editPhysicalQuantityByLineIndex(prismaA,op.id, torcevIndex, 1)).rejects.toThrow(
       "Нельзя изменить/удалить: деталь уже использована в упаковке или дальнейшей присадке",
     );
     expect(await chainTopology(both.id, world.material.id)).toEqual({
@@ -1954,7 +1955,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       include: { lines: { orderBy: { id: "asc" } } },
     });
     const ploskIndex = op.lines.findIndex((l) => l.prisadkaPloskost);
-    await updateProductionLineQuantity(op.id, ploskIndex, 1);
+    await editPhysicalQuantityByLineIndex(prismaA,op.id, ploskIndex, 1);
     expect(await chainTopology(both.id, world.material.id)).toEqual({
       blank: 0,
       tf: 1,
@@ -2138,7 +2139,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       where: { id: world.emp.id },
       data: { ratePrisadkaTorcev: 99, ratePrisadkaPloskt: 88 },
     });
-    await expect(updateProductionLineQuantity(op.id, torcevIndex, 1)).rejects.toThrow(
+    await expect(editPhysicalQuantityByLineIndex(prismaA,op.id, torcevIndex, 1)).rejects.toThrow(
       "Нельзя изменить/удалить: деталь уже использована в упаковке или дальнейшей присадке",
     );
     expect(await chainTopology(both.id, world.material.id)).toEqual({
@@ -2147,7 +2148,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       ft: 0,
       tt: 2,
     });
-    await updateProductionLineQuantity(op.id, ploskIndex, 1);
+    await editPhysicalQuantityByLineIndex(prismaA,op.id, ploskIndex, 1);
     expect(await chainTopology(both.id, world.material.id)).toEqual({
       blank: 0,
       tf: 1,
@@ -2274,7 +2275,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     });
     const destBAfterExt = await prismaA.detailStock.findUniqueOrThrow({ where: { id: destB.id } });
     expect(destBAfterExt.costVersion).toBe(historicalB + 1);
-    await updateProductionLineQuantity(op.id, lineAIndex, 2);
+    await editPhysicalQuantityByLineIndex(prismaA,op.id, lineAIndex, 2);
     const afterCorr = await prismaA.productionOperation.findUniqueOrThrow({
       where: { id: op.id },
       include: { lines: true },
@@ -2327,7 +2328,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     });
     expect(torcevLine.outputCostVersion).toBe(midBefore.costVersion);
     const historicalMid = midBefore.costVersion;
-    await updateProductionLineQuantity(op.id, ploskIndex, 1);
+    await editPhysicalQuantityByLineIndex(prismaA,op.id, ploskIndex, 1);
     const midAfter = await prismaA.detailStock.findUniqueOrThrow({
       where: { id: midBefore.id },
     });
@@ -2388,7 +2389,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       where: { id: mid.id },
       data: { costVersion: mid.costVersion + 1 },
     });
-    await expect(updateProductionLineQuantity(op.id, ploskIndex, 1)).rejects.toThrow(
+    await expect(editPhysicalQuantityByLineIndex(prismaA,op.id, ploskIndex, 1)).rejects.toThrow(
       COST_FLOW_VERSION_MISMATCH,
     );
     const afterFail = await prismaA.productionOperation.findUniqueOrThrow({
@@ -2456,7 +2457,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     const ploskIndex = op.lines.findIndex((l) => l.prisadkaPloskost);
     expect(ploskIndex).toBeGreaterThanOrEqual(0);
     const results = await raceSettled("correction-vs-intermediate-writer", [
-      updateProductionLineQuantity(op.id, ploskIndex, 1),
+      editPhysicalQuantityByLineIndex(prismaA,op.id, ploskIndex, 1),
       submitPrisadka({
         employeeId: world.emp.id,
         clientRequestId: `ver-chain-race-b-${world.suffix}`,
@@ -2706,7 +2707,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
         },
       },
     });
-    await expect(updateProductionLineQuantity(op.id, 0, 1)).rejects.toThrow(INVENTORY_BOUNDARY);
+    await expect(editPhysicalQuantityByLineIndex(prismaA,op.id, 0, 1)).rejects.toThrow(INVENTORY_BOUNDARY);
     const after = await prismaA.productionOperation.findUniqueOrThrow({
       where: { id: op.id },
       include: { lines: true },

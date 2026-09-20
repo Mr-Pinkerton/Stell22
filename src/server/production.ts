@@ -8,36 +8,32 @@ import { requireAdmin } from "@/server/session";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { lockBatches, lockProductionOperations } from "@/server/internal/finance-operations";
 import {
-  correctActivePrisadkaLine,
   reverseActivePrisadkaOperation,
   reverseActiveUpakovkaOperation,
 } from "@/server/internal/cost-flow-downstream";
-import {
-  correctActiveTorcovkaLineQuantityInTx,
-  reverseActiveTorcovkaStockInTx,
-} from "@/server/internal/cost-flow-raw";
+import { reverseActiveTorcovkaStockInTx } from "@/server/internal/cost-flow-raw";
 import { isCostFlowActive } from "@/server/internal/cost-flow-state";
-import { D } from "@/lib/cost";
 import { maybeFreezeBatch } from "@/server/internal/cost";
-import {
-  applyPrisadkaPick,
-  applyUpakovkaPrepared,
-  reversePrisadkaLine,
-  reverseUpakovkaOperation,
-} from "@/server/internal/production-reversal";
+import { reversePrisadkaLine, reverseUpakovkaOperation } from "@/server/internal/production-reversal";
 import {
   assertTorcovkaBlankInventoryBoundary,
   blankSpecSortKey,
-  preparePrisadkaEdit,
   preparePrisadkaReverse,
   prepareTorcovkaBlankMutation,
-  prepareUpakovkaEdit,
-  snapshotUpakovkaApply,
   type BlankSpec,
 } from "@/server/internal/inventory-integrity";
 import { operationEarning, operationRatesFromSnapshots } from "@/lib/payroll";
 import { requireClientRequestId } from "@/lib/request-id";
 import { assertPhysicalProductionDeleteAllowed } from "@/lib/production-physical-delete-policy";
+import {
+  PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND,
+  assertQuantityEditIntegers,
+  computeQuantityEditStateFingerprint,
+  normalizeTargetLineId,
+  type ProductionQuantityEditInput,
+  type QuantityEditResult,
+} from "@/server/internal/production-quantity-edit";
+import { editProductionOperationQuantityInTransaction } from "@/server/internal/production-quantity-edit-tx";
 import {
   assertCorrectionCommandIntegers,
   canonicalCorrectionReason,
@@ -46,7 +42,6 @@ import {
 } from "@/server/internal/production-operation-correction";
 import { userMovementActorFromAdmin } from "@/server/internal/inventory-movement-actor";
 import { correctTorcovkaRailsTakenInTransaction } from "@/server/internal/correct-torcovka-rails-taken-tx";
-import { isOverRailLength } from "@/lib/torcovka";
 import { dayKey } from "@/lib/entries";
 import type {
   ProductionChangeLogEntry,
@@ -65,7 +60,9 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-type OpFull = Prisma.ProductionOperationGetPayload<{ include: { lines: true } }>;
+type OpFull = Prisma.ProductionOperationGetPayload<{
+  include: { lines: true; nomenclatureLines: true };
+}>;
 
 function requireTorcovkaBlankSpecs(lines: OpFull["lines"]): BlankSpec[] {
   return lines.map((l) => {
@@ -121,6 +118,7 @@ function serializeRow(op: OpFull, maps: RefMaps): ProductionEntryRow {
   const detailLines: ProductionDetailLine[] =
     op.type === "TORCOVKA" || op.type === "PRISADKA"
       ? op.lines.map((l) => ({
+          id: l.id,
           // Торцовка — заготовка (по длине), присадка — конкретная деталь.
           detailName: l.detailId
             ? (maps.detail.get(l.detailId)?.name ?? "—")
@@ -128,6 +126,11 @@ function serializeRow(op: OpFull, maps: RefMaps): ProductionEntryRow {
           quantity: l.quantity,
           prisadkaTorcevaya: l.prisadkaTorcevaya,
           prisadkaPloskost: l.prisadkaPloskost,
+          editStateFingerprint: computeQuantityEditStateFingerprint({
+            operationId: op.id,
+            operationType: op.type,
+            line: l,
+          }),
         }))
       : [];
 
@@ -152,6 +155,18 @@ function serializeRow(op: OpFull, maps: RefMaps): ProductionEntryRow {
         : undefined,
     batchFrozenAt: op.batchId ? (maps.batchFrozenAt.get(op.batchId) ?? null) : undefined,
     productName: op.productId ? maps.productName.get(op.productId) : undefined,
+    productQty: op.productQty ?? undefined,
+    editStateFingerprint:
+      op.type === "UPAKOVKA"
+        ? computeQuantityEditStateFingerprint({
+            operationId: op.id,
+            operationType: op.type,
+            productId: op.productId,
+            productQty: op.productQty,
+            lines: op.lines,
+            nomenclatureLines: op.nomenclatureLines,
+          })
+        : undefined,
     detailLines: detailLines.length > 0 ? detailLines : undefined,
     changeLog: maps.logs.get(op.id) ?? [],
   };
@@ -205,7 +220,7 @@ async function buildMaps(ops: OpFull[]): Promise<RefMaps> {
 export async function getProductionEntries(): Promise<ProductionEntryRow[]> {
   await requireAdmin();
   const ops = await prisma.productionOperation.findMany({
-    include: { lines: true },
+    include: { lines: true, nomenclatureLines: true },
     orderBy: { createdAt: "desc" },
   });
   const maps = await buildMaps(ops);
@@ -215,260 +230,100 @@ export async function getProductionEntries(): Promise<ProductionEntryRow[]> {
 async function reloadRow(id: string): Promise<ProductionEntryRow> {
   const op = await prisma.productionOperation.findUniqueOrThrow({
     where: { id },
-    include: { lines: true },
+    include: { lines: true, nomenclatureLines: true },
   });
   const maps = await buildMaps([op]);
   return serializeRow(op, maps);
 }
 
 /**
- * Правка количества строки операции до выплаты.
- *  - TORCOVKA: корректируется сырой остаток произведённой детали.
- *  - HOURS / UPAKOVKA: одна синтетическая строка (часы / изделия), правка —
- *    как в HOURS для часов; для УПАКОВКИ — полная обратная разноска старого
- *    количества и повторное списание материалов под новое (см. ниже).
- *  - PRISADKA: обратная разноска конкретной строки (в исходную комбинацию
- *    присадки) и повторное списание под новое количество — источники могут
- *    оказаться другими (актуальный остаток на момент правки).
+ * HOURS quantity edit only. Physical A/B/C must use
+ * `editProductionOperationQuantity` (stable target / CAS / requestId).
  */
 export async function updateProductionLineQuantity(
   id: string,
-  lineIndex: number,
+  _lineIndex: number,
   newQty: number,
 ): Promise<ProductionEntryRow> {
   await requireAdmin();
   if (!(newQty > 0)) throw new Error("Количество должно быть положительным");
 
-  let enqueueBatchId: string | null = null;
-  let revalidateReports = false;
+  const peek = await prisma.productionOperation.findUnique({
+    where: { id },
+    select: { id: true, type: true },
+  });
+  if (!peek) throw new Error("Операция не найдена");
+  if (peek.type !== "HOURS") {
+    throw new Error(PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND);
+  }
 
   await prisma.$transaction(async (tx) => {
     await lockProductionOperations(tx, [id]);
-    const op = await tx.productionOperation.findUnique({
-      where: { id },
-      include: { lines: { orderBy: { id: "asc" } } },
-    });
+    const op = await tx.productionOperation.findUnique({ where: { id } });
     if (!op) throw new Error("Операция не найдена");
     if (op.isPaid) throw new Error("Нельзя изменить — операция уже выплачена");
-
-    if (op.type === "HOURS") {
-      const old = num(op.hours);
-      await tx.productionOperation.update({ where: { id }, data: { hours: newQty } });
-      await writeChangeLog(
-        {
-          entity: "ProductionOperation",
-          entityId: id,
-          newValues: { field: "Количество", oldValue: old, newValue: newQty },
-        },
-        tx,
-      );
-      return;
+    if (op.type !== "HOURS") {
+      throw new Error(PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND);
     }
-
-    if (op.type === "UPAKOVKA") {
-      const newQtyInt = Math.round(newQty);
-      const oldQty = op.productQty ?? 0;
-      if (!op.productId) throw new Error("У операции не указано изделие");
-      if (newQtyInt === oldQty) return;
-
-      const [detailLines, nomenclatureLines] = await Promise.all([
-        tx.operationDetailLine.findMany({ where: { operationId: id } }),
-        tx.operationNomenclatureLine.findMany({ where: { operationId: id } }),
-      ]);
-      if (await isCostFlowActive(tx)) {
-        const prepared = await snapshotUpakovkaApply(tx, op.productId);
-        await reverseActiveUpakovkaOperation(tx, {
-          ...op,
-          lines: detailLines,
-          nomenclatureLines,
-        });
-        await tx.operationDetailLine.deleteMany({ where: { operationId: id } });
-        await tx.operationNomenclatureLine.deleteMany({ where: { operationId: id } });
-        await applyUpakovkaPrepared(tx, id, newQtyInt, prepared);
-      } else {
-        const prepared = await prepareUpakovkaEdit(
-          tx,
-          op.createdAt,
-          op.productId,
-          detailLines,
-          nomenclatureLines,
-        );
-        await reverseUpakovkaOperation(
-          tx,
-          op.productId,
-          oldQty,
-          detailLines,
-          nomenclatureLines,
-          op.createdAt,
-        );
-        await tx.operationDetailLine.deleteMany({ where: { operationId: id } });
-        await tx.operationNomenclatureLine.deleteMany({ where: { operationId: id } });
-        await applyUpakovkaPrepared(tx, id, newQtyInt, prepared);
-      }
-      await tx.productionOperation.update({ where: { id }, data: { productQty: newQtyInt } });
-      await writeChangeLog(
-        {
-          entity: "ProductionOperation",
-          entityId: id,
-          newValues: { field: "Количество", oldValue: oldQty, newValue: newQtyInt },
-        },
-        tx,
-      );
-      revalidateReports = true;
-      return;
-    }
-
-    if (op.type === "PRISADKA") {
-      const line = op.lines[lineIndex];
-      if (!line) throw new Error("Строка не найдена");
-      const newQtyInt = Math.round(newQty);
-      if (newQtyInt === line.quantity) return;
-      const kind: "torcev" | "plosk" = line.prisadkaTorcevaya ? "torcev" : "plosk";
-      if (!line.detailId) throw new Error("Строка присадки без детали");
-      const detailId = line.detailId;
-      if (await isCostFlowActive(tx)) {
-        await correctActivePrisadkaLine({
-          tx,
-          op: { id: op.id, createdAt: op.createdAt, lines: op.lines },
-          lineIndex,
-          newQty: newQtyInt,
-        });
-      } else {
-        await preparePrisadkaEdit(tx, op.createdAt, line, newQtyInt);
-        await reversePrisadkaLine(tx, line);
-        await tx.operationDetailLine.delete({ where: { id: line.id } });
-        await applyPrisadkaPick(tx, id, detailId, kind, newQtyInt);
-      }
-      await writeChangeLog(
-        {
-          entity: "ProductionOperation",
-          entityId: id,
-          newValues: { field: "Количество", oldValue: line.quantity, newValue: newQtyInt },
-        },
-        tx,
-      );
-      revalidateReports = true;
-      return;
-    }
-
-    if (op.type !== "TORCOVKA") {
-      throw new Error("Редактирование этого типа операции пока недоступно");
-    }
-
-    const line = op.lines[lineIndex];
-    if (!line) throw new Error("Строка не найдена");
-    const { blankLengthM, blankType, blankSort, blankMaterialId } = line;
-    if (blankLengthM == null || blankType == null || blankSort == null || blankMaterialId == null) {
-      throw new Error("Строка торцовки без спецификации заготовки");
-    }
-    const lineId = line.id;
-    const oldQty = line.quantity;
-    const delta = newQty - oldQty;
-    if (delta === 0) return;
-
-    if (await isCostFlowActive(tx)) {
-      const specs = requireTorcovkaBlankSpecs(op.lines);
-      await assertTorcovkaBlankInventoryBoundary(tx, op.createdAt, specs);
-      if (op.railLotId && op.railsTaken) {
-        const lot = await tx.railLot.findUnique({ where: { id: op.railLotId } });
-        const takenM = D(op.railsTaken).times(D(lot ? lot.lengthM : 0));
-        const usedM = op.lines.reduce(
-          (sum, l) => sum.plus(D(num(l.blankLengthM)).times(l.id === lineId ? newQty : l.quantity)),
-          D(0),
-        );
-        if (usedM.gt(takenM)) {
-          throw new Error("Суммарная длина заготовок превышает длину взятых реек");
-        }
-      }
-      await correctActiveTorcovkaLineQuantityInTx({
-        tx,
-        op,
-        lineId,
-        newQty,
-      });
-      await writeChangeLog(
-        {
-          entity: "ProductionOperation",
-          entityId: id,
-          newValues: { field: "Количество", oldValue: oldQty, newValue: newQty },
-        },
-        tx,
-      );
-      enqueueBatchId = op.batchId;
-      revalidateReports = true;
-      return;
-    }
-
-    await prepareTorcovkaBlankMutation(tx, op.createdAt, [
-      {
-        materialId: blankMaterialId,
-        lengthM: blankLengthM,
-        detailType: blankType,
-        sort: blankSort,
-      },
-    ]);
-
-    if (delta < 0) {
-      const dec = await tx.blankStock.updateMany({
-        where: {
-          materialId: blankMaterialId,
-          lengthM: blankLengthM,
-          detailType: blankType,
-          sort: blankSort,
-          quantity: { gte: -delta },
-        },
-        data: { quantity: { decrement: -delta } },
-      });
-      if (dec.count === 0) throw new Error("Нельзя уменьшить: заготовки уже прошли присадку/упаковку");
-    } else {
-      if (op.railLotId && op.railsTaken) {
-        const lot = await tx.railLot.findUnique({ where: { id: op.railLotId } });
-        const takenLengthM = op.railsTaken * (lot ? num(lot.lengthM) : 0);
-        const usedLengthM = op.lines.reduce(
-          (sum, l) => sum + num(l.blankLengthM) * (l.id === lineId ? newQty : l.quantity),
-          0,
-        );
-        if (isOverRailLength(takenLengthM, usedLengthM)) {
-          throw new Error("Суммарная длина заготовок превышает длину взятых реек");
-        }
-      }
-      await tx.blankStock.upsert({
-        where: {
-          materialId_lengthM_detailType_sort: {
-            materialId: blankMaterialId,
-            lengthM: blankLengthM,
-            detailType: blankType,
-            sort: blankSort,
-          },
-        },
-        create: {
-          materialId: blankMaterialId,
-          lengthM: blankLengthM,
-          detailType: blankType,
-          sort: blankSort,
-          quantity: delta,
-        },
-        update: { quantity: { increment: delta } },
-      });
-    }
-    await tx.operationDetailLine.update({ where: { id: lineId }, data: { quantity: newQty } });
+    const old = num(op.hours);
+    if (old === newQty) return;
+    await tx.productionOperation.update({ where: { id }, data: { hours: newQty } });
     await writeChangeLog(
       {
         entity: "ProductionOperation",
         entityId: id,
-        newValues: { field: "Количество", oldValue: oldQty, newValue: newQty },
+        newValues: { field: "Количество", oldValue: old, newValue: newQty },
       },
       tx,
     );
-    enqueueBatchId = op.batchId;
-    revalidateReports = true;
+  });
+  revalidatePath(PATH);
+  return reloadRow(id);
+}
+
+export async function editProductionOperationQuantity(
+  input: ProductionQuantityEditInput,
+): Promise<QuantityEditResult & { entry: ProductionEntryRow }> {
+  const admin = await requireAdmin();
+  const actor = userMovementActorFromAdmin(admin);
+  const requestId = requireClientRequestId(input.requestId);
+  const targetLineId = normalizeTargetLineId(input.targetLineId);
+  assertQuantityEditIntegers({
+    expectedOldQuantity: input.expectedOldQuantity,
+    newQuantity: input.newQuantity,
   });
 
-  if (enqueueBatchId) await enqueueRecalcBatchCosts(enqueueBatchId);
+  let enqueueBatchId: string | null = null;
+  let revalidateReports = false;
+  const outcome: { value: QuantityEditResult | null } = { value: null };
 
+  await prisma.$transaction(
+    async (tx) => {
+      const inner = await editProductionOperationQuantityInTransaction(tx, {
+        actor,
+        operationId: input.operationId,
+        requestId,
+        targetLineId,
+        expectedOldQuantity: input.expectedOldQuantity,
+        newQuantity: input.newQuantity,
+        expectedStateFingerprint: input.expectedStateFingerprint,
+      });
+      outcome.value = inner.result;
+      enqueueBatchId = inner.enqueueBatchId;
+      revalidateReports = inner.revalidateReports;
+    },
+    {
+      isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+      maxWait: 20_000,
+      timeout: 20_000,
+    },
+  );
+
+  if (!outcome.value) throw new Error("Правка количества не записана");
+  if (enqueueBatchId) await enqueueRecalcBatchCosts(enqueueBatchId);
   revalidatePath(PATH);
   if (revalidateReports) revalidatePath("/reports");
-  return reloadRow(id);
+  return { ...outcome.value, entry: await reloadRow(input.operationId) };
 }
 
 /**

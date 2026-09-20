@@ -13,10 +13,8 @@ import {
   submitTorcovka,
   submitUpakovka,
 } from "../src/server/terminal";
-import {
-  deleteProductionOperation,
-  updateProductionLineQuantity,
-} from "../src/server/production";
+import { deleteProductionOperation } from "../src/server/production";
+import { editPhysicalQuantityByLineIndex } from "../src/server/integrity/physical-quantity-edit-call";
 import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "../src/lib/torcovka-delete-policy";
 
 const prisma = new PrismaClient();
@@ -147,7 +145,7 @@ async function testPrisadkaRoundtrip() {
   assertEqual(readyAfterSubmit - readyBefore, 10, "присажено +10 шт (torcev)");
 
   // Правка: увеличиваем с 10 до 15.
-  await withAdminSession(() => updateProductionLineQuantity(op.id, 0, 15));
+  await withAdminSession(() => editPhysicalQuantityByLineIndex(prisma, op.id, 0, 15));
   const afterEdit =
     (await prisma.detailStock.findFirst({
       where: { detailId: detail.id, torcevayaDone: true, ploskostDone: false },
@@ -226,7 +224,7 @@ async function testUpakovkaRoundtrip() {
   });
 
   // Правка: 5 -> 3 изделия (часть материала должна вернуться).
-  await withAdminSession(() => updateProductionLineQuantity(op.id, 0, 3));
+  await withAdminSession(() => editPhysicalQuantityByLineIndex(prisma, op.id, 0, 3));
   const productStockAfterEdit = await snapshotProductStock(product.id);
   assertEqual(productStockAfterEdit, productStockBefore + 3, "после правки на складе 3 изделия");
 

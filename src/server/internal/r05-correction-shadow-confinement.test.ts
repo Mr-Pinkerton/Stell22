@@ -75,8 +75,10 @@ describe("R-05 correction SHADOW writer confinement", () => {
       delStart,
     );
     const delFn = production.slice(delStart, corrStart);
+    expect(production).toContain("export async function editProductionOperationQuantity");
     expect(qtyFn).not.toContain("appendR05CorrectionShadowMovement");
     expect(qtyFn).not.toContain("appendProductionShadowMovements");
+    expect(qtyFn).not.toContain("appendShadowInventoryMovements");
     expect(delFn).not.toContain("appendR05CorrectionShadowMovement");
     expect(delFn).not.toContain("appendProductionShadowMovements");
   });

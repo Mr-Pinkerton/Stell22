@@ -27,7 +27,8 @@ import {
   STALE_SNAPSHOT,
   prepareUpakovkaEdit,
 } from "@/server/internal/inventory-integrity";
-import { correctTorcovkaRailsTaken, deleteProductionOperation, updateProductionLineQuantity } from "@/server/production";
+import { correctTorcovkaRailsTaken, deleteProductionOperation } from "@/server/production";
+import { editPhysicalQuantityByLineIndex } from "./physical-quantity-edit-call";
 import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "@/lib/torcovka-delete-policy";
 import {
   PRISADKA_PHYSICAL_DELETE_BLOCKED,
@@ -1133,7 +1134,7 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     expect(aBefore).toBe(4);
     expect(bBefore).toBe(10);
 
-    await expect(updateProductionLineQuantity(op.id, 0, 2)).rejects.toThrow(INVENTORY_BOUNDARY);
+    await expect(editPhysicalQuantityByLineIndex(prismaA,op.id, 0, 2)).rejects.toThrow(INVENTORY_BOUNDARY);
 
     expect(await prismaA.productionOperation.findUniqueOrThrow({ where: { id: op.id } })).toMatchObject({
       productQty: 1,
@@ -1205,7 +1206,7 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     });
 
     const results = await Promise.allSettled([
-      withTimeout(updateProductionLineQuantity(op.id, 0, 2), "edit-17b"),
+      withTimeout(editPhysicalQuantityByLineIndex(prismaA,op.id, 0, 2), "edit-17b"),
       withTimeout(conductInventory(doc.id), "conduct-17b"),
     ]);
     for (const r of results) {
@@ -1309,7 +1310,7 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     const wipBefore = await wipSum(d.id);
     const readyBefore = await readySum(d.id);
 
-    await expect(updateProductionLineQuantity(tOp.id, 0, 3)).rejects.toThrow(INVENTORY_BOUNDARY);
+    await expect(editPhysicalQuantityByLineIndex(prismaA,tOp.id, 0, 3)).rejects.toThrow(INVENTORY_BOUNDARY);
 
     expect(await prismaA.productionOperation.findUniqueOrThrow({ where: { id: tOp.id } })).toMatchObject({
       id: tOp.id,

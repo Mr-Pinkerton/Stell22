@@ -1,5 +1,12 @@
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
-vi.mock("@/server/session", () => ({ requireAdmin: async () => {} }));
+vi.mock("@/server/session", () => ({
+  requireAdmin: async () => ({
+    id: "integrity-admin",
+    name: "Admin",
+    email: "admin@test.local",
+    role: "ADMIN",
+  }),
+}));
 vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} }));
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +18,8 @@ import { prismaUniqueDiscriminator } from "@/lib/prisma-unique-conflict";
 import { maybeFreezeBatch, recalcBatchCosts } from "@/server/internal/cost";
 import { syncBatchTotalCostInternal } from "@/server/internal/finance-operations";
 import { markEmployeePaid } from "@/server/payroll";
-import { deleteProductionOperation, updateProductionLineQuantity } from "@/server/production";
+import { deleteProductionOperation } from "@/server/production";
+import { editPhysicalQuantityByLineIndex } from "./physical-quantity-edit-call";
 import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "@/lib/torcovka-delete-policy";
 import { updateBatch } from "@/server/purchases";
 import {
@@ -408,7 +416,7 @@ describe.skipIf(!enabled)("cost-freeze integrity (DI-005/006/018/019/BD-3)", () 
     const edit = (async () => {
       await delay(80);
       try {
-        await updateProductionLineQuantity(seeded.op.id, 0, QTY_B);
+        await editPhysicalQuantityByLineIndex(prismaA,seeded.op.id, 0, QTY_B);
       } catch (err) {
         editError = err;
       }
@@ -452,7 +460,7 @@ describe.skipIf(!enabled)("cost-freeze integrity (DI-005/006/018/019/BD-3)", () 
     try {
       const payroll = markEmployeePaid(seeded.emp.id);
       await delay(30);
-      await updateProductionLineQuantity(seeded.op.id, 0, QTY_B);
+      await editPhysicalQuantityByLineIndex(prismaA,seeded.op.id, 0, QTY_B);
       await payroll;
     } finally {
       spy.mockRestore();
