@@ -10,6 +10,7 @@ import {
 import {
   deleteProductionOperation,
   updateProductionLineQuantity,
+  editProductionOperationQuantity,
   correctTorcovkaRailsTaken,
 } from "@/server/production";
 import {
@@ -40,6 +41,11 @@ import {
   retainOrMintCorrectionRequestId,
   shouldRotateCorrectionRequestId,
 } from "@/lib/production-correction-request";
+import {
+  quantityEditCommandKey,
+  retainOrMintQuantityEditRequestId,
+  shouldRotateQuantityEditRequestId,
+} from "@/lib/production-quantity-edit-request";
 import { XLSX_FMT } from "@/lib/xlsx-types";
 import { scrollTableYClass } from "@/lib/scroll-classes";
 import { cn } from "@/lib/utils";
@@ -283,6 +289,8 @@ function ProductionExtraFilters({
 
 interface DetailEditRow {
   index: number;
+  lineId: string | null;
+  editStateFingerprint: string | null;
   detailName: string;
   operationLabel: string;
   terminalQty: number;
@@ -305,6 +313,8 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
   const [correctReason, setCorrectReason] = useState("");
   const correctionRequestIdRef = useRef<string | null>(null);
   const correctionBoundKeyRef = useRef<string | null>(null);
+  const quantityEditRequestIdRef = useRef<string | null>(null);
+  const quantityEditBoundKeyRef = useRef<string | null>(null);
   const [, startTransition] = useTransition();
   const [exporting, startExport] = useTransition();
 
@@ -383,18 +393,75 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
     });
   };
 
-  const handleSaveQuantity = (id: string, lineIndex: number, newQty: number) => {
+  const clearQuantityEditRequest = () => {
+    quantityEditRequestIdRef.current = null;
+    quantityEditBoundKeyRef.current = null;
+  };
+
+  const handleSaveQuantity = (row: ProductionEntryRow, line: DetailEditRow, newQty: number) => {
     if (!Number.isFinite(newQty) || newQty <= 0) {
       toast.error("Укажите положительное количество");
       return;
     }
+    if (row.type === "HOURS") {
+      startTransition(async () => {
+        try {
+          const updated = await updateProductionLineQuantity(row.id, line.index, newQty);
+          setEntries((prev) => prev.map((item) => (item.id === row.id ? updated : item)));
+          toast.success("Операция обновлена — пересчёт предварительной себестоимости");
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Ошибка сохранения");
+        }
+      });
+      return;
+    }
+    const fingerprint = line.editStateFingerprint;
+    if (!fingerprint) {
+      toast.error("Нет актуального состояния строки для правки");
+      return;
+    }
+    if ((row.type === "TORCOVKA" || row.type === "PRISADKA") && !line.lineId) {
+      toast.error("Нет стабильного идентификатора строки");
+      return;
+    }
+    const minted = retainOrMintQuantityEditRequestId({
+      requestId: quantityEditRequestIdRef.current,
+      boundKey: quantityEditBoundKeyRef.current,
+      commandKey: quantityEditCommandKey({
+        operationId: row.id,
+        targetLineId: row.type === "UPAKOVKA" ? null : line.lineId,
+        expectedOldQuantity: line.terminalQty,
+        newQuantity: newQty,
+        expectedStateFingerprint: fingerprint,
+      }),
+    });
+    quantityEditRequestIdRef.current = minted.requestId;
+    quantityEditBoundKeyRef.current = minted.boundKey;
     startTransition(async () => {
       try {
-        const updated = await updateProductionLineQuantity(id, lineIndex, newQty);
-        setEntries((prev) => prev.map((row) => (row.id === id ? updated : row)));
-        toast.success("Операция обновлена — пересчёт предварительной себестоимости");
+        const updated = await editProductionOperationQuantity({
+          operationId: row.id,
+          requestId: minted.requestId,
+          targetLineId: row.type === "UPAKOVKA" ? null : line.lineId,
+          expectedOldQuantity: line.terminalQty,
+          newQuantity: newQty,
+          expectedStateFingerprint: fingerprint,
+        });
+        setEntries((prev) => prev.map((item) => (item.id === row.id ? updated.entry : item)));
+        clearQuantityEditRequest();
+        toast.success(
+          updated.replayed
+            ? "Правка уже применена (повтор той же команды)"
+            : updated.noop
+              ? "Количество не изменилось"
+              : "Операция обновлена — пересчёт предварительной себестоимости",
+        );
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Ошибка сохранения");
+        const message = err instanceof Error ? err.message : "Ошибка сохранения";
+        if (shouldRotateQuantityEditRequestId(message)) {
+          clearQuantityEditRequest();
+        }
+        toast.error(message);
       }
     });
   };
@@ -550,9 +617,7 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
                       }
                       onDelete={() => handleDelete(row.id)}
                       onCorrect={() => openCorrect(row)}
-                      onSaveQuantity={(lineIndex, qty) =>
-                        handleSaveQuantity(row.id, lineIndex, qty)
-                      }
+                      onSaveQuantity={(line, qty) => handleSaveQuantity(row, line, qty)}
                     />
                   ))
                 )}
@@ -638,7 +703,7 @@ function ProductionRowGroup({
   onToggle: () => void;
   onDelete: () => void;
   onCorrect: () => void;
-  onSaveQuantity: (lineIndex: number, qty: number) => void;
+  onSaveQuantity: (line: DetailEditRow, qty: number) => void;
 }) {
   const editRows = useMemo(() => buildDetailEditRows(row), [row]);
   const [editQty, setEditQty] = useState<Record<number, string>>({});
@@ -756,7 +821,7 @@ function ProductionRowGroup({
               onEditQtyChange={(index, value) =>
                 setEditQty((prev) => ({ ...prev, [index]: value }))
               }
-              onSaveLine={(index) => onSaveQuantity(index, Number(editQty[index]))}
+              onSaveLine={(line) => onSaveQuantity(line, Number(editQty[line.index]))}
               onCorrect={onCorrect}
             />
           </div>
@@ -778,7 +843,7 @@ function ProductionEntryDetail({
   editRows: DetailEditRow[];
   editQty: Record<number, string>;
   onEditQtyChange: (index: number, value: string) => void;
-  onSaveLine: (index: number) => void;
+  onSaveLine: (line: DetailEditRow) => void;
   onCorrect: () => void;
 }) {
   const unit = OPERATION_TYPE_UNIT[row.type];
@@ -845,7 +910,7 @@ function ProductionEntryDetail({
             !row.isPaid && Number.isFinite(parsed) && parsed > 0 && parsed !== line.terminalQty;
 
           return (
-            <TableRow key={`${row.id}-line-${line.index}`}>
+            <TableRow key={`${row.id}-line-${line.lineId ?? line.index}`}>
               <NestedTableCell className="font-medium whitespace-normal">
                 {line.detailName}
               </NestedTableCell>
@@ -884,7 +949,7 @@ function ProductionEntryDetail({
                       )}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onSaveLine(line.index);
+                        onSaveLine(line);
                       }}
                     >
                       Сохранить
@@ -942,6 +1007,8 @@ function buildDetailEditRows(row: ProductionEntryRow): DetailEditRow[] {
   if (row.detailLines && row.detailLines.length > 0) {
     return row.detailLines.map((line, index) => ({
       index,
+      lineId: line.id ?? null,
+      editStateFingerprint: line.editStateFingerprint ?? null,
       detailName: line.detailName,
       operationLabel: OPERATION_TYPE_LABEL[row.type],
       terminalQty: line.quantity,
@@ -951,9 +1018,11 @@ function buildDetailEditRows(row: ProductionEntryRow): DetailEditRow[] {
   return [
     {
       index: 0,
+      lineId: null,
+      editStateFingerprint: row.editStateFingerprint ?? null,
       detailName: row.productName ?? "—",
       operationLabel: OPERATION_TYPE_LABEL[row.type],
-      terminalQty: row.quantity,
+      terminalQty: row.productQty ?? row.quantity,
     },
   ];
 }

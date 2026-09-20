@@ -55,7 +55,11 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 import { createCashFlow } from "@/server/finance";
 import { markEmployeePaid } from "@/server/payroll";
 import { createBatch } from "@/server/purchases";
-import { deleteProductionOperation, correctTorcovkaRailsTaken } from "@/server/production";
+import {
+  correctTorcovkaRailsTaken,
+  deleteProductionOperation,
+  editProductionOperationQuantity,
+} from "@/server/production";
 import { getApiCredentials } from "@/server/settings";
 import { conductInventory, deleteInventoryDraft } from "@/server/warehouse";
 
@@ -79,6 +83,16 @@ describe("representative admin action boundaries", () => {
         newRailsTaken: 1,
         reason: "test",
         requestId: "req-1",
+      }),
+    ],
+    ["production-quantity-edit", () =>
+      editProductionOperationQuantity({
+        operationId: "operation-1",
+        requestId: "req-1",
+        targetLineId: "line-1",
+        expectedOldQuantity: 2,
+        newQuantity: 1,
+        expectedStateFingerprint: "qedit-state-v1:test",
       }),
     ],
     ["warehouse", () => conductInventory("inventory-1")],

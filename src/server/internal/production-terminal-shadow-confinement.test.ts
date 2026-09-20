@@ -72,8 +72,10 @@ describe("terminal production SHADOW writer confinement", () => {
     );
 
     const production = read("src/server/production.ts");
-    expect(production).toMatch(/applyUpakovkaPrepared\(\s*tx,\s*id,\s*newQtyInt,\s*prepared\s*\)/);
+    const qeditTx = read("src/server/internal/production-quantity-edit-tx.ts");
+    expect(qeditTx).toMatch(/applyUpakovkaPrepared\(\s*tx,\s*id,\s*newQty,\s*prepared\s*\)/);
     expect(production).not.toContain("{ costFlowActive }");
+    expect(qeditTx).not.toContain("{ costFlowActive }");
   });
 
   it("does not connect blocked admin edit/delete contours", () => {
@@ -81,10 +83,15 @@ describe("terminal production SHADOW writer confinement", () => {
     expect(production).not.toContain("appendProductionShadowMovements");
     expect(production).not.toContain("appendShadowInventoryMovements");
     expect(production).toContain("export async function updateProductionLineQuantity");
+    expect(production).toContain("export async function editProductionOperationQuantity");
     expect(production).toContain("export async function deleteProductionOperation");
     const qty = production.slice(production.indexOf("export async function updateProductionLineQuantity"));
     const del = production.slice(production.indexOf("export async function deleteProductionOperation"));
+    const qeditTx = read("src/server/internal/production-quantity-edit-tx.ts");
     expect(qty).not.toContain("appendR05CorrectionShadowMovement");
+    expect(qty).not.toContain("appendShadowInventoryMovements");
+    expect(qeditTx).not.toContain("appendShadowInventoryMovements");
+    expect(qeditTx).not.toContain("appendProductionShadowMovements");
     expect(del).not.toContain("appendR05CorrectionShadowMovement");
   });
 });

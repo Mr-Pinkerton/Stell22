@@ -87,6 +87,7 @@ export const actionPolicy = {
     "payroll.markEmployeePaid",
     "production.correctTorcovkaRailsTaken",
     "production.deleteProductionOperation",
+    "production.editProductionOperationQuantity",
     "production.getProductionEntries",
     "production.updateProductionLineQuantity",
     "purchases.createBatch",

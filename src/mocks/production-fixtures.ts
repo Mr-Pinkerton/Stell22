@@ -12,10 +12,12 @@ export interface ProductionChangeLogEntry {
 }
 
 export interface ProductionDetailLine {
+  id?: string;
   detailName: string;
   quantity: number;
   prisadkaTorcevaya?: boolean;
   prisadkaPloskost?: boolean;
+  editStateFingerprint?: string;
 }
 
 /** Строка журнала производства для админки (расширенный снимок операции). */
@@ -37,6 +39,8 @@ export interface ProductionEntryRow {
   producedM?: number;
   batchFrozenAt?: string | null;
   productName?: string;
+  productQty?: number;
+  editStateFingerprint?: string;
   detailLines?: ProductionDetailLine[];
   changeLog: ProductionChangeLogEntry[];
 }

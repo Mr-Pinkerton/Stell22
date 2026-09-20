@@ -522,6 +522,27 @@ model ProductionOperationCorrection {
   @@index([operationId, recordedAt])
 }
 
+// PSR-P2 Package 2: retained identity for TORCOVKA / PRISADKA / UPAKOVKA quantity edit.
+// Scalar IDs only — no Prisma relations / ON DELETE CASCADE.
+// Empty at cutover. Not InventoryMovement. Not R-05. Not HOURS. Not Package 3 writer.
+model ProductionOperationQuantityEdit {
+  id                       String        @id @default(cuid())
+  requestId                String        @unique
+  operationId              String
+  adminUserId              String
+  actorDisplaySnapshot     String
+  operationType            OperationType
+  targetLineId             String?
+  expectedOldQuantity      Int
+  newQuantity              Int
+  expectedStateFingerprint String
+  requestSnapshot          Json
+  effectSnapshot           Json
+  recordedAt               DateTime      @default(now()) @db.Timestamptz(3)
+
+  @@index([operationId, recordedAt])
+}
+
 // One-time EXTREME TORCOVKA admin code (HMAC). UNIQUE(clientRequestId).
 // No FK to ProductionOperation: the Op does not exist until the code is consumed.
 model TorcovkaApproval {
