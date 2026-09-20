@@ -169,7 +169,7 @@ No `audit/01.16*` or `audit/01.17*`.
 | `audit/08.16-psr-p2-r05-correction-shadow-writer.md` | PSR-P2 R-05 TORCOVKA correction SHADOW writer | Implementation | PR #26 merge `debafda`; accepted head `c9d3c0b`; post-merge CI `35444256886` | `IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED / SHADOW NOT ACTIVATED` | YES after this closeout merge | SHADOW writer for `correctTorcovkaRailsTaken`. Explicit READ COMMITTED. Gate-first. Retained USER actor. HEAD PASS. Independent Opus SKIPPED BY OWNER COST POLICY. P0=0 / P1=0 / P2=0. Source contours = Inventory conduct + three normal terminal submits + R-05. Production writer currently live = **NO**. No schema/migration. SHADOW not activated. P2 globally not complete. P3 not started. NEXT = Supply prerequisite. |
 | `audit/08.17-psr-p2-supply-prerequisite.md` | PSR-P2 Supply writer prerequisite | Implementation | PR #28 merge `5fe5f40`; accepted HEAD `8e92dd6`; PR #29 merge `eb79b26`; trusted preflight `35452435411` | `COMPLETE / NOT DEPLOYED / PRODUCTION PREFLIGHT COMPLETE / TRUSTED` | YES after this closeout merge | P1-01/P1-02 **CLOSED**. Parser `SUPPLY-PREFLIGHT-PARSER-001` **CLOSED**. P2-01 **CLOSED**. Historical failed run `35449877592` (no trusted counts). Trusted rerun TOTAL=0 / D=0 / S=0 / O=0 / `SUPPLY_DATA_BLOCKER=NO`. Supply writer **READY TO START / NOT STARTED**. No InventoryMovement writer. No schema/migration. SHADOW not activated. P2 globally not complete. P3 not started. NEXT = Supply SHADOW writer. |
 | `audit/08.18-psr-p2-supply-shadow-writer.md` | PSR-P2 Supply SHADOW writer | Implementation | PR #31 merge `164ffca`; accepted head `2e90060`; exact-head CI `35493552025`; post-merge CI `35493953060` | `IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED / SHADOW NOT ACTIVATED` | YES after this closeout merge | SHADOW writer for Supply deduction and Ozon positive restore. HEAD PASS. Independent Opus SKIPPED BY OWNER COST POLICY. Initial REQUEST CHANGES P0=0 / P1=1 / P2=1. P1-01/P2-01 CLOSED. Final P0=0 / P1=0 / P2=0. Source contours = 6. Production writer currently live = **NO**. No schema/migration. SHADOW not activated. P2 globally not complete. P3 not started. NEXT = raw receipt/write-off identity prerequisite. |
-| `audit/08.19-psr-p2-raw-identity-prerequisite.md` | PSR-P2 raw receipt / write-off identity | Implementation | Base `ea794246`; branch `feat/psr-p2-raw-identity-prerequisite` | `IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED` | NO until reviewed merge | Retained identities for `createBatch`, `writeOffBatchRemainder`, `createSimplePurchase`. No InventoryMovement writers. Schema/migration YES. No backfill. Source contours remain 6. SHADOW not activated. P2 globally not complete. P3 not started. NEXT = HEAD REVIEW. |
+| `audit/08.19-psr-p2-raw-identity-prerequisite.md` | PSR-P2 raw receipt / write-off identity | Implementation | Base `ea794246`; branch `feat/psr-p2-raw-identity-prerequisite`; initial HEAD `1af25770` | `IMPLEMENTATION ON FEATURE BRANCH / AWAITING HEAD RE-REVIEW / NOT MERGED / NOT DEPLOYED` | NO until reviewed merge | Retained identities for `createBatch`, `writeOffBatchRemainder`, `createSimplePurchase`. Initial HEAD review REQUEST CHANGES P0=0 / P1=1 / P2=0. P1-01 React state requestId AWAITING HEAD RE-REVIEW. No InventoryMovement writers. Schema/migration YES. Source contours remain 6. NEXT = HEAD RE-REVIEW. |
 
 ### D.8 Production incidents
 
@@ -459,8 +459,10 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 
 - File: `audit/08.19-psr-p2-raw-identity-prerequisite.md`
 - Scope: retained request/lifecycle identities for `createBatch`, `writeOffBatchRemainder`, `createSimplePurchase`. No InventoryMovement writers.
-- Status: **IMPLEMENTATION ON FEATURE BRANCH / NOT MERGED / NOT DEPLOYED**
+- Status: **IMPLEMENTATION ON FEATURE BRANCH / AWAITING HEAD RE-REVIEW / NOT MERGED / NOT DEPLOYED**
 - Canonical?: **NO** until reviewed merge
+- Initial HEAD: `1af25770e950c6975473fbc08bd28a54b89d504e`
+- Initial HEAD review: **REQUEST CHANGES** P0=0 / P1=1 / P2=0. P1-01 AWAITING HEAD RE-REVIEW.
 - Base: `ea7942464add030cbe12b7226075820bc16f70bc`
 - Source/`main` connected physical InventoryMovement contours remain 6
 - Production application checkpoint remains `eb02b17f488ef9ec13a11dcf158fc169b78e3e37`. Production writer currently live = **NO**.
@@ -470,4 +472,4 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Production access/mutation/deploy: **NO / NO / NO**.
 - Runtime P2 global completeness: **NOT COMPLETE**.
 - P3: **NOT STARTED**.
-- NEXT: **HEAD REVIEW OF RAW RECEIPT / WRITE-OFF IDENTITY PR**. Not merge. Not deploy. Not the three writers.
+- NEXT: **HEAD RE-REVIEW OF RAW RECEIPT / WRITE-OFF IDENTITY PR**. Not merge. Not deploy. Not the three writers.

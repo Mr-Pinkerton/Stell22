@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { AlertTriangle, PackageMinus, Pencil, Printer, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -33,7 +33,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { BatchFormDialog } from "@/components/purchases/batch-form-dialog";
 import {
   batchCreateCommandKey,
-  retainOrMintPurchaseRequestId,
+  createKeyedPurchaseRequestIdentityOwner,
+  createPurchaseRequestIdentityOwner,
   shouldRotatePurchaseRequestId,
   simplePurchaseCommandKey,
   writeOffCommandKey,
@@ -59,17 +60,9 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
   const [batches, setBatches] = useState<PurchaseBatchRow[]>(initialRows);
   const [pending, startTransition] = useTransition();
   const [exporting, startExport] = useTransition();
-  const [batchCreateRequest, setBatchCreateRequest] = useState<{
-    requestId: string | null;
-    boundKey: string | null;
-  }>({ requestId: null, boundKey: null });
-  const [simplePurchaseRequest, setSimplePurchaseRequest] = useState<{
-    requestId: string | null;
-    boundKey: string | null;
-  }>({ requestId: null, boundKey: null });
-  const [writeOffRequests, setWriteOffRequests] = useState<
-    Record<string, { requestId: string; boundKey: string }>
-  >({});
+  const batchCreateIdentityRef = useRef(createPurchaseRequestIdentityOwner());
+  const simplePurchaseIdentityRef = useRef(createPurchaseRequestIdentityOwner());
+  const writeOffIdentityRef = useRef(createKeyedPurchaseRequestIdentityOwner());
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -114,9 +107,20 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
       }
     });
 
+  const clearCreateIdentities = () => {
+    batchCreateIdentityRef.current.clear();
+    simplePurchaseIdentityRef.current.clear();
+  };
+
   const openCreate = () => {
+    clearCreateIdentities();
     setEditing(null);
     setDialogOpen(true);
+  };
+
+  const handleDialogOpenChange = (open: boolean) => {
+    if (!open) clearCreateIdentities();
+    setDialogOpen(open);
   };
 
   const openEdit = (batch: PurchaseBatchRow) => {
@@ -159,28 +163,25 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
       }
     });
 
-  const handleBatchSubmit = (values: BatchFormValues) =>
-    new Promise<void>((resolve) => {
+  const handleBatchSubmit = (values: BatchFormValues) => {
+    const requestId = editing
+      ? null
+      : batchCreateIdentityRef.current.acquire(batchCreateCommandKey(values));
+    return new Promise<void>((resolve) => {
       startTransition(async () => {
         try {
           if (editing) {
             upsert(await updateBatch(editing.id, values));
           } else {
-            const minted = retainOrMintPurchaseRequestId({
-              requestId: batchCreateRequest.requestId,
-              boundKey: batchCreateRequest.boundKey,
-              commandKey: batchCreateCommandKey(values),
-            });
-            setBatchCreateRequest(minted);
-            upsert(await createBatch(values, minted.requestId));
-            setBatchCreateRequest({ requestId: null, boundKey: null });
+            upsert(await createBatch(values, requestId as string));
+            batchCreateIdentityRef.current.clear();
           }
           toast.success(editing ? "Партия сохранена" : "Партия добавлена");
           setDialogOpen(false);
         } catch (err) {
           const message = err instanceof Error ? err.message : "Ошибка сохранения";
           if (!editing && shouldRotatePurchaseRequestId(message)) {
-            setBatchCreateRequest({ requestId: null, boundKey: null });
+            batchCreateIdentityRef.current.clear();
           }
           toast.error(message);
         } finally {
@@ -188,25 +189,21 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
         }
       });
     });
+  };
 
-  const handleSimpleSubmit = (values: SimplePurchaseFormValues) =>
-    new Promise<void>((resolve) => {
+  const handleSimpleSubmit = (values: SimplePurchaseFormValues) => {
+    const requestId = simplePurchaseIdentityRef.current.acquire(simplePurchaseCommandKey(values));
+    return new Promise<void>((resolve) => {
       startTransition(async () => {
         try {
-          const minted = retainOrMintPurchaseRequestId({
-            requestId: simplePurchaseRequest.requestId,
-            boundKey: simplePurchaseRequest.boundKey,
-            commandKey: simplePurchaseCommandKey(values),
-          });
-          setSimplePurchaseRequest(minted);
-          await createSimplePurchase(values, minted.requestId);
-          setSimplePurchaseRequest({ requestId: null, boundKey: null });
+          await createSimplePurchase(values, requestId);
+          simplePurchaseIdentityRef.current.clear();
           toast.success("Закупка добавлена");
           setDialogOpen(false);
         } catch (err) {
           const message = err instanceof Error ? err.message : "Ошибка сохранения";
           if (shouldRotatePurchaseRequestId(message)) {
-            setSimplePurchaseRequest({ requestId: null, boundKey: null });
+            simplePurchaseIdentityRef.current.clear();
           }
           toast.error(message);
         } finally {
@@ -214,6 +211,7 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
         }
       });
     });
+  };
 
   const columns: Column<PurchaseBatchRow>[] = [
     {
@@ -329,35 +327,25 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
                     className={tableActionClass}
                     aria-label="Списать остаток"
                     disabled={pending}
-                    onClick={() =>
+                    onClick={() => {
+                      const requestId = writeOffIdentityRef.current.acquire(
+                        row.id,
+                        writeOffCommandKey(row.id),
+                      );
                       runRow(async () => {
-                        const minted = retainOrMintPurchaseRequestId({
-                          requestId: writeOffRequests[row.id]?.requestId ?? null,
-                          boundKey: writeOffRequests[row.id]?.boundKey ?? null,
-                          commandKey: writeOffCommandKey(row.id),
-                        });
-                        setWriteOffRequests((prev) => ({ ...prev, [row.id]: minted }));
                         try {
-                          const next = await writeOffBatchRemainder(row.id, minted.requestId);
-                          setWriteOffRequests((prev) => {
-                            const copy = { ...prev };
-                            delete copy[row.id];
-                            return copy;
-                          });
+                          const next = await writeOffBatchRemainder(row.id, requestId);
+                          writeOffIdentityRef.current.clear(row.id);
                           upsert(next);
                         } catch (err) {
                           const message = err instanceof Error ? err.message : "";
                           if (shouldRotatePurchaseRequestId(message)) {
-                            setWriteOffRequests((prev) => {
-                              const copy = { ...prev };
-                              delete copy[row.id];
-                              return copy;
-                            });
+                            writeOffIdentityRef.current.clear(row.id);
                           }
                           throw err;
                         }
-                      }, "Остаток списан в отход, партия выработана")
-                    }
+                      }, "Остаток списан в отход, партия выработана");
+                    }}
                   />
                 }
               >
@@ -457,7 +445,7 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
         batch={editing}
         items={items}
         materials={materials}
-        onOpenChange={setDialogOpen}
+        onOpenChange={handleDialogOpenChange}
         onSubmitBatch={handleBatchSubmit}
         onSubmitSimple={handleSimpleSubmit}
         pending={pending}
