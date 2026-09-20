@@ -332,6 +332,8 @@ P2-GUARD/CI historical implementation status = **IMPLEMENTED / MERGED TO MAIN / 
 - Status: **IMPLEMENTED / CI VERIFIED / AWAITING HEAD REVIEW / NOT MERGED / NOT DEPLOYED**
 - Base `origin/main`: `6c858db0cc21a456e7d6c10825b9aaad002cae72`
 - Branch: `psr-p2/safe-destructive-guards`
+- Implementation PR: #40
+- First exact-head CI: `35518067729` SUCCESS (`4d693a3`)
 - Schema / migration: **NO**
 - InventoryMovement writer added: **NO**
 - Production access / deploy: **NO / NO**

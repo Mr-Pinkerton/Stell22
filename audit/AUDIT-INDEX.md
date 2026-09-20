@@ -172,7 +172,7 @@ No `audit/01.16*` or `audit/01.17*`.
 | `audit/08.19-psr-p2-raw-identity-prerequisite.md` | PSR-P2 raw receipt / write-off identity | Implementation + deploy closeout | PR #33 merge `76131ca`; accepted head `919a427`; historical identity deploy `35502770382` / `0cc8382`; current prod `69e0f53` / `35510094974` | `IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED` | YES after this closeout merge | Historical implementation **NOT DEPLOYED** preserved. Identity deploy `35502770382` first made tables live. Current production is later application SHA `69e0f53`. Migration APPLIED; tables LIVE / EMPTY AT CUTOVER; historical backfill NO. Connected writers **DEPLOYED DORMANT**. Dual-write **NOT STARTED**. Later writers: `08.20`. |
 | `audit/08.20-psr-p2-raw-shadow-writers.md` | PSR-P2 raw receipt / write-off SHADOW writers | Implementation + deploy closeout | PR #36 merge `0bf2c77`; accepted head `424f119`; Production Deploy `35510094974`; prod app `69e0f53` | `IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED / SHADOW INACTIVE` | YES | Source/`main` contours **9**. Production dormant contours **9**. Application deploy / no new migration. No activation. P2 **NOT COMPLETE**. P3 **NOT STARTED**. Later discovery: `08.21`. |
 | `audit/08.21-psr-p2-remaining-mutation-destructive-adjudication.md` | PSR-P2 remaining mutation / destructive contours | Discovery + HEAD architecture + independent review | Starting main `289979b0`; discovery HEAD `6f11e38`; adjudicated HEAD `a9567b6`; app `69e0f53` | `DISCOVERY COMPLETE / ARCHITECTURE ACCEPTED / REVIEWED / NO IMPLEMENTATION` | YES | Exhaustive A–H **PASS**. Independent Opus **PASS** P0=0 / P1=0 / P2=4 informational. Architecture unchanged. No runtime. P2 **NOT COMPLETE**. Later implementation: `08.22`. |
-| `audit/08.22-psr-p2-safe-destructive-guards.md` | PSR-P2 Package 1 safe destructive guards | Implementation + tests | Starting main `6c858db`; branch `psr-p2/safe-destructive-guards`; app `69e0f53` | `IMPLEMENTED / CI VERIFIED / AWAITING HEAD REVIEW / NOT MERGED / NOT DEPLOYED` | NO until merge | D/E fail-closed. F preserved. G remaining===0 + locks. H INACTIVE qty===0 / ACTIVE any-row. No writer. No schema. Branch remaining uncovered = A/B/C. Production **NOT DEPLOYED**. P2 **NOT COMPLETE**. NEXT = HEAD REVIEW. |
+| `audit/08.22-psr-p2-safe-destructive-guards.md` | PSR-P2 Package 1 safe destructive guards | Implementation + tests | Starting main `6c858db`; PR #40; first CI `35518067729`; app `69e0f53` | `IMPLEMENTED / CI VERIFIED / AWAITING HEAD REVIEW / NOT MERGED / NOT DEPLOYED` | NO until merge | D/E fail-closed. F preserved. G remaining===0 + locks. H INACTIVE qty===0 / ACTIVE any-row. No writer. No schema. Branch remaining uncovered = A/B/C. Production **NOT DEPLOYED**. P2 **NOT COMPLETE**. NEXT = HEAD REVIEW. |
 
 ### D.8 Production incidents
 
@@ -502,6 +502,8 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Status: **IMPLEMENTED / CI VERIFIED / AWAITING HEAD REVIEW / NOT MERGED / NOT DEPLOYED**
 - Canonical?: **NO until merge**
 - Starting `origin/main`: `6c858db0cc21a456e7d6c10825b9aaad002cae72`
+- Implementation PR: #40
+- First exact-head CI: `35518067729` SUCCESS (`4d693a3`)
 - Schema / migration: **NO**
 - InventoryMovement writer added: **NO**
 - Production access / mutation / deploy: **NO / NO / NO**
