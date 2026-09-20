@@ -846,7 +846,7 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
       blankLengthM: "1",
       lotLengthM: "4",
     });
-    await writeOffBatchRemainder(written.batch.id);
+    await writeOffBatchRemainder(written.batch.id, `test:wo:di020-${written.batch.id}`);
     const archived = await prismaA.batch.findUniqueOrThrow({ where: { id: written.batch.id } });
     expect(archived.status).toBe("ARCHIVED");
     expect(archived.closedAt).not.toBeNull();
@@ -969,7 +969,7 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
           newRailsTaken: newRails,
           reason: "race write-off",
         }),
-        writeOffBatchRemainder(seeded.batch.id),
+        writeOffBatchRemainder(seeded.batch.id, `test:wo:race-${seeded.batch.id}`),
       ]),
       "correction || writeOff",
     );

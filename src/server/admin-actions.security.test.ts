@@ -70,7 +70,7 @@ describe("representative admin action boundaries", () => {
   it.each([
     ["finance", () => createCashFlow({} as never)],
     ["payroll", () => markEmployeePaid("employee-1")],
-    ["purchases", () => createBatch({} as never)],
+    ["purchases", () => createBatch({} as never, "security-probe")],
     ["production", () => deleteProductionOperation("operation-1")],
     ["production-rails-correct", () =>
       correctTorcovkaRailsTaken({

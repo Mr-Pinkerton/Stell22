@@ -297,6 +297,42 @@ model SimplePurchase {
   createdAt         DateTime         @default(now())
 }
 
+// PSR-P2 raw receipt/write-off retained identities. Scalar IDs only — no
+// Prisma relations / FKs / CASCADE. Empty at cutover. Not InventoryMovement.
+// Future SHADOW writers (NOT this package):
+//   createBatch → causationKind=BATCH, causationId=BatchCreationCommand.id
+//   writeOff → causationKind=BATCH, causationId=BatchRemainderWriteOff.id
+//   simple purchase → causationKind=SIMPLE_PURCHASE, causationId=SimplePurchase.id
+model BatchCreationCommand {
+  id              String   @id @default(cuid())
+  requestId       String   @unique
+  batchId         String   @unique
+  adminUserId     String
+  requestSnapshot Json
+  recordedAt      DateTime @default(now()) @db.Timestamptz(3)
+}
+
+model BatchRemainderWriteOff {
+  id             String   @id @default(cuid())
+  requestId      String   @unique
+  batchId        String
+  adminUserId    String
+  totalQuantity  Int
+  effectSnapshot Json
+  recordedAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([batchId, recordedAt])
+}
+
+model SimplePurchaseCreationCommand {
+  id               String   @id @default(cuid())
+  requestId        String   @unique
+  simplePurchaseId String   @unique
+  adminUserId      String
+  requestSnapshot  Json
+  recordedAt       DateTime @default(now()) @db.Timestamptz(3)
+}
+
 // ============================= НОМЕНКЛАТУРА =================================
 
 // Крепёж / упаковка / разное. Цена за единицу вводится вручную.

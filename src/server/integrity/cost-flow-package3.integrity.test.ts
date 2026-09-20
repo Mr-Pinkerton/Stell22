@@ -292,7 +292,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       quantity: 4,
       unitPrice: 12,
       purchaseDate: "2026-01-20",
-    });
+    }, `test:sp:p3-1`);
     const nom = await prismaA.nomenclatureStock.findUniqueOrThrow({
       where: { nomenclatureId: world.fastener.id },
     });
@@ -360,7 +360,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       quantity: 8,
       unitPrice: 12,
       purchaseDate: "2026-01-20",
-    });
+    }, `test:sp:p3-2`);
     await submitUpakovka({
       employeeId: world.emp.id,
       clientRequestId: `inact-up2-${world.suffix}`,
@@ -486,7 +486,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       quantity: 4,
       unitPrice: 12,
       purchaseDate: "2026-01-20",
-    });
+    }, `test:sp:p3-3`);
     const nom = await prismaA.nomenclatureStock.findUniqueOrThrow({
       where: { nomenclatureId: world.fastener.id },
     });
@@ -510,7 +510,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
         quantity: 1,
         unitPrice: 3,
         purchaseDate: "2026-01-20",
-      }),
+      }, `test:sp:p3-4`),
     ).rejects.toThrow(/не инициализирован/);
   });
 
@@ -528,7 +528,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       quantity: 10,
       unitPrice: 12,
       purchaseDate: "2026-01-20",
-    });
+    }, `test:sp:p3-5`);
     await submitUpakovka({
       employeeId: world.emp.id,
       clientRequestId: `e2e-up-${world.suffix}`,
@@ -603,7 +603,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       quantity: 10,
       unitPrice: 12,
       purchaseDate: "2026-01-20",
-    });
+    }, `test:sp:p3-6`);
     await submitUpakovka({
       employeeId: world.emp.id,
       clientRequestId: `rev-up-${world.suffix}`,
@@ -638,7 +638,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       quantity: 10,
       unitPrice: 12,
       purchaseDate: "2026-01-20",
-    });
+    }, `test:sp:p3-7`);
     await submitUpakovka({
       employeeId: world.emp.id,
       clientRequestId: `id-up-${world.suffix}`,
@@ -714,7 +714,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       quantity: 2,
       unitPrice: 10,
       purchaseDate: "2026-01-20",
-    });
+    }, `test:sp:p3-8`);
     await prismaA.nomenclatureStock.update({
       where: { nomenclatureId: world.fastener.id },
       data: { quantity: 0, nomenclatureValue: new Prisma.Decimal(0), totalValue: new Prisma.Decimal(0) },
@@ -814,13 +814,13 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
         quantity: 2,
         unitPrice: 10,
         purchaseDate: "2026-01-20",
-      }),
+      }, `test:sp:p3-9`),
       createSimplePurchase({
         nomenclatureId: item.id,
         quantity: 3,
         unitPrice: 20,
         purchaseDate: "2026-01-20",
-      }),
+      }, `test:sp:p3-10`),
     ]);
     expectNoDeadlock(results);
     expect(results.every((r) => r.status === "fulfilled")).toBe(true);
@@ -959,7 +959,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       quantity: 10,
       unitPrice: 12,
       purchaseDate: "2026-01-20",
-    });
+    }, `test:sp:p3-11`);
     const results = await raceSettled("upakovka-same-product", [
       submitUpakovka({
         employeeId: world.emp.id,
@@ -1347,7 +1347,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       quantity: 10,
       unitPrice: 12,
       purchaseDate: "2026-01-20",
-    });
+    }, `test:sp:p3-12`);
     const wipBefore = await prismaA.detailStock.findFirstOrThrow({
       where: { detailId: world.detail.id, torcevayaDone: true },
     });
@@ -1400,7 +1400,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       quantity: 10,
       unitPrice: 12,
       purchaseDate: "2026-01-20",
-    });
+    }, `test:sp:p3-13`);
     await submitUpakovka({
       employeeId: world.emp.id,
       clientRequestId: `rvlock-up-${world.suffix}`,
@@ -1466,7 +1466,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       quantity: 10,
       unitPrice: 12,
       purchaseDate: "2026-01-20",
-    });
+    }, `test:sp:p3-14`);
     expect(await prismaA.productStock.findUnique({ where: { productId: world.product.id } })).toBeNull();
     const doc = await prismaA.inventory.create({
       data: {
@@ -1548,7 +1548,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
         quantity: 2,
         unitPrice: 12,
         purchaseDate: "2026-01-20",
-      }),
+      }, `test:sp:p3-15`),
     ]);
     expectNoDeadlock(results);
     const inv = results[0]!;
