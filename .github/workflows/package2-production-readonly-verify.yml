@@ -1,0 +1,204 @@
+name: Package 2 Production Read-only Verify
+
+# Manual read-only Package 2 production verification only. This workflow never deploys.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Read-only Package 2 production verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - name: Check required secrets
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+        run: |
+          missing=0
+          for name in PROD_HOST PROD_USER PROD_SSH_KEY PROD_APP_DIR; do
+            if [ -z "${!name}" ]; then
+              echo "Missing required secret: ${name}" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Add secrets on the GitHub Environment \"production\"." >&2
+            exit 1
+          fi
+
+      - name: Read-only Package 2 production verify
+        uses: appleboy/ssh-action@v1.2.4
+        env:
+          APP_DIR: ${{ secrets.PROD_APP_DIR }}
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT || 22 }}
+          command_timeout: 5m
+          envs: APP_DIR
+          script: |
+            set -euo pipefail
+            cd "$APP_DIR"
+            if [[ ! -f docker-compose.prod.yml ]]; then
+              echo "ERROR: docker-compose.prod.yml not found in $APP_DIR" >&2
+              exit 1
+            fi
+
+            pinned_sha="b033cfad88f01d9231f7b892fcce290244f48130"
+            actual_sha="$(git rev-parse HEAD)"
+            echo "PRODUCTION_APP_SHA=${actual_sha}"
+            if [[ "$actual_sha" != "$pinned_sha" ]]; then
+              echo "PRODUCTION_APP_SHA_MISMATCH expected=${pinned_sha}" >&2
+              exit 1
+            fi
+
+            sql="BEGIN TRANSACTION READ ONLY;
+            SELECT 'P2_MIGRATION=' || CASE WHEN (
+              SELECT COUNT(*) FROM \"_prisma_migrations\"
+              WHERE migration_name = '20260920180000_psr_p2_production_quantity_edit_identity'
+                AND finished_at IS NOT NULL
+                AND rolled_back_at IS NULL
+            ) = 1 THEN 'APPLIED' ELSE 'FAIL' END;
+            SELECT 'P2_TABLE=' || CASE
+              WHEN to_regclass('public.\"ProductionOperationQuantityEdit\"') IS NOT NULL THEN 'EXISTS'
+              ELSE 'ABSENT'
+            END;
+            SELECT 'P2_ROW_COUNT=' || (SELECT COUNT(*)::text FROM \"ProductionOperationQuantityEdit\");
+            SELECT 'P2_FK_COUNT=' || (
+              SELECT COUNT(*)::text
+              FROM information_schema.table_constraints
+              WHERE table_schema = 'public'
+                AND table_name = 'ProductionOperationQuantityEdit'
+                AND constraint_type = 'FOREIGN KEY'
+            );
+            SELECT 'P2_REQUEST_ID_UNIQUE=' || CASE WHEN (
+              SELECT COUNT(*)
+              FROM pg_namespace n
+              JOIN pg_class t ON t.relnamespace = n.oid
+              JOIN pg_index i ON i.indrelid = t.oid
+              JOIN pg_class idx ON idx.oid = i.indexrelid
+              WHERE n.nspname = 'public'
+                AND t.relname = 'ProductionOperationQuantityEdit'
+                AND idx.relname = 'ProductionOperationQuantityEdit_requestId_key'
+                AND i.indisunique
+            ) = 1 THEN 'YES' ELSE 'NO' END;
+            SELECT 'SHADOW_SETTING=' || COALESCE((
+              SELECT CASE
+                WHEN s.\"value\" IS NULL THEN 'MALFORMED'
+                WHEN jsonb_typeof(s.\"value\"::jsonb) IS DISTINCT FROM 'object' THEN 'MALFORMED'
+                WHEN jsonb_typeof(s.\"value\"::jsonb -> 'version') IS DISTINCT FROM 'number'
+                  OR (s.\"value\"::jsonb ->> 'version') IS DISTINCT FROM '1' THEN 'MALFORMED'
+                WHEN jsonb_typeof(s.\"value\"::jsonb -> 'active') IS DISTINCT FROM 'boolean' THEN 'MALFORMED'
+                WHEN (s.\"value\"::jsonb ->> 'active') = 'true' THEN 'ACTIVE'
+                WHEN (s.\"value\"::jsonb ->> 'active') = 'false' THEN 'INACTIVE'
+                ELSE 'MALFORMED'
+              END
+              FROM \"Setting\" s
+              WHERE s.\"key\" = 'inventory_movement_shadow_write'
+            ), 'ABSENT');
+            SELECT 'COST_FLOW_SETTING=' || COALESCE((
+              SELECT CASE
+                WHEN s.\"value\" IS NULL THEN 'MALFORMED'
+                WHEN jsonb_typeof(s.\"value\"::jsonb) IS DISTINCT FROM 'object' THEN 'MALFORMED'
+                WHEN jsonb_typeof(s.\"value\"::jsonb -> 'version') IS DISTINCT FROM 'number'
+                  OR (s.\"value\"::jsonb ->> 'version') IS DISTINCT FROM '1' THEN 'MALFORMED'
+                WHEN jsonb_typeof(s.\"value\"::jsonb -> 'active') IS DISTINCT FROM 'boolean' THEN 'MALFORMED'
+                WHEN (s.\"value\"::jsonb ->> 'active') = 'true' THEN 'ACTIVE'
+                WHEN (s.\"value\"::jsonb ->> 'active') = 'false' THEN 'INACTIVE'
+                ELSE 'MALFORMED'
+              END
+              FROM \"Setting\" s
+              WHERE s.\"key\" = 'production_cost_flow'
+            ), 'ABSENT');
+            SELECT 'INVENTORY_MOVEMENT_COUNT=' || (SELECT COUNT(*)::text FROM \"InventoryMovement\");
+            COMMIT;"
+
+            raw="$(printf '%s\n' "$sql" | docker compose -f docker-compose.prod.yml exec -T db \
+              psql -U stell22 -d stell22 -v ON_ERROR_STOP=1 -At)"
+
+            require_one_marker() {
+              local pattern="$1"
+              local name="$2"
+              local n
+              n="$(printf '%s\n' "$raw" | grep -cE "$pattern" || true)"
+              if [[ "$n" -ne 1 ]]; then
+                echo "${name}_PARSE_FAILED count=${n}" >&2
+                printf '%s\n' "$raw" >&2
+                exit 1
+              fi
+            }
+
+            one_marker() {
+              local pattern="$1"
+              printf '%s\n' "$raw" | grep -E "$pattern"
+            }
+
+            require_one_marker '^P2_MIGRATION=(APPLIED|FAIL)$' P2_MIGRATION
+            require_one_marker '^P2_TABLE=(EXISTS|ABSENT)$' P2_TABLE
+            require_one_marker '^P2_ROW_COUNT=[0-9]+$' P2_ROW_COUNT
+            require_one_marker '^P2_FK_COUNT=[0-9]+$' P2_FK_COUNT
+            require_one_marker '^P2_REQUEST_ID_UNIQUE=(YES|NO)$' P2_REQUEST_ID_UNIQUE
+            require_one_marker '^SHADOW_SETTING=(ABSENT|INACTIVE|ACTIVE|MALFORMED)$' SHADOW_SETTING
+            require_one_marker '^COST_FLOW_SETTING=(ABSENT|INACTIVE|ACTIVE|MALFORMED)$' COST_FLOW_SETTING
+            require_one_marker '^INVENTORY_MOVEMENT_COUNT=[0-9]+$' INVENTORY_MOVEMENT_COUNT
+
+            p2_migration="$(one_marker '^P2_MIGRATION=(APPLIED|FAIL)$')"
+            p2_table="$(one_marker '^P2_TABLE=(EXISTS|ABSENT)$')"
+            p2_row_count="$(one_marker '^P2_ROW_COUNT=[0-9]+$')"
+            p2_fk_count="$(one_marker '^P2_FK_COUNT=[0-9]+$')"
+            p2_unique="$(one_marker '^P2_REQUEST_ID_UNIQUE=(YES|NO)$')"
+            shadow_setting="$(one_marker '^SHADOW_SETTING=(ABSENT|INACTIVE|ACTIVE|MALFORMED)$')"
+            cost_flow_setting="$(one_marker '^COST_FLOW_SETTING=(ABSENT|INACTIVE|ACTIVE|MALFORMED)$')"
+            inventory_count="$(one_marker '^INVENTORY_MOVEMENT_COUNT=[0-9]+$')"
+
+            echo "${p2_migration}"
+            echo "${p2_table}"
+            echo "${p2_row_count}"
+            echo "${p2_fk_count}"
+            echo "${p2_unique}"
+            echo "${shadow_setting}"
+            echo "${cost_flow_setting}"
+            echo "${inventory_count}"
+
+            if [[ "$p2_migration" != "P2_MIGRATION=APPLIED" ]]; then
+              echo "P2_MIGRATION_NOT_APPLIED" >&2
+              exit 1
+            fi
+            if [[ "$p2_table" != "P2_TABLE=EXISTS" ]]; then
+              echo "P2_TABLE_MISSING" >&2
+              exit 1
+            fi
+            if [[ "$p2_row_count" != "P2_ROW_COUNT=0" ]]; then
+              echo "P2_ROW_COUNT_NOT_ZERO ${p2_row_count}" >&2
+              exit 1
+            fi
+            if [[ "$p2_fk_count" != "P2_FK_COUNT=0" ]]; then
+              echo "P2_FK_COUNT_NOT_ZERO ${p2_fk_count}" >&2
+              exit 1
+            fi
+            if [[ "$p2_unique" != "P2_REQUEST_ID_UNIQUE=YES" ]]; then
+              echo "P2_REQUEST_ID_UNIQUE_MISSING" >&2
+              exit 1
+            fi
+            if [[ "$shadow_setting" != "SHADOW_SETTING=ABSENT" && "$shadow_setting" != "SHADOW_SETTING=INACTIVE" ]]; then
+              echo "SHADOW_SETTING_NOT_ACCEPTED ${shadow_setting}" >&2
+              exit 1
+            fi
+            if [[ "$cost_flow_setting" != "COST_FLOW_SETTING=ABSENT" && "$cost_flow_setting" != "COST_FLOW_SETTING=INACTIVE" ]]; then
+              echo "COST_FLOW_SETTING_NOT_ACCEPTED ${cost_flow_setting}" >&2
+              exit 1
+            fi
+            if [[ "$inventory_count" != "INVENTORY_MOVEMENT_COUNT=0" ]]; then
+              echo "INVENTORY_MOVEMENT_COUNT_NOT_ZERO ${inventory_count}" >&2
+              exit 1
+            fi
+
+            echo "PACKAGE2_PRODUCTION_DB_VERIFY_OK"
