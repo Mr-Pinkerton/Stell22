@@ -82,13 +82,24 @@ jobs:
             SELECT 'P2_REQUEST_ID_UNIQUE=' || CASE WHEN (
               SELECT COUNT(*)
               FROM pg_namespace n
-              JOIN pg_class t ON t.relnamespace = n.oid
-              JOIN pg_index i ON i.indrelid = t.oid
-              JOIN pg_class idx ON idx.oid = i.indexrelid
+              JOIN pg_class t
+                ON t.relnamespace = n.oid
+              JOIN pg_index i
+                ON i.indrelid = t.oid
+              JOIN pg_class idx
+                ON idx.oid = i.indexrelid
+              JOIN pg_attribute a
+                ON a.attrelid = t.oid
+               AND a.attnum = ANY(i.indkey)
               WHERE n.nspname = 'public'
                 AND t.relname = 'ProductionOperationQuantityEdit'
                 AND idx.relname = 'ProductionOperationQuantityEdit_requestId_key'
                 AND i.indisunique
+                AND i.indpred IS NULL
+                AND i.indexprs IS NULL
+                AND i.indnkeyatts = 1
+                AND i.indnatts = 1
+                AND a.attname = 'requestId'
             ) = 1 THEN 'YES' ELSE 'NO' END;
             SELECT 'SHADOW_SETTING=' || COALESCE((
               SELECT CASE
