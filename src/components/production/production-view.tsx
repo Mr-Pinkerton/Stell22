@@ -32,7 +32,9 @@ import {
 } from "@/lib/production-entries";
 import { formatIsoDate, formatIsoDateTime, formatLength, formatMoney } from "@/lib/format";
 import { exportXlsx } from "@/lib/export-xlsx";
-import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "@/lib/torcovka-delete-policy";
+import {
+  physicalProductionDeleteBlockedMessage,
+} from "@/lib/production-physical-delete-policy";
 import {
   correctionCommandKey,
   retainOrMintCorrectionRequestId,
@@ -364,8 +366,9 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
       toast.error("Нельзя удалить — операция уже выплачена");
       return;
     }
-    if (row.type === "TORCOVKA") {
-      toast.error(TORCOVKA_GENERIC_DELETE_BLOCKED);
+    const blocked = physicalProductionDeleteBlockedMessage(row.type);
+    if (blocked) {
+      toast.error(blocked);
       return;
     }
     startTransition(async () => {
@@ -708,7 +711,7 @@ function ProductionRowGroup({
               <Tooltip>
                 <TooltipTrigger
                   render={
-                    row.type === "TORCOVKA" ? (
+                    physicalProductionDeleteBlockedMessage(row.type) ? (
                       <span className="inline-flex">
                         <Button
                           type="button"
@@ -716,7 +719,7 @@ function ProductionRowGroup({
                           size="icon"
                           className={tableActionDestructiveClass}
                           disabled
-                          aria-label={TORCOVKA_GENERIC_DELETE_BLOCKED}
+                          aria-label={physicalProductionDeleteBlockedMessage(row.type) ?? undefined}
                         >
                           <Trash2 />
                         </Button>
@@ -735,7 +738,7 @@ function ProductionRowGroup({
                   }
                 />
                 <TooltipContent>
-                  {row.type === "TORCOVKA" ? TORCOVKA_GENERIC_DELETE_BLOCKED : "Удалить"}
+                  {physicalProductionDeleteBlockedMessage(row.type) ?? "Удалить"}
                 </TooltipContent>
               </Tooltip>
             </div>

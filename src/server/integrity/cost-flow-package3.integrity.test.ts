@@ -23,7 +23,6 @@ import { D } from "@/lib/cost";
 import { q6 } from "@/lib/cost-foundation";
 import {
   COST_FLOW_POOL_UNINITIALIZED,
-  COST_FLOW_PRE_CUTOVER_REVERSE,
   COST_FLOW_VERSION_MISMATCH,
 } from "@/server/internal/cost-flow-raw";
 import {
@@ -33,6 +32,11 @@ import {
 import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
 import { INVENTORY_BOUNDARY, STALE_SNAPSHOT } from "@/server/internal/inventory-integrity";
 import { applySupplyDeduction } from "@/server/internal/supply-deduct";
+import { DETAIL_NONZERO_STOCK_DELETE_BLOCKED } from "@/lib/destructive-delete-guards";
+import {
+  PRISADKA_PHYSICAL_DELETE_BLOCKED,
+  UPAKOVKA_PHYSICAL_DELETE_BLOCKED,
+} from "@/lib/production-physical-delete-policy";
 import { deleteDetail } from "@/server/nomenclature";
 import { deleteProductionOperation, updateProductionLineQuantity } from "@/server/production";
 import { createSimplePurchase } from "@/server/purchases";
@@ -347,14 +351,9 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     });
     expect(prisAfter.lines.reduce((s, l) => s + l.quantity, 0)).toBe(2);
     expect(prisAfter.lines.every((l) => l.inputMaterialValue == null && l.outputCostVersion == null)).toBe(true);
-    await deleteProductionOperation(pris.id);
-    expect(await prismaA.productionOperation.count({ where: { id: pris.id } })).toBe(0);
+    await expect(deleteProductionOperation(pris.id)).rejects.toThrow(PRISADKA_PHYSICAL_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: pris.id } })).toBe(1);
 
-    await submitPrisadka({
-      employeeId: world.emp.id,
-      clientRequestId: `inact-pr3-${world.suffix}`,
-      picks: [{ detailId: world.detail.id, kind: "torcev", quantity: 2 }],
-    });
     await createSimplePurchase({
       nomenclatureId: world.fastener.id,
       quantity: 8,
@@ -371,8 +370,8 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     const packAfter = await prismaA.productionOperation.findUniqueOrThrow({ where: { id: pack.id } });
     expect(packAfter.productQty).toBe(2);
     expect(packAfter.receiptMaterialValue).toBeNull();
-    await deleteProductionOperation(pack.id);
-    expect(await prismaA.productionOperation.count({ where: { id: pack.id } })).toBe(0);
+    await expect(deleteProductionOperation(pack.id)).rejects.toThrow(UPAKOVKA_PHYSICAL_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: pack.id } })).toBe(1);
 
     const orphan = await prismaA.detail.create({
       data: {
@@ -389,9 +388,9 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     await prismaA.detailStock.create({
       data: { detailId: orphan.id, torcevayaDone: true, ploskostDone: false, quantity: 3 },
     });
-    await deleteDetail(orphan.id);
-    expect(await prismaA.detail.findUnique({ where: { id: orphan.id } })).toBeNull();
-    expect(await prismaA.detailStock.count({ where: { detailId: orphan.id } })).toBe(0);
+    await expect(deleteDetail(orphan.id)).rejects.toThrow(DETAIL_NONZERO_STOCK_DELETE_BLOCKED);
+    expect(await prismaA.detail.findUnique({ where: { id: orphan.id } })).not.toBeNull();
+    expect(await prismaA.detailStock.count({ where: { detailId: orphan.id } })).toBe(1);
 
     await prismaA.productStock.upsert({
       where: { productId: world.product.id },
@@ -577,27 +576,15 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     await setCostFlowActive(true);
     const world = await seedChain();
     await createdTorcovka(world, `rev-tor-${world.suffix}`);
-    const blankAfterTorc = await prismaA.blankStock.findFirstOrThrow({
-      where: { materialId: world.material.id, lengthM: new Prisma.Decimal("1.8000") },
-    });
     await submitPrisadka({
       employeeId: world.emp.id,
       clientRequestId: `rev-pr-${world.suffix}`,
       picks: [{ detailId: world.detail.id, kind: "torcev", quantity: 1 }],
     });
     const pris = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "PRISADKA" } });
-    await deleteProductionOperation(pris.id);
-    const blankRestored = await prismaA.blankStock.findFirstOrThrow({
-      where: { materialId: world.material.id, lengthM: new Prisma.Decimal("1.8000") },
-    });
-    expect(blankRestored.quantity).toBe(blankAfterTorc.quantity);
-    expect(d(blankRestored.materialValue)!.equals(d(blankAfterTorc.materialValue)!)).toBe(true);
+    await expect(deleteProductionOperation(pris.id)).rejects.toThrow(PRISADKA_PHYSICAL_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: pris.id } })).toBe(1);
 
-    await submitPrisadka({
-      employeeId: world.emp.id,
-      clientRequestId: `rev-pr2-${world.suffix}`,
-      picks: [{ detailId: world.detail.id, kind: "torcev", quantity: 1 }],
-    });
     await createSimplePurchase({
       nomenclatureId: world.fastener.id,
       quantity: 10,
@@ -615,7 +602,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       where: { productId: world.product.id },
       data: { costVersion: destBefore.costVersion + 1 },
     });
-    await expect(deleteProductionOperation(pack.id)).rejects.toThrow(COST_FLOW_VERSION_MISMATCH);
+    await expect(deleteProductionOperation(pack.id)).rejects.toThrow(UPAKOVKA_PHYSICAL_DELETE_BLOCKED);
   });
 
   it("idempotent PRISADKA/UPAKOVKA replay does not double money", async () => {
@@ -766,7 +753,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     });
     const op = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "PRISADKA" } });
     await setCostFlowActive(true);
-    await expect(deleteProductionOperation(op.id)).rejects.toThrow(COST_FLOW_PRE_CUTOVER_REVERSE);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(PRISADKA_PHYSICAL_DELETE_BLOCKED);
 
     await prismaA.productStock.create({
       data: {
@@ -1284,12 +1271,6 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
         costVersion: 1,
       },
     });
-    const blank0 = await prismaA.blankStock.findFirstOrThrow({
-      where: { materialId: world.material.id, lengthM: new Prisma.Decimal("1.8000") },
-    });
-    const partial0 = await prismaA.detailStock.findFirstOrThrow({
-      where: { detailId: world.detail.id, torcevayaDone: false, ploskostDone: false },
-    });
     const eventsBefore = await prismaA.costEvent.count();
     await submitPrisadka({
       employeeId: world.emp.id,
@@ -1314,22 +1295,8 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     expect(destSharing.length).toBeGreaterThan(1);
     expect(new Set(destSharing.map((l) => l.outputCostVersion)).size).toBe(1);
     expect(destSharing[0]!.outputCostVersion).toBe(dest.costVersion);
-    await deleteProductionOperation(op.id);
-    const destAfter = await prismaA.detailStock.findFirst({
-      where: { detailId: world.detail.id, torcevayaDone: true, ploskostDone: false },
-    });
-    expect(destAfter?.quantity ?? 0).toBe(0);
-    expect(d(destAfter?.materialValue ?? 0)!.equals(q6(0))).toBe(true);
-    expect(d(destAfter?.laborValue ?? 0)!.equals(q6(0))).toBe(true);
-    const blankAfter = await prismaA.blankStock.findUniqueOrThrow({ where: { id: blank0.id } });
-    const partialAfter = await prismaA.detailStock.findUniqueOrThrow({ where: { id: partial0.id } });
-    expect(blankAfter.quantity).toBe(blank0.quantity);
-    expect(d(blankAfter.materialValue)!.equals(d(blank0.materialValue)!)).toBe(true);
-    expect(d(blankAfter.laborValue)!.equals(d(blank0.laborValue)!)).toBe(true);
-    expect(partialAfter.quantity).toBe(partial0.quantity);
-    expect(d(partialAfter.materialValue)!.equals(d(partial0.materialValue)!)).toBe(true);
-    expect(d(partialAfter.laborValue)!.equals(d(partial0.laborValue)!)).toBe(true);
-    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(0);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(PRISADKA_PHYSICAL_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     expect(await prismaA.costEvent.count()).toBe(eventsBefore);
   });
 
@@ -1348,12 +1315,6 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       unitPrice: 12,
       purchaseDate: "2026-01-20",
     }, `test:sp:p3-12`);
-    const wipBefore = await prismaA.detailStock.findFirstOrThrow({
-      where: { detailId: world.detail.id, torcevayaDone: true },
-    });
-    const nomBefore = await prismaA.nomenclatureStock.findUniqueOrThrow({
-      where: { nomenclatureId: world.fastener.id },
-    });
     await submitUpakovka({
       employeeId: world.emp.id,
       clientRequestId: `exup-up-${world.suffix}`,
@@ -1365,22 +1326,8 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     });
     expect(d(pack.pieceLaborCost)!.equals(q6(6))).toBe(true);
     const eventsBefore = await prismaA.costEvent.count();
-    await deleteProductionOperation(pack.id);
-    const product = await prismaA.productStock.findUniqueOrThrow({ where: { productId: world.product.id } });
-    expect(product.quantity).toBe(0);
-    expect(d(product.materialValue)!.equals(q6(0))).toBe(true);
-    expect(d(product.laborValue)!.equals(q6(0))).toBe(true);
-    expect(d(product.nomenclatureValue)!.equals(q6(0))).toBe(true);
-    const wipAfter = await prismaA.detailStock.findUniqueOrThrow({ where: { id: wipBefore.id } });
-    expect(wipAfter.quantity).toBe(wipBefore.quantity);
-    expect(d(wipAfter.materialValue)!.equals(d(wipBefore.materialValue)!)).toBe(true);
-    expect(d(wipAfter.laborValue)!.equals(d(wipBefore.laborValue)!)).toBe(true);
-    const nomAfter = await prismaA.nomenclatureStock.findUniqueOrThrow({
-      where: { nomenclatureId: world.fastener.id },
-    });
-    expect(nomAfter.quantity).toBe(nomBefore.quantity);
-    expect(d(nomAfter.nomenclatureValue)!.equals(d(nomBefore.nomenclatureValue)!)).toBe(true);
-    expect(await prismaA.productionOperation.count({ where: { id: pack.id } })).toBe(0);
+    await expect(deleteProductionOperation(pack.id)).rejects.toThrow(UPAKOVKA_PHYSICAL_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: pack.id } })).toBe(1);
     expect(await prismaA.costEvent.count()).toBe(eventsBefore);
   });
 
@@ -1726,7 +1673,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
         prisadkaPloskost: true,
       },
     });
-    const torcevOnly = await prismaA.detailStock.create({
+    await prismaA.detailStock.create({
       data: {
         detailId: both.id,
         torcevayaDone: true,
@@ -1738,7 +1685,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
         costVersion: 1,
       },
     });
-    const ploskOnly = await prismaA.detailStock.create({
+    await prismaA.detailStock.create({
       data: {
         detailId: both.id,
         torcevayaDone: false,
@@ -1770,20 +1717,8 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     expect(new Set(op.lines.map((l) => l.outputCostVersion)).size).toBe(1);
     expect(op.lines[0]!.outputCostVersion).toBe(dest.costVersion);
     expect(d(op.pieceLaborCost)!.equals(q6(9))).toBe(true);
-    await deleteProductionOperation(op.id);
-    const destAfter = await prismaA.detailStock.findUniqueOrThrow({ where: { id: dest.id } });
-    expect(destAfter.quantity).toBe(0);
-    expect(d(destAfter.materialValue)!.equals(q6(0))).toBe(true);
-    expect(d(destAfter.laborValue)!.equals(q6(0))).toBe(true);
-    const torcevRestored = await prismaA.detailStock.findUniqueOrThrow({ where: { id: torcevOnly.id } });
-    const ploskRestored = await prismaA.detailStock.findUniqueOrThrow({ where: { id: ploskOnly.id } });
-    expect(torcevRestored.quantity).toBe(1);
-    expect(d(torcevRestored.materialValue)!.equals(q6(100))).toBe(true);
-    expect(d(torcevRestored.laborValue)!.equals(q6(10))).toBe(true);
-    expect(ploskRestored.quantity).toBe(1);
-    expect(d(ploskRestored.materialValue)!.equals(q6(80))).toBe(true);
-    expect(d(ploskRestored.laborValue)!.equals(q6(5))).toBe(true);
-    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(0);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(PRISADKA_PHYSICAL_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     expect(await prismaA.costEvent.count()).toBe(eventsBefore);
   });
 
@@ -1885,20 +1820,8 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     expect(d(ploskAfterCorr.laborValue)!.equals(q6(5))).toBe(true);
     expect(await prismaA.costEvent.count()).toBe(eventsBefore);
 
-    await deleteProductionOperation(op.id);
-    const destAfterDel = await prismaA.detailStock.findUniqueOrThrow({ where: { id: dest.id } });
-    expect(destAfterDel.quantity).toBe(0);
-    expect(d(destAfterDel.materialValue)!.equals(q6(0))).toBe(true);
-    expect(d(destAfterDel.laborValue)!.equals(q6(0))).toBe(true);
-    const torcevRestored = await prismaA.detailStock.findUniqueOrThrow({ where: { id: torcevSrc.id } });
-    const ploskRestored = await prismaA.detailStock.findUniqueOrThrow({ where: { id: ploskSrc.id } });
-    expect(torcevRestored.quantity).toBe(2);
-    expect(d(torcevRestored.materialValue)!.equals(q6(200))).toBe(true);
-    expect(d(torcevRestored.laborValue)!.equals(q6(20))).toBe(true);
-    expect(ploskRestored.quantity).toBe(2);
-    expect(d(ploskRestored.materialValue)!.equals(q6(160))).toBe(true);
-    expect(d(ploskRestored.laborValue)!.equals(q6(10))).toBe(true);
-    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(0);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(PRISADKA_PHYSICAL_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     expect(await prismaA.costEvent.count()).toBe(eventsBefore);
   });
 
@@ -2147,7 +2070,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     await setCostFlowActive(true);
     const world = await seedChain();
     const both = await createBothPrisadkaDetail(world, 52);
-    const blank = await prismaA.blankStock.create({
+    await prismaA.blankStock.create({
       data: {
         materialId: world.material.id,
         lengthM: new Prisma.Decimal("1.8000"),
@@ -2174,41 +2097,8 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       data: { ratePrisadkaTorcev: 99, ratePrisadkaPloskt: 88 },
     });
     const op = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "PRISADKA" } });
-    await deleteProductionOperation(op.id);
-    const blankAfter = await prismaA.blankStock.findUniqueOrThrow({ where: { id: blank.id } });
-    expect(blankAfter.quantity).toBe(2);
-    expect(d(blankAfter.materialValue)!.equals(q6(200))).toBe(true);
-    expect(d(blankAfter.laborValue)!.equals(q6(20))).toBe(true);
-    expect(await detailBucketQty(both.id, true, false)).toBe(0);
-    expect(await detailBucketQty(both.id, false, true)).toBe(0);
-    expect(await detailBucketQty(both.id, true, true)).toBe(0);
-    const tf = await prismaA.detailStock.findUnique({
-      where: {
-        detailId_torcevayaDone_ploskostDone: {
-          detailId: both.id,
-          torcevayaDone: true,
-          ploskostDone: false,
-        },
-      },
-    });
-    const tt = await prismaA.detailStock.findUnique({
-      where: {
-        detailId_torcevayaDone_ploskostDone: {
-          detailId: both.id,
-          torcevayaDone: true,
-          ploskostDone: true,
-        },
-      },
-    });
-    if (tf) {
-      expect(d(tf.materialValue)!.equals(q6(0))).toBe(true);
-      expect(d(tf.laborValue)!.equals(q6(0))).toBe(true);
-    }
-    if (tt) {
-      expect(d(tt.materialValue)!.equals(q6(0))).toBe(true);
-      expect(d(tt.laborValue)!.equals(q6(0))).toBe(true);
-    }
-    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(0);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(PRISADKA_PHYSICAL_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     expect(await prismaA.costEvent.count()).toBe(eventsBefore);
   });
 
@@ -2216,7 +2106,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     await setCostFlowActive(true);
     const world = await seedChain();
     const both = await createBothPrisadkaDetail(world, 53);
-    const blank = await prismaA.blankStock.create({
+    await prismaA.blankStock.create({
       data: {
         materialId: world.material.id,
         lengthM: new Prisma.Decimal("1.8000"),
@@ -2293,13 +2183,8 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     expect(d(corrected.pieceLaborCost)!.equals(q6(14))).toBe(true);
     expect(d(corrected.pieceLaborCost)!.equals(q6(99 + 88))).toBe(false);
     expect(await prismaA.costEvent.count()).toBe(eventsBefore);
-    await deleteProductionOperation(op.id);
-    const blankAfter = await prismaA.blankStock.findUniqueOrThrow({ where: { id: blank.id } });
-    expect(blankAfter.quantity).toBe(2);
-    expect(d(blankAfter.materialValue)!.equals(q6(200))).toBe(true);
-    expect(d(blankAfter.laborValue)!.equals(q6(20))).toBe(true);
-    expect(await detailBucketQty(both.id, true, false)).toBe(0);
-    expect(await detailBucketQty(both.id, true, true)).toBe(0);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(PRISADKA_PHYSICAL_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     expect(await prismaA.costEvent.count()).toBe(eventsBefore);
   });
 
@@ -2397,7 +2282,7 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     const lineBAfter = afterCorr.lines.find((l) => l.detailId === detB.id)!;
     expect(lineBAfter.outputCostVersion).toBe(historicalB);
     expect(lineBAfter.outputCostVersion).not.toBe(destBAfterExt.costVersion);
-    await expect(deleteProductionOperation(op.id)).rejects.toThrow(COST_FLOW_VERSION_MISMATCH);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(PRISADKA_PHYSICAL_DELETE_BLOCKED);
   });
 
   it("chain downstream correction rebases retained upstream dest version then exact delete succeeds", async () => {
@@ -2454,8 +2339,8 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
     const torcevAfter = after.lines.find((l) => l.prisadkaTorcevaya)!;
     expect(torcevAfter.outputCostVersion).toBe(midAfter.costVersion);
     expect(torcevAfter.outputCostVersion).not.toBe(historicalMid);
-    await deleteProductionOperation(op.id);
-    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(0);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(PRISADKA_PHYSICAL_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
   });
 
   it("chain downstream correction fail-closes if intermediate was externally mutated", async () => {
@@ -2763,7 +2648,9 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       },
     });
     const eventsBefore = await prismaA.costEvent.count();
-    await expect(deleteProductionOperation(op.id)).rejects.toThrow(INVENTORY_BOUNDARY);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(
+      /физический сток не отменяется/,
+    );
     expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     const dest = await prismaA.detailStock.findUniqueOrThrow({ where: { id: destBefore.id } });
     const blank = await prismaA.blankStock.findUniqueOrThrow({ where: { id: blankBefore.id } });
@@ -2786,7 +2673,9 @@ describe.skipIf(!enabled)("Package 3 downstream production cost flow", () => {
       suffix: `inact-del-${seq}`,
       qty: 10,
     });
-    await expect(deleteProductionOperation(op.id)).rejects.toThrow(INVENTORY_BOUNDARY);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(
+      /физический сток не отменяется/,
+    );
     expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     expect(await detailBucketQty(world.detail.id, true, false)).toBe(10);
     expect(await blankQty(world.material.id)).toBe(0);

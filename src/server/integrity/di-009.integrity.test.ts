@@ -29,6 +29,10 @@ import {
 } from "@/server/internal/inventory-integrity";
 import { correctTorcovkaRailsTaken, deleteProductionOperation, updateProductionLineQuantity } from "@/server/production";
 import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "@/lib/torcovka-delete-policy";
+import {
+  PRISADKA_PHYSICAL_DELETE_BLOCKED,
+  UPAKOVKA_PHYSICAL_DELETE_BLOCKED,
+} from "@/lib/production-physical-delete-policy";
 import { submitPrisadka, submitUpakovka } from "@/server/terminal";
 import { conductInventory, getInventoryDocs, updateInventoryLineActual } from "@/server/warehouse";
 import {
@@ -390,13 +394,13 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     });
     const op = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "UPAKOVKA" } });
 
-    await deleteProductionOperation(op.id);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(UPAKOVKA_PHYSICAL_DELETE_BLOCKED);
 
-    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(0);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     expect((await prismaA.productStock.findUnique({ where: { productId: p.id } }))?.quantity ?? 0).toBe(
-      0,
+      2,
     );
-    expect(await readySum(d.id)).toBe(5);
+    expect(await readySum(d.id)).toBe(3);
   });
 
   it("7 reverse across covering inventory BLOCK, zero writes", async () => {
@@ -436,7 +440,7 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     });
     await conductInventory(doc.id);
 
-    await expect(deleteProductionOperation(op.id)).rejects.toThrow(INVENTORY_BOUNDARY);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(UPAKOVKA_PHYSICAL_DELETE_BLOCKED);
 
     expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     expect((await prismaA.productStock.findUniqueOrThrow({ where: { productId: p.id } })).quantity).toBe(
@@ -485,10 +489,10 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     });
     await conductInventory(doc.id);
 
-    await deleteProductionOperation(op.id);
-    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(0);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(UPAKOVKA_PHYSICAL_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     expect((await prismaA.productStock.findUnique({ where: { productId: pA.id } }))?.quantity ?? 0).toBe(
-      0,
+      1,
     );
   });
 
@@ -528,8 +532,8 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     });
     const op = await prismaA.productionOperation.findFirstOrThrow({ where: { type: "UPAKOVKA" } });
 
-    await deleteProductionOperation(op.id);
-    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(0);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(UPAKOVKA_PHYSICAL_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
   });
 
   it("10 RailLot correction unaffected; TORCOVKA delete ALLOW if blank spec not inventoried", async () => {
@@ -952,13 +956,13 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     });
     await conductInventory(doc.id);
 
-    await deleteProductionOperation(op.id);
-    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(0);
-    expect(await wipSum(d.id)).toBe(0);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(PRISADKA_PHYSICAL_DELETE_BLOCKED);
+    expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
+    expect(await wipSum(d.id)).toBe(2);
     const blank = await prismaA.blankStock.findFirstOrThrow({
       where: { materialId: mat.id, detailType: "POLKA", sort: "SORT1" },
     });
-    expect(blank.quantity).toBe(4);
+    expect(blank.quantity).toBe(2);
   });
 
   it("15 READY PRISADKA reverse + covering inventory BLOCK", async () => {
@@ -997,7 +1001,7 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     });
     await conductInventory(doc.id);
 
-    await expect(deleteProductionOperation(op.id)).rejects.toThrow(INVENTORY_BOUNDARY);
+    await expect(deleteProductionOperation(op.id)).rejects.toThrow(PRISADKA_PHYSICAL_DELETE_BLOCKED);
     expect(await prismaA.productionOperation.count({ where: { id: op.id } })).toBe(1);
     expect(await readySum(d.id)).toBe(5);
     expect(await wipSum(d.id)).toBe(0);

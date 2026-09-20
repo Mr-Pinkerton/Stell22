@@ -302,6 +302,17 @@ export async function lockDetails(
   );
 }
 
+export async function lockDetailStocks(
+  tx: Prisma.TransactionClient,
+  ids: Iterable<string | null | undefined>,
+): Promise<void> {
+  const unique = sortedUniqueIds(ids);
+  if (unique.length === 0) return;
+  await tx.$queryRaw(
+    Prisma.sql`SELECT id FROM "DetailStock" WHERE id IN (${Prisma.join(unique)}) ORDER BY id FOR UPDATE`,
+  );
+}
+
 export async function lockProductIds(
   tx: Prisma.TransactionClient,
   ids: Iterable<string | null | undefined>,
