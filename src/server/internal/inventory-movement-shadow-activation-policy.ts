@@ -85,6 +85,36 @@ export type VerifyActiveDecision =
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 const MARKER_RE = /^SHADOW_CTRL ([A-Za-z0-9_]+)=([A-Za-z0-9_]+)$/;
+const SNAPSHOT_COMPLETE_LINE = "SHADOW_CTRL SNAPSHOT_MODE=READ_ONLY";
+
+export function assertSnapshotComplete(text: string): { ok: true } | PolicyRefusal {
+  const markers = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(
+      (line) => line === SNAPSHOT_COMPLETE_LINE || line.startsWith("SHADOW_CTRL SNAPSHOT_MODE="),
+    );
+  if (markers.length !== 1 || markers[0] !== SNAPSHOT_COMPLETE_LINE) {
+    return { ok: false, code: "SNAPSHOT_INCOMPLETE" };
+  }
+  return { ok: true };
+}
+
+export function assertApplySuccessToken(
+  text: string,
+  cliState: string,
+): { ok: true } | PolicyRefusal {
+  const expected = `SHADOW_CONTROL_APPLY_OK state=${cliState}`;
+  const markers = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("SHADOW_CONTROL_APPLY_OK"));
+  if (cliState !== "on" && cliState !== "off") return { ok: false, code: "APPLY_NOT_PROVEN" };
+  if (markers.length !== 1 || markers[0] !== expected) {
+    return { ok: false, code: "APPLY_NOT_PROVEN" };
+  }
+  return { ok: true };
+}
 
 function migrationKey(name: string): string {
   return `MIGRATION_${name}`;
@@ -102,6 +132,9 @@ function isRefusal(value: number | PolicyRefusal): value is PolicyRefusal {
 }
 
 export function parseShadowControlSnapshot(text: string): ShadowControlSnapshot | PolicyRefusal {
+  const complete = assertSnapshotComplete(text);
+  if (!complete.ok) return complete;
+
   const values = new Map<string, string>();
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();

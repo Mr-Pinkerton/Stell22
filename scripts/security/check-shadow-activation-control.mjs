@@ -74,7 +74,7 @@ for (const name of migrationNames) {
   if (!snapshot.includes(name)) failures.push(`snapshot missing migration ${name}`);
 }
 
-const mutation = /\b(UPDATE|INSERT|DELETE|TRUNCATE|ALTER|DROP)\b/;
+const mutation = /\b(UPDATE|INSERT|DELETE|TRUNCATE|ALTER|DROP)\b/i;
 for (const [rel, src] of [
   ["scripts/shadow-activation-readonly-snapshot.sh", snapshot],
   ["scripts/shadow-activation-apply-deployed-cli.sh", apply],
@@ -86,6 +86,44 @@ for (const [rel, src] of [
   if (src.includes("setting.upsert") || src.includes("setting.update")) {
     failures.push(`${rel}: contains Setting mutation`);
   }
+}
+
+function logicalDockerLines(src) {
+  return withoutComments(src)
+    .replace(/\\\r?\n/g, " ")
+    .split("\n")
+    .filter((line) => line.includes("docker compose"));
+}
+
+function assertDockerStdin(rel, src) {
+  if (/(^|\n)\s*exec\s+</.test(src)) {
+    failures.push(`${rel}: must not replace bash -s script stdin with exec </dev/null`);
+  }
+  const lines = logicalDockerLines(src);
+  if (lines.length === 0) failures.push(`${rel}: expected docker commands`);
+  for (const line of lines) {
+    const dockerAt = line.indexOf("docker compose");
+    const piped = line.slice(0, dockerAt).includes("|");
+    if (piped) {
+      if (!line.slice(0, dockerAt).includes("printf") || !line.includes("psql")) {
+        failures.push(`${rel}: piped docker stdin must remain the SQL printf | psql pipe`);
+      }
+      if (line.includes("</dev/null")) {
+        failures.push(`${rel}: SQL pipe must not be replaced with /dev/null`);
+      }
+    } else if (!line.includes("</dev/null")) {
+      failures.push(`${rel}: non-piped docker command must detach stdin with </dev/null`);
+    }
+  }
+}
+
+assertDockerStdin("scripts/shadow-activation-readonly-snapshot.sh", snapshot);
+assertDockerStdin("scripts/shadow-activation-apply-deployed-cli.sh", apply);
+if (!snapshot.includes("SHADOW_CTRL SNAPSHOT_MODE=READ_ONLY")) {
+  failures.push("snapshot script must emit the completion token");
+}
+if (!apply.includes("SHADOW_CONTROL_APPLY_OK state=${CLI_STATE}")) {
+  failures.push("apply script must emit SHADOW_CONTROL_APPLY_OK");
 }
 
 if (!snapshot.includes("BEGIN TRANSACTION READ ONLY")) {
@@ -231,9 +269,35 @@ if (control.includes("reset-inventory-movement") || control.includes("INVENTORY_
 }
 const precheckAt = control.indexOf("shadow-activation-policy.ts precheck");
 const applyAt = control.indexOf("shadow-activation-ssh.sh apply");
+const applyProofAt = control.indexOf("shadow-activation-policy.ts assert-apply");
 const postAt = control.indexOf("shadow-activation-policy.ts post-activate");
-if (!(precheckAt > 0 && applyAt > precheckAt && postAt > applyAt)) {
-  failures.push("control workflow must precheck, then apply the CLI, then post-check");
+if (!(precheckAt > 0 && applyAt > precheckAt && applyProofAt > applyAt && postAt > applyProofAt)) {
+  failures.push("control workflow must precheck, then apply the CLI, prove the apply token, then post-check");
+}
+const snapshotProofs = control.split("shadow-activation-policy.ts assert-snapshot").length - 1;
+if (snapshotProofs !== 2) {
+  failures.push("control workflow must require a complete snapshot before precheck and post-check");
+}
+if (!control.includes("id: apply")) failures.push("apply step must be identifiable for post-mutation remediation");
+if (
+  !control.includes(
+    "failure() && (steps.apply.outcome == 'failure' || steps.apply.outcome == 'success')",
+  )
+) {
+  failures.push("remediation must run only after the mutation step was entered");
+}
+if (!control.includes("ACTIVATION_STATE_UNCONFIRMED — gate may already be ACTIVE.")) {
+  failures.push("activation failure must say the gate state is unconfirmed");
+}
+if (!control.includes("DEACTIVATION_STATE_UNCONFIRMED — gate state may already have changed.")) {
+  failures.push("deactivation failure must say the gate state is unconfirmed");
+}
+const remediation = control.slice(control.indexOf("Report unconfirmed gate"));
+if (remediation.includes("shadow-activation-ssh.sh") || remediation.includes("set-inventory-movement-shadow-write")) {
+  failures.push("remediation must not automatically roll back or dispatch the gate CLI");
+}
+if (!control.includes("NO_AUTOMATIC_ROLLBACK=YES")) {
+  failures.push("remediation must record that rollback is not automatic");
 }
 const contractBody = control.slice(control.indexOf("  contract:"), control.indexOf("  control:"));
 if (contractBody.includes("environment:")) {
@@ -256,6 +320,9 @@ if (!verify.includes("shadow-activation-ssh.sh snapshot")) {
   failures.push("post-activation verifier must take a read-only snapshot");
 }
 if (!verify.includes("verify-active")) failures.push("post-activation verifier must call verify-active");
+if (!verify.includes("shadow-activation-policy.ts assert-snapshot")) {
+  failures.push("post-activation verifier must require a complete snapshot");
+}
 const verifyContract = verify.slice(verify.indexOf("  contract:"), verify.indexOf("  verify:"));
 if (verifyContract.includes("environment:")) {
   failures.push("verifier pin job must not receive production environment secrets");

@@ -150,13 +150,17 @@ jobs:
           PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
           PROD_PORT: ${{ secrets.PROD_PORT }}
           EXPECTED_SHA: ${{ needs.contract.outputs.expected_sha }}
-        run: bash scripts/shadow-activation-ssh.sh snapshot > pre-snapshot.txt
+        run: |
+          set -euo pipefail
+          bash scripts/shadow-activation-ssh.sh snapshot > pre-snapshot.txt
+          npx tsx scripts/shadow-activation-policy.ts assert-snapshot --snapshot=pre-snapshot.txt
 
       - name: Fail closed unless preconditions allow this action
         id: precheck
         run: npx tsx scripts/shadow-activation-policy.ts precheck --snapshot=pre-snapshot.txt
 
       - name: Apply deployed gate CLI
+        id: apply
         env:
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_USER: ${{ secrets.PROD_USER }}
@@ -166,7 +170,10 @@ jobs:
           EXPECTED_SHA: ${{ needs.contract.outputs.expected_sha }}
           CLI_STATE: ${{ steps.precheck.outputs.cli_state }}
           EXPECTED_PRIOR: ${{ steps.precheck.outputs.expected_prior }}
-        run: bash scripts/shadow-activation-ssh.sh apply
+        run: |
+          set -euo pipefail
+          bash scripts/shadow-activation-ssh.sh apply > apply-output.txt
+          npx tsx scripts/shadow-activation-policy.ts assert-apply --output=apply-output.txt
 
       - name: Read-only post-control snapshot
         env:
@@ -176,7 +183,10 @@ jobs:
           PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
           PROD_PORT: ${{ secrets.PROD_PORT }}
           EXPECTED_SHA: ${{ needs.contract.outputs.expected_sha }}
-        run: bash scripts/shadow-activation-ssh.sh snapshot > post-snapshot.txt
+        run: |
+          set -euo pipefail
+          bash scripts/shadow-activation-ssh.sh snapshot > post-snapshot.txt
+          npx tsx scripts/shadow-activation-policy.ts assert-snapshot --snapshot=post-snapshot.txt
 
       - name: Verify post-control state
         run: |
@@ -191,3 +201,25 @@ jobs:
           fi
           echo "PSR_P2_DUAL_WRITE_STARTED=NO"
           echo "SHADOW_GATE_ACTIVATION_IS_NOT_DUAL_WRITE_START=YES"
+
+      - name: Report unconfirmed gate after mutation failure
+        if: failure() && (steps.apply.outcome == 'failure' || steps.apply.outcome == 'success')
+        run: |
+          set -euo pipefail
+          if [[ "$SHADOW_CONTROL_ACTION" == "activate" ]]; then
+            echo "ACTIVATION_STATE_UNCONFIRMED — gate may already be ACTIVE."
+            echo "OPERATOR: do not retry activation blindly."
+            echo "OPERATOR: run the supported read-only state verification."
+            echo "OPERATOR: if the gate is ACTIVE and this activation run did not close successfully, perform the separately authorized DEACTIVATE operation."
+            echo "OPERATOR: verify INACTIVE afterward."
+          elif [[ "$SHADOW_CONTROL_ACTION" == "deactivate" ]]; then
+            echo "DEACTIVATION_STATE_UNCONFIRMED — gate state may already have changed."
+            echo "OPERATOR: verify the actual gate state with the supported read-only verifier."
+            echo "OPERATOR: do not assume the gate is ACTIVE."
+            echo "OPERATOR: do not assume the gate is INACTIVE."
+            echo "OPERATOR: do not re-activate automatically."
+          else
+            echo "GATE_STATE_UNCONFIRMED — gate state may already have changed."
+            exit 1
+          fi
+          echo "NO_AUTOMATIC_ROLLBACK=YES"

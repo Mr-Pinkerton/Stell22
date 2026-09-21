@@ -133,7 +133,10 @@ jobs:
           PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
           PROD_PORT: ${{ secrets.PROD_PORT }}
           EXPECTED_SHA: ${{ needs.contract.outputs.expected_sha }}
-        run: bash scripts/shadow-activation-ssh.sh snapshot > snapshot.txt
+        run: |
+          set -euo pipefail
+          bash scripts/shadow-activation-ssh.sh snapshot > snapshot.txt
+          npx tsx scripts/shadow-activation-policy.ts assert-snapshot --snapshot=snapshot.txt
 
       - name: Verify ACTIVE gate without declaring dual-write started
         run: npx tsx scripts/shadow-activation-policy.ts verify-active --snapshot=snapshot.txt

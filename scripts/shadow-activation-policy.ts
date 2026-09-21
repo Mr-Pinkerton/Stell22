@@ -9,6 +9,8 @@
  *   npx tsx scripts/shadow-activation-policy.ts post-activate --before=<file> --after=<file>
  *   npx tsx scripts/shadow-activation-policy.ts post-deactivate --before=<file> --after=<file>
  *   npx tsx scripts/shadow-activation-policy.ts verify-active --snapshot=<file>
+ *   npx tsx scripts/shadow-activation-policy.ts assert-snapshot --snapshot=<file>
+ *   npx tsx scripts/shadow-activation-policy.ts assert-apply --output=<file>
  *
  * Environment:
  *   EXPECTED_APPLICATION_SHA
@@ -17,6 +19,8 @@
 import fs from "node:fs";
 
 import {
+  assertApplySuccessToken,
+  assertSnapshotComplete,
   assertSuppliedApplicationPin,
   cliStateForAction,
   evaluateShadowActiveVerify,
@@ -122,6 +126,29 @@ function main(): void {
     console.log(`SHADOW_CONTROL_POSTCHECK_OK gate=${result.shadowGate}`);
     console.log("PSR_P2_DUAL_WRITE_STARTED=NO");
     console.log("SHADOW_GATE_ACTIVATION_IS_NOT_DUAL_WRITE_START=YES");
+    return;
+  }
+
+  if (command === "assert-snapshot") {
+    const result = assertSnapshotComplete(readSnapshot(argValue("snapshot")));
+    if (!result.ok) {
+      console.error(`REFUSE code=${result.code}`);
+      process.exit(1);
+    }
+    console.log("SHADOW_CTRL_SNAPSHOT_COMPLETE");
+    return;
+  }
+
+  if (command === "assert-apply") {
+    const result = assertApplySuccessToken(
+      readSnapshot(argValue("output")),
+      process.env.CLI_STATE ?? "",
+    );
+    if (!result.ok) {
+      console.error(`REFUSE code=${result.code}`);
+      process.exit(1);
+    }
+    console.log(`SHADOW_CONTROL_APPLY_PROVEN state=${process.env.CLI_STATE}`);
     return;
   }
 

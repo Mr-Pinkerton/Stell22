@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   PINNED_PRODUCTION_APPLICATION_SHA,
   REQUIRED_WRITER_MIGRATIONS,
+  assertApplySuccessToken,
+  assertSnapshotComplete,
   assertSuppliedApplicationPin,
   evaluateShadowActiveVerify,
   evaluateShadowControlPrecheck,
@@ -45,9 +47,10 @@ function snapshotText(overrides: Record<string, string> = {}): string {
     markers[`MIGRATION_${name}`] = "APPLIED";
   }
   Object.assign(markers, overrides);
-  return Object.entries(markers)
+  const body = Object.entries(markers)
     .map(([key, value]) => `SHADOW_CTRL ${key}=${value}`)
     .join("\n");
+  return `${body}\nSHADOW_CTRL SNAPSHOT_MODE=READ_ONLY`;
 }
 
 function parsed(overrides: Record<string, string> = {}): ShadowControlSnapshot {
@@ -398,12 +401,131 @@ describe("SHADOW post-control and active verify", () => {
   });
 
   it("ignores log noise and rejects duplicate markers", () => {
-    const noisy = parseShadowControlSnapshot(`noise\n${snapshotText()}\nSHADOW_CTRL SNAPSHOT_MODE=READ_ONLY`);
+    const noisy = parseShadowControlSnapshot(`noise\n${snapshotText()}\ntrailing log`);
     expect("ok" in noisy).toBe(false);
     const duplicate = parseShadowControlSnapshot(
       `${snapshotText()}\nSHADOW_CTRL SHADOW_SETTING=ACTIVE`,
     );
     expect(duplicate).toMatchObject({ code: "SNAPSHOT_INVALID" });
+  });
+});
+
+describe("SHADOW activation transport and completion tokens", () => {
+  function logicalDockerLines(src: string): string[] {
+    return src
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("#"))
+      .join("\n")
+      .replace(/\\\r?\n/g, " ")
+      .split("\n")
+      .filter((line) => line.includes("docker compose"));
+  }
+
+  function assertStdinDetached(src: string): void {
+    expect(src).not.toMatch(/(^|\n)\s*exec\s+</);
+    for (const line of logicalDockerLines(src)) {
+      const dockerAt = line.indexOf("docker compose");
+      const piped = line.slice(0, dockerAt).includes("|");
+      if (piped) {
+        expect(line.slice(0, dockerAt)).toContain("printf");
+        expect(line).toContain("psql");
+        expect(line).not.toContain("</dev/null");
+      } else {
+        expect(line).toContain("</dev/null");
+      }
+    }
+  }
+
+  it("detaches stdin from non-piped Docker commands and keeps the SQL pipe", () => {
+    const snapshot = fs.readFileSync(
+      path.join(process.cwd(), "scripts/shadow-activation-readonly-snapshot.sh"),
+      "utf8",
+    );
+    const apply = fs.readFileSync(
+      path.join(process.cwd(), "scripts/shadow-activation-apply-deployed-cli.sh"),
+      "utf8",
+    );
+    assertStdinDetached(snapshot);
+    assertStdinDetached(apply);
+    expect(logicalDockerLines(snapshot)).toHaveLength(2);
+    expect(logicalDockerLines(apply)).toHaveLength(4);
+  });
+
+  it("requires exactly one snapshot completion token before field parsing", () => {
+    expect(assertSnapshotComplete(snapshotText())).toEqual({ ok: true });
+    const truncated = snapshotText().replace("\nSHADOW_CTRL SNAPSHOT_MODE=READ_ONLY", "");
+    expect(parseShadowControlSnapshot(truncated)).toEqual({
+      ok: false,
+      code: "SNAPSHOT_INCOMPLETE",
+    });
+    expect(parseShadowControlSnapshot(`${snapshotText()}\nSHADOW_CTRL SNAPSHOT_MODE=READ_ONLY`)).toEqual({
+      ok: false,
+      code: "SNAPSHOT_INCOMPLETE",
+    });
+    expect(parseShadowControlSnapshot("SHADOW_CTRL PRODUCTION_APP_SHA=abc")).toMatchObject({
+      code: "SNAPSHOT_INCOMPLETE",
+    });
+  });
+
+  it("requires exactly one apply success token for the requested state", () => {
+    expect(assertApplySuccessToken("noise\nSHADOW_CONTROL_APPLY_OK state=on\n", "on")).toEqual({
+      ok: true,
+    });
+    expect(assertApplySuccessToken("SHADOW_CONTROL_APPLY_OK state=off", "off")).toEqual({ ok: true });
+    expect(assertApplySuccessToken("setter finished", "on")).toMatchObject({ code: "APPLY_NOT_PROVEN" });
+    expect(assertApplySuccessToken("SHADOW_CONTROL_APPLY_OK state=off", "on")).toMatchObject({
+      code: "APPLY_NOT_PROVEN",
+    });
+    expect(
+      assertApplySuccessToken(
+        "SHADOW_CONTROL_APPLY_OK state=on\nSHADOW_CONTROL_APPLY_OK state=on",
+        "on",
+      ),
+    ).toMatchObject({ code: "APPLY_NOT_PROVEN" });
+    expect(assertApplySuccessToken("SHADOW_CONTROL_APPLY_OK state=maybe", "on")).toMatchObject({
+      code: "APPLY_NOT_PROVEN",
+    });
+  });
+
+  it("exposes manual remediation and does not roll the gate back", () => {
+    const control = fs.readFileSync(
+      path.join(process.cwd(), ".github/workflows/shadow-activation-control.yml"),
+      "utf8",
+    );
+    const verify = fs.readFileSync(
+      path.join(process.cwd(), ".github/workflows/shadow-post-activation-verify.yml"),
+      "utf8",
+    );
+    const deploy = fs.readFileSync(
+      path.join(process.cwd(), ".github/workflows/deploy-production.yml"),
+      "utf8",
+    );
+    expect(control.match(/assert-snapshot --snapshot=/g)).toHaveLength(2);
+    expect(verify.match(/assert-snapshot --snapshot=/g)).toHaveLength(1);
+    expect(control).toContain("assert-apply --output=apply-output.txt");
+    const policy = fs.readFileSync(
+      path.join(process.cwd(), "src/server/internal/inventory-movement-shadow-activation-policy.ts"),
+      "utf8",
+    );
+    expect(policy).toContain("SHADOW_CONTROL_APPLY_OK state=${cliState}");
+    expect(policy).toContain("SNAPSHOT_INCOMPLETE");
+    expect(control).toContain("id: apply");
+    expect(control).toContain(
+      "failure() && (steps.apply.outcome == 'failure' || steps.apply.outcome == 'success')",
+    );
+    expect(control).toContain("ACTIVATION_STATE_UNCONFIRMED — gate may already be ACTIVE.");
+    expect(control).toContain("DEACTIVATION_STATE_UNCONFIRMED — gate state may already have changed.");
+    expect(control).toContain("do not retry activation blindly.");
+    expect(control).toContain("do not re-activate automatically.");
+    expect(control).toContain("NO_AUTOMATIC_ROLLBACK=YES");
+    const remediation = control.slice(control.indexOf("Report unconfirmed gate"));
+    expect(remediation).not.toContain("shadow-activation-ssh.sh");
+    expect(remediation).not.toContain("set-inventory-movement-shadow-write");
+    expect(verify).not.toContain("shadow-activation-ssh.sh apply");
+    expect(verify).not.toContain("set-inventory-movement-shadow-write");
+    expect(deploy).not.toContain("set-inventory-movement-shadow-write");
+    expect(deploy).not.toContain("--state=on");
+    expect(deploy).not.toContain("--state=off");
   });
 });
 

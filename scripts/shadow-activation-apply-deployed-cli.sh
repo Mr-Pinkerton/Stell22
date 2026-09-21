@@ -49,14 +49,18 @@ if ! git diff --quiet -- "${setter_paths[@]}" || ! git diff --cached --quiet -- 
   exit 1
 fi
 
-if ! docker compose -f docker-compose.prod.yml exec -T app test -f node_modules/.bin/tsx; then
+# This script is executed by `bash -s`, so stdin is the script itself.
+# Detach each Docker command that does not intentionally read a pipe.
+# Do not `exec </dev/null` for the whole shell.
+if ! docker compose -f docker-compose.prod.yml exec -T app \
+  test -f node_modules/.bin/tsx </dev/null; then
   echo "REFUSE code=SETTER_PATH_UNVERIFIED" >&2
   exit 1
 fi
 
 host_hash="$(sha256sum scripts/set-inventory-movement-shadow-write.ts | awk '{print $1}')"
 image_hash="$(docker compose -f docker-compose.prod.yml exec -T app \
-  sha256sum scripts/set-inventory-movement-shadow-write.ts | awk '{print $1}')"
+  sha256sum scripts/set-inventory-movement-shadow-write.ts </dev/null | awk '{print $1}')"
 if [[ "$host_hash" != "$image_hash" || -z "$host_hash" ]]; then
   echo "REFUSE code=SETTER_PATH_UNVERIFIED" >&2
   exit 1
@@ -110,7 +114,8 @@ docker compose -f docker-compose.prod.yml run --rm --no-deps \
   app \
   scripts/set-inventory-movement-shadow-write.ts \
   "--state=${CLI_STATE}" \
-  --confirm=INVENTORY_MOVEMENT_SHADOW_WRITE_CONTROL
+  --confirm=INVENTORY_MOVEMENT_SHADOW_WRITE_CONTROL \
+  </dev/null
 
 after_sha="$(git rev-parse HEAD)"
 if [[ "$after_sha" != "$EXPECTED_SHA" ]]; then

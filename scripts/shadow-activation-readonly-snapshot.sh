@@ -52,8 +52,10 @@ fi
 echo "SHADOW_CTRL SETTER_SOURCE=PRESENT"
 
 host_hash="$(sha256sum scripts/set-inventory-movement-shadow-write.ts | awk '{print $1}')"
+# This script is executed by `bash -s`, so stdin is the script itself.
+# Detach this command only. Do not `exec </dev/null` for the whole shell.
 image_hash="$(docker compose -f docker-compose.prod.yml exec -T app \
-  sha256sum scripts/set-inventory-movement-shadow-write.ts | awk '{print $1}')"
+  sha256sum scripts/set-inventory-movement-shadow-write.ts </dev/null | awk '{print $1}')"
 if [[ "$host_hash" != "$image_hash" || -z "$host_hash" ]]; then
   echo "SHADOW_CTRL SETTER_SCRIPT_MATCH=NO"
   echo "SETTER_SCRIPT_MISMATCH" >&2
