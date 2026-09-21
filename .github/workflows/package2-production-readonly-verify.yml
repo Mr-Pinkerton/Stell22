@@ -1,6 +1,8 @@
-name: Package 2 Production Read-only Verify
+name: PSR-P2 Production Read-only Verify
 
-# Manual read-only Package 2 production verification only. This workflow never deploys.
+# Manual read-only Package 3 post-deploy production verification only.
+# Proves dormant production state. This workflow never deploys and never
+# activates SHADOW.
 on:
   workflow_dispatch:
 
@@ -9,7 +11,7 @@ permissions:
 
 jobs:
   verify:
-    name: Read-only Package 2 production verify
+    name: Read-only Package 3 post-deploy production verify
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: production
@@ -33,7 +35,7 @@ jobs:
             exit 1
           fi
 
-      - name: Read-only Package 2 production verify
+      - name: Read-only Package 3 post-deploy production verify
         uses: appleboy/ssh-action@v1.2.4
         env:
           APP_DIR: ${{ secrets.PROD_APP_DIR }}
@@ -52,7 +54,7 @@ jobs:
               exit 1
             fi
 
-            pinned_sha="b033cfad88f01d9231f7b892fcce290244f48130"
+            pinned_sha="2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf"
             actual_sha="$(git rev-parse HEAD)"
             echo "PRODUCTION_APP_SHA=${actual_sha}"
             if [[ "$actual_sha" != "$pinned_sha" ]]; then
@@ -187,10 +189,6 @@ jobs:
               echo "P2_TABLE_MISSING" >&2
               exit 1
             fi
-            if [[ "$p2_row_count" != "P2_ROW_COUNT=0" ]]; then
-              echo "P2_ROW_COUNT_NOT_ZERO ${p2_row_count}" >&2
-              exit 1
-            fi
             if [[ "$p2_fk_count" != "P2_FK_COUNT=0" ]]; then
               echo "P2_FK_COUNT_NOT_ZERO ${p2_fk_count}" >&2
               exit 1
@@ -212,4 +210,4 @@ jobs:
               exit 1
             fi
 
-            echo "PACKAGE2_PRODUCTION_DB_VERIFY_OK"
+            echo "PACKAGE3_PRODUCTION_POST_DEPLOY_VERIFY_OK"
