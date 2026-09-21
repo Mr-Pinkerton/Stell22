@@ -419,3 +419,20 @@ P2-GUARD/CI historical implementation status = **IMPLEMENTED / MERGED TO MAIN / 
 - `ARCH-P1-001`: **OPEN / CONFIRMED**
 - Independent Opus: **COMPLETED** — implementation P0=0 / P1=0; initial evidence P2=1 closed by HEAD via PR #45 comment `5762512562`. Final acceptance P0=0 / P1=0 / P2=0.
 - NEXT: **NEW HEAD TAKEOVER / PSR-P2 SHADOW ACTIVATION & DUAL-WRITE START READINESS REVIEW**. Not SHADOW activation. Not PSR-P3.
+
+## 08.25 — PSR-P2 SHADOW activation control and start verification
+
+- File: `audit/08.25-psr-p2-shadow-activation-control.md`
+- Status: **REWORK IMPLEMENTED / AWAITING HEAD REVIEW / NOT MERGED / NOT RUN IN PRODUCTION / SHADOW INACTIVE**
+- Previous candidate `329c2be45dad2a9ab2e69a62e53b9e0000368c6c`: **REWORKED / SUPERSEDED / NOT ACCEPTED**
+- This section does not call the current candidate `CI VERIFIED`
+- `PRODUCTION_ENVIRONMENT_REF_POLICY`: **UNSAFE**
+- Canonical?: **NO** until HEAD accepts
+- Starting `origin/main`: `693a9f12fe52b7b6babecdf4f8b6d05e1082f7b6`
+- Production application pin: `2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf` (unchanged)
+- SHADOW activation: **NO**
+- Dual-write: **NOT STARTED**
+- PSR-P3: **NOT STARTED**
+- `ARCH-P1-001`: **OPEN / CONFIRMED**
+- `INC-001`: **OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION**
+- This section does not authorize dispatch of the control or post-activation workflows.
