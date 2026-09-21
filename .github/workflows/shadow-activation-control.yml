@@ -1,0 +1,173 @@
+name: SHADOW activation control
+
+# Manual production control for inventory_movement_shadow_write only.
+# Dispatching this workflow is a production Setting change. This package does
+# not dispatch it. GitHub main is not the production application SHA.
+# Gate activation is not PSR-P2 dual-write start.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: activate or deactivate. Not dual-write start. Not reset.
+        required: true
+        type: choice
+        options:
+          - activate
+          - deactivate
+      expected_application_sha:
+        description: Deployed production application SHA. Not GitHub main.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inventory-movement-shadow-gate-control
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Pin production application SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      expected_sha: ${{ steps.pin.outputs.expected_sha }}
+      action: ${{ steps.cli.outputs.action }}
+    steps:
+      - name: Checkout control-plane ref
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Refuse unless the supplied SHA is the pinned production application
+        id: pin
+        env:
+          EXPECTED_APPLICATION_SHA: ${{ inputs.expected_application_sha }}
+          PINNED_PRODUCTION_APPLICATION_SHA: 2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf
+        run: |
+          set -euo pipefail
+          if [[ "$EXPECTED_APPLICATION_SHA" != "$PINNED_PRODUCTION_APPLICATION_SHA" ]]; then
+            echo "REFUSE code=SHA_NOT_PINNED" >&2
+            exit 1
+          fi
+          npx tsx scripts/shadow-activation-policy.ts assert-pin
+          echo "WORKFLOW_CHECKOUT_SHA=$(git rev-parse HEAD)"
+          echo "PINNED_PRODUCTION_APPLICATION_SHA=${PINNED_PRODUCTION_APPLICATION_SHA}"
+          echo "WORKFLOW_CHECKOUT_IS_NOT_THE_PRODUCTION_APPLICATION_PIN=YES"
+
+      - name: Resolve explicit activate or deactivate
+        id: cli
+        env:
+          SHADOW_CONTROL_ACTION: ${{ inputs.action }}
+        run: npx tsx scripts/shadow-activation-policy.ts cli-state
+
+  control:
+    name: Control SHADOW gate
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      PINNED_PRODUCTION_APPLICATION_SHA: 2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf
+      EXPECTED_APPLICATION_SHA: ${{ needs.contract.outputs.expected_sha }}
+      SHADOW_CONTROL_ACTION: ${{ needs.contract.outputs.action }}
+    steps:
+      - name: Checkout control-plane ref
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Re-check application pin before production access
+        run: |
+          set -euo pipefail
+          if [[ "$EXPECTED_APPLICATION_SHA" != "$PINNED_PRODUCTION_APPLICATION_SHA" ]]; then
+            echo "REFUSE code=SHA_NOT_PINNED" >&2
+            exit 1
+          fi
+          npx tsx scripts/shadow-activation-policy.ts assert-pin
+          echo "WORKFLOW_CHECKOUT_SHA=$(git rev-parse HEAD)"
+          echo "PINNED_PRODUCTION_APPLICATION_SHA=${PINNED_PRODUCTION_APPLICATION_SHA}"
+
+      - name: Check required secrets
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+        run: |
+          missing=0
+          for name in PROD_HOST PROD_USER PROD_SSH_KEY PROD_APP_DIR; do
+            if [ -z "${!name}" ]; then
+              echo "Missing required secret: ${name}" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Add secrets on the GitHub Environment \"production\"." >&2
+            exit 1
+          fi
+
+      - name: Read-only pre-control snapshot
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          EXPECTED_SHA: ${{ needs.contract.outputs.expected_sha }}
+        run: bash scripts/shadow-activation-ssh.sh snapshot > pre-snapshot.txt
+
+      - name: Fail closed unless preconditions allow this action
+        id: precheck
+        run: npx tsx scripts/shadow-activation-policy.ts precheck --snapshot=pre-snapshot.txt
+
+      - name: Apply deployed gate CLI
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          EXPECTED_SHA: ${{ needs.contract.outputs.expected_sha }}
+          CLI_STATE: ${{ steps.precheck.outputs.cli_state }}
+          EXPECTED_PRIOR: ${{ steps.precheck.outputs.expected_prior }}
+        run: bash scripts/shadow-activation-ssh.sh apply
+
+      - name: Read-only post-control snapshot
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          EXPECTED_SHA: ${{ needs.contract.outputs.expected_sha }}
+        run: bash scripts/shadow-activation-ssh.sh snapshot > post-snapshot.txt
+
+      - name: Verify post-control state
+        run: |
+          set -euo pipefail
+          if [[ "$SHADOW_CONTROL_ACTION" == "activate" ]]; then
+            npx tsx scripts/shadow-activation-policy.ts post-activate --before=pre-snapshot.txt --after=post-snapshot.txt
+          elif [[ "$SHADOW_CONTROL_ACTION" == "deactivate" ]]; then
+            npx tsx scripts/shadow-activation-policy.ts post-deactivate --before=pre-snapshot.txt --after=post-snapshot.txt
+          else
+            echo "REFUSE code=UNSUPPORTED_ACTION" >&2
+            exit 1
+          fi
+          echo "PSR_P2_DUAL_WRITE_STARTED=NO"
+          echo "SHADOW_GATE_ACTIVATION_IS_NOT_DUAL_WRITE_START=YES"

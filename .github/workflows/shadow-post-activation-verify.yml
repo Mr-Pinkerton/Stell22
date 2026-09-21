@@ -1,0 +1,119 @@
+name: SHADOW post-activation verify
+
+# Read-only verifier for a production SHADOW gate that is already ACTIVE.
+# This is not the Package 3 dormant-state verifier. It does not activate,
+# deactivate, reset, or mutate production.
+# SHADOW GATE ACTIVATED is not PSR-P2 DUAL-WRITE STARTED.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_application_sha:
+        description: Deployed production application SHA. Not GitHub main.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inventory-movement-shadow-post-activation-verify
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Pin production application SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      expected_sha: ${{ steps.pin.outputs.expected_sha }}
+    steps:
+      - name: Checkout control-plane ref
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Refuse unless the supplied SHA is the pinned production application
+        id: pin
+        env:
+          EXPECTED_APPLICATION_SHA: ${{ inputs.expected_application_sha }}
+          PINNED_PRODUCTION_APPLICATION_SHA: 2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf
+        run: |
+          set -euo pipefail
+          if [[ "$EXPECTED_APPLICATION_SHA" != "$PINNED_PRODUCTION_APPLICATION_SHA" ]]; then
+            echo "REFUSE code=SHA_NOT_PINNED" >&2
+            exit 1
+          fi
+          npx tsx scripts/shadow-activation-policy.ts assert-pin
+          echo "WORKFLOW_CHECKOUT_SHA=$(git rev-parse HEAD)"
+          echo "PINNED_PRODUCTION_APPLICATION_SHA=${PINNED_PRODUCTION_APPLICATION_SHA}"
+          echo "WORKFLOW_CHECKOUT_IS_NOT_THE_PRODUCTION_APPLICATION_PIN=YES"
+
+  verify:
+    name: Read-only post-activation production verify
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      PINNED_PRODUCTION_APPLICATION_SHA: 2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf
+      EXPECTED_APPLICATION_SHA: ${{ needs.contract.outputs.expected_sha }}
+    steps:
+      - name: Checkout control-plane ref
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Re-check application pin before production access
+        run: |
+          set -euo pipefail
+          if [[ "$EXPECTED_APPLICATION_SHA" != "$PINNED_PRODUCTION_APPLICATION_SHA" ]]; then
+            echo "REFUSE code=SHA_NOT_PINNED" >&2
+            exit 1
+          fi
+          npx tsx scripts/shadow-activation-policy.ts assert-pin
+
+      - name: Check required secrets
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+        run: |
+          missing=0
+          for name in PROD_HOST PROD_USER PROD_SSH_KEY PROD_APP_DIR; do
+            if [ -z "${!name}" ]; then
+              echo "Missing required secret: ${name}" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Add secrets on the GitHub Environment \"production\"." >&2
+            exit 1
+          fi
+
+      - name: Read-only production snapshot
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+          PROD_PORT: ${{ secrets.PROD_PORT }}
+          EXPECTED_SHA: ${{ needs.contract.outputs.expected_sha }}
+        run: bash scripts/shadow-activation-ssh.sh snapshot > snapshot.txt
+
+      - name: Verify ACTIVE gate without declaring dual-write started
+        run: npx tsx scripts/shadow-activation-policy.ts verify-active --snapshot=snapshot.txt
