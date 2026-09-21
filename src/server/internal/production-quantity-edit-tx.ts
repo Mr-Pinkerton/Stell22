@@ -11,6 +11,7 @@ import { correctActiveTorcovkaLineQuantityInTx } from "@/server/internal/cost-fl
 import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import type { MovementActorSnapshot } from "@/server/internal/inventory-movement-actor";
 import { isInventoryMovementShadowWriteActiveForWriter } from "@/server/internal/inventory-movement-shadow-write";
+import { appendQuantityEditShadowMovements } from "@/server/internal/production-quantity-edit-shadow-write";
 import {
   assertTorcovkaBlankInventoryBoundary,
   planPrisadkaQuantityEdit,
@@ -31,7 +32,6 @@ import { isOverRailLength } from "@/lib/torcovka";
 import type { OperationType } from "@/types/domain";
 import {
   QUANTITY_EDIT_ACTIVE_TARGET_ESCAPE,
-  QUANTITY_EDIT_SHADOW_WRITER_NOT_READY,
   QUANTITY_EDIT_UPAKOVKA_COST_FLOW_NOT_READY,
   STALE_QUANTITY_EDIT,
   acquireQuantityEditRequestLock,
@@ -160,9 +160,6 @@ export async function editProductionOperationQuantityInTransaction(
   };
 
   const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
-  if (shadowWriteActive) {
-    throw new Error(QUANTITY_EDIT_SHADOW_WRITER_NOT_READY);
-  }
 
   await acquireQuantityEditRequestLock(tx, input.requestId);
 
@@ -356,6 +353,12 @@ export async function editProductionOperationQuantityInTransaction(
       requestSnapshot: requestSnapshot as Prisma.InputJsonValue,
       effectSnapshot: effectSnapshot as Prisma.InputJsonValue,
     },
+  });
+
+  await appendQuantityEditShadowMovements(tx, {
+    shadowWriteActive,
+    actor,
+    quantityEdit: row,
   });
 
   await writeChangeLog(
