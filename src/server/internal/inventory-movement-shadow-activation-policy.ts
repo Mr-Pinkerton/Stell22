@@ -316,9 +316,16 @@ export function evaluateShadowControlPrecheck(input: {
   };
 }
 
-function sameLedgerIdentity(before: ShadowControlSnapshot, after: ShadowControlSnapshot): PolicyRefusal | null {
+/**
+ * SHADOW rows may increase after the gate is ACTIVE and before this snapshot.
+ * A decrease is row loss. Any total-count delta must be exactly the SHADOW delta.
+ */
+function retainedShadowMovement(
+  before: ShadowControlSnapshot,
+  after: ShadowControlSnapshot,
+): PolicyRefusal | null {
   if (after.productionAppSha !== before.productionAppSha) return { ok: false, code: "SHA_CHANGED" };
-  if (after.shadowCount !== before.shadowCount) return { ok: false, code: "SHADOW_ROWS_CHANGED" };
+  if (after.shadowCount < before.shadowCount) return { ok: false, code: "SHADOW_ROWS_CHANGED" };
   if (after.authoritativeCount !== before.authoritativeCount) {
     return { ok: false, code: "AUTHORITATIVE_CHANGED" };
   }
@@ -331,10 +338,14 @@ function sameLedgerIdentity(before: ShadowControlSnapshot, after: ShadowControlS
   if (after.costFlowSetting !== before.costFlowSetting) {
     return { ok: false, code: "COST_FLOW_CHANGED" };
   }
-  if (after.inventoryMovementCount !== before.inventoryMovementCount) {
-    return { ok: false, code: "SHADOW_ROWS_CHANGED" };
+  if (!countsConsistent(before) || !countsConsistent(after)) {
+    return { ok: false, code: "COUNT_INCONSISTENT" };
   }
-  if (!countsConsistent(after)) return { ok: false, code: "COUNT_INCONSISTENT" };
+  const shadowDelta = after.shadowCount - before.shadowCount;
+  const totalDelta = after.inventoryMovementCount - before.inventoryMovementCount;
+  if (shadowDelta < 0 || totalDelta !== shadowDelta) {
+    return { ok: false, code: "COUNT_INCONSISTENT" };
+  }
   return null;
 }
 
@@ -347,7 +358,7 @@ export function evaluateShadowPostActivate(input: {
   if (pin) return pin;
   if (!setterPathVerified(input.after)) return { ok: false, code: "SETTER_PATH_UNVERIFIED" };
   if (!schemaReady(input.after)) return { ok: false, code: "SCHEMA_PREREQUISITE_INVALID" };
-  const same = sameLedgerIdentity(input.before, input.after);
+  const same = retainedShadowMovement(input.before, input.after);
   if (same) return same;
   if (input.after.shadowSetting !== "ACTIVE") return { ok: false, code: "SHADOW_NOT_ACTIVE" };
   if (input.after.costFlowSetting !== "ABSENT" && input.after.costFlowSetting !== "INACTIVE") {
@@ -370,7 +381,7 @@ export function evaluateShadowPostDeactivate(input: {
   if (pin) return pin;
   if (!setterPathVerified(input.after)) return { ok: false, code: "SETTER_PATH_UNVERIFIED" };
   if (input.before.shadowSetting !== "ACTIVE") return { ok: false, code: "SHADOW_NOT_ACTIVE" };
-  const same = sameLedgerIdentity(input.before, input.after);
+  const same = retainedShadowMovement(input.before, input.after);
   if (same) return same;
   if (input.after.shadowSetting !== "INACTIVE") return { ok: false, code: "SHADOW_NOT_INACTIVE" };
   return { ok: true, dualWriteStarted: "NO", shadowGate: "DEACTIVATED" };

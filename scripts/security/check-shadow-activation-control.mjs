@@ -141,8 +141,14 @@ function assertDispatchOnly(rel, src) {
   if (/\n\s*push:/.test(src) || /\n\s*pull_request:/.test(src) || src.includes("schedule:")) {
     failures.push(`${rel}: must not run automatically`);
   }
-  if (src.includes("origin/main") || src.includes("github.sha")) {
-    failures.push(`${rel}: must not treat GitHub main or github.sha as the application pin`);
+  if (src.includes("github.sha")) {
+    failures.push(`${rel}: must not treat github.sha as the application pin`);
+  }
+  if (src.includes("rev-parse origin/main") && src.includes("EXPECTED_APPLICATION_SHA")) {
+    const pinFromMain = /EXPECTED_APPLICATION_SHA[^\n]*origin\/main/;
+    if (pinFromMain.test(src)) {
+      failures.push(`${rel}: origin/main must not become the production application pin`);
+    }
   }
   if (!src.includes(PIN)) failures.push(`${rel}: missing pinned production application SHA`);
   if (!src.includes("scripts/shadow-activation-policy.ts assert-pin")) {
@@ -153,6 +159,68 @@ function assertDispatchOnly(rel, src) {
 
 assertDispatchOnly(".github/workflows/shadow-activation-control.yml", control);
 assertDispatchOnly(".github/workflows/shadow-post-activation-verify.yml", verify);
+
+const canonicalMainGuard = read("scripts/shadow-activation-assert-canonical-main.sh");
+for (const token of [
+  'refs/heads/main',
+  "git fetch origin main",
+  "git rev-parse HEAD",
+  "git rev-parse origin/main",
+  "CONTROL_PLANE_CHECKOUT_SHA=",
+  "ORIGIN_MAIN_SHA=",
+  "exit 1",
+]) {
+  if (!canonicalMainGuard.includes(token)) {
+    failures.push(`canonical-main guard missing ${token}`);
+  }
+}
+
+function requireCanonicalMain(rel, src, productionJob) {
+  const required = [
+    "github.ref == 'refs/heads/main' && needs.contract.result == 'success'",
+    "ref: main",
+    "scripts/shadow-activation-assert-canonical-main.sh",
+    "REFUSE code=DISPATCH_REF_NOT_MAIN",
+  ];
+  for (const token of required) {
+    if (!src.includes(token)) failures.push(`${rel}: missing ${token}`);
+  }
+  const calls = src.split("shadow-activation-assert-canonical-main.sh").length - 1;
+  if (calls < 2) failures.push(`${rel}: canonical-main proof must run before and inside the production job`);
+  const checkouts = src.split("uses: actions/checkout@v4");
+  if (checkouts.length < 3) failures.push(`${rel}: expected an explicit checkout in each job`);
+  for (let i = 1; i < checkouts.length; i += 1) {
+    if (!checkouts[i].slice(0, 220).includes("ref: main")) {
+      failures.push(`${rel}: checkout must set ref: main and must not use the dispatch ref implicitly`);
+    }
+  }
+  const job = src.slice(src.indexOf(`\n  ${productionJob}:`));
+  const assertAt = job.indexOf("shadow-activation-assert-canonical-main.sh");
+  const sshAt = job.indexOf("shadow-activation-ssh.sh");
+  if (!(assertAt >= 0 && sshAt > assertAt)) {
+    failures.push(`${rel}: canonical-main proof must run before production SSH`);
+  }
+  if (!job.startsWith(`\n  ${productionJob}:`) && !src.includes(`\n  ${productionJob}:`)) {
+    failures.push(`${rel}: missing ${productionJob} job`);
+  }
+  const jobHeader = job.slice(0, job.indexOf("steps:"));
+  if (!jobHeader.includes("if: github.ref == 'refs/heads/main' && needs.contract.result == 'success'")) {
+    failures.push(`${rel}: production job must require canonical main before the environment`);
+  }
+  if (!jobHeader.includes("environment: production")) {
+    failures.push(`${rel}: production job missing environment: production`);
+  }
+}
+
+requireCanonicalMain(".github/workflows/shadow-activation-control.yml", control, "control");
+requireCanonicalMain(".github/workflows/shadow-post-activation-verify.yml", verify, "verify");
+
+if (policy.includes("shadowCount !== before.shadowCount")) {
+  failures.push("post-control must not require SHADOW count equality");
+}
+if (!policy.includes("after.shadowCount < before.shadowCount")) {
+  failures.push("post-control must refuse SHADOW row loss");
+}
 
 const controlJobs = control.split(/^ {2}[a-z]+:/m);
 if (!control.includes("activate") || !control.includes("deactivate")) {

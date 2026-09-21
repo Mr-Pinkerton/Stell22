@@ -215,22 +215,77 @@ describe("SHADOW post-control and active verify", () => {
     expect(decision).toEqual({ ok: true, dualWriteStarted: "NO", shadowGate: "ACTIVATED" });
   });
 
-  it("post-activate fails if rows, authoritative data, epoch, cost flow, or SHA change", () => {
-    const before = parsed();
+  it("post-activate allows legitimate SHADOW growth and refuses loss or other drift", () => {
+    const pin = PINNED_PRODUCTION_APPLICATION_SHA;
     expect(
       evaluateShadowPostActivate({
-        expectedApplicationSha: PINNED_PRODUCTION_APPLICATION_SHA,
-        before,
+        expectedApplicationSha: pin,
+        before: parsed(),
+        after: parsed({ SHADOW_SETTING: "ACTIVE", SHADOW_COUNT: "1", INVENTORY_MOVEMENT_COUNT: "1" }),
+      }),
+    ).toEqual({ ok: true, dualWriteStarted: "NO", shadowGate: "ACTIVATED" });
+    expect(
+      evaluateShadowPostActivate({
+        expectedApplicationSha: pin,
+        before: parsed({
+          SHADOW_SETTING: "INACTIVE",
+          SHADOW_COUNT: "4",
+          INVENTORY_MOVEMENT_COUNT: "4",
+        }),
+        after: parsed({ SHADOW_SETTING: "ACTIVE", SHADOW_COUNT: "7", INVENTORY_MOVEMENT_COUNT: "7" }),
+      }),
+    ).toEqual({ ok: true, dualWriteStarted: "NO", shadowGate: "ACTIVATED" });
+    expect(
+      evaluateShadowPostActivate({
+        expectedApplicationSha: pin,
+        before: parsed({ SHADOW_COUNT: "2", INVENTORY_MOVEMENT_COUNT: "2" }),
         after: parsed({ SHADOW_SETTING: "ACTIVE", SHADOW_COUNT: "1", INVENTORY_MOVEMENT_COUNT: "1" }),
       }),
     ).toMatchObject({ code: "SHADOW_ROWS_CHANGED" });
     expect(
       evaluateShadowPostActivate({
-        expectedApplicationSha: PINNED_PRODUCTION_APPLICATION_SHA,
-        before,
+        expectedApplicationSha: pin,
+        before: parsed(),
+        after: parsed({
+          SHADOW_SETTING: "ACTIVE",
+          AUTHORITATIVE_COUNT: "1",
+          INVENTORY_MOVEMENT_COUNT: "1",
+        }),
+      }),
+    ).toMatchObject({ code: "AUTHORITATIVE_CHANGED" });
+    expect(
+      evaluateShadowPostActivate({
+        expectedApplicationSha: pin,
+        before: parsed(),
+        after: parsed({ SHADOW_SETTING: "ACTIVE", NONEMPTY_EPOCH_COUNT: "1" }),
+      }),
+    ).toMatchObject({ code: "EPOCH_CHANGED" });
+    expect(
+      evaluateShadowPostActivate({
+        expectedApplicationSha: pin,
+        before: parsed(),
+        after: parsed({
+          SHADOW_SETTING: "ACTIVE",
+          SHADOW_COUNT: "1",
+          AUTHORITATIVE_COUNT: "0",
+          INVENTORY_MOVEMENT_COUNT: "2",
+        }),
+      }),
+    ).toMatchObject({ code: "COUNT_INCONSISTENT" });
+    expect(
+      evaluateShadowPostActivate({
+        expectedApplicationSha: pin,
+        before: parsed(),
         after: parsed({ SHADOW_SETTING: "ACTIVE", COST_FLOW_SETTING: "ACTIVE" }),
       }),
     ).toMatchObject({ code: "COST_FLOW_CHANGED" });
+    expect(
+      evaluateShadowPostActivate({
+        expectedApplicationSha: pin,
+        before: parsed({ PRODUCTION_APP_SHA: GITHUB_MAIN_AT_PACKAGE_START }),
+        after: parsed({ SHADOW_SETTING: "ACTIVE" }),
+      }),
+    ).toMatchObject({ code: "SHA_CHANGED" });
   });
 
   it("post-deactivate keeps SHADOW rows and leaves cost flow and authoritative rows unchanged", () => {
@@ -256,6 +311,21 @@ describe("SHADOW post-control and active verify", () => {
     expect(
       evaluateShadowPostDeactivate({
         expectedApplicationSha: PINNED_PRODUCTION_APPLICATION_SHA,
+        before: parsed({
+          SHADOW_SETTING: "ACTIVE",
+          SHADOW_COUNT: "5",
+          INVENTORY_MOVEMENT_COUNT: "5",
+        }),
+        after: parsed({
+          SHADOW_SETTING: "INACTIVE",
+          SHADOW_COUNT: "6",
+          INVENTORY_MOVEMENT_COUNT: "6",
+        }),
+      }),
+    ).toEqual({ ok: true, dualWriteStarted: "NO", shadowGate: "DEACTIVATED" });
+    expect(
+      evaluateShadowPostDeactivate({
+        expectedApplicationSha: PINNED_PRODUCTION_APPLICATION_SHA,
         before,
         after: parsed({
           SHADOW_SETTING: "INACTIVE",
@@ -264,6 +334,29 @@ describe("SHADOW post-control and active verify", () => {
         }),
       }),
     ).toMatchObject({ code: "SHADOW_ROWS_CHANGED" });
+    expect(
+      evaluateShadowPostDeactivate({
+        expectedApplicationSha: PINNED_PRODUCTION_APPLICATION_SHA,
+        before: parsed({
+          SHADOW_SETTING: "ACTIVE",
+          SHADOW_COUNT: "5",
+          INVENTORY_MOVEMENT_COUNT: "5",
+        }),
+        after: parsed({
+          SHADOW_SETTING: "INACTIVE",
+          SHADOW_COUNT: "5",
+          AUTHORITATIVE_COUNT: "1",
+          INVENTORY_MOVEMENT_COUNT: "6",
+        }),
+      }),
+    ).toMatchObject({ code: "AUTHORITATIVE_CHANGED" });
+    expect(
+      evaluateShadowPostDeactivate({
+        expectedApplicationSha: PINNED_PRODUCTION_APPLICATION_SHA,
+        before: parsed({ SHADOW_SETTING: "ACTIVE", COST_FLOW_SETTING: "INACTIVE" }),
+        after: parsed({ SHADOW_SETTING: "INACTIVE", COST_FLOW_SETTING: "ACTIVE" }),
+      }),
+    ).toMatchObject({ code: "COST_FLOW_CHANGED" });
   });
 
   it("active verifier accepts SHADOW count >= 0 and never declares dual-write started", () => {
@@ -320,6 +413,40 @@ describe("SHADOW activation static control files", () => {
       cwd: path.join(process.cwd()),
       stdio: "pipe",
     });
+  });
+
+  it("production workflows require canonical main and stay read-only except the deployed CLI", () => {
+    const control = fs.readFileSync(
+      path.join(process.cwd(), ".github/workflows/shadow-activation-control.yml"),
+      "utf8",
+    );
+    const verify = fs.readFileSync(
+      path.join(process.cwd(), ".github/workflows/shadow-post-activation-verify.yml"),
+      "utf8",
+    );
+    const guard = fs.readFileSync(
+      path.join(process.cwd(), "scripts/shadow-activation-assert-canonical-main.sh"),
+      "utf8",
+    );
+    const boundary = "github.ref == 'refs/heads/main' && needs.contract.result == 'success'";
+    expect(control).toContain(boundary);
+    expect(verify).toContain(boundary);
+    expect(control.match(/uses: actions\/checkout@v4/g)).toHaveLength(2);
+    expect(verify.match(/uses: actions\/checkout@v4/g)).toHaveLength(2);
+    expect(control.match(/ref: main/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(verify.match(/ref: main/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(guard).toContain("git fetch origin main");
+    expect(guard).toContain("git rev-parse origin/main");
+    expect(guard).toContain("CONTROL_PLANE_CHECKOUT_SHA=");
+    expect(guard).toContain("ORIGIN_MAIN_SHA=");
+    expect(verify).not.toContain("shadow-activation-ssh.sh apply");
+    expect(verify).not.toContain("set-inventory-movement-shadow-write.ts");
+    const deploy = fs.readFileSync(
+      path.join(process.cwd(), ".github/workflows/deploy-production.yml"),
+      "utf8",
+    );
+    expect(deploy).not.toContain("set-inventory-movement-shadow-write");
+    expect(deploy).not.toContain("--state=on");
   });
 
   it("apply path is the deployed CLI and deactivate is not reset", () => {

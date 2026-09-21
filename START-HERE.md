@@ -423,7 +423,9 @@ P2-GUARD/CI historical implementation status = **IMPLEMENTED / MERGED TO MAIN / 
 ## 08.25 — PSR-P2 SHADOW activation control and start verification
 
 - File: `audit/08.25-psr-p2-shadow-activation-control.md`
-- Status: **IMPLEMENTED / CI VERIFIED / AWAITING HEAD REVIEW / NOT MERGED / NOT RUN IN PRODUCTION / SHADOW INACTIVE**
+- Status: **REWORK IN PROGRESS / AWAITING CI / NOT ACCEPTED / NOT MERGED / NOT RUN IN PRODUCTION / SHADOW INACTIVE**
+- Previous candidate `357576f182cf71331cf1547b20a09fbe451bbb12`: **REWORKED / SUPERSEDED / NOT ACCEPTED**
+- `PRODUCTION_ENVIRONMENT_REF_POLICY`: **UNSAFE**
 - Canonical?: **NO** until HEAD accepts
 - Starting `origin/main`: `693a9f12fe52b7b6babecdf4f8b6d05e1082f7b6`
 - Production application pin: `2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf` (unchanged)

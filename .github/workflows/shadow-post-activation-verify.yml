@@ -27,8 +27,22 @@ jobs:
     outputs:
       expected_sha: ${{ steps.pin.outputs.expected_sha }}
     steps:
-      - name: Checkout control-plane ref
+      - name: Refuse unless workflow_dispatch ref is canonical main
+        run: |
+          set -euo pipefail
+          echo "GITHUB_REF=${GITHUB_REF}"
+          if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+            echo "REFUSE code=DISPATCH_REF_NOT_MAIN" >&2
+            exit 1
+          fi
+
+      - name: Checkout canonical main
         uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Prove checkout equals origin/main
+        run: bash scripts/shadow-activation-assert-canonical-main.sh
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -58,6 +72,7 @@ jobs:
   verify:
     name: Read-only post-activation production verify
     needs: contract
+    if: github.ref == 'refs/heads/main' && needs.contract.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production
@@ -65,8 +80,13 @@ jobs:
       PINNED_PRODUCTION_APPLICATION_SHA: 2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf
       EXPECTED_APPLICATION_SHA: ${{ needs.contract.outputs.expected_sha }}
     steps:
-      - name: Checkout control-plane ref
+      - name: Checkout canonical main
         uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Prove checkout equals origin/main before production access
+        run: bash scripts/shadow-activation-assert-canonical-main.sh
 
       - name: Setup Node
         uses: actions/setup-node@v4
