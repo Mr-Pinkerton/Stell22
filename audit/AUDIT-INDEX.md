@@ -174,7 +174,7 @@ No `audit/01.16*` or `audit/01.17*`.
 | `audit/08.21-psr-p2-remaining-mutation-destructive-adjudication.md` | PSR-P2 remaining mutation / destructive contours | Discovery + HEAD architecture + independent review | Starting main `289979b0`; discovery HEAD `6f11e38`; adjudicated HEAD `a9567b6`; app `69e0f53` | `DISCOVERY COMPLETE / ARCHITECTURE ACCEPTED / REVIEWED / NO IMPLEMENTATION` | YES | Exhaustive A–H **PASS**. Independent Opus **PASS** P0=0 / P1=0 / P2=4 informational. Architecture unchanged. No runtime. P2 **NOT COMPLETE**. Later implementation: `08.22`. |
 | `audit/08.22-psr-p2-safe-destructive-guards.md` | PSR-P2 Package 1 safe destructive guards | Implementation + deploy closeout | Starting main `6c858db`; PR #40 accepted head `e402328`; merge `4508ee1`; Production Deploy `35524416936`; prod app `4508ee1` | `IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED` | YES after this closeout merge | D/E fail-closed. F preserved. G remaining===0 + locks. H INACTIVE qty===0 / ACTIVE any-row. No writer. No schema. Production remaining uncovered = A/B/C. P2 **NOT COMPLETE**. Later identity: `08.23`. |
 | `audit/08.23-psr-p2-production-quantity-edit-identity.md` | PSR-P2 Package 2 production quantity-edit identity | Implementation + deploy closeout | Starting main `fb22ab7`; PR #42 accepted HEAD `e143e22`; merge `b033cfad`; Production Deploy `35536089109`; prod app `b033cfad`; verifier `35592291536` PASS | `IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED` | YES after this closeout merge | A/B/C retained identity. Migration APPLIED. `ProductionOperationQuantityEdit` LIVE / EMPTY. requestId UNIQUE verified. FK 0. InventoryMovement 0. SHADOW ABSENT. No InventoryMovement writer. P2 **NOT COMPLETE**. Historical closeout NEXT was Package 3. Later candidate: `08.24`. |
-| `audit/08.24-psr-p2-production-quantity-edit-shadow-writers.md` | PSR-P2 Package 3 production quantity-edit SHADOW writers | Implementation candidate | Starting main `4c662f96`; branch `psr-p2/package3-production-quantity-edit-shadow-writers`; prod app `b033cfad` unchanged | `IMPLEMENTED / AWAITING EXACT-HEAD CI / AWAITING HEAD REVIEW / NOT MERGED / NOT DEPLOYED / SHADOW INACTIVE` | NO (feature branch) | A/B/C SHADOW writer. Consumes retained `physicalAdjustments`. No schema/migration. No SHADOW activation. No deploy. UPAKOVKA ACTIVE still blocked. `ARCH-P1-001` OPEN. P2 **NOT COMPLETE**. P3 **NOT STARTED**. |
+| `audit/08.24-psr-p2-production-quantity-edit-shadow-writers.md` | PSR-P2 Package 3 production quantity-edit SHADOW writers | Implementation candidate | Starting main `4c662f96`; PR #45; implementation commit `218f2f7`; CI `35603658542` SUCCESS; prod app `b033cfad` unchanged | `IMPLEMENTED / CI VERIFIED / AWAITING HEAD REVIEW / NOT MERGED / NOT DEPLOYED / SHADOW INACTIVE` | NO (feature branch) | A/B/C SHADOW writer. Consumes retained `physicalAdjustments`. No schema/migration. No SHADOW activation. No deploy. UPAKOVKA ACTIVE still blocked. `ARCH-P1-001` OPEN. P2 **NOT COMPLETE**. P3 **NOT STARTED**. |
 
 ### D.8 Production incidents
 
@@ -555,10 +555,13 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 
 - File: `audit/08.24-psr-p2-production-quantity-edit-shadow-writers.md`
 - Scope: A/B/C quantity-edit InventoryMovement SHADOW writer from retained `physicalAdjustments`.
-- Status: **IMPLEMENTED / AWAITING EXACT-HEAD CI / AWAITING HEAD REVIEW / NOT MERGED / NOT DEPLOYED / SHADOW INACTIVE**
+- Status: **IMPLEMENTED / CI VERIFIED / AWAITING HEAD REVIEW / NOT MERGED / NOT DEPLOYED / SHADOW INACTIVE**
 - Canonical?: **NO** (feature branch; not on `main`)
 - Starting `origin/main`: `4c662f96b1d279e2832a4dfcf7ee7b3d9ec6a595`
 - Branch: `psr-p2/package3-production-quantity-edit-shadow-writers`
+- Implementation PR: [#45](https://github.com/Mr-Pinkerton/Stell22/pull/45) **OPEN**
+- Implementation commit: `218f2f7b6ca6b77d49e893636b7d21f706babd70`
+- Exact-head CI on implementation commit: `35603658542` SUCCESS
 - Production application: `b033cfad88f01d9231f7b892fcce290244f48130` **unchanged**
 - Schema / migration: **NO / NO**
 - SHADOW activation: **NO**
