@@ -104,6 +104,7 @@ describe("raw purchase SHADOW writer confinement", () => {
     expect(callers.sort()).toEqual([
       "src/server/internal/inventory-conduct.ts",
       "src/server/internal/inventory-movement-shadow-gateway.ts",
+      "src/server/internal/production-quantity-edit-shadow-write.ts",
       "src/server/internal/production-shadow-write.ts",
       "src/server/internal/r05-correction-shadow-write.ts",
       "src/server/internal/raw-purchase-shadow-write.ts",

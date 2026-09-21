@@ -731,25 +731,26 @@ describe.skipIf(!enabled)("PSR-P2 Package 2 production quantity-edit identity", 
     );
   });
 
-  it("SHADOW ACTIVE fail-closed for A/B/C before mutation", async () => {
+  it("SHADOW ACTIVE no longer blocks A/B/C; Package 3 writes retained ADJUSTMENT", async () => {
     const { op, line } = await seedTorcovka(`sh-${seq}`);
     await prismaA.setting.upsert({
       where: { key: INVENTORY_MOVEMENT_SHADOW_WRITE_KEY },
       create: { key: INVENTORY_MOVEMENT_SHADOW_WRITE_KEY, value: { version: 1, active: true } },
       update: { value: { version: 1, active: true } },
     });
-    await expect(
-      editQty({
-        operationId: op.id,
-        targetLineId: line.id,
-        expectedOldQuantity: line.quantity,
-        newQuantity: 1,
-      }),
-    ).rejects.toThrow(QUANTITY_EDIT_SHADOW_WRITER_NOT_READY);
-    expect(await prismaA.productionOperationQuantityEdit.count()).toBe(0);
-    expect(await prismaA.inventoryMovement.count()).toBe(0);
-    expect(await quantityChangeLogs(op.id)).toHaveLength(0);
-    expect((await loadOp(op.id)).lines[0]!.quantity).toBe(line.quantity);
+    const result = await editQty({
+      operationId: op.id,
+      targetLineId: line.id,
+      expectedOldQuantity: line.quantity,
+      newQuantity: 1,
+    });
+    expect(result.replayed).toBe(false);
+    expect(result.quantityEditId).toBeTruthy();
+    expect((await loadOp(op.id)).lines[0]!.quantity).toBe(1);
+    expect(await prismaA.productionOperationQuantityEdit.count()).toBe(1);
+    expect(await prismaA.inventoryMovement.count()).toBeGreaterThan(0);
+    expect(await quantityChangeLogs(op.id)).toHaveLength(1);
+    expect(QUANTITY_EDIT_SHADOW_WRITER_NOT_READY).toMatch(/SHADOW активен без writer Package 3/);
   });
 
   it("HOURS remains editable without ProductionOperationQuantityEdit or physical requestId", async () => {

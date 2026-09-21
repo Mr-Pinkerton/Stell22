@@ -92,6 +92,14 @@ describe("terminal production SHADOW writer confinement", () => {
     expect(qty).not.toContain("appendShadowInventoryMovements");
     expect(qeditTx).not.toContain("appendShadowInventoryMovements");
     expect(qeditTx).not.toContain("appendProductionShadowMovements");
+    const qeditFn = qeditTx.slice(qeditTx.indexOf("export async function editProductionOperationQuantityInTransaction"));
+    expect(qeditFn).toContain("appendQuantityEditShadowMovements");
+    expect(qeditFn.indexOf("appendQuantityEditShadowMovements")).toBeGreaterThan(
+      qeditFn.indexOf("productionOperationQuantityEdit.create"),
+    );
+    expect(qeditFn.indexOf("writeChangeLog")).toBeGreaterThan(
+      qeditFn.indexOf("appendQuantityEditShadowMovements"),
+    );
     expect(del).not.toContain("appendR05CorrectionShadowMovement");
   });
 });

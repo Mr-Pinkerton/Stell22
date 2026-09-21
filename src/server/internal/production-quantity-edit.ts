@@ -1,4 +1,4 @@
-/** PSR-P2 Package 2: retained identity for A/B/C quantity edit. Not Package 3 writer. */
+/** PSR-P2 Package 2: retained identity for A/B/C quantity edit. Package 3 writer is separate. */
 
 import { createHash } from "node:crypto";
 import { Prisma } from "@prisma/client";
@@ -20,6 +20,7 @@ export const STALE_QUANTITY_EDIT =
 export const REQUEST_ID_REUSE =
   "REQUEST_ID_REUSE: ключ попытки уже использован для другой команды";
 
+/** @deprecated Package 3 replaced the temporary SHADOW-active runtime block. Kept for historical error text. */
 export const QUANTITY_EDIT_SHADOW_WRITER_NOT_READY =
   "QUANTITY_EDIT_SHADOW_WRITER_NOT_READY: правки количества A/B/C заблокированы, пока SHADOW активен без writer Package 3";
 
