@@ -201,8 +201,10 @@ COMMIT;
 SQL
 )"
 
+# -X -q: ignore psqlrc and omit command tags (BEGIN/COMMIT) from stdout.
+# Query rows stay unaligned and tuples-only. Do not relax the allowlist below.
 raw="$(printf '%s\n' "$sql" | docker compose -f docker-compose.prod.yml exec -T db \
-  psql -U stell22 -d stell22 -v ON_ERROR_STOP=1 -At | tr -d '\r')"
+  psql -X -q -U stell22 -d stell22 -v ON_ERROR_STOP=1 -At | tr -d '\r')"
 
 while IFS= read -r line; do
   [[ -z "$line" ]] && continue
