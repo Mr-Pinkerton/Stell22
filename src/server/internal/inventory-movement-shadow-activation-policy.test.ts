@@ -436,6 +436,72 @@ describe("SHADOW activation transport and completion tokens", () => {
     }
   }
 
+  function psqlQueryFlags(line: string): { short: Set<string>; long: Set<string>; variables: string[] } {
+    const psqlAt = line.indexOf("psql");
+    const invocation = line.slice(psqlAt).split("|")[0] ?? "";
+    const tokens = invocation.trim().split(/\s+/);
+    const short = new Set<string>();
+    const long = new Set<string>();
+    const variables: string[] = [];
+    for (let i = 1; i < tokens.length; i += 1) {
+      const tok = tokens[i] ?? "";
+      if (tok === "-v" || tok === "--set" || tok === "--variable") {
+        variables.push(tokens[i + 1] ?? "");
+        i += 1;
+        continue;
+      }
+      if (tok.startsWith("--")) {
+        long.add(tok);
+        continue;
+      }
+      if (/^-[A-Za-z]+$/.test(tok)) {
+        for (const ch of tok.slice(1)) short.add(ch);
+      }
+    }
+    return { short, long, variables };
+  }
+
+  it("keeps snapshot psql quiet so command tags never reach the strict allowlist", () => {
+    const snapshot = fs.readFileSync(
+      path.join(process.cwd(), "scripts/shadow-activation-readonly-snapshot.sh"),
+      "utf8",
+    );
+    const queries = logicalDockerLines(snapshot).filter(
+      (line) => line.includes("printf") && line.includes("psql"),
+    );
+    expect(queries).toHaveLength(1);
+    const flags = psqlQueryFlags(queries[0] ?? "");
+    expect(flags.short.has("X") || flags.long.has("--no-psqlrc")).toBe(true);
+    expect(flags.short.has("q") || flags.long.has("--quiet")).toBe(true);
+    expect(flags.short.has("A") || flags.long.has("--no-align")).toBe(true);
+    expect(flags.short.has("t") || flags.long.has("--tuples-only")).toBe(true);
+    expect(flags.variables).toContain("ON_ERROR_STOP=1");
+    expect(snapshot).toContain("BEGIN TRANSACTION READ ONLY;");
+    expect(snapshot).toContain("\nCOMMIT;");
+
+    const parserAt = snapshot.indexOf("while IFS= read -r line");
+    expect(parserAt).toBeGreaterThan(0);
+    const parser = snapshot.slice(parserAt);
+    const pattern = "^[A-Za-z0-9_]+=[A-Za-z0-9_]+$";
+    expect(parser).toContain(pattern);
+    expect(parser).toContain("SNAPSHOT_LINE_REJECTED");
+    expect(parser).toContain("exit 1");
+    for (const tag of ["BEGIN", "COMMIT", "ROLLBACK", "NOTICE", "WARNING"]) {
+      expect(parser).not.toContain(tag);
+    }
+    const allowlist = new RegExp(pattern);
+    for (const rejected of ["BEGIN", "COMMIT", "ROLLBACK", "NOTICE: x", "WARNING: y", "SET"]) {
+      expect(allowlist.test(rejected)).toBe(false);
+    }
+    for (const accepted of [
+      "SHADOW_SETTING=ABSENT",
+      "COST_FLOW_SETTING=INACTIVE",
+      "AUTHORITATIVE_COUNT=0",
+    ]) {
+      expect(allowlist.test(accepted)).toBe(true);
+    }
+  });
+
   it("detaches stdin from non-piped Docker commands and keeps the SQL pipe", () => {
     const snapshot = fs.readFileSync(
       path.join(process.cwd(), "scripts/shadow-activation-readonly-snapshot.sh"),

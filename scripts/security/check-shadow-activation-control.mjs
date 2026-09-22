@@ -129,6 +129,79 @@ if (!apply.includes("SHADOW_CONTROL_APPLY_OK state=${CLI_STATE}")) {
 if (!snapshot.includes("BEGIN TRANSACTION READ ONLY")) {
   failures.push("snapshot must be a read-only transaction");
 }
+if (!snapshot.includes("\nCOMMIT;")) {
+  failures.push("snapshot must commit the read-only transaction");
+}
+
+function psqlInvocationFlags(line) {
+  const psqlAt = line.indexOf("psql");
+  const invocation = line.slice(psqlAt).split("|")[0] ?? "";
+  const tokens = invocation.trim().split(/\s+/);
+  const short = new Set();
+  const long = new Set();
+  const variables = [];
+  for (let i = 1; i < tokens.length; i += 1) {
+    const tok = tokens[i];
+    if (tok === "-v" || tok === "--set" || tok === "--variable") {
+      variables.push(tokens[i + 1] ?? "");
+      i += 1;
+      continue;
+    }
+    if (tok.startsWith("--")) {
+      long.add(tok);
+      continue;
+    }
+    if (/^-[A-Za-z]+$/.test(tok)) {
+      for (const ch of tok.slice(1)) short.add(ch);
+    }
+  }
+  return { short, long, variables };
+}
+
+const snapshotQueries = logicalDockerLines(snapshot).filter(
+  (line) => line.includes("printf") && line.includes("psql"),
+);
+if (snapshotQueries.length !== 1) {
+  failures.push("snapshot must keep exactly one printf | psql query invocation");
+} else {
+  const flags = psqlInvocationFlags(snapshotQueries[0]);
+  const quiet = flags.short.has("q") || flags.long.has("--quiet");
+  const noPsqlrc = flags.short.has("X") || flags.long.has("--no-psqlrc");
+  const unaligned = flags.short.has("A") || flags.long.has("--no-align");
+  const tuplesOnly = flags.short.has("t") || flags.long.has("--tuples-only");
+  if (!quiet || !noPsqlrc || !unaligned || !tuplesOnly) {
+    failures.push(
+      "snapshot psql must use deterministic quiet query-output mode (-X -q -A -t) so BEGIN/COMMIT command tags never enter stdout",
+    );
+  }
+  if (!flags.variables.includes("ON_ERROR_STOP=1")) {
+    failures.push("snapshot psql must keep ON_ERROR_STOP=1");
+  }
+}
+
+const snapshotAllowlist = /^[A-Za-z0-9_]+=[A-Za-z0-9_]+$/;
+const snapshotParserAt = snapshot.indexOf("while IFS= read -r line");
+if (snapshotParserAt < 0) {
+  failures.push("snapshot KEY=VALUE parser loop missing");
+} else {
+  const parser = snapshot.slice(snapshotParserAt);
+  const pattern = "^[A-Za-z0-9_]+=[A-Za-z0-9_]+$";
+  if (!parser.includes(pattern)) {
+    failures.push("snapshot parser allowlist must remain ^[A-Za-z0-9_]+=[A-Za-z0-9_]+$");
+  }
+  if (!parser.includes("SNAPSHOT_LINE_REJECTED") || !parser.includes("exit 1")) {
+    failures.push("snapshot parser must fail closed on unexpected stdout");
+  }
+  for (const tag of ["BEGIN", "COMMIT", "ROLLBACK", "NOTICE", "WARNING"]) {
+    if (parser.includes(tag)) failures.push(`snapshot parser must not special-case ${tag}`);
+  }
+  for (const sample of ["BEGIN", "COMMIT", "ROLLBACK", "NOTICE: x", "WARNING: y", "SET"]) {
+    if (snapshotAllowlist.test(sample)) failures.push(`snapshot allowlist must reject ${sample}`);
+  }
+  for (const sample of ["SHADOW_SETTING=ABSENT", "COST_FLOW_SETTING=INACTIVE", "AUTHORITATIVE_COUNT=0"]) {
+    if (!snapshotAllowlist.test(sample)) failures.push(`snapshot allowlist must accept ${sample}`);
+  }
+}
 if (snapshot.includes("tsx scripts/set-inventory-movement-shadow-write.ts")) {
   failures.push("snapshot must not invoke the gate CLI");
 }
