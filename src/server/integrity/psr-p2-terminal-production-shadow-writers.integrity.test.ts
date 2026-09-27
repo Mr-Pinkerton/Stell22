@@ -32,6 +32,7 @@ vi.mock("@/server/session", () => ({
 vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} }));
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { TERMINAL_REQUEST_ALREADY_RECORDED } from "@/server/internal/terminal-request-identity";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
 import { lockRailLots } from "@/server/internal/finance-operations";
@@ -687,7 +688,7 @@ describe.skipIf(!enabled)("PSR-P2 terminal production SHADOW writers", () => {
     await prismaA.productionOperation.delete({ where: { id: doomed.id } });
     await expect(
       submitUpakovka({ employeeId: w.emp.id, clientRequestId, picks }),
-    ).rejects.toThrow("Несогласованный повтор упаковки");
+    ).rejects.toThrow(TERMINAL_REQUEST_ALREADY_RECORDED);
     expect(await prismaA.inventoryMovement.count()).toBe(firstCount);
   });
 

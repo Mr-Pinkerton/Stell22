@@ -26,6 +26,7 @@ import {
   CLIENT_REQUEST_ID_REQUIRED,
   CLIENT_REQUEST_ID_TOO_LONG,
 } from "@/lib/request-id";
+import { TERMINAL_REQUEST_ALREADY_RECORDED } from "@/server/internal/terminal-request-identity";
 import {
   submitHours,
   submitPrisadka,
@@ -644,7 +645,15 @@ describe.skipIf(!enabled)("DI-007/DI-008 terminal idempotency", () => {
     } catch (err) {
       expect(isDuplicateClientRequest(err)).toBe(true);
     }
-    await submitHours(w.emp.id, 8, requestId);
+    await submitHours(w.emp.id, 1, requestId);
+    expect(await prismaA.productionOperation.count({ where: { clientRequestId: requestId } })).toBe(1);
+    await expect(submitHours(w.emp.id, 8, requestId)).rejects.toThrow(
+      TERMINAL_REQUEST_ALREADY_RECORDED,
+    );
+    const row = await prismaA.productionOperation.findUniqueOrThrow({
+      where: { clientRequestId: requestId },
+    });
+    expect(row.hours?.toFixed(2)).toBe("1.00");
     expect(await prismaA.productionOperation.count({ where: { clientRequestId: requestId } })).toBe(1);
   });
 
