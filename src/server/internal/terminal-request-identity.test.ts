@@ -6,6 +6,8 @@ import {
   decidePrisadkaReplay,
   decideTorcovkaReplay,
   decideUpakovkaReplay,
+  guardConfirmedUnrecorded,
+  UPAKOVKA_ALREADY_RECORDED,
 } from "@/server/internal/terminal-request-identity";
 
 describe("terminal request identity", () => {
@@ -198,7 +200,7 @@ describe("terminal request identity", () => {
           { productId: "prod-b", quantity: 2 },
         ],
       }),
-    ).toBe("CONFLICT");
+    ).toBe("PARTIAL");
     expect(decideUpakovkaReplay(stored, { ...full, employeeId: "emp-b" })).toBe("CONFLICT");
     expect(
       decideUpakovkaReplay(
@@ -206,6 +208,43 @@ describe("terminal request identity", () => {
         { ...full, picks: [{ productId: "prod-a", quantity: 1 }] },
       ),
     ).toBe("CONFLICT");
+  });
+
+  it("allows a new upakovka only for products the employee confirmed as unrecorded", () => {
+    const stored = [
+      {
+        employeeId: "emp-a",
+        type: "UPAKOVKA",
+        productId: "prod-a",
+        productQty: 1,
+        clientRequestId: "req-1:prod-a",
+      },
+    ];
+    expect(
+      guardConfirmedUnrecorded(stored, {
+        employeeId: "emp-a",
+        recordedRequestId: "req-1",
+        parentRequestId: "req-2",
+        picks: [{ productId: "prod-b", quantity: 2 }],
+      }),
+    ).toBe("OK");
+    expect(
+      guardConfirmedUnrecorded(stored, {
+        employeeId: "emp-a",
+        recordedRequestId: "req-1",
+        parentRequestId: "req-2",
+        picks: [{ productId: "prod-a", quantity: 1 }],
+      }),
+    ).toBe("ALREADY_RECORDED");
+    expect(
+      guardConfirmedUnrecorded(stored, {
+        employeeId: "emp-b",
+        recordedRequestId: "req-1",
+        parentRequestId: "req-2",
+        picks: [{ productId: "prod-b", quantity: 2 }],
+      }),
+    ).toBe("CONFLICT");
+    expect(UPAKOVKA_ALREADY_RECORDED).not.toMatch(/сотрудник|работник|другому/i);
   });
 
   it("matches hours only for the same employee and the exact hour count", () => {

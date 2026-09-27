@@ -37,6 +37,7 @@ import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import {
   setApprovalGateAfterEnsureForTests,
   TERMINAL_REQUEST_ALREADY_RECORDED,
+  UPAKOVKA_ALREADY_RECORDED,
 } from "@/server/internal/terminal-request-identity";
 import { TORCOVKA_APPROVAL_MAX_ATTEMPTS, TORCOVKA_WRONG_CODE_MESSAGE } from "@/lib/torcovka-approval";
 import { setInventoryMovementShadowWriteGate } from "@/server/internal/inventory-movement-shadow-write";
@@ -685,7 +686,7 @@ describe.skipIf(!enabled)("terminal strict idempotency", () => {
     );
   });
 
-  it("UPAKOVKA matches the whole set and rejects quantity, membership, and partial changes", async () => {
+  it("UPAKOVKA matches the whole set, rejects a changed payload, and reports a stored subset", async () => {
     await setShadowGate(true);
     const world = await seedUpakovka(`u-${Date.now()}`);
     const [prodA, prodB] = world.products;
@@ -701,7 +702,7 @@ describe.skipIf(!enabled)("terminal strict idempotency", () => {
     await submitUpakovka(input);
     const saved = await effects();
     expect(saved.ops).toHaveLength(2);
-    await submitUpakovka(input);
+    await expect(submitUpakovka(input)).resolves.toEqual({ status: "RECORDED" });
     expect(await effects()).toEqual(saved);
 
     await expect(
@@ -730,16 +731,136 @@ describe.skipIf(!enabled)("terminal strict idempotency", () => {
       where: { entity: "ProductionOperation", entityId: doomed.id },
     });
     await prismaA.productionOperation.delete({ where: { id: doomed.id } });
-    const partial = await effects();
-    expect(partial.ops).toHaveLength(1);
-    await expect(submitUpakovka(input)).rejects.toThrow(TERMINAL_REQUEST_ALREADY_RECORDED);
-    expect(await effects()).toEqual(partial);
+    const partialEffects = await effects();
+    expect(partialEffects.ops).toHaveLength(1);
+    await expect(submitUpakovka(input)).resolves.toEqual({
+      status: "PARTIAL",
+      saved: [{ productId: prodA!.id, quantity: 1 }],
+    });
+    expect(await effects()).toEqual(partialEffects);
 
     const other = await employee("Другой работник упаковки");
     await expect(submitUpakovka({ ...input, employeeId: other.id })).rejects.toThrow(
       TERMINAL_REQUEST_ALREADY_RECORDED,
     );
     expect(await prismaA.productionOperation.count()).toBe(1);
+  });
+
+  it("UPAKOVKA partial recovery writes only a confirmed new request", async () => {
+    await setShadowGate(true);
+    const world = await seedUpakovka(`ur-${Date.now()}`);
+    const [prodA, prodB] = world.products;
+    const requestId = `ur-${Date.now()}`;
+    await prismaA.productionOperation.create({
+      data: {
+        type: "UPAKOVKA",
+        employeeId: world.emp.id,
+        clientRequestId: `${requestId}:${prodA!.id}`,
+        workDate: new Date(),
+        productId: prodA!.id,
+        productQty: 1,
+        rateSnapshotVersion: 1,
+        rateUpakovkaSnapshot: 10,
+      },
+    });
+    const before = await effects();
+    const full = {
+      employeeId: world.emp.id,
+      clientRequestId: requestId,
+      picks: [
+        { productId: prodA!.id, quantity: 1 },
+        { productId: prodB!.id, quantity: 1 },
+      ],
+    };
+    const partial = await submitUpakovka(full);
+    expect(partial).toEqual({
+      status: "PARTIAL",
+      saved: [{ productId: prodA!.id, quantity: 1 }],
+    });
+    expect(partial.status === "PARTIAL" && partial.saved.some((row) => row.productId === prodB!.id)).toBe(
+      false,
+    );
+    expect(await effects()).toEqual(before);
+
+    await expect(
+      submitUpakovka({
+        employeeId: world.emp.id,
+        clientRequestId: `${requestId}-again`,
+        recordedRequestId: requestId,
+        picks: [{ productId: prodA!.id, quantity: 1 }],
+      }),
+    ).rejects.toThrow(UPAKOVKA_ALREADY_RECORDED);
+    expect(await effects()).toEqual(before);
+
+    const other = await employee("Чужой сотрудник упаковки");
+    const beforeForeign = await effects();
+    let foreign = "";
+    try {
+      await submitUpakovka({
+        employeeId: other.id,
+        clientRequestId: `${requestId}-foreign`,
+        recordedRequestId: requestId,
+        picks: [{ productId: prodB!.id, quantity: 1 }],
+      });
+    } catch (error) {
+      foreign = error instanceof Error ? error.message : "";
+    }
+    expect(foreign).toBe(TERMINAL_REQUEST_ALREADY_RECORDED);
+    expect(foreign).not.toContain(world.emp.id);
+    expect(foreign).not.toContain(other.id);
+    expect(foreign).not.toContain("Чужой");
+    expect(await effects()).toEqual(beforeForeign);
+
+    await bind(world.emp);
+    await expect(
+      submitUpakovka({
+        employeeId: world.emp.id,
+        clientRequestId: `${requestId}-confirmed`,
+        recordedRequestId: requestId,
+        picks: [{ productId: prodB!.id, quantity: 1 }],
+      }),
+    ).resolves.toEqual({ status: "RECORDED" });
+    const after = await effects();
+    expect(after.ops).toHaveLength(before.ops.length + 1);
+    expect(after.ops.filter((op) => op.productId === prodA!.id)).toHaveLength(1);
+    expect(
+      after.ops.some(
+        (op) => op.productId === prodB!.id && op.clientRequestId === `${requestId}-confirmed:${prodB!.id}`,
+      ),
+    ).toBe(true);
+    expect(after.products).toEqual([{ productId: prodB!.id, quantity: 1 }]);
+    expect(after.costs).toBe(before.costs);
+    expect(after.movements).toBeGreaterThan(before.movements);
+    expect(after.ops.filter((op) => op.clientRequestId?.startsWith(`${requestId}:`))).toHaveLength(1);
+  });
+
+  it("UPAKOVKA corrupt stored row refuses without a new write", async () => {
+    const world = await seedUpakovka(`ucorrupt-${Date.now()}`);
+    const [prodA, prodB] = world.products;
+    const requestId = `ucorrupt-${Date.now()}`;
+    await prismaA.productionOperation.create({
+      data: {
+        type: "UPAKOVKA",
+        employeeId: world.emp.id,
+        clientRequestId: `${requestId}:${prodA!.id}`,
+        workDate: new Date(),
+        productId: prodA!.id,
+        productQty: null,
+        rateSnapshotVersion: 1,
+      },
+    });
+    const before = await effects();
+    await expect(
+      submitUpakovka({
+        employeeId: world.emp.id,
+        clientRequestId: requestId,
+        picks: [
+          { productId: prodA!.id, quantity: 1 },
+          { productId: prodB!.id, quantity: 1 },
+        ],
+      }),
+    ).rejects.toThrow(TERMINAL_REQUEST_ALREADY_RECORDED);
+    expect(await effects()).toEqual(before);
   });
 
   it("UPAKOVKA concurrent same id does not pack both quantities", async () => {

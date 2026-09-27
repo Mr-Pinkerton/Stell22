@@ -32,7 +32,6 @@ vi.mock("@/server/session", () => ({
 vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} }));
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { TERMINAL_REQUEST_ALREADY_RECORDED } from "@/server/internal/terminal-request-identity";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
 import { lockRailLots } from "@/server/internal/finance-operations";
@@ -658,7 +657,7 @@ describe.skipIf(!enabled)("PSR-P2 terminal production SHADOW writers", () => {
     }
   });
 
-  it("UPAKOVKA replay is whole-request and partial replay stays blocked", async () => {
+  it("UPAKOVKA replay is whole-request and partial replay does not write", async () => {
     const w = await seedUpakovkaMixed(`replay-u-${Date.now()}`, 2);
     await setShadowGate(true);
     const clientRequestId = `replay-u-${Date.now()}`;
@@ -688,7 +687,10 @@ describe.skipIf(!enabled)("PSR-P2 terminal production SHADOW writers", () => {
     await prismaA.productionOperation.delete({ where: { id: doomed.id } });
     await expect(
       submitUpakovka({ employeeId: w.emp.id, clientRequestId, picks }),
-    ).rejects.toThrow(TERMINAL_REQUEST_ALREADY_RECORDED);
+    ).resolves.toEqual({
+      status: "PARTIAL",
+      saved: [{ productId: w.products[0]!.id, quantity: 1 }],
+    });
     expect(await prismaA.inventoryMovement.count()).toBe(firstCount);
   });
 

@@ -59,6 +59,7 @@ import {
   type TorcovkaApprovalSnapshot,
 } from "@/server/internal/torcovka-approval";
 import {
+  assertConfirmedUnrecorded,
   assertReplayMatched,
   resolveHoursReplay,
   resolvePrisadkaReplay,
@@ -920,7 +921,16 @@ export interface UpakovkaInput {
   /** Ключ идемпотентности с клиента (A21). */
   clientRequestId: string;
   picks: { productId: string; quantity: number }[];
+  /**
+   * Явная отдельная упаковка после частичной записи.
+   * Не является продолжением старого запроса.
+   */
+  recordedRequestId?: string;
 }
+
+export type SubmitUpakovkaResult =
+  | { status: "RECORDED" }
+  | { status: "PARTIAL"; saved: { productId: string; quantity: number }[] };
 
 /**
  * Списывает готовые детали/крепёж/упаковку под `quantity` изделий `productId`
@@ -1158,10 +1168,13 @@ async function movedReverseUpakovkaOperation(
 }
 */
 
-export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
+export async function submitUpakovka(input: UpakovkaInput): Promise<SubmitUpakovkaResult> {
   const employee = await requireTerminalEmployee(input?.employeeId);
   const actor = employeeMovementActor(employee);
   const clientRequestId = requireClientRequestId(input.clientRequestId);
+  const recordedRequestId = input.recordedRequestId
+    ? requireClientRequestId(input.recordedRequestId)
+    : null;
   const employeeId = employee.id;
   const picks = input.picks.filter((p) => p.quantity > 0);
   if (!employeeId) throw new Error("Не выбран работник");
@@ -1170,12 +1183,26 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
   if (new Set(productIds).size !== productIds.length) {
     throw new Error("В списке упаковки изделие указано дважды");
   }
+  if (recordedRequestId && recordedRequestId === clientRequestId) {
+    throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);
+  }
 
-  await prisma
+  const outcome = await prisma
     .$transaction(async (tx) => {
       const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
+      if (recordedRequestId) {
+        await assertConfirmedUnrecorded(tx, {
+          employeeId,
+          parentRequestId: clientRequestId,
+          recordedRequestId,
+          picks,
+        });
+      }
       const upakovkaReplay = { employeeId, parentRequestId: clientRequestId, picks };
-      if ((await resolveUpakovkaReplay(tx, upakovkaReplay)) === "MATCH") return;
+      const replay = async () => resolveUpakovkaReplay(tx, upakovkaReplay);
+      const first = await replay();
+      if (first.status === "MATCH") return { status: "RECORDED" as const };
+      if (first.status === "PARTIAL") return first;
 
       const preparedRows = [];
       for (const pick of picks) {
@@ -1188,7 +1215,9 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
       await lockUpakovkaPhysicalWriteSet(tx, planUpakovkaPhysicalLockSet(preparedRows), {
         costFlowActive,
       });
-      if ((await resolveUpakovkaReplay(tx, upakovkaReplay)) === "MATCH") return;
+      const second = await replay();
+      if (second.status === "MATCH") return { status: "RECORDED" as const };
+      if (second.status === "PARTIAL") return second;
       const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
       for (const { pick, prepared } of preparedRows) {
         const occurredAt = new Date();
@@ -1227,20 +1256,30 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
           tx,
         );
       }
+      return { status: "RECORDED" as const };
     }, { timeout: 20_000, maxWait: 20_000 })
     .catch(async (e) => {
       if (!isDuplicateClientRequest(e)) throw e;
-      assertReplayMatched(
-        await resolveUpakovkaReplay(prisma, {
-          employeeId,
-          parentRequestId: clientRequestId,
-          picks,
-        }),
-      );
+      const verdict = await resolveUpakovkaReplay(prisma, {
+        employeeId,
+        parentRequestId: clientRequestId,
+        picks,
+      });
+      if (verdict.status === "MATCH") return { status: "RECORDED" as const };
+      if (verdict.status === "PARTIAL") return verdict;
+      throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);
     });
 
-  revalidatePath("/production");
-  revalidatePath("/terminal");
+  try {
+    revalidatePath("/production");
+    revalidatePath("/terminal");
+  } catch (error) {
+    console.error("[terminal] upakovka page refresh failed after commit", {
+      clientRequestId,
+      errorMessage: error instanceof Error ? error.message : "unknown",
+    });
+  }
+  return outcome;
 }
 
 // ============================ РАБОЧИЕ ЧАСЫ =================================
