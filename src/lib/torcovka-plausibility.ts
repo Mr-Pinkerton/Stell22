@@ -64,7 +64,7 @@ export interface TorcovkaWasteMetrics {
 }
 
 export type SubmitTorcovkaResult =
-  | { status: "CREATED" }
+  | { status: "CREATED"; costRecalc?: "FAILED"; pageRefresh?: "FAILED" }
   | Extract<TorcovkaSubmitDecision, { status: "ACK_REQUIRED" }>
   | {
       status: "APPROVAL_REQUIRED";

@@ -14,7 +14,9 @@ import {
   shouldSkipTorcovkaDraftPersist,
   TERMINAL_REFRESH_AFTER_SAVE_WARNING,
   torcovkaBlankPrerequisiteHint,
+  torcovkaPostCommitNotices,
   torcovkaSavedDetail,
+  TORCOVKA_COST_RECALC_WARNING,
   TORCOVKA_SWITCH_RESET,
   TORCOVKA_SWITCH_STAY,
   TORCOVKA_SWITCH_WARNING,
@@ -281,5 +283,26 @@ describe("refreshAfterSavedOperation", () => {
     expect(TERMINAL_REFRESH_AFTER_SAVE_WARNING).toContain("Операция сохранена");
     expect(TERMINAL_REFRESH_AFTER_SAVE_WARNING).not.toBe("Ошибка внесения");
     expect(TERMINAL_REFRESH_AFTER_SAVE_WARNING).not.toContain("Ошибка внесения");
+  });
+});
+
+describe("torcovkaPostCommitNotices", () => {
+  it("keeps a saved operation separate from a cost recalc warning", () => {
+    expect(torcovkaPostCommitNotices({ costRecalc: "FAILED" })).toEqual([
+      TORCOVKA_COST_RECALC_WARNING,
+    ]);
+    expect(TORCOVKA_COST_RECALC_WARNING).toContain("Операция сохранена");
+    expect(TORCOVKA_COST_RECALC_WARNING).not.toContain("Ошибка внесения");
+    expect(TORCOVKA_COST_RECALC_WARNING).not.toMatch(/повторите|введите/i);
+  });
+
+  it("adds a page refresh warning without replacing the save", () => {
+    expect(
+      torcovkaPostCommitNotices({ costRecalc: "FAILED", pageRefresh: "FAILED" }),
+    ).toEqual([TORCOVKA_COST_RECALC_WARNING, TERMINAL_REFRESH_AFTER_SAVE_WARNING]);
+  });
+
+  it("returns no extra notices when maintenance finished", () => {
+    expect(torcovkaPostCommitNotices({})).toEqual([]);
   });
 });

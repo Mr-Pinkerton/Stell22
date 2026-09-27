@@ -108,6 +108,20 @@ export function shouldSkipTorcovkaDraftPersist(opts: {
 export const TERMINAL_REFRESH_AFTER_SAVE_WARNING =
   `${OPERATION_SAVED_TITLE}, но не удалось обновить данные терминала`;
 
+/** Пересчёт после уже записанной операции. Не обещает автоматическое восстановление. */
+export const TORCOVKA_COST_RECALC_WARNING =
+  `${OPERATION_SAVED_TITLE}. Пересчёт себестоимости не завершён.`;
+
+export function torcovkaPostCommitNotices(result: {
+  costRecalc?: "FAILED";
+  pageRefresh?: "FAILED";
+}): string[] {
+  const notices: string[] = [];
+  if (result.costRecalc === "FAILED") notices.push(TORCOVKA_COST_RECALC_WARNING);
+  if (result.pageRefresh === "FAILED") notices.push(TERMINAL_REFRESH_AFTER_SAVE_WARNING);
+  return notices;
+}
+
 export async function refreshAfterSavedOperation(
   refresh: () => Promise<void>,
 ): Promise<"ok" | "refresh-failed"> {
