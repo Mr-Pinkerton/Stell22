@@ -7,4 +7,5 @@ export const toast = {
   success: (message: string) => sonner.success(message, opts),
   error: (message: string) => sonner.error(message, opts),
   info: (message: string) => sonner.info(message, opts),
+  warning: (message: string) => sonner.warning(message, opts),
 };

@@ -12,6 +12,8 @@ import type {
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
+import { writeSystemLog } from "@/server/system-log";
+import { settleTorcovkaAfterCommit } from "@/lib/torcovka-post-commit";
 import {
   applyPrisadkaPicks,
   applyUpakovkaPrepared,
@@ -467,6 +469,45 @@ function publicApprovalRequired(
   };
 }
 
+function revalidateTerminalPages(): void {
+  revalidatePath("/production");
+  revalidatePath("/terminal");
+  revalidatePath("/reports");
+  revalidatePath("/", "layout");
+}
+
+async function recordTorcovkaPostCommitFailure(
+  kind: "cost-recalc" | "page-refresh",
+  error: unknown,
+  ids: { batchId: string; clientRequestId: string },
+): Promise<void> {
+  const errorMessage = error instanceof Error ? error.message : "unknown";
+  console.error("[terminal] torcovka post-commit maintenance failed", {
+    kind,
+    batchId: ids.batchId,
+    clientRequestId: ids.clientRequestId,
+    errorMessage,
+  });
+  try {
+    await writeSystemLog({
+      level: "ERROR",
+      source: "Терминал",
+      message:
+        kind === "cost-recalc"
+          ? "Торцовка сохранена, пересчёт себестоимости не завершён"
+          : "Торцовка сохранена, обновление страниц не завершено",
+      details: {
+        kind,
+        batchId: ids.batchId,
+        clientRequestId: ids.clientRequestId,
+        errorMessage,
+      },
+    });
+  } catch (logError) {
+    console.error("[terminal] post-commit diagnostic was not stored", logError);
+  }
+}
+
 async function finishApprovalGate(
   snapshot: TorcovkaApprovalSnapshot,
   requested: TorcovkaReplayRequest & { clientRequestId: string },
@@ -490,17 +531,29 @@ async function finishApprovalGate(
         { committedOpExists: true },
       );
     });
-    revalidatePath("/production");
-    revalidatePath("/terminal");
-    revalidatePath("/reports");
-    revalidatePath("/", "layout");
+    const ack = await settleTorcovkaAfterCommit({
+      recalc: null,
+      refreshPages: revalidateTerminalPages,
+      recordFailure: (kind, error) =>
+        recordTorcovkaPostCommitFailure(kind, error, {
+          batchId: snapshot.batchId,
+          clientRequestId: snapshot.clientRequestId,
+        }),
+    });
     if (conflict) throw conflict;
-    return { status: "CREATED" };
+    return ack;
   }
   if (ensure.kind === "CONSUMED") {
     throw new Error(TORCOVKA_APPROVAL_CONSUMED_ORPHAN);
   }
-  revalidatePath("/", "layout");
+  try {
+    revalidatePath("/", "layout");
+  } catch (error) {
+    console.error("[terminal] torcovka approval refresh failed", {
+      clientRequestId: snapshot.clientRequestId,
+      errorMessage: error instanceof Error ? error.message : "unknown",
+    });
+  }
   return publicApprovalRequired(snapshot, ensure.expiresAt);
 }
 
@@ -570,15 +623,16 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
   if (txResult.status === "EXPIRED" || txResult.status === "METRICS_CHANGED") {
     return finishApprovalGate(txResult.snapshot, replayRequest);
   }
-  if (txResult.status === "CREATED_NEW") {
-    await enqueueRecalcBatchCosts(batchId);
+  if (txResult.status === "CREATED_NEW" || txResult.status === "IDEMPOTENT_REPLAY") {
+    return settleTorcovkaAfterCommit({
+      recalc: txResult.status === "CREATED_NEW" ? () => enqueueRecalcBatchCosts(batchId) : null,
+      refreshPages: revalidateTerminalPages,
+      recordFailure: (kind, error) =>
+        recordTorcovkaPostCommitFailure(kind, error, { batchId, clientRequestId }),
+    });
   }
 
-  revalidatePath("/production");
-  revalidatePath("/terminal");
-  revalidatePath("/reports");
-  revalidatePath("/", "layout");
-  return { status: "CREATED" };
+  throw new Error("Неизвестный результат торцовки");
 }
 
 // ============================ ПРИСАДКА =====================================

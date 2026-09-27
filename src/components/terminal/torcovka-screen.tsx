@@ -36,6 +36,7 @@ import {
   shouldShowTorcovkaWastePct,
   shouldSkipTorcovkaDraftPersist,
   torcovkaBlankPrerequisiteHint,
+  torcovkaPostCommitNotices,
   torcovkaSavedDetail,
   TORCOVKA_SWITCH_RESET,
   TORCOVKA_SWITCH_STAY,
@@ -303,8 +304,15 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
     resetLot();
   };
 
-  const finishCreated = async (detail: string, toastMessage: string) => {
+  const finishCreated = async (
+    detail: string,
+    toastMessage: string,
+    followUp: { costRecalc?: "FAILED"; pageRefresh?: "FAILED" },
+  ) => {
     toast.success(toastMessage);
+    for (const notice of torcovkaPostCommitNotices(followUp)) {
+      toast.warning(notice);
+    }
     skipDraftPersistRef.current = true;
     clearDraft();
     setPicked({});
@@ -343,7 +351,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         railsTaken,
         picks,
       });
-      if (result.status === "ACK_REQUIRED" || result.status === "APPROVAL_REQUIRED") {
+      if (result.status !== "CREATED") {
         if (result.status === "APPROVAL_REQUIRED") {
           setApprovalCode("");
         }
@@ -364,6 +372,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       await finishCreated(
         torcovkaSavedDetail(pickedCount),
         `Торцовка внесена: ${pickedCount} заг., отход ${wasteLabel}`,
+        result,
       );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
@@ -393,7 +402,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
           wastePct: pendingAck.wastePct,
         },
       });
-      if (result.status === "ACK_REQUIRED" || result.status === "APPROVAL_REQUIRED") {
+      if (result.status !== "CREATED") {
         if (result.status === "APPROVAL_REQUIRED") {
           setApprovalCode("");
         }
@@ -404,7 +413,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       }
       const qty = pendingAck.picks.reduce((s, p) => s + p.quantity, 0);
       setPendingAck(null);
-      await finishCreated(torcovkaSavedDetail(qty), `Торцовка внесена: ${qty} заг.`);
+      await finishCreated(torcovkaSavedDetail(qty), `Торцовка внесена: ${qty} заг.`, result);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
       endExclusiveSubmit(submitLock);
@@ -436,7 +445,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
         setSubmitting(false);
         return;
       }
-      if (result.status === "ACK_REQUIRED") {
+      if (result.status !== "CREATED") {
         setPendingAck((prev) => (prev ? { ...prev, ...result } : prev));
         endExclusiveSubmit(submitLock);
         setSubmitting(false);
@@ -445,7 +454,7 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
       const qty = pendingAck.picks.reduce((s, p) => s + p.quantity, 0);
       setPendingAck(null);
       setApprovalCode("");
-      await finishCreated(torcovkaSavedDetail(qty), `Торцовка внесена: ${qty} заг.`);
+      await finishCreated(torcovkaSavedDetail(qty), `Торцовка внесена: ${qty} заг.`, result);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
       if (err instanceof Error && err.message === WRONG_APPROVAL_CODE_MESSAGE) {
