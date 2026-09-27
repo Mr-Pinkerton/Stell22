@@ -56,6 +56,14 @@ import {
   invalidateTorcovkaApprovalIfNotNeeded,
   type TorcovkaApprovalSnapshot,
 } from "@/server/internal/torcovka-approval";
+import {
+  assertReplayMatched,
+  resolveHoursReplay,
+  resolvePrisadkaReplay,
+  resolveTorcovkaReplay,
+  resolveUpakovkaReplay,
+  upakovkaOperationRequestId,
+} from "@/server/internal/terminal-request-identity";
 import { requireClientRequestId } from "@/lib/request-id";
 import { assertValidHours, HOURS_NO_RATE_MESSAGE, isHourlyRateUnavailable } from "@/lib/hours-input";
 import { upakovkaAvailability } from "@/lib/upakovka-availability";
@@ -90,9 +98,8 @@ function num(value: Prisma.Decimal | number | null): number | null {
 
 /**
  * Дубль по ключу идемпотентности терминала (A21): unique-конфликт P2002 на
- * `clientRequestId`. Такой повтор одной попытки (двойной тап / сетевой retry /
- * replay того же id) считаем успешно обработанным — операция уже создана
- * первым запросом. Две вкладки обычно дают два разных id — это две попытки.
+ * `clientRequestId`. Точное совпадение состава — успешный повтор без новой
+ * операции. Другой состав или другой сотрудник — отказ без новой записи.
  */
 function isDuplicateClientRequest(e: unknown): boolean {
   if (typeof e !== "object" || e === null) return false;
@@ -515,8 +522,24 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
         plausibilityAck: input.plausibilityAck,
         code,
       }),
-  ).catch((e) => {
-    if (isDuplicateClientRequest(e)) return { status: "IDEMPOTENT_REPLAY" as const };
+  ).catch(async (e) => {
+    if (isDuplicateClientRequest(e)) {
+      const verdict = await resolveTorcovkaReplay(prisma, {
+        employeeId,
+        clientRequestId,
+        batchId,
+        railLotId,
+        railsTaken,
+        picks,
+      });
+      assertReplayMatched(verdict);
+      await prisma.$transaction(async (tx) => {
+        await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, employeeId, {
+          committedOpExists: true,
+        });
+      });
+      return { status: "IDEMPOTENT_REPLAY" as const };
+    }
     if (isPrismaP2025(e)) {
       logTorcovkaP2025Forensic({
         clientRequestId,
@@ -779,19 +802,17 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
   if (!employeeId) throw new Error("Не выбран работник");
   if (picks.length === 0) throw new Error("Не выбраны детали");
 
+  const prisadkaReplay = { employeeId, clientRequestId, picks };
   await prisma
     .$transaction(async (tx) => {
       const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
-      const existing = await tx.productionOperation.findUnique({
-        where: { clientRequestId },
-        select: { id: true },
-      });
-      if (existing) return;
+      if ((await resolvePrisadkaReplay(tx, prisadkaReplay)) === "MATCH") return;
 
       await lockDetails(
         tx,
         picks.map((p) => p.detailId),
       );
+      if ((await resolvePrisadkaReplay(tx, prisadkaReplay)) === "MATCH") return;
       const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
       const occurredAt = new Date();
       const op = await tx.productionOperation.create({
@@ -825,9 +846,9 @@ export async function submitPrisadka(input: PrisadkaInput): Promise<void> {
         tx,
       );
     }, { timeout: 20_000, maxWait: 20_000 })
-    .catch((e) => {
-      if (isDuplicateClientRequest(e)) return; // A21: повтор уже обработан
-      throw e;
+    .catch(async (e) => {
+      if (!isDuplicateClientRequest(e)) throw e;
+      assertReplayMatched(await resolvePrisadkaReplay(prisma, prisadkaReplay));
     });
 
   revalidatePath("/production");
@@ -1095,17 +1116,8 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
   await prisma
     .$transaction(async (tx) => {
       const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
-      const expectedIds = picks.map((p) => `${clientRequestId}:${p.productId}`);
-      const existing = await tx.productionOperation.findMany({
-        where: { clientRequestId: { in: expectedIds } },
-        select: { clientRequestId: true },
-      });
-      const found = new Set(existing.map((row) => row.clientRequestId));
-      const missing = expectedIds.filter((id) => !found.has(id));
-      if (missing.length === 0) return;
-      if (found.size > 0) {
-        throw new Error("Несогласованный повтор упаковки");
-      }
+      const upakovkaReplay = { employeeId, parentRequestId: clientRequestId, picks };
+      if ((await resolveUpakovkaReplay(tx, upakovkaReplay)) === "MATCH") return;
 
       const preparedRows = [];
       for (const pick of picks) {
@@ -1118,6 +1130,7 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
       await lockUpakovkaPhysicalWriteSet(tx, planUpakovkaPhysicalLockSet(preparedRows), {
         costFlowActive,
       });
+      if ((await resolveUpakovkaReplay(tx, upakovkaReplay)) === "MATCH") return;
       const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
       for (const { pick, prepared } of preparedRows) {
         const occurredAt = new Date();
@@ -1125,7 +1138,7 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
           data: {
             type: "UPAKOVKA",
             employeeId,
-            clientRequestId: `${clientRequestId}:${pick.productId}`,
+            clientRequestId: upakovkaOperationRequestId(clientRequestId, pick.productId),
             workDate: occurredAt,
             productId: pick.productId,
             productQty: pick.quantity,
@@ -1157,9 +1170,15 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<void> {
         );
       }
     }, { timeout: 20_000, maxWait: 20_000 })
-    .catch((e) => {
-      if (isDuplicateClientRequest(e)) return; // A21: повтор уже обработан
-      throw e;
+    .catch(async (e) => {
+      if (!isDuplicateClientRequest(e)) throw e;
+      assertReplayMatched(
+        await resolveUpakovkaReplay(prisma, {
+          employeeId,
+          parentRequestId: clientRequestId,
+          picks,
+        }),
+      );
     });
 
   revalidatePath("/production");
@@ -1178,14 +1197,12 @@ export async function submitHours(
   if (!employeeId) throw new Error("Не выбран работник");
   assertValidHours(hours);
 
+  const hoursReplay = { employeeId, clientRequestId: requestId, hours };
   try {
     await prisma.$transaction(async (tx) => {
-      const existing = await tx.productionOperation.findUnique({
-        where: { clientRequestId: requestId },
-        select: { id: true },
-      });
-      if (existing) return;
+      if ((await resolveHoursReplay(tx, hoursReplay)) === "MATCH") return;
       const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
+      if ((await resolveHoursReplay(tx, hoursReplay)) === "MATCH") return;
       if (isHourlyRateUnavailable(rateSnapshots.hourlyRateSnapshot)) {
         throw new Error(HOURS_NO_RATE_MESSAGE);
       }
@@ -1209,8 +1226,8 @@ export async function submitHours(
       );
     });
   } catch (e) {
-    if (isDuplicateClientRequest(e)) return; // A21: повтор уже обработан
-    throw e;
+    if (!isDuplicateClientRequest(e)) throw e;
+    assertReplayMatched(await resolveHoursReplay(prisma, hoursReplay));
   }
 
   revalidatePath("/production");

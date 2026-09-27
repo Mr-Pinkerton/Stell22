@@ -33,6 +33,7 @@ import {
   lockAndReadRateSnapshots,
   snapshotFieldsForLog,
 } from "@/server/internal/production-terminal-shared";
+import { resolveTorcovkaReplay } from "@/server/internal/terminal-request-identity";
 import { updateEventMessage } from "@/server/internal/notification-event";
 import {
   approvalSnapshotDiffers,
@@ -108,28 +109,18 @@ export async function submitTorcovkaInTransaction(
   } = input;
 
   const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
-  const existingBeforeLock = await tx.productionOperation.findUnique({
-    where: { clientRequestId },
-    select: { id: true, employeeId: true },
-  });
-  if (existingBeforeLock) {
-    await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, existingBeforeLock.employeeId, {
+  const requested = { employeeId, clientRequestId, batchId, railLotId, railsTaken, picks };
+  const replayMatched = async (): Promise<boolean> => {
+    if ((await resolveTorcovkaReplay(tx, requested)) !== "MATCH") return false;
+    await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, employeeId, {
       committedOpExists: true,
     });
-    return { status: "IDEMPOTENT_REPLAY" as const };
-  }
+    return true;
+  };
+  if (await replayMatched()) return { status: "IDEMPOTENT_REPLAY" as const };
 
   await lockRailLots(tx, [railLotId]);
-  const existingAfterLock = await tx.productionOperation.findUnique({
-    where: { clientRequestId },
-    select: { id: true, employeeId: true },
-  });
-  if (existingAfterLock) {
-    await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, existingAfterLock.employeeId, {
-      committedOpExists: true,
-    });
-    return { status: "IDEMPOTENT_REPLAY" as const };
-  }
+  if (await replayMatched()) return { status: "IDEMPOTENT_REPLAY" as const };
   const lot = await tx.railLot.findUnique({ where: { id: railLotId } });
   if (!lot || lot.batchId !== batchId) throw new Error("Пакет реек не найден");
   const batch = await tx.batch.findUniqueOrThrow({ where: { id: batchId } });
