@@ -62,7 +62,10 @@ import {
   resolvePrisadkaReplay,
   resolveTorcovkaReplay,
   resolveUpakovkaReplay,
+  runApprovalGateAfterEnsureForTests,
+  TERMINAL_REQUEST_ALREADY_RECORDED,
   upakovkaOperationRequestId,
+  type TorcovkaReplayRequest,
 } from "@/server/internal/terminal-request-identity";
 import { requireClientRequestId } from "@/lib/request-id";
 import { assertValidHours, HOURS_NO_RATE_MESSAGE, isHourlyRateUnavailable } from "@/lib/hours-input";
@@ -466,13 +469,19 @@ function publicApprovalRequired(
 
 async function finishApprovalGate(
   snapshot: TorcovkaApprovalSnapshot,
+  requested: TorcovkaReplayRequest & { clientRequestId: string },
 ): Promise<SubmitTorcovkaResult> {
   const ensure = await ensurePendingApproval(snapshot);
-  const opNow = await prisma.productionOperation.findUnique({
-    where: { clientRequestId: snapshot.clientRequestId },
-    select: { id: true },
-  });
-  if (opNow) {
+  await runApprovalGateAfterEnsureForTests();
+  let conflict: Error | null = null;
+  let verdict: "ABSENT" | "MATCH" = "ABSENT";
+  try {
+    verdict = await resolveTorcovkaReplay(prisma, requested);
+  } catch (err) {
+    if (!(err instanceof Error) || err.message !== TERMINAL_REQUEST_ALREADY_RECORDED) throw err;
+    conflict = err;
+  }
+  if (verdict === "MATCH" || conflict) {
     await prisma.$transaction(async (tx) => {
       await invalidateTorcovkaApprovalIfNotNeeded(
         tx,
@@ -485,6 +494,7 @@ async function finishApprovalGate(
     revalidatePath("/terminal");
     revalidatePath("/reports");
     revalidatePath("/", "layout");
+    if (conflict) throw conflict;
     return { status: "CREATED" };
   }
   if (ensure.kind === "CONSUMED") {
@@ -508,6 +518,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
   }
   if (picks.length === 0) throw new Error("Не выбраны длины заготовок");
   const code = parseApprovalCode(input.approvalCode);
+  const replayRequest = { employeeId, clientRequestId, batchId, railLotId, railsTaken, picks };
 
   const txResult: TorcovkaTxResult = await prisma.$transaction(
     (tx) =>
@@ -524,14 +535,7 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
       }),
   ).catch(async (e) => {
     if (isDuplicateClientRequest(e)) {
-      const verdict = await resolveTorcovkaReplay(prisma, {
-        employeeId,
-        clientRequestId,
-        batchId,
-        railLotId,
-        railsTaken,
-        picks,
-      });
+      const verdict = await resolveTorcovkaReplay(prisma, replayRequest);
       assertReplayMatched(verdict);
       await prisma.$transaction(async (tx) => {
         await invalidateTorcovkaApprovalIfNotNeeded(tx, clientRequestId, employeeId, {
@@ -555,16 +559,16 @@ export async function submitTorcovka(input: TorcovkaInput): Promise<SubmitTorcov
 
   if (txResult.status === "ACK_REQUIRED") return txResult;
   if (txResult.status === "APPROVAL_NEEDED") {
-    return finishApprovalGate(txResult.snapshot);
+    return finishApprovalGate(txResult.snapshot, replayRequest);
   }
   if (txResult.status === "WRONG_CODE") {
     if (txResult.failedAttempts < TORCOVKA_APPROVAL_MAX_ATTEMPTS) {
       throw new Error(TORCOVKA_WRONG_CODE_MESSAGE);
     }
-    return finishApprovalGate(txResult.snapshot);
+    return finishApprovalGate(txResult.snapshot, replayRequest);
   }
   if (txResult.status === "EXPIRED" || txResult.status === "METRICS_CHANGED") {
-    return finishApprovalGate(txResult.snapshot);
+    return finishApprovalGate(txResult.snapshot, replayRequest);
   }
   if (txResult.status === "CREATED_NEW") {
     await enqueueRecalcBatchCosts(batchId);

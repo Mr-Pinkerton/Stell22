@@ -307,3 +307,21 @@ export async function resolveHoursReplay(
 export function assertReplayMatched(verdict: ReplayPresence): void {
   if (verdict !== "MATCH") throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);
 }
+
+/**
+ * Integrity seam only. Lets a test commit another request between
+ * ensurePendingApproval and the saved-operation comparison.
+ * Unset in production paths.
+ */
+let approvalGateAfterEnsure: (() => Promise<void>) | null = null;
+
+export function setApprovalGateAfterEnsureForTests(hook: (() => Promise<void>) | null): void {
+  approvalGateAfterEnsure = hook;
+}
+
+export async function runApprovalGateAfterEnsureForTests(): Promise<void> {
+  if (process.env.NODE_ENV === "production") return;
+  const hook = approvalGateAfterEnsure;
+  if (!hook) return;
+  await hook();
+}

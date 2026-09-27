@@ -23,6 +23,7 @@ import { writeOffBatchRemainder } from "@/server/purchases";
 import { correctTorcovkaRailsTaken, deleteProductionOperation } from "@/server/production";
 import { TORCOVKA_GENERIC_DELETE_BLOCKED } from "@/lib/torcovka-delete-policy";
 import { submitTorcovka } from "@/server/terminal";
+import { TERMINAL_REQUEST_ALREADY_RECORDED } from "@/server/internal/terminal-request-identity";
 import { archiveBatchIfDepleted } from "@/server/internal/cost";
 import { lockBatches, lockRailLots } from "@/server/internal/finance-operations";
 import {
@@ -1488,7 +1489,7 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
     expect(after.notes.filter((n) => n.key.endsWith(":2"))).toHaveLength(0);
   });
 
-  it("stale C: late ensure after non-EXTREME Op is invalidated; public CREATED", async () => {
+  it("stale C: late ensure after a different non-EXTREME Op refuses and redacts the code", async () => {
     const w = await seedWorld({
       suffix: `stale-c-${Date.now()}`,
       lotLengthM: "10",
@@ -1544,9 +1545,10 @@ describe.skipIf(!enabled)("DI-020 TORCOVKA input safety", () => {
     );
     expect(t2Result.status).toBe("CREATED");
     blocker.release();
-    const t1Result = await withTimeout(t1, "stale C T1 late ensure after Op");
+    await expect(withTimeout(t1, "stale C T1 late ensure after Op")).rejects.toThrow(
+      TERMINAL_REQUEST_ALREADY_RECORDED,
+    );
     await blocker.done;
-    expect(t1Result.status).toBe("CREATED");
     expect(await prismaA.productionOperation.count({ where: { clientRequestId: raceId } })).toBe(1);
     const raced = await approvalBundle(raceId);
     expect(raced.row).not.toBeNull();

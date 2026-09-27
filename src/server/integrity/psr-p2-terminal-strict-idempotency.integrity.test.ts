@@ -34,7 +34,11 @@ vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: vi.fn(async () 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Prisma } from "@prisma/client";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
-import { TERMINAL_REQUEST_ALREADY_RECORDED } from "@/server/internal/terminal-request-identity";
+import {
+  setApprovalGateAfterEnsureForTests,
+  TERMINAL_REQUEST_ALREADY_RECORDED,
+} from "@/server/internal/terminal-request-identity";
+import { TORCOVKA_APPROVAL_MAX_ATTEMPTS, TORCOVKA_WRONG_CODE_MESSAGE } from "@/lib/torcovka-approval";
 import { setInventoryMovementShadowWriteGate } from "@/server/internal/inventory-movement-shadow-write";
 import { planProductionShadowMovements } from "@/server/internal/production-movement-plan";
 import { submitHours, submitPrisadka, submitTorcovka, submitUpakovka } from "@/server/terminal";
@@ -60,6 +64,7 @@ describe.skipIf(!enabled)("terminal strict idempotency", () => {
     await resetIntegrityInventory(prismaA);
     sessionState.employee = { id: "", fullName: "" };
     vi.mocked(enqueueRecalcBatchCosts).mockClear();
+    setApprovalGateAfterEnsureForTests(null);
   });
 
   afterAll(async () => {
@@ -424,6 +429,180 @@ describe.skipIf(!enabled)("terminal strict idempotency", () => {
     ).rejects.toThrow(TERMINAL_REQUEST_ALREADY_RECORDED);
     expect(await effects()).toEqual(saved);
   });
+
+  function armApprovalWindow(action: () => Promise<void>) {
+    setApprovalGateAfterEnsureForTests(async () => {
+      setApprovalGateAfterEnsureForTests(null);
+      await action();
+    });
+  }
+
+  async function latestApprovalCode(requestId: string): Promise<string> {
+    const note = await prismaA.notification.findFirstOrThrow({
+      where: { key: { startsWith: `event:torcovka-approval:${requestId}:` } },
+      orderBy: { createdAt: "desc" },
+    });
+    const code = note.message.match(/Код подтверждения: (\d{4})/)?.[1];
+    if (!code) throw new Error("no approval code");
+    return code;
+  }
+
+  async function assertOnlyPeerWrite(opts: {
+    requestId: string;
+    peerId: string;
+    lotId: string;
+    railsTaken: number;
+    remaining: number;
+  }) {
+    const ops = await prismaA.productionOperation.findMany({
+      where: { clientRequestId: opts.requestId },
+      include: { lines: true, nomenclatureLines: true },
+    });
+    expect(ops).toHaveLength(1);
+    expect(ops[0]?.employeeId).toBe(opts.peerId);
+    expect(ops[0]?.railsTaken).toBe(opts.railsTaken);
+    const lot = await prismaA.railLot.findUniqueOrThrow({ where: { id: opts.lotId } });
+    expect(lot.remainingQuantity).toBe(opts.remaining);
+    const plan = planProductionShadowMovements({ kind: "TORCOVKA", operation: ops[0]! });
+    expect(await prismaA.inventoryMovement.count()).toBe(plan.effects.length);
+    expect(await prismaA.batchCost.count()).toBe(0);
+  }
+
+  it.each(["APPROVAL_NEEDED", "WRONG_CODE", "EXPIRED", "METRICS_CHANGED"] as const)(
+    "finishApprovalGate %s rejects a different composition committed in the approval window",
+    async (gate) => {
+      await setShadowGate(true);
+      const world = await seedTorcovka(`gate-c-${gate}-${Date.now()}`, { lengthM: "10", remaining: 20 });
+      const requestId = `gate-c-${gate}-${Date.now()}`;
+      const extreme = torcovkaInput(world, requestId, 10, [{ lengthM: 1, sort: "SORT1", quantity: 27 }]);
+      const shifted = torcovkaInput(world, requestId, 10, [{ lengthM: 1, sort: "SORT1", quantity: 20 }]);
+      const peerInput = torcovkaInput(world, requestId, 1, [{ lengthM: 1, sort: "SORT1", quantity: 9 }]);
+      const peer = await prismaA.employee.create({
+        data: {
+          fullName: `Чужой ${gate} ${requestId}`,
+          pin: "5678",
+          rateTorcovkaSort1: 10,
+          rateTorcovkaSort2: 10,
+          hourlyRate: 100,
+        },
+      });
+      const savePeer = async () => {
+        expect(await submitTorcovka(peerInput)).toEqual({ status: "CREATED" });
+        await prismaA.productionOperation.update({
+          where: { clientRequestId: requestId },
+          data: { employeeId: peer.id },
+        });
+      };
+      armApprovalWindow(savePeer);
+
+      let error: unknown;
+      try {
+        if (gate === "APPROVAL_NEEDED") {
+          await submitTorcovka(extreme);
+        } else {
+          setApprovalGateAfterEnsureForTests(null);
+          expect((await submitTorcovka(extreme)).status).toBe("APPROVAL_REQUIRED");
+          const code = await latestApprovalCode(requestId);
+          const wrong = code === "0000" ? "0001" : "0000";
+          armApprovalWindow(savePeer);
+          if (gate === "WRONG_CODE") {
+            for (let attempt = 0; attempt < TORCOVKA_APPROVAL_MAX_ATTEMPTS - 1; attempt += 1) {
+              setApprovalGateAfterEnsureForTests(null);
+              await expect(submitTorcovka({ ...extreme, approvalCode: wrong })).rejects.toThrow(
+                TORCOVKA_WRONG_CODE_MESSAGE,
+              );
+            }
+            armApprovalWindow(savePeer);
+            await submitTorcovka({ ...extreme, approvalCode: wrong });
+          } else if (gate === "EXPIRED") {
+            await prismaA.torcovkaApproval.update({
+              where: { clientRequestId: requestId },
+              data: { expiresAt: new Date(Date.now() - 1000) },
+            });
+            await submitTorcovka({ ...extreme, approvalCode: code });
+          } else {
+            await submitTorcovka({ ...shifted, approvalCode: code });
+          }
+        }
+      } catch (err) {
+        error = err;
+      }
+      const message = rejectionMessage(error);
+      expect(message).toBe(TERMINAL_REQUEST_ALREADY_RECORDED);
+      expect(message).not.toContain(world.emp.fullName);
+      expect(message).not.toContain(world.emp.id);
+      expect(message).not.toContain(peer.fullName);
+      expect(message).not.toContain(peer.id);
+      expect(message).not.toMatch(/сотрудник|работник|другому/i);
+      await assertOnlyPeerWrite({
+        requestId,
+        peerId: peer.id,
+        lotId: world.lot.id,
+        railsTaken: 1,
+        remaining: 19,
+      });
+      const lines = await prismaA.operationDetailLine.findMany({
+        where: { operation: { clientRequestId: requestId } },
+      });
+      expect(lines.map((line) => line.quantity)).toEqual([9]);
+    },
+  );
+
+  it.each(["APPROVAL_NEEDED", "WRONG_CODE", "EXPIRED", "METRICS_CHANGED"] as const)(
+    "finishApprovalGate %s replays an exact composition committed in the approval window",
+    async (gate) => {
+      await setShadowGate(true);
+      const world = await seedTorcovka(`gate-m-${gate}-${Date.now()}`, { lengthM: "10", remaining: 20 });
+      const requestId = `gate-m-${gate}-${Date.now()}`;
+      const extreme = torcovkaInput(world, requestId, 10, [{ lengthM: 1, sort: "SORT1", quantity: 27 }]);
+      const shifted = torcovkaInput(world, requestId, 10, [{ lengthM: 1, sort: "SORT1", quantity: 20 }]);
+      const matching = gate === "METRICS_CHANGED" ? shifted : extreme;
+      const saveExact = async () => {
+        const code = await latestApprovalCode(requestId);
+        expect(await submitTorcovka({ ...matching, approvalCode: code })).toEqual({ status: "CREATED" });
+      };
+
+      let result: Awaited<ReturnType<typeof submitTorcovka>> | undefined;
+      if (gate === "APPROVAL_NEEDED") {
+        armApprovalWindow(saveExact);
+        result = await submitTorcovka(extreme);
+      } else {
+        expect((await submitTorcovka(extreme)).status).toBe("APPROVAL_REQUIRED");
+        const code = await latestApprovalCode(requestId);
+        const wrong = code === "0000" ? "0001" : "0000";
+        if (gate === "WRONG_CODE") {
+          for (let attempt = 0; attempt < TORCOVKA_APPROVAL_MAX_ATTEMPTS - 1; attempt += 1) {
+            await expect(submitTorcovka({ ...extreme, approvalCode: wrong })).rejects.toThrow(
+              TORCOVKA_WRONG_CODE_MESSAGE,
+            );
+          }
+          armApprovalWindow(saveExact);
+          result = await submitTorcovka({ ...extreme, approvalCode: wrong });
+        } else if (gate === "EXPIRED") {
+          await prismaA.torcovkaApproval.update({
+            where: { clientRequestId: requestId },
+            data: { expiresAt: new Date(Date.now() - 1000) },
+          });
+          armApprovalWindow(saveExact);
+          result = await submitTorcovka({ ...extreme, approvalCode: code });
+        } else {
+          armApprovalWindow(saveExact);
+          result = await submitTorcovka({ ...shifted, approvalCode: code });
+        }
+      }
+      expect(result).toEqual({ status: "CREATED" });
+      await assertOnlyPeerWrite({
+        requestId,
+        peerId: world.emp.id,
+        lotId: world.lot.id,
+        railsTaken: matching.railsTaken,
+        remaining: 10,
+      });
+      const again = await effects();
+      expect(await submitTorcovka(matching)).toEqual({ status: "CREATED" });
+      expect(await effects()).toEqual(again);
+    },
+  );
 
   it("PRISADKA split sources match, changed quantity and other employee do not", async () => {
     await setShadowGate(true);
