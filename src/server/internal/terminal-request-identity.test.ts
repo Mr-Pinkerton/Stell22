@@ -5,6 +5,7 @@ import {
   decideHoursReplay,
   decidePrisadkaReplay,
   decideTorcovkaReplay,
+  decideRecoveryReceipts,
   decideUpakovkaReplay,
   guardConfirmedUnrecorded,
   UPAKOVKA_ALREADY_RECORDED,
@@ -245,6 +246,54 @@ describe("terminal request identity", () => {
       }),
     ).toBe("CONFLICT");
     expect(UPAKOVKA_ALREADY_RECORDED).not.toMatch(/сотрудник|работник|другому/i);
+  });
+
+  it("keeps one recovery identity for a recorded request and product", () => {
+    const receipt = {
+      recordedRequestId: "parent",
+      productId: "prod-b",
+      recoveryRequestId: "recovery-1",
+      employeeId: "emp-a",
+      quantity: 2,
+      operationId: "op-b",
+    };
+    const base = {
+      employeeId: "emp-a",
+      recordedRequestId: "parent",
+      parentRequestId: "recovery-1",
+      recoveryRequestId: "recovery-1",
+      picks: [{ productId: "prod-b", quantity: 2 }],
+    };
+    expect(decideRecoveryReceipts([], base)).toBe("CREATE");
+    expect(decideRecoveryReceipts([receipt], base)).toBe("EXACT");
+    expect(
+      decideRecoveryReceipts([receipt], {
+        ...base,
+        parentRequestId: "recovery-2",
+        recoveryRequestId: "recovery-2",
+      }),
+    ).toBe("ALREADY_RECOVERED");
+    expect(
+      decideRecoveryReceipts([receipt], { ...base, picks: [{ productId: "prod-b", quantity: 3 }] }),
+    ).toBe("CONFLICT");
+    expect(decideRecoveryReceipts([{ ...receipt, employeeId: "emp-b" }], base)).toBe("CONFLICT");
+    expect(
+      decideRecoveryReceipts([receipt], {
+        ...base,
+        picks: [
+          { productId: "prod-b", quantity: 2 },
+          { productId: "prod-c", quantity: 1 },
+        ],
+      }),
+    ).toBe("CONFLICT");
+    expect(
+      decideRecoveryReceipts([receipt], {
+        ...base,
+        parentRequestId: "recovery-c",
+        recoveryRequestId: "recovery-c",
+        picks: [{ productId: "prod-c", quantity: 1 }],
+      }),
+    ).toBe("CREATE");
   });
 
   it("matches hours only for the same employee and the exact hour count", () => {

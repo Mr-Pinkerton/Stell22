@@ -58,15 +58,19 @@ import {
   invalidateTorcovkaApprovalIfNotNeeded,
   type TorcovkaApprovalSnapshot,
 } from "@/server/internal/torcovka-approval";
+import { isPrismaP2002, prismaUniqueDiscriminator } from "@/lib/prisma-unique-conflict";
 import {
   assertConfirmedUnrecorded,
   assertReplayMatched,
   resolveHoursReplay,
   resolvePrisadkaReplay,
+  resolveRecoveryReceipts,
   resolveTorcovkaReplay,
   resolveUpakovkaReplay,
   runApprovalGateAfterEnsureForTests,
+  runUpakovkaRecoveryAfterWriteForTests,
   TERMINAL_REQUEST_ALREADY_RECORDED,
+  UPAKOVKA_ALREADY_RECORDED,
   upakovkaOperationRequestId,
   type TorcovkaReplayRequest,
 } from "@/server/internal/terminal-request-identity";
@@ -115,6 +119,11 @@ function isDuplicateClientRequest(e: unknown): boolean {
   return Array.isArray(target)
     ? target.includes("clientRequestId")
     : String(target ?? "").includes("clientRequestId");
+}
+
+function isRecoveryReceiptUnique(e: unknown): boolean {
+  if (!isPrismaP2002(e)) return false;
+  return /UpakovkaRecoveryReceipt|recordedRequestId/.test(prismaUniqueDiscriminator(e));
 }
 
 function isPrismaP2025(e: unknown): boolean {
@@ -1187,22 +1196,47 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<SubmitUpakov
     throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);
   }
 
+  const upakovkaReplay = { employeeId, parentRequestId: clientRequestId, picks };
+  const recoveryRequest = recordedRequestId
+    ? {
+        employeeId,
+        parentRequestId: clientRequestId,
+        recordedRequestId,
+        recoveryRequestId: clientRequestId,
+        picks,
+      }
+    : null;
+
   const outcome = await prisma
     .$transaction(async (tx) => {
       const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
-      if (recordedRequestId) {
-        await assertConfirmedUnrecorded(tx, {
-          employeeId,
-          parentRequestId: clientRequestId,
-          recordedRequestId,
-          picks,
-        });
+      if (recoveryRequest) {
+        await assertConfirmedUnrecorded(tx, recoveryRequest);
       }
-      const upakovkaReplay = { employeeId, parentRequestId: clientRequestId, picks };
+      const acceptRecovery = async (): Promise<SubmitUpakovkaResult | null> => {
+        if (!recoveryRequest) return null;
+        const decision = await resolveRecoveryReceipts(tx, recoveryRequest);
+        if (decision === "CREATE") return null;
+        if (decision === "EXACT") {
+          const replay = await resolveUpakovkaReplay(tx, upakovkaReplay);
+          if (replay.status === "MATCH") return { status: "RECORDED" };
+          throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);
+        }
+        if (decision === "ALREADY_RECOVERED") throw new Error(UPAKOVKA_ALREADY_RECORDED);
+        throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);
+      };
       const replay = async () => resolveUpakovkaReplay(tx, upakovkaReplay);
+      const accepted = await acceptRecovery();
+      if (accepted) return accepted;
       const first = await replay();
-      if (first.status === "MATCH") return { status: "RECORDED" as const };
-      if (first.status === "PARTIAL") return first;
+      if (first.status === "MATCH") {
+        if (recoveryRequest) throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);
+        return { status: "RECORDED" as const };
+      }
+      if (first.status === "PARTIAL") {
+        if (recoveryRequest) throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);
+        return first;
+      }
 
       const preparedRows = [];
       for (const pick of picks) {
@@ -1215,9 +1249,17 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<SubmitUpakov
       await lockUpakovkaPhysicalWriteSet(tx, planUpakovkaPhysicalLockSet(preparedRows), {
         costFlowActive,
       });
+      const acceptedAfterLock = await acceptRecovery();
+      if (acceptedAfterLock) return acceptedAfterLock;
       const second = await replay();
-      if (second.status === "MATCH") return { status: "RECORDED" as const };
-      if (second.status === "PARTIAL") return second;
+      if (second.status === "MATCH") {
+        if (recoveryRequest) throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);
+        return { status: "RECORDED" as const };
+      }
+      if (second.status === "PARTIAL") {
+        if (recoveryRequest) throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);
+        return second;
+      }
       const rateSnapshots = await lockAndReadRateSnapshots(tx, employeeId);
       for (const { pick, prepared } of preparedRows) {
         const occurredAt = new Date();
@@ -1255,16 +1297,48 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<SubmitUpakov
           },
           tx,
         );
+        if (recordedRequestId) {
+          const receipt = await tx.upakovkaRecoveryReceipt.create({
+            data: {
+              recordedRequestId,
+              productId: pick.productId,
+              recoveryRequestId: clientRequestId,
+              operationId: op.id,
+              employeeId,
+              quantity: pick.quantity,
+            },
+          });
+          await writeChangeLog(
+            {
+              entity: "UpakovkaRecoveryReceipt",
+              entityId: receipt.id,
+              newValues: {
+                recordedRequestId,
+                productId: pick.productId,
+                recoveryRequestId: clientRequestId,
+                operationId: op.id,
+                quantity: pick.quantity,
+              },
+            },
+            tx,
+          );
+          await runUpakovkaRecoveryAfterWriteForTests();
+        }
       }
       return { status: "RECORDED" as const };
     }, { timeout: 20_000, maxWait: 20_000 })
     .catch(async (e) => {
+      if (recoveryRequest && (isDuplicateClientRequest(e) || isRecoveryReceiptUnique(e))) {
+        const decision = await resolveRecoveryReceipts(prisma, recoveryRequest);
+        if (decision === "EXACT") {
+          const verdict = await resolveUpakovkaReplay(prisma, upakovkaReplay);
+          if (verdict.status === "MATCH") return { status: "RECORDED" as const };
+        }
+        if (decision === "ALREADY_RECOVERED") throw new Error(UPAKOVKA_ALREADY_RECORDED);
+        throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);
+      }
       if (!isDuplicateClientRequest(e)) throw e;
-      const verdict = await resolveUpakovkaReplay(prisma, {
-        employeeId,
-        parentRequestId: clientRequestId,
-        picks,
-      });
+      const verdict = await resolveUpakovkaReplay(prisma, upakovkaReplay);
       if (verdict.status === "MATCH") return { status: "RECORDED" as const };
       if (verdict.status === "PARTIAL") return verdict;
       throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);

@@ -75,6 +75,7 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
   const [partial, setPartial] = useState<{ productId: string; quantity: number }[] | null>(null);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [recoveryQty, setRecoveryQty] = useState<Record<string, number>>({});
+  // Session hint only. The server receipt is what blocks a second recovery.
   const [separatelyPacked, setSeparatelyPacked] = useState<string[]>([]);
   const [recoveryProduct, setRecoveryProduct] = useState<TerminalProduct | null>(null);
   const submitLock = useRef(false);

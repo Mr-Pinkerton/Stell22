@@ -36,6 +36,7 @@ import { Prisma } from "@prisma/client";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import {
   setApprovalGateAfterEnsureForTests,
+  setUpakovkaRecoveryAfterWriteForTests,
   TERMINAL_REQUEST_ALREADY_RECORDED,
   UPAKOVKA_ALREADY_RECORDED,
 } from "@/server/internal/terminal-request-identity";
@@ -66,6 +67,7 @@ describe.skipIf(!enabled)("terminal strict idempotency", () => {
     sessionState.employee = { id: "", fullName: "" };
     vi.mocked(enqueueRecalcBatchCosts).mockClear();
     setApprovalGateAfterEnsureForTests(null);
+    setUpakovkaRecoveryAfterWriteForTests(null);
   });
 
   afterAll(async () => {
@@ -235,7 +237,7 @@ describe.skipIf(!enabled)("terminal strict idempotency", () => {
     return { emp, material, det };
   }
 
-  async function seedUpakovka(suffix: string) {
+  async function seedUpakovka(suffix: string, productCount = 2) {
     const emp = await employee(`emp-${suffix}`);
     const material = await prismaA.material.create({
       data: { name: `mat-${suffix}`, sectionWidthMm: 40, sectionHeightMm: 20 },
@@ -285,7 +287,7 @@ describe.skipIf(!enabled)("terminal strict idempotency", () => {
       data: { detailId: readyDet.id, torcevayaDone: true, ploskostDone: true, quantity: 20 },
     });
     const products = [];
-    for (let i = 0; i < 2; i += 1) {
+    for (let i = 0; i < productCount; i += 1) {
       products.push(
         await prismaA.product.create({
           data: {
@@ -861,6 +863,323 @@ describe.skipIf(!enabled)("terminal strict idempotency", () => {
       }),
     ).rejects.toThrow(TERMINAL_REQUEST_ALREADY_RECORDED);
     expect(await effects()).toEqual(before);
+    expect(await prismaA.upakovkaRecoveryReceipt.count()).toBe(0);
+  });
+
+  it("UPAKOVKA recovery receipt is unique across request ids, reload, and a concurrent pair", async () => {
+    await setShadowGate(true);
+    const world = await seedUpakovka(`receipt-${Date.now()}`, 3);
+    const [prodA, prodB, prodC] = world.products;
+    const recorded = `receipt-parent-${Date.now()}`;
+    await prismaA.productionOperation.create({
+      data: {
+        type: "UPAKOVKA",
+        employeeId: world.emp.id,
+        clientRequestId: `${recorded}:${prodA!.id}`,
+        workDate: new Date(),
+        productId: prodA!.id,
+        productQty: 1,
+        rateSnapshotVersion: 1,
+        rateUpakovkaSnapshot: 10,
+      },
+    });
+    const before = await effects();
+    const recoveryId = `receipt-b-${Date.now()}`;
+    const recoverB = {
+      employeeId: world.emp.id,
+      clientRequestId: recoveryId,
+      recordedRequestId: recorded,
+      picks: [{ productId: prodB!.id, quantity: 1 }],
+    };
+    await expect(submitUpakovka(recoverB)).resolves.toEqual({ status: "RECORDED" });
+    const op = await prismaA.productionOperation.findFirstOrThrow({
+      where: { clientRequestId: `${recoveryId}:${prodB!.id}` },
+      include: { lines: true, nomenclatureLines: true },
+    });
+    const plan = planProductionShadowMovements({ kind: "UPAKOVKA", operation: op });
+    const movements = await prismaA.inventoryMovement.findMany({
+      where: { causationId: op.id },
+      orderBy: { effectKey: "asc" },
+    });
+    expect(movements).toHaveLength(plan.effects.length);
+    expect(movements.every((row) => row.causationId === op.id)).toBe(true);
+    expect(op.rateUpakovkaSnapshot?.toFixed(2)).toBe("10.00");
+    expect(op.rateSnapshotVersion).toBe(1);
+    const saved = await effects();
+    expect(saved.ops.filter((row) => row.productId === prodB!.id)).toHaveLength(1);
+    expect(saved.products).toEqual([{ productId: prodB!.id, quantity: 1 }]);
+    expect(saved.costs).toBe(before.costs);
+    const receipts = await prismaA.upakovkaRecoveryReceipt.findMany({
+      where: { recordedRequestId: recorded },
+    });
+    expect(receipts).toEqual([
+      expect.objectContaining({
+        recordedRequestId: recorded,
+        productId: prodB!.id,
+        recoveryRequestId: recoveryId,
+        operationId: op.id,
+        employeeId: world.emp.id,
+        quantity: 1,
+      }),
+    ]);
+    expect(
+      await prismaA.changeLog.count({ where: { entity: "ProductionOperation", entityId: op.id } }),
+    ).toBe(1);
+    expect(
+      await prismaA.changeLog.count({
+        where: { entity: "UpakovkaRecoveryReceipt", entityId: receipts[0]!.id },
+      }),
+    ).toBe(1);
+
+    await expect(submitUpakovka(recoverB)).resolves.toEqual({ status: "RECORDED" });
+    expect(await effects()).toEqual(saved);
+    expect(await prismaA.upakovkaRecoveryReceipt.count({ where: { recordedRequestId: recorded } })).toBe(1);
+
+    await expect(
+      submitUpakovka({ ...recoverB, clientRequestId: `${recoveryId}-reload` }),
+    ).rejects.toThrow(UPAKOVKA_ALREADY_RECORDED);
+    expect(await effects()).toEqual(saved);
+
+    await expect(
+      submitUpakovka({ ...recoverB, picks: [{ productId: prodB!.id, quantity: 2 }] }),
+    ).rejects.toThrow(TERMINAL_REQUEST_ALREADY_RECORDED);
+    expect(await effects()).toEqual(saved);
+
+    await expect(
+      submitUpakovka({
+        employeeId: world.emp.id,
+        clientRequestId: `${recoveryId}-bc`,
+        recordedRequestId: recorded,
+        picks: [
+          { productId: prodB!.id, quantity: 1 },
+          { productId: prodC!.id, quantity: 1 },
+        ],
+      }),
+    ).rejects.toThrow(UPAKOVKA_ALREADY_RECORDED);
+    expect(await effects()).toEqual(saved);
+    expect(await prismaA.productionOperation.count({ where: { productId: prodC!.id } })).toBe(0);
+
+    await expect(
+      submitUpakovka({
+        employeeId: world.emp.id,
+        clientRequestId: `${recoveryId}-c`,
+        recordedRequestId: recorded,
+        picks: [{ productId: prodC!.id, quantity: 1 }],
+      }),
+    ).resolves.toEqual({ status: "RECORDED" });
+    expect(await prismaA.upakovkaRecoveryReceipt.count({ where: { recordedRequestId: recorded } })).toBe(2);
+    expect(await prismaA.productionOperation.count({ where: { productId: prodC!.id } })).toBe(1);
+    expect(await prismaA.productStock.findMany({ where: { productId: prodC!.id } })).toEqual([
+      expect.objectContaining({ quantity: 1 }),
+    ]);
+  });
+
+  it("UPAKOVKA recovery of two products is one transaction", async () => {
+    await setShadowGate(true);
+    const world = await seedUpakovka(`pair-${Date.now()}`, 3);
+    const [prodA, prodB, prodC] = world.products;
+    const recorded = `pair-parent-${Date.now()}`;
+    const recoveryId = `pair-bc-${Date.now()}`;
+    await prismaA.productionOperation.create({
+      data: {
+        type: "UPAKOVKA",
+        employeeId: world.emp.id,
+        clientRequestId: `${recorded}:${prodA!.id}`,
+        workDate: new Date(),
+        productId: prodA!.id,
+        productQty: 1,
+        rateSnapshotVersion: 1,
+        rateUpakovkaSnapshot: 10,
+      },
+    });
+    await expect(
+      submitUpakovka({
+        employeeId: world.emp.id,
+        clientRequestId: recoveryId,
+        recordedRequestId: recorded,
+        picks: [
+          { productId: prodB!.id, quantity: 1 },
+          { productId: prodC!.id, quantity: 1 },
+        ],
+      }),
+    ).resolves.toEqual({ status: "RECORDED" });
+    expect(await prismaA.productionOperation.count({ where: { clientRequestId: { startsWith: `${recoveryId}:` } } })).toBe(2);
+    expect(await prismaA.upakovkaRecoveryReceipt.count({ where: { recoveryRequestId: recoveryId } })).toBe(2);
+    const products = await prismaA.productStock.findMany({ orderBy: { productId: "asc" } });
+    expect(products.map((row) => row.productId).sort()).toEqual([prodB!.id, prodC!.id].sort());
+    expect(products.every((row) => row.quantity === 1)).toBe(true);
+  });
+
+  it("UPAKOVKA concurrent recoveries of one product leave one physical effect", async () => {
+    await setShadowGate(true);
+    const world = await seedUpakovka(`race-${Date.now()}`);
+    const [prodA, prodB] = world.products;
+    const recorded = `race-parent-${Date.now()}`;
+    await prismaA.productionOperation.create({
+      data: {
+        type: "UPAKOVKA",
+        employeeId: world.emp.id,
+        clientRequestId: `${recorded}:${prodA!.id}`,
+        workDate: new Date(),
+        productId: prodA!.id,
+        productQty: 1,
+        rateSnapshotVersion: 1,
+        rateUpakovkaSnapshot: 10,
+      },
+    });
+    const settled = await Promise.allSettled([
+      submitUpakovka({
+        employeeId: world.emp.id,
+        clientRequestId: `${recorded}-r1`,
+        recordedRequestId: recorded,
+        picks: [{ productId: prodB!.id, quantity: 1 }],
+      }),
+      submitUpakovka({
+        employeeId: world.emp.id,
+        clientRequestId: `${recorded}-r2`,
+        recordedRequestId: recorded,
+        picks: [{ productId: prodB!.id, quantity: 1 }],
+      }),
+    ]);
+    expect(settled.filter((row) => row.status === "fulfilled")).toHaveLength(1);
+    const rejected = settled.filter((row) => row.status === "rejected");
+    expect(rejected).toHaveLength(1);
+    expect(rejectionMessage((rejected[0] as PromiseRejectedResult).reason)).toBe(UPAKOVKA_ALREADY_RECORDED);
+    expect(rejectionMessage((rejected[0] as PromiseRejectedResult).reason)).not.toContain(world.emp.id);
+    expect(await prismaA.productionOperation.count({ where: { productId: prodB!.id } })).toBe(1);
+    expect(await prismaA.upakovkaRecoveryReceipt.count({ where: { recordedRequestId: recorded } })).toBe(1);
+    expect(await prismaA.productStock.findMany()).toEqual([
+      expect.objectContaining({ productId: prodB!.id, quantity: 1 }),
+    ]);
+  });
+
+  it("UPAKOVKA recovery rolls back the receipt and the stock write together", async () => {
+    await setShadowGate(true);
+    const world = await seedUpakovka(`boom-${Date.now()}`, 3);
+    const [prodA, prodB, prodC] = world.products;
+    const recorded = `boom-parent-${Date.now()}`;
+    await prismaA.productionOperation.create({
+      data: {
+        type: "UPAKOVKA",
+        employeeId: world.emp.id,
+        clientRequestId: `${recorded}:${prodA!.id}`,
+        workDate: new Date(),
+        productId: prodA!.id,
+        productQty: 1,
+        rateSnapshotVersion: 1,
+        rateUpakovkaSnapshot: 10,
+      },
+    });
+    const before = await effects();
+    setUpakovkaRecoveryAfterWriteForTests(async () => {
+      setUpakovkaRecoveryAfterWriteForTests(null);
+      throw new Error("recovery-boom");
+    });
+    await expect(
+      submitUpakovka({
+        employeeId: world.emp.id,
+        clientRequestId: `boom-bc-${Date.now()}`,
+        recordedRequestId: recorded,
+        picks: [
+          { productId: prodB!.id, quantity: 1 },
+          { productId: prodC!.id, quantity: 1 },
+        ],
+      }),
+    ).rejects.toThrow("recovery-boom");
+    expect(await effects()).toEqual(before);
+    expect(await prismaA.upakovkaRecoveryReceipt.count()).toBe(0);
+    expect(await prismaA.inventoryMovement.count()).toBe(before.movements);
+  });
+
+  it("UPAKOVKA recovery by another employee stays anonymous", async () => {
+    const world = await seedUpakovka(`foreign-r-${Date.now()}`);
+    const [prodA, prodB] = world.products;
+    const recorded = `foreign-r-${Date.now()}`;
+    await prismaA.productionOperation.create({
+      data: {
+        type: "UPAKOVKA",
+        employeeId: world.emp.id,
+        clientRequestId: `${recorded}:${prodA!.id}`,
+        workDate: new Date(),
+        productId: prodA!.id,
+        productQty: 1,
+        rateSnapshotVersion: 1,
+      },
+    });
+    const other = await employee("Чужой восстановитель");
+    let message = "";
+    try {
+      await submitUpakovka({
+        employeeId: other.id,
+        clientRequestId: `${recorded}-other`,
+        recordedRequestId: recorded,
+        picks: [{ productId: prodB!.id, quantity: 1 }],
+      });
+    } catch (error) {
+      message = rejectionMessage(error);
+    }
+    expect(message).toBe(TERMINAL_REQUEST_ALREADY_RECORDED);
+    expect(message).not.toContain(world.emp.id);
+    expect(message).not.toContain(other.fullName);
+    expect(await prismaA.upakovkaRecoveryReceipt.count()).toBe(0);
+    expect(await prismaA.productionOperation.count()).toBe(1);
+  });
+
+  it("UPAKOVKA deleted historical row is not rebuilt", async () => {
+    const world = await seedUpakovka(`gone-${Date.now()}`);
+    const [prodA, prodB] = world.products;
+    const recorded = `gone-${Date.now()}`;
+    const planted = await prismaA.productionOperation.create({
+      data: {
+        type: "UPAKOVKA",
+        employeeId: world.emp.id,
+        clientRequestId: `${recorded}:${prodA!.id}`,
+        workDate: new Date(),
+        productId: prodA!.id,
+        productQty: 1,
+        rateSnapshotVersion: 1,
+      },
+    });
+    await prismaA.productionOperation.delete({ where: { id: planted.id } });
+    await expect(
+      submitUpakovka({
+        employeeId: world.emp.id,
+        clientRequestId: `${recorded}-rebuild`,
+        recordedRequestId: recorded,
+        picks: [{ productId: prodB!.id, quantity: 1 }],
+      }),
+    ).rejects.toThrow(TERMINAL_REQUEST_ALREADY_RECORDED);
+    expect(await prismaA.productionOperation.count()).toBe(0);
+    expect(await prismaA.upakovkaRecoveryReceipt.count()).toBe(0);
+    expect(await prismaA.productStock.count()).toBe(0);
+  });
+
+  it("UPAKOVKA recovery receipt unique index rejects a second product row", async () => {
+    await expect(
+      prismaA.upakovkaRecoveryReceipt.create({
+        data: {
+          recordedRequestId: "unique-parent",
+          productId: "unique-product",
+          recoveryRequestId: "unique-recovery-1",
+          operationId: "unique-op-1",
+          employeeId: "unique-emp",
+          quantity: 1,
+        },
+      }),
+    ).resolves.toEqual(expect.objectContaining({ productId: "unique-product" }));
+    await expect(
+      prismaA.upakovkaRecoveryReceipt.create({
+        data: {
+          recordedRequestId: "unique-parent",
+          productId: "unique-product",
+          recoveryRequestId: "unique-recovery-2",
+          operationId: "unique-op-2",
+          employeeId: "unique-emp",
+          quantity: 1,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "P2002" });
+    expect(await prismaA.upakovkaRecoveryReceipt.count()).toBe(1);
   });
 
   it("UPAKOVKA concurrent same id does not pack both quantities", async () => {

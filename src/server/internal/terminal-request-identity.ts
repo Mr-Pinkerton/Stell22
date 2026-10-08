@@ -264,6 +264,91 @@ export function guardConfirmedUnrecorded(
   return "OK";
 }
 
+export type RecoveryReceiptRow = {
+  recordedRequestId: string;
+  productId: string;
+  recoveryRequestId: string;
+  employeeId: string;
+  quantity: number;
+  operationId: string;
+};
+
+export type RecoveryDecision = "CREATE" | "EXACT" | "ALREADY_RECOVERED" | "CONFLICT";
+
+/**
+ * Whole recovery submit. A product already recovered under another request id
+ * refuses the entire set, including products that are not yet recovered.
+ */
+export function decideRecoveryReceipts(
+  receipts: readonly RecoveryReceiptRow[],
+  requested: UpakovkaReplayRequest & { recordedRequestId: string; recoveryRequestId: string },
+): RecoveryDecision {
+  if (requested.recoveryRequestId === requested.recordedRequestId) return "CONFLICT";
+  const requestedPicks = new Map<string, number>();
+  for (const pick of requested.picks) {
+    if (!pick.productId || !positiveInt(pick.quantity) || requestedPicks.has(pick.productId)) {
+      return "CONFLICT";
+    }
+    requestedPicks.set(pick.productId, pick.quantity);
+  }
+  if (requestedPicks.size === 0) return "CONFLICT";
+
+  const seen = new Set<string>();
+  for (const row of receipts) {
+    if (!row.productId || !row.operationId || !positiveInt(row.quantity)) return "CONFLICT";
+    const key = `${row.recordedRequestId}\0${row.productId}`;
+    if (seen.has(key)) return "CONFLICT";
+    seen.add(key);
+    if (row.employeeId !== requested.employeeId) return "CONFLICT";
+  }
+
+  const forRecovery = receipts.filter((row) => row.recoveryRequestId === requested.recoveryRequestId);
+  if (forRecovery.some((row) => row.recordedRequestId !== requested.recordedRequestId)) {
+    return "CONFLICT";
+  }
+  const forProducts = receipts.filter(
+    (row) => row.recordedRequestId === requested.recordedRequestId && requestedPicks.has(row.productId),
+  );
+  if (forProducts.some((row) => row.recoveryRequestId !== requested.recoveryRequestId)) {
+    return "ALREADY_RECOVERED";
+  }
+  if (forProducts.length === 0 && forRecovery.length === 0) return "CREATE";
+  if (forRecovery.length !== requestedPicks.size || forProducts.length !== requestedPicks.size) {
+    return "CONFLICT";
+  }
+  for (const [productId, quantity] of requestedPicks) {
+    const row = forProducts.find((item) => item.productId === productId);
+    if (!row || row.quantity !== quantity || row.recoveryRequestId !== requested.recoveryRequestId) {
+      return "CONFLICT";
+    }
+  }
+  return "EXACT";
+}
+
+export async function resolveRecoveryReceipts(
+  db: ReplayDb,
+  requested: UpakovkaReplayRequest & { recordedRequestId: string; recoveryRequestId: string },
+): Promise<RecoveryDecision> {
+  const productIds = requested.picks.map((pick) => pick.productId);
+  const receipts = await db.upakovkaRecoveryReceipt.findMany({
+    where: {
+      OR: [
+        { recordedRequestId: requested.recordedRequestId, productId: { in: productIds } },
+        { recoveryRequestId: requested.recoveryRequestId },
+      ],
+    },
+    select: {
+      recordedRequestId: true,
+      productId: true,
+      recoveryRequestId: true,
+      employeeId: true,
+      quantity: true,
+      operationId: true,
+    },
+  });
+  return decideRecoveryReceipts(receipts, requested);
+}
+
 export type HoursReplayRequest = {
   employeeId: string;
   hours: number;
@@ -408,6 +493,23 @@ export function setApprovalGateAfterEnsureForTests(hook: (() => Promise<void>) |
 export async function runApprovalGateAfterEnsureForTests(): Promise<void> {
   if (process.env.NODE_ENV === "production") return;
   const hook = approvalGateAfterEnsure;
+  if (!hook) return;
+  await hook();
+}
+
+/**
+ * Integrity seam only. Throws inside a recovery write so the whole
+ * transaction, including the receipt, rolls back. Unset in production.
+ */
+let upakovkaRecoveryAfterWrite: (() => Promise<void>) | null = null;
+
+export function setUpakovkaRecoveryAfterWriteForTests(hook: (() => Promise<void>) | null): void {
+  upakovkaRecoveryAfterWrite = hook;
+}
+
+export async function runUpakovkaRecoveryAfterWriteForTests(): Promise<void> {
+  if (process.env.NODE_ENV === "production") return;
+  const hook = upakovkaRecoveryAfterWrite;
   if (!hook) return;
   await hook();
 }
