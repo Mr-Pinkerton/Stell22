@@ -21,7 +21,7 @@ function withoutComments(src) {
     .join("\n");
 }
 
-const PIN = "2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf";
+const PIN = "678cbc1d308ddfe568b901ebf53f7e05f9a8c014";
 const policy = read("src/server/internal/inventory-movement-shadow-activation-policy.ts");
 const cli = read("scripts/shadow-activation-policy.ts");
 const snapshot = read("scripts/shadow-activation-readonly-snapshot.sh");
@@ -37,7 +37,7 @@ const pinMatch = policy.match(
   /export const PINNED_PRODUCTION_APPLICATION_SHA =\s*"([0-9a-f]{40})";/,
 );
 if (!pinMatch || pinMatch[1] !== PIN) {
-  failures.push("pinned production application SHA must stay 2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf");
+  failures.push("pinned production application SHA must stay 678cbc1d308ddfe568b901ebf53f7e05f9a8c014");
 }
 
 if (policy.includes('dualWriteStarted: "YES"') || policy.includes("PSR_P2_DUAL_WRITE_STARTED=YES")) {

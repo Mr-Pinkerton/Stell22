@@ -4,7 +4,7 @@ import process from "node:process";
 
 const root = process.cwd();
 const failures = [];
-const PIN = "2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf";
+const PIN = "678cbc1d308ddfe568b901ebf53f7e05f9a8c014";
 
 function read(rel) {
   const file = path.join(root, rel);

@@ -65,7 +65,7 @@ jobs:
         id: pin
         env:
           EXPECTED_APPLICATION_SHA: ${{ inputs.expected_application_sha }}
-          PINNED_PRODUCTION_APPLICATION_SHA: 2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf
+          PINNED_PRODUCTION_APPLICATION_SHA: 678cbc1d308ddfe568b901ebf53f7e05f9a8c014
         run: |
           set -euo pipefail
           if [[ "$EXPECTED_APPLICATION_SHA" != "$PINNED_PRODUCTION_APPLICATION_SHA" ]]; then
@@ -91,7 +91,7 @@ jobs:
     timeout-minutes: 20
     environment: production
     env:
-      PINNED_PRODUCTION_APPLICATION_SHA: 2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf
+      PINNED_PRODUCTION_APPLICATION_SHA: 678cbc1d308ddfe568b901ebf53f7e05f9a8c014
       EXPECTED_APPLICATION_SHA: ${{ needs.contract.outputs.expected_sha }}
       SHADOW_CONTROL_ACTION: ${{ needs.contract.outputs.action }}
     steps:
