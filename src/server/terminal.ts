@@ -60,6 +60,7 @@ import {
 } from "@/server/internal/torcovka-approval";
 import { isPrismaP2002, prismaUniqueDiscriminator } from "@/lib/prisma-unique-conflict";
 import {
+  acquireUpakovkaRecoveryRequestLock,
   assertConfirmedUnrecorded,
   assertReplayMatched,
   resolveHoursReplay,
@@ -1209,10 +1210,11 @@ export async function submitUpakovka(input: UpakovkaInput): Promise<SubmitUpakov
 
   const outcome = await prisma
     .$transaction(async (tx) => {
-      const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
       if (recoveryRequest) {
+        await acquireUpakovkaRecoveryRequestLock(tx, recoveryRequest.recoveryRequestId);
         await assertConfirmedUnrecorded(tx, recoveryRequest);
       }
+      const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
       const acceptRecovery = async (): Promise<SubmitUpakovkaResult | null> => {
         if (!recoveryRequest) return null;
         const decision = await resolveRecoveryReceipts(tx, recoveryRequest);

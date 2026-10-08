@@ -1,7 +1,12 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { Prisma } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 import {
   TERMINAL_REQUEST_ALREADY_RECORDED,
+  UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE,
+  UPAKOVKA_RECOVERY_REQUEST_LOCK_TX_REQUIRED,
+  acquireUpakovkaRecoveryRequestLock,
   decideHoursReplay,
   decidePrisadkaReplay,
   decideTorcovkaReplay,
@@ -294,6 +299,43 @@ describe("terminal request identity", () => {
         picks: [{ productId: "prod-c", quantity: 1 }],
       }),
     ).toBe("CREATE");
+  });
+
+  it("serializes one recoveryRequestId with a transaction advisory lock", async () => {
+    expect(UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE).toBe(8327);
+    expect(UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE).not.toBe(8322);
+    expect(UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE).not.toBe(8325);
+    expect(UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE).not.toBe(8326);
+    const sql: string[] = [];
+    const tx = {
+      $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+        sql.push(strings.join("?"));
+        expect(values).toContain(UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE);
+        expect(values).toContain("recovery-q");
+        return [];
+      },
+    };
+    await acquireUpakovkaRecoveryRequestLock(tx as never, "recovery-q");
+    expect(sql.join("")).toMatch(/pg_advisory_xact_lock/);
+    expect(sql.join("")).toMatch(/hashtext/);
+    await expect(
+      acquireUpakovkaRecoveryRequestLock({ $transaction: async () => {} } as never, "recovery-q"),
+    ).rejects.toThrow(UPAKOVKA_RECOVERY_REQUEST_LOCK_TX_REQUIRED);
+  });
+
+  it("takes the recovery lock before reading the original request or receipts", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "src/server/terminal.ts"),
+      "utf8",
+    );
+    const body = source.slice(source.indexOf("export async function submitUpakovka"));
+    const lockAt = body.indexOf("acquireUpakovkaRecoveryRequestLock");
+    const originalAt = body.indexOf("assertConfirmedUnrecorded");
+    const receiptsAt = body.indexOf("resolveRecoveryReceipts");
+    expect(lockAt).toBeGreaterThan(-1);
+    expect(lockAt).toBeLessThan(originalAt);
+    expect(originalAt).toBeLessThan(receiptsAt);
+    expect(body.indexOf("if (recoveryRequest)")).toBeLessThan(lockAt);
   });
 
   it("matches hours only for the same employee and the exact hour count", () => {

@@ -325,6 +325,34 @@ export function decideRecoveryReceipts(
   return "EXACT";
 }
 
+/**
+ * Dedicated two-int advisory namespace for one upakovka recoveryRequestId.
+ * Distinct from SHADOW `(8322, 1)`, R-05 `8325`, and quantity-edit/purchase `8326`.
+ * key2 = hashtext(recoveryRequestId); a hash collision only extra-serializes.
+ */
+export const UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE = 8327;
+
+export const UPAKOVKA_RECOVERY_REQUEST_LOCK_TX_REQUIRED =
+  "Upakovka recovery request lock requires an open Prisma transaction client.";
+
+export async function acquireUpakovkaRecoveryRequestLock(
+  tx: Prisma.TransactionClient,
+  recoveryRequestId: string,
+): Promise<void> {
+  if (typeof (tx as { $transaction?: unknown }).$transaction === "function") {
+    throw new Error(UPAKOVKA_RECOVERY_REQUEST_LOCK_TX_REQUIRED);
+  }
+  await tx.$queryRaw`
+    SELECT 1 AS acquired
+    FROM (
+      SELECT pg_advisory_xact_lock(
+        ${UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE}::integer,
+        hashtext(${recoveryRequestId})
+      )
+    ) AS upakovka_recovery_request_lock
+  `;
+}
+
 export async function resolveRecoveryReceipts(
   db: ReplayDb,
   requested: UpakovkaReplayRequest & { recordedRequestId: string; recoveryRequestId: string },
