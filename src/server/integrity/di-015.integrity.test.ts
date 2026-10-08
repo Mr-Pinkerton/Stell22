@@ -17,7 +17,6 @@ const { enqueueMock } = vi.hoisted(() => ({
 vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: enqueueMock }));
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { TERMINAL_REQUEST_ALREADY_RECORDED } from "@/server/internal/terminal-request-identity";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -699,7 +698,7 @@ describe.skipIf(!enabled)("DI-015 payroll rate snapshot", () => {
     expect(beforeBlanks).toBe(2);
   });
 
-  it("M5 partial expected-id set is an invariant anomaly", async () => {
+  it("M5 partial expected-id set does not write the missing product", async () => {
     const w = await seedTwoProductsSharedDetail(`m5-${Date.now()}`, 6, 4);
     const req = `test:di015:m5-${Date.now()}`;
     const emp = await prismaA.employee.findUniqueOrThrow({ where: { id: w.emp.id } });
@@ -724,7 +723,10 @@ describe.skipIf(!enabled)("DI-015 payroll rate snapshot", () => {
           { productId: w.prod2.id, quantity: 1 },
         ],
       }),
-    ).rejects.toThrow(TERMINAL_REQUEST_ALREADY_RECORDED);
+    ).resolves.toEqual({
+      status: "PARTIAL",
+      saved: [{ productId: w.prod.id, quantity: 1 }],
+    });
     expect(await prismaA.productionOperation.count()).toBe(1);
     expect((await prismaA.blankStock.aggregate({ _sum: { quantity: true } }))._sum.quantity).toBe(
       blanksBefore,

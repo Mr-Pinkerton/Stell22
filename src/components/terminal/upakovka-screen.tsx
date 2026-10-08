@@ -11,9 +11,19 @@ import { TerminalSuccessAck, useTerminalSuccessAck } from "@/components/terminal
 import { submitUpakovka } from "@/server/terminal";
 import { formatProductSku } from "@/lib/format";
 import { sectionLabel } from "@/lib/material";
+import { newRequestId } from "@/lib/request-id";
 import { terminalDialogContentClass, terminalStickyOperationClass } from "@/lib/scroll-classes";
 import { beginExclusiveSubmit, endExclusiveSubmit } from "@/lib/terminal-submit-guard";
 import type { UpakovkaShortage } from "@/lib/upakovka-availability";
+import {
+  confirmedRecoveryPicks,
+  UPAKOVKA_PARTIAL_BODY,
+  UPAKOVKA_PARTIAL_TITLE,
+  UPAKOVKA_RECOVERY_ACTION,
+  UPAKOVKA_RECOVERY_CONFIRM,
+  UPAKOVKA_RECOVERY_HINT,
+  unrecordedCandidates,
+} from "@/lib/upakovka-partial";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type {
@@ -62,7 +72,14 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
   const [dialogProduct, setDialogProduct] = useState<TerminalProduct | null>(null);
   const [reasonProduct, setReasonProduct] = useState<TerminalProduct | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [partial, setPartial] = useState<{ productId: string; quantity: number }[] | null>(null);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryQty, setRecoveryQty] = useState<Record<string, number>>({});
+  // Session hint only. The server receipt is what blocks a second recovery.
+  const [separatelyPacked, setSeparatelyPacked] = useState<string[]>([]);
+  const [recoveryProduct, setRecoveryProduct] = useState<TerminalProduct | null>(null);
   const submitLock = useRef(false);
+  const recoveryRequest = useRef<{ signature: string; id: string } | null>(null);
   const successAck = useTerminalSuccessAck();
 
   const products = useMemo(() => {
@@ -114,23 +131,77 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
   }, [picked, saveDraft]);
 
   const confirm = async () => {
-    if (pickedCount === 0) return;
+    if (partial || pickedCount === 0) return;
     if (!beginExclusiveSubmit(submitLock)) return;
     const picks = Object.entries(picked)
       .filter(([, qty]) => qty > 0)
       .map(([productId, quantity]) => ({ productId, quantity }));
     setSubmitting(true);
     try {
-      await submitUpakovka({
+      const result = await submitUpakovka({
         employeeId: employee.id,
         clientRequestId,
         picks,
       });
+      if (result.status === "PARTIAL") {
+        setPartial(result.saved);
+        setRecoveryOpen(false);
+        setRecoveryQty({});
+        return;
+      }
       toast.success(`Упаковано: ${pickedCount} шт`);
       clearDraft();
       setPicked({});
+      setPartial(null);
       setDialogProduct(null);
       successAck.show(`Упаковка сохранена: ${pickedCount} шт`);
+      await onDone();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Ошибка внесения");
+    } finally {
+      endExclusiveSubmit(submitLock);
+      setSubmitting(false);
+    }
+  };
+
+  const savedIds = partial?.map((row) => row.productId) ?? [];
+  const recoveryCandidates = unrecordedCandidates({
+    draftPicks: Object.entries(picked).map(([productId, quantity]) => ({ productId, quantity })),
+    savedProductIds: savedIds,
+    separatelyPackedIds: separatelyPacked,
+  });
+  const recoveryPicks = confirmedRecoveryPicks({
+    candidates: recoveryCandidates,
+    confirmedQuantities: recoveryQty,
+    savedProductIds: savedIds,
+  });
+
+  const confirmRecovery = async () => {
+    if (!partial || recoveryPicks.length === 0) return;
+    if (!beginExclusiveSubmit(submitLock)) return;
+    const signature = recoveryPicks.map((pick) => `${pick.productId}:${pick.quantity}`).join("|");
+    if (!recoveryRequest.current || recoveryRequest.current.signature !== signature) {
+      recoveryRequest.current = { signature, id: newRequestId() };
+    }
+    setSubmitting(true);
+    try {
+      const result = await submitUpakovka({
+        employeeId: employee.id,
+        clientRequestId: recoveryRequest.current.id,
+        recordedRequestId: clientRequestId,
+        picks: recoveryPicks,
+      });
+      if (result.status === "PARTIAL") {
+        toast.error("Отдельная упаковка сохранена не полностью. Сверьте журнал.");
+        return;
+      }
+      const packedCount = recoveryPicks.reduce((sum, pick) => sum + pick.quantity, 0);
+      toast.success(`Отдельная упаковка сохранена: ${packedCount} шт`);
+      setSeparatelyPacked((prev) => [...prev, ...recoveryPicks.map((pick) => pick.productId)]);
+      setRecoveryQty({});
+      setRecoveryOpen(false);
+      recoveryRequest.current = null;
+      successAck.show(`Отдельная упаковка сохранена: ${packedCount} шт`);
       await onDone();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Ошибка внесения");
@@ -192,6 +263,62 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
 
       {stockWarning && <p className="text-amber-800 text-sm leading-relaxed">{stockWarning}</p>}
 
+      {partial && (
+        <div className="space-y-3 rounded-2xl border border-amber-300 bg-amber-50 p-4">
+          <p className="text-lg font-semibold">{UPAKOVKA_PARTIAL_TITLE}</p>
+          <p className="text-base leading-relaxed">{UPAKOVKA_PARTIAL_BODY}</p>
+          <ul className="space-y-1 text-base">
+            {partial.map((row) => {
+              const product = data.products.find((item) => item.id === row.productId);
+              return (
+                <li key={row.productId}>
+                  {product?.name ?? "Изделие"} — {row.quantity} шт
+                </li>
+              );
+            })}
+          </ul>
+          {recoveryCandidates.length > 0 && !recoveryOpen && (
+            <Button
+              className="h-14 w-full rounded-xl text-lg"
+              onClick={() => {
+                setRecoveryQty({});
+                setRecoveryOpen(true);
+              }}
+            >
+              {UPAKOVKA_RECOVERY_ACTION}
+            </Button>
+          )}
+          {recoveryOpen && (
+            <div className="space-y-3">
+              <p className="text-base leading-relaxed">{UPAKOVKA_RECOVERY_HINT}</p>
+              {recoveryCandidates.map((productId) => {
+                const product = data.products.find((item) => item.id === productId);
+                const qty = recoveryQty[productId] ?? 0;
+                return (
+                  <Button
+                    key={productId}
+                    variant="outline"
+                    className="h-14 w-full justify-between rounded-xl text-lg"
+                    onClick={() => setRecoveryProduct(product ?? null)}
+                  >
+                    <span>{product?.name ?? "Изделие"}</span>
+                    <span>{qty > 0 ? `${qty} шт` : "Указать"}</span>
+                  </Button>
+                );
+              })}
+              <Button
+                className="h-14 w-full rounded-xl text-lg"
+                disabled={recoveryPicks.length === 0 || submitting}
+                onClick={() => void confirmRecovery()}
+              >
+                {UPAKOVKA_RECOVERY_CONFIRM}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!partial && (
       <TerminalConfirmBar
         label="Сохранить операцию"
         summary={
@@ -205,6 +332,7 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
         disabled={pickedCount === 0 || submitting}
         onConfirm={confirm}
       />
+      )}
 
       <QuantityDialog
         open={dialogProduct != null}
@@ -219,6 +347,25 @@ export function UpakovkaScreen({ data, employee, onDone }: UpakovkaScreenProps) 
           setDialogProduct(null);
         }}
         onClose={() => setDialogProduct(null)}
+      />
+
+      <QuantityDialog
+        open={recoveryProduct != null}
+        title={recoveryProduct?.name ?? ""}
+        hint="Количество не подставляется из черновика"
+        initial={0}
+        max={
+          recoveryProduct
+            ? Math.max(availabilityOf(recoveryProduct, data).canAssemble, 0) || undefined
+            : undefined
+        }
+        onConfirm={(v) => {
+          if (recoveryProduct) {
+            setRecoveryQty((prev) => ({ ...prev, [recoveryProduct.id]: v }));
+          }
+          setRecoveryProduct(null);
+        }}
+        onClose={() => setRecoveryProduct(null)}
       />
 
       <Dialog open={reasonProduct != null} onOpenChange={(o) => !o && setReasonProduct(null)}>

@@ -1,11 +1,19 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { Prisma } from "@prisma/client";
 import { describe, expect, it } from "vitest";
 import {
   TERMINAL_REQUEST_ALREADY_RECORDED,
+  UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE,
+  UPAKOVKA_RECOVERY_REQUEST_LOCK_TX_REQUIRED,
+  acquireUpakovkaRecoveryRequestLock,
   decideHoursReplay,
   decidePrisadkaReplay,
   decideTorcovkaReplay,
+  decideRecoveryReceipts,
   decideUpakovkaReplay,
+  guardConfirmedUnrecorded,
+  UPAKOVKA_ALREADY_RECORDED,
 } from "@/server/internal/terminal-request-identity";
 
 describe("terminal request identity", () => {
@@ -198,7 +206,7 @@ describe("terminal request identity", () => {
           { productId: "prod-b", quantity: 2 },
         ],
       }),
-    ).toBe("CONFLICT");
+    ).toBe("PARTIAL");
     expect(decideUpakovkaReplay(stored, { ...full, employeeId: "emp-b" })).toBe("CONFLICT");
     expect(
       decideUpakovkaReplay(
@@ -206,6 +214,128 @@ describe("terminal request identity", () => {
         { ...full, picks: [{ productId: "prod-a", quantity: 1 }] },
       ),
     ).toBe("CONFLICT");
+  });
+
+  it("allows a new upakovka only for products the employee confirmed as unrecorded", () => {
+    const stored = [
+      {
+        employeeId: "emp-a",
+        type: "UPAKOVKA",
+        productId: "prod-a",
+        productQty: 1,
+        clientRequestId: "req-1:prod-a",
+      },
+    ];
+    expect(
+      guardConfirmedUnrecorded(stored, {
+        employeeId: "emp-a",
+        recordedRequestId: "req-1",
+        parentRequestId: "req-2",
+        picks: [{ productId: "prod-b", quantity: 2 }],
+      }),
+    ).toBe("OK");
+    expect(
+      guardConfirmedUnrecorded(stored, {
+        employeeId: "emp-a",
+        recordedRequestId: "req-1",
+        parentRequestId: "req-2",
+        picks: [{ productId: "prod-a", quantity: 1 }],
+      }),
+    ).toBe("ALREADY_RECORDED");
+    expect(
+      guardConfirmedUnrecorded(stored, {
+        employeeId: "emp-b",
+        recordedRequestId: "req-1",
+        parentRequestId: "req-2",
+        picks: [{ productId: "prod-b", quantity: 2 }],
+      }),
+    ).toBe("CONFLICT");
+    expect(UPAKOVKA_ALREADY_RECORDED).not.toMatch(/сотрудник|работник|другому/i);
+  });
+
+  it("keeps one recovery identity for a recorded request and product", () => {
+    const receipt = {
+      recordedRequestId: "parent",
+      productId: "prod-b",
+      recoveryRequestId: "recovery-1",
+      employeeId: "emp-a",
+      quantity: 2,
+      operationId: "op-b",
+    };
+    const base = {
+      employeeId: "emp-a",
+      recordedRequestId: "parent",
+      parentRequestId: "recovery-1",
+      recoveryRequestId: "recovery-1",
+      picks: [{ productId: "prod-b", quantity: 2 }],
+    };
+    expect(decideRecoveryReceipts([], base)).toBe("CREATE");
+    expect(decideRecoveryReceipts([receipt], base)).toBe("EXACT");
+    expect(
+      decideRecoveryReceipts([receipt], {
+        ...base,
+        parentRequestId: "recovery-2",
+        recoveryRequestId: "recovery-2",
+      }),
+    ).toBe("ALREADY_RECOVERED");
+    expect(
+      decideRecoveryReceipts([receipt], { ...base, picks: [{ productId: "prod-b", quantity: 3 }] }),
+    ).toBe("CONFLICT");
+    expect(decideRecoveryReceipts([{ ...receipt, employeeId: "emp-b" }], base)).toBe("CONFLICT");
+    expect(
+      decideRecoveryReceipts([receipt], {
+        ...base,
+        picks: [
+          { productId: "prod-b", quantity: 2 },
+          { productId: "prod-c", quantity: 1 },
+        ],
+      }),
+    ).toBe("CONFLICT");
+    expect(
+      decideRecoveryReceipts([receipt], {
+        ...base,
+        parentRequestId: "recovery-c",
+        recoveryRequestId: "recovery-c",
+        picks: [{ productId: "prod-c", quantity: 1 }],
+      }),
+    ).toBe("CREATE");
+  });
+
+  it("serializes one recoveryRequestId with a transaction advisory lock", async () => {
+    expect(UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE).toBe(8327);
+    expect(UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE).not.toBe(8322);
+    expect(UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE).not.toBe(8325);
+    expect(UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE).not.toBe(8326);
+    const sql: string[] = [];
+    const tx = {
+      $queryRaw: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+        sql.push(strings.join("?"));
+        expect(values).toContain(UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE);
+        expect(values).toContain("recovery-q");
+        return [];
+      },
+    };
+    await acquireUpakovkaRecoveryRequestLock(tx as never, "recovery-q");
+    expect(sql.join("")).toMatch(/pg_advisory_xact_lock/);
+    expect(sql.join("")).toMatch(/hashtext/);
+    await expect(
+      acquireUpakovkaRecoveryRequestLock({ $transaction: async () => {} } as never, "recovery-q"),
+    ).rejects.toThrow(UPAKOVKA_RECOVERY_REQUEST_LOCK_TX_REQUIRED);
+  });
+
+  it("takes the recovery lock before reading the original request or receipts", () => {
+    const source = readFileSync(
+      path.join(process.cwd(), "src/server/terminal.ts"),
+      "utf8",
+    );
+    const body = source.slice(source.indexOf("export async function submitUpakovka"));
+    const lockAt = body.indexOf("acquireUpakovkaRecoveryRequestLock");
+    const originalAt = body.indexOf("assertConfirmedUnrecorded");
+    const receiptsAt = body.indexOf("resolveRecoveryReceipts");
+    expect(lockAt).toBeGreaterThan(-1);
+    expect(lockAt).toBeLessThan(originalAt);
+    expect(originalAt).toBeLessThan(receiptsAt);
+    expect(body.indexOf("if (recoveryRequest)")).toBeLessThan(lockAt);
   });
 
   it("matches hours only for the same employee and the exact hour count", () => {

@@ -9,6 +9,9 @@ import { canonicalLengthFixed4 } from "@/server/internal/blank-length";
 export const TERMINAL_REQUEST_ALREADY_RECORDED =
   "Этот запрос уже записан. Новые данные не сохранены. Проверьте ранее внесённую операцию в журнале.";
 
+export const UPAKOVKA_ALREADY_RECORDED =
+  "Это изделие уже записано. Новая упаковка его не повторяет.";
+
 export type ReplayPresence = "ABSENT" | "MATCH";
 
 const SORTS = new Set<string>(["SORT1", "SORT2"]);
@@ -175,7 +178,7 @@ export type UpakovkaReplayStored = {
 export function decideUpakovkaReplay(
   stored: readonly UpakovkaReplayStored[],
   requested: UpakovkaReplayRequest,
-): "MATCH" | "CONFLICT" {
+): "MATCH" | "PARTIAL" | "CONFLICT" {
   if (stored.length === 0) return "CONFLICT";
 
   const requestedPicks = new Map<string, number>();
@@ -189,7 +192,8 @@ export function decideUpakovkaReplay(
   const prefix = `${requested.parentRequestId}:`;
   const storedPicks = new Map<string, number>();
   for (const row of stored) {
-    if (row.type !== "UPAKOVKA" || row.employeeId !== requested.employeeId) return "CONFLICT";
+    if (row.employeeId !== requested.employeeId) return "CONFLICT";
+    if (row.type !== "UPAKOVKA") return "CONFLICT";
     if (!row.clientRequestId.startsWith(prefix)) return "CONFLICT";
     const productFromKey = row.clientRequestId.slice(prefix.length);
     if (!productFromKey || productFromKey !== row.productId) return "CONFLICT";
@@ -197,7 +201,180 @@ export function decideUpakovkaReplay(
     if (storedPicks.has(row.productId)) return "CONFLICT";
     storedPicks.set(row.productId, row.productQty);
   }
-  return sameCounts(storedPicks, requestedPicks) ? "MATCH" : "CONFLICT";
+
+  for (const [productId, quantity] of storedPicks) {
+    if (requestedPicks.get(productId) !== quantity) return "CONFLICT";
+  }
+  if (storedPicks.size === requestedPicks.size) return "MATCH";
+  return "PARTIAL";
+}
+
+export type UpakovkaReplayOutcome =
+  | { status: "ABSENT" }
+  | { status: "MATCH" }
+  | { status: "PARTIAL"; saved: { productId: string; quantity: number }[] };
+
+export function partialSavedUpakovka(
+  stored: readonly UpakovkaReplayStored[],
+): { productId: string; quantity: number }[] {
+  return stored
+    .filter((row): row is UpakovkaReplayStored & { productId: string; productQty: number } =>
+      row.productId != null && row.productQty != null,
+    )
+    .map((row) => ({ productId: row.productId, quantity: row.productQty }))
+    .sort((left, right) => left.productId.localeCompare(right.productId));
+}
+
+export type ConfirmedUnrecordedGuard = "OK" | "CONFLICT" | "ALREADY_RECORDED";
+
+/** A new request may include only products the employee confirmed, never the saved ones. */
+export function guardConfirmedUnrecorded(
+  stored: readonly UpakovkaReplayStored[],
+  requested: UpakovkaReplayRequest & { recordedRequestId: string },
+): ConfirmedUnrecordedGuard {
+  if (requested.parentRequestId === requested.recordedRequestId) return "CONFLICT";
+  if (stored.length === 0) return "CONFLICT";
+  const savedPicks: { productId: string; quantity: number }[] = [];
+  const prefix = `${requested.recordedRequestId}:`;
+  for (const row of stored) {
+    if (row.employeeId !== requested.employeeId) return "CONFLICT";
+    if (row.type !== "UPAKOVKA" || row.productId == null || row.productQty == null) return "CONFLICT";
+    if (!positiveInt(row.productQty)) return "CONFLICT";
+    if (!row.clientRequestId.startsWith(prefix)) return "CONFLICT";
+    if (row.clientRequestId.slice(prefix.length) !== row.productId) return "CONFLICT";
+    savedPicks.push({ productId: row.productId, quantity: row.productQty });
+  }
+  if (
+    decideUpakovkaReplay(stored, {
+      employeeId: requested.employeeId,
+      parentRequestId: requested.recordedRequestId,
+      picks: savedPicks,
+    }) !== "MATCH"
+  ) {
+    return "CONFLICT";
+  }
+  const savedIds = new Set(savedPicks.map((pick) => pick.productId));
+  const seen = new Set<string>();
+  for (const pick of requested.picks) {
+    if (!pick.productId || !positiveInt(pick.quantity) || seen.has(pick.productId)) return "CONFLICT";
+    seen.add(pick.productId);
+    if (savedIds.has(pick.productId)) return "ALREADY_RECORDED";
+  }
+  if (seen.size === 0) return "CONFLICT";
+  return "OK";
+}
+
+export type RecoveryReceiptRow = {
+  recordedRequestId: string;
+  productId: string;
+  recoveryRequestId: string;
+  employeeId: string;
+  quantity: number;
+  operationId: string;
+};
+
+export type RecoveryDecision = "CREATE" | "EXACT" | "ALREADY_RECOVERED" | "CONFLICT";
+
+/**
+ * Whole recovery submit. A product already recovered under another request id
+ * refuses the entire set, including products that are not yet recovered.
+ */
+export function decideRecoveryReceipts(
+  receipts: readonly RecoveryReceiptRow[],
+  requested: UpakovkaReplayRequest & { recordedRequestId: string; recoveryRequestId: string },
+): RecoveryDecision {
+  if (requested.recoveryRequestId === requested.recordedRequestId) return "CONFLICT";
+  const requestedPicks = new Map<string, number>();
+  for (const pick of requested.picks) {
+    if (!pick.productId || !positiveInt(pick.quantity) || requestedPicks.has(pick.productId)) {
+      return "CONFLICT";
+    }
+    requestedPicks.set(pick.productId, pick.quantity);
+  }
+  if (requestedPicks.size === 0) return "CONFLICT";
+
+  const seen = new Set<string>();
+  for (const row of receipts) {
+    if (!row.productId || !row.operationId || !positiveInt(row.quantity)) return "CONFLICT";
+    const key = `${row.recordedRequestId}\0${row.productId}`;
+    if (seen.has(key)) return "CONFLICT";
+    seen.add(key);
+    if (row.employeeId !== requested.employeeId) return "CONFLICT";
+  }
+
+  const forRecovery = receipts.filter((row) => row.recoveryRequestId === requested.recoveryRequestId);
+  if (forRecovery.some((row) => row.recordedRequestId !== requested.recordedRequestId)) {
+    return "CONFLICT";
+  }
+  const forProducts = receipts.filter(
+    (row) => row.recordedRequestId === requested.recordedRequestId && requestedPicks.has(row.productId),
+  );
+  if (forProducts.some((row) => row.recoveryRequestId !== requested.recoveryRequestId)) {
+    return "ALREADY_RECOVERED";
+  }
+  if (forProducts.length === 0 && forRecovery.length === 0) return "CREATE";
+  if (forRecovery.length !== requestedPicks.size || forProducts.length !== requestedPicks.size) {
+    return "CONFLICT";
+  }
+  for (const [productId, quantity] of requestedPicks) {
+    const row = forProducts.find((item) => item.productId === productId);
+    if (!row || row.quantity !== quantity || row.recoveryRequestId !== requested.recoveryRequestId) {
+      return "CONFLICT";
+    }
+  }
+  return "EXACT";
+}
+
+/**
+ * Dedicated two-int advisory namespace for one upakovka recoveryRequestId.
+ * Distinct from SHADOW `(8322, 1)`, R-05 `8325`, and quantity-edit/purchase `8326`.
+ * key2 = hashtext(recoveryRequestId); a hash collision only extra-serializes.
+ */
+export const UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE = 8327;
+
+export const UPAKOVKA_RECOVERY_REQUEST_LOCK_TX_REQUIRED =
+  "Upakovka recovery request lock requires an open Prisma transaction client.";
+
+export async function acquireUpakovkaRecoveryRequestLock(
+  tx: Prisma.TransactionClient,
+  recoveryRequestId: string,
+): Promise<void> {
+  if (typeof (tx as { $transaction?: unknown }).$transaction === "function") {
+    throw new Error(UPAKOVKA_RECOVERY_REQUEST_LOCK_TX_REQUIRED);
+  }
+  await tx.$queryRaw`
+    SELECT 1 AS acquired
+    FROM (
+      SELECT pg_advisory_xact_lock(
+        ${UPAKOVKA_RECOVERY_REQUEST_LOCK_NAMESPACE}::integer,
+        hashtext(${recoveryRequestId})
+      )
+    ) AS upakovka_recovery_request_lock
+  `;
+}
+
+export async function resolveRecoveryReceipts(
+  db: ReplayDb,
+  requested: UpakovkaReplayRequest & { recordedRequestId: string; recoveryRequestId: string },
+): Promise<RecoveryDecision> {
+  const productIds = requested.picks.map((pick) => pick.productId);
+  const receipts = await db.upakovkaRecoveryReceipt.findMany({
+    where: {
+      OR: [
+        { recordedRequestId: requested.recordedRequestId, productId: { in: productIds } },
+        { recoveryRequestId: requested.recoveryRequestId },
+      ],
+    },
+    select: {
+      recordedRequestId: true,
+      productId: true,
+      recoveryRequestId: true,
+      employeeId: true,
+      quantity: true,
+      operationId: true,
+    },
+  });
+  return decideRecoveryReceipts(receipts, requested);
 }
 
 export type HoursReplayRequest = {
@@ -274,10 +451,29 @@ export async function resolvePrisadkaReplay(
   return rejectConflict(decidePrisadkaReplay(stored, requested));
 }
 
+export async function assertConfirmedUnrecorded(
+  db: ReplayDb,
+  requested: UpakovkaReplayRequest & { recordedRequestId: string },
+): Promise<void> {
+  const stored = await db.productionOperation.findMany({
+    where: { clientRequestId: { startsWith: `${requested.recordedRequestId}:` } },
+    select: {
+      employeeId: true,
+      type: true,
+      productId: true,
+      productQty: true,
+      clientRequestId: true,
+    },
+  });
+  const guard = guardConfirmedUnrecorded(stored, requested);
+  if (guard === "ALREADY_RECORDED") throw new Error(UPAKOVKA_ALREADY_RECORDED);
+  if (guard !== "OK") throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);
+}
+
 export async function resolveUpakovkaReplay(
   db: ReplayDb,
   requested: UpakovkaReplayRequest,
-): Promise<ReplayPresence> {
+): Promise<UpakovkaReplayOutcome> {
   const stored = await db.productionOperation.findMany({
     where: { clientRequestId: { startsWith: `${requested.parentRequestId}:` } },
     select: {
@@ -288,8 +484,11 @@ export async function resolveUpakovkaReplay(
       clientRequestId: true,
     },
   });
-  if (stored.length === 0) return "ABSENT";
-  return rejectConflict(decideUpakovkaReplay(stored, requested));
+  if (stored.length === 0) return { status: "ABSENT" };
+  const decision = decideUpakovkaReplay(stored, requested);
+  if (decision === "CONFLICT") throw new Error(TERMINAL_REQUEST_ALREADY_RECORDED);
+  if (decision === "MATCH") return { status: "MATCH" };
+  return { status: "PARTIAL", saved: partialSavedUpakovka(stored) };
 }
 
 export async function resolveHoursReplay(
@@ -322,6 +521,23 @@ export function setApprovalGateAfterEnsureForTests(hook: (() => Promise<void>) |
 export async function runApprovalGateAfterEnsureForTests(): Promise<void> {
   if (process.env.NODE_ENV === "production") return;
   const hook = approvalGateAfterEnsure;
+  if (!hook) return;
+  await hook();
+}
+
+/**
+ * Integrity seam only. Throws inside a recovery write so the whole
+ * transaction, including the receipt, rolls back. Unset in production.
+ */
+let upakovkaRecoveryAfterWrite: (() => Promise<void>) | null = null;
+
+export function setUpakovkaRecoveryAfterWriteForTests(hook: (() => Promise<void>) | null): void {
+  upakovkaRecoveryAfterWrite = hook;
+}
+
+export async function runUpakovkaRecoveryAfterWriteForTests(): Promise<void> {
+  if (process.env.NODE_ENV === "production") return;
+  const hook = upakovkaRecoveryAfterWrite;
   if (!hook) return;
   await hook();
 }

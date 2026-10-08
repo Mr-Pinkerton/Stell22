@@ -567,6 +567,24 @@ model TorcovkaApproval {
   @@index([expiresAt])
 }
 
+// PSR-P2-INC-001C: one recovery of one product for one partial upakovka request.
+// Empty at creation. No backfill. Scalar IDs only — no FK and no cascade.
+// UNIQUE(recordedRequestId, productId) is the durable identity.
+model UpakovkaRecoveryReceipt {
+  id                String   @id @default(cuid())
+  recordedRequestId String
+  productId         String
+  recoveryRequestId String
+  operationId       String
+  employeeId        String
+  quantity          Int
+  recordedAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([recordedRequestId, productId])
+  @@unique([operationId])
+  @@index([recoveryRequestId])
+}
+
 // Строки деталей в операции:
 //  - TORCOVKA: произведённые детали (qty) — выход, не списание со склада
 //  - PRISADKA: обработанные детали + какой тип присадки сделан (списание
