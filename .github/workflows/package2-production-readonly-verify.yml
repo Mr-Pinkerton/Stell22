@@ -54,7 +54,7 @@ jobs:
               exit 1
             fi
 
-            pinned_sha="2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf"
+            pinned_sha="678cbc1d308ddfe568b901ebf53f7e05f9a8c014"
             actual_sha="$(git rev-parse HEAD)"
             echo "PRODUCTION_APP_SHA=${actual_sha}"
             if [[ "$actual_sha" != "$pinned_sha" ]]; then

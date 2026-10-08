@@ -9,7 +9,7 @@
  */
 
 export const PINNED_PRODUCTION_APPLICATION_SHA =
-  "2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf";
+  "678cbc1d308ddfe568b901ebf53f7e05f9a8c014";
 
 export const SHADOW_ACTIVATION_ACTIONS = ["activate", "deactivate"] as const;
 
