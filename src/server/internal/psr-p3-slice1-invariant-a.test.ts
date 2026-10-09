@@ -412,6 +412,65 @@ describe("batch remainder write-off invariant A", () => {
     expect(result.invariantA).toBe("INVALID_SOURCE");
   });
 
+  it("does not treat an impossible zero write-off as a proven empty effect", () => {
+    const empty = evaluateSlice1InvariantA({
+      contour: "BATCH_REMAINDER_WRITEOFF",
+      causationId: "wo-1",
+      source: writeOff({
+        totalQuantity: 0,
+        effectSnapshot: {
+          v: 1,
+          d: "BATCH_REMAINDER_WRITEOFF",
+          batchId: "batch-1",
+          effects: [],
+        },
+      }),
+      observed: [],
+    });
+    expect(empty.invariantA).toBe("INVALID_SOURCE");
+    expect(empty.invariantA).not.toBe("MATCH_OBSERVED");
+    expect(empty.invariantA).not.toBe("GATE_UNKNOWN");
+    expect(empty.invariantB).toBe("NOT_EVALUABLE");
+    expect(empty.expectedEffectCount).toBe(0);
+
+    const withMovement = evaluateSlice1InvariantA({
+      contour: "BATCH_REMAINDER_WRITEOFF",
+      causationId: "wo-1",
+      source: writeOff({
+        totalQuantity: 0,
+        effectSnapshot: {
+          v: 1,
+          d: "BATCH_REMAINDER_WRITEOFF",
+          batchId: "batch-1",
+          effects: [],
+        },
+      }),
+      observed: writeOffObserved(),
+    });
+    expect(withMovement.invariantA).toBe("INVALID_SOURCE");
+    expect(withMovement.invariantB).toBe("NOT_EVALUABLE");
+  });
+
+  it("rejects a positive total with an empty effect list", () => {
+    const result = evaluateSlice1InvariantA({
+      contour: "BATCH_REMAINDER_WRITEOFF",
+      causationId: "wo-1",
+      source: writeOff({
+        totalQuantity: 4,
+        effectSnapshot: {
+          v: 1,
+          d: "BATCH_REMAINDER_WRITEOFF",
+          batchId: "batch-1",
+          effects: [],
+        },
+      }),
+      observed: [],
+    });
+    expect(result.invariantA).toBe("INVALID_SOURCE");
+    expect(result.invariantA).not.toBe("GATE_UNKNOWN");
+    expect(result.invariantB).toBe("NOT_EVALUABLE");
+  });
+
   it("rejects a malformed snapshot", () => {
     const result = evaluateSlice1InvariantA({
       contour: "BATCH_REMAINDER_WRITEOFF",

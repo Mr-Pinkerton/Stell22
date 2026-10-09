@@ -258,8 +258,8 @@ function deriveWriteOff(source: WriteOffRetainedSource, causationId: string): So
   if (source.id !== causationId || isBlank(source.batchId)) {
     return { status: "INVALID_SOURCE", reason: "write-off identity is incomplete" };
   }
-  if (!Number.isInteger(source.totalQuantity) || source.totalQuantity < 0) {
-    return { status: "INVALID_SOURCE", reason: "write-off totalQuantity is not a non-negative integer" };
+  if (!isPositiveInt(source.totalQuantity)) {
+    return { status: "INVALID_SOURCE", reason: "write-off totalQuantity is not a positive integer" };
   }
   if (!isRecord(source.effectSnapshot)) {
     return { status: "INVALID_SOURCE", reason: "write-off effectSnapshot is malformed" };
@@ -297,6 +297,9 @@ function deriveWriteOff(source: WriteOffRetainedSource, causationId: string): So
     seen.add(item.railLotId);
     total += item.quantityBefore;
     effects.push(railEffect("writeoff", item.railLotId, -item.quantityBefore));
+  }
+  if (effects.length === 0) {
+    return { status: "INVALID_SOURCE", reason: "write-off effectSnapshot has no effects" };
   }
   if (total !== source.totalQuantity) {
     return { status: "INVALID_SOURCE", reason: "write-off totalQuantity does not equal the retained effects" };

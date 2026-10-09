@@ -235,6 +235,67 @@ describe.skipIf(!enabled)("PSR-P3 slice 1 invariant A", () => {
     expect(await counts()).toEqual(before);
   });
 
+  it("classifies a persisted impossible zero write-off as INVALID_SOURCE", async () => {
+    const constraint = "BatchRemainderWriteOff_totalQuantity_positive";
+    let dropped = false;
+    await prismaA.$executeRawUnsafe(
+      `ALTER TABLE "BatchRemainderWriteOff" DROP CONSTRAINT "${constraint}"`,
+    );
+    dropped = true;
+    try {
+      const writeOff = await prismaA.batchRemainderWriteOff.create({
+        data: {
+          id: "s1-wo-zero",
+          requestId: "s1-wo-zero-req",
+          batchId: "s1-batch",
+          adminUserId: "integrity-admin",
+          totalQuantity: 0,
+          effectSnapshot: {
+            v: 1,
+            d: "BATCH_REMAINDER_WRITEOFF",
+            batchId: "s1-batch",
+            effects: [],
+          },
+        },
+      });
+      const absent = await readSlice1InvariantA(prismaA, {
+        contour: "BATCH_REMAINDER_WRITEOFF",
+        causationId: writeOff.id,
+      });
+      expect(absent.invariantA).toBe("INVALID_SOURCE");
+      expect(absent.invariantA).not.toBe("MATCH_OBSERVED");
+      expect(absent.invariantA).not.toBe("GATE_UNKNOWN");
+      expect(absent.invariantB).toBe("NOT_EVALUABLE");
+
+      const key = railKey("writeoff", "lot-a");
+      await insertMovement({
+        id: "s1-wo-zero-shadow",
+        kind: "ADJUSTMENT",
+        stockDomain: "RAIL_LOT",
+        quantityDelta: -1,
+        causationKind: "BATCH",
+        causationId: writeOff.id,
+        effectKey: key.effectKey,
+        railLotId: "lot-a",
+        targetSnapshot: key.targetSnapshot,
+      });
+      const present = await readSlice1InvariantA(prismaA, {
+        contour: "BATCH_REMAINDER_WRITEOFF",
+        causationId: writeOff.id,
+      });
+      expect(present.invariantA).toBe("INVALID_SOURCE");
+      expect(present.invariantB).toBe("NOT_EVALUABLE");
+      expect(await prismaA.inventoryMovement.count()).toBe(1);
+    } finally {
+      if (dropped) {
+        await prismaA.batchRemainderWriteOff.deleteMany({ where: { id: "s1-wo-zero" } });
+        await prismaA.$executeRawUnsafe(
+          `ALTER TABLE "BatchRemainderWriteOff" ADD CONSTRAINT "${constraint}" CHECK ("totalQuantity" > 0)`,
+        );
+      }
+    }
+  });
+
   it("matches a SimplePurchase receipt and does not use the creation command id", async () => {
     const item = await prismaA.nomenclatureItem.create({
       data: { name: "s1-screw", type: "FASTENER", unitPrice: new Prisma.Decimal(10) },
