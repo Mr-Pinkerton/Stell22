@@ -1,6 +1,6 @@
 # Stell22 Audit — Index
 
-Updated: 2026-09-22
+Updated: 2026-10-09
 
 This is the canonical audit navigation and **master registry** for Stell22.
 
@@ -15,20 +15,20 @@ Do not import Woodveri door-manufacturing entities or workflows.
 | --- | --- |
 | Repository | `Mr-Pinkerton/Stell22` |
 | Branch | `main` is canonical. |
-| Application-code checkpoint | `2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf` — Production Deploy `35616829882` SUCCESS (Package 3 **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED / SHADOW INACTIVE**; verifier `35619733266` **PASS**; InventoryMovement **0**; SHADOW **ABSENT**; `production_cost_flow` **ABSENT**; remaining enabled uncovered writer contours **0**; all twelve connected writers **DEPLOYED DORMANT / SHADOW INACTIVE**). GitHub `main` at the start of the `audit/08.26` closeout is `1c8b45b29acb1de1bac6eae13572dab71305de3e` (PR #49 docs merge) and is **not** a production application SHA. PR #48 control-plane merge `231026601cdbaa0ff1a8a80411f90a33b92eaef8` is also **not** a production application SHA. Historical PR #46 verifier merge `49aa1209` is also **not** a production application SHA. Prior prod SHA `b033cfad` (deploy `35536089109`, Package 2 **DEPLOYED / POST-DEPLOY VERIFIED**) is **historical**. Prior prod SHA `4508ee1` (deploy `35524416936`, Package 1 **DEPLOYED / POST-DEPLOY VERIFIED**) is **historical**. Prior prod SHA `69e0f53` (deploy `35510094974`, raw SHADOW writers **DEPLOYED DORMANT / SHADOW INACTIVE**) is **historical**. Prior prod SHA `0cc8382` (deploy `35502770382`, raw identity prerequisite **DEPLOYED / POST-DEPLOY VERIFIED**) is **historical**. Prior prod SHA `eb02b17` (deploy `35337215903`, R-06 **DEPLOYED / POST-DEPLOY VERIFIED**) is **historical**. Prior `27538a5` (deploy `35329071777`, R-05 **DEPLOYED**) is **historical**. Prior `c14a586` (deploy `35314440036`, R-04 **DEPLOYED**) is **historical**. Prior `de2e1c0` (deploy `35257469956`, PSR-P2 general preconditions **DEPLOYED DORMANT**) is **historical**. Prior `92532e8` (deploy `35228794988`, PSR-P1 empty SHADOW) is **historical**. Containment SHA `3608b36` remains in the running tree. Always verify current `main` HEAD. |
+| Application-code checkpoint | `678cbc1d308ddfe568b901ebf53f7e05f9a8c014` — Production Deploy `37816537899` SUCCESS. Current PSR-P2 status is `audit/08.27` (**COMPLETE / ALL ENABLED PHYSICAL WRITERS COVERED / SHADOW GATE ACTIVE / REAL DUAL-WRITE OBSERVED / POST-START READ-ONLY VERIFIED**). Ledger **NOT AUTHORITATIVE**. `AUTHORITATIVE_COUNT` = **0**. Final epoch **NOT CREATED**. `OPENING_BALANCE` **NOT CREATED**. `production_cost_flow` **INACTIVE / ABSENT**. PSR-P3 **NOT STARTED**. Paper removal **NOT AUTHORIZED**. `SOAK_COMPLETE` = **NO**. `INC-001` **OPEN**. `ARCH-P1-001` **OPEN / CONFIRMED**. Writer coverage from `audit/08.24`: connected **12** / deployed **12** / uncovered **0**. GitHub `main` at the start of `audit/08.27` is `8cb61c8322f68a6a4e4f5997ed966a5b1996513f` (PR #56 pin alignment) and is **not** a production application SHA. Prior application `2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf` (Production Deploy `35616829882`) is historical. `audit/08.24`, `audit/08.25`, and `audit/08.26` are not rewritten. Always verify current `main` HEAD. |
 | Docs on `main` | AUDIT 1 artifact `08.01` (`COMPLETE / REVIEWED`). ARCH-2 artifact `08.02` (`ACCEPTED / REVIEWED`). PSR-P0-CORR artifact `08.03` (`ACCEPTED DESIGN / NOT IMPLEMENTED`). PSR-P0-CORE artifact `08.04` (`ACCEPTED DESIGN / NOT IMPLEMENTED`). PSR-P1 schema contract `08.05` (**ACCEPTED DESIGN**; historical **NOT IMPLEMENTED** at contract creation preserved). PSR-P1 closeout `08.06` (`COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY`). PSR-P2 general preconditions `08.07` (`ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main`; package **DEPLOYED DORMANT** at `de2e1c0`; Canonical? **YES**). PSR-P2 R-04 `08.08` (`ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED`; Production Deploy `35314440036`). PSR-P2 R-05 identity `08.09` (`ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED`; production `27538a5`; Production Deploy `35329071777`). PSR-P2 R-06 `08.10` (`ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED`; production `eb02b17`; Production Deploy `35337215903`). PSR-P2 P2-GUARD/CI `08.12` (historical **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED**; current runtime **DEPLOYED DORMANT**; PR #18; merge `643c796`). PSR-P2 Inventory writer prerequisite `08.13` (`IMPLEMENTED / MERGED / DEPLOYED DORMANT`; PR #20). PSR-P2 Inventory SHADOW writer `08.14` (`DEPLOYED DORMANT / SHADOW INACTIVE`; PR #22). PSR-P2 terminal production SHADOW writers `08.15` (`DEPLOYED DORMANT / SHADOW INACTIVE`; PR #24). PSR-P2 R-05 correction SHADOW writer `08.16` (`DEPLOYED DORMANT / SHADOW INACTIVE`; PR #26). PSR-P2 Supply writer prerequisite `08.17` (`COMPLETE / DEPLOYED / PRODUCTION PREFLIGHT COMPLETE / TRUSTED`). PSR-P2 raw identity prerequisite `08.19` (`IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED`; Production Deploy `35502770382`). PSR-P2 Package 1 safe destructive guards `08.22` (`IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED`; historical Package 1 Production Deploy `35524416936`). PSR-P2 Package 2 quantity-edit identity `08.23` (`IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED`; historical Package 2 Production Deploy `35536089109`). PSR-P2 Package 3 quantity-edit SHADOW writers `08.24` (`IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED / SHADOW INACTIVE`; Production Deploy `35616829882`; verifier `35619733266` PASS). Always verify current `main` HEAD. |
 | ARCH-2 | `audit/08.02-primary-system-readiness-architecture.md` — **`ACCEPTED / REVIEWED`**. Independent Review #1 = REQUEST CHANGES (R1…R6 CLOSED/PASS). Independent Review #2 = REQUEST CHANGES (R7…R8 CLOSED/PASS). Independent Review #3 = **PASS / ACCEPT** (new blockers = 0). Architecture contract accepted; **not** full PSR implementation complete. `PSR-Q-001` / `Q2` / `Q5` / `Q7` / `Q8` = **CLOSED / ACCEPTED** in `08.04` (design only). |
 | PSR-P0 | **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime. Correction Center **not** implemented. Cancellation **DEFERRED / NOT IMPLEMENTED**. |
 | PSR-P1 | **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** (`08.06`). Schema contract `08.05` remains **ACCEPTED DESIGN** (do not rewrite its historical **NOT IMPLEMENTED** header). Empty unused SHADOW-capable table; production row count at P1 closeout = **0**; no runtime writers. |
-| PSR-P2 general preconditions | `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`; Canonical? **YES**; first deployed at `de2e1c0`, run `35257469956`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Canonical? **YES**; Production Deploy `35314440036`). R-05 identity = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.09`; Canonical? **YES**; production `27538a5`; Production Deploy `35329071777`). R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; Canonical? **YES**; production `eb02b17`; Production Deploy `35337215903`). P2-GUARD/CI historical implementation status = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED**; current runtime = **DEPLOYED DORMANT** (`audit/08.12`; PR #18; merge `643c796`). Inventory writer prerequisite historical implementation status = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED**; current runtime = prerequisite code **DEPLOYED DORMANT** (`audit/08.13`). Inventory SHADOW writer = **DEPLOYED DORMANT / SHADOW INACTIVE** (`audit/08.14`). Terminal production SHADOW writers = `audit/08.15` (**DEPLOYED DORMANT / SHADOW INACTIVE**). R-05 correction writer = `audit/08.16` (**DEPLOYED DORMANT / SHADOW INACTIVE**). Supply writer prerequisite = `audit/08.17` (**COMPLETE / DEPLOYED / PRODUCTION PREFLIGHT COMPLETE / TRUSTED**; latest rerun `35502680346`). Supply SHADOW writer = `audit/08.18` (**DEPLOYED DORMANT / SHADOW INACTIVE**). Raw identity prerequisite = `audit/08.19` (**IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED**; Production Deploy `35502770382`). Raw SHADOW writers = `audit/08.20` (**IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED / SHADOW INACTIVE**; PR #36 merge `0bf2c77`; Production Deploy `35510094974`; deployed application `69e0f53`; source/`main` contours **9**; production dormant contours **9**). Remaining mutation / destructive discovery = `audit/08.21` (**ARCHITECTURE ACCEPTED / REVIEWED**; Canonical? **YES**; no implementation in that file). Safe destructive guards = `audit/08.22` (**IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED**; historical Package 1 Production Deploy `35524416936`; historical Package 1 application `4508ee1`). Quantity-edit identity = `audit/08.23` (**IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED**; accepted HEAD `e143e22`; PR #42 merge `b033cfad`; historical Package 2 Production Deploy `35536089109`). Quantity-edit SHADOW writers = `audit/08.24` (**IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED / SHADOW INACTIVE**; accepted HEAD `7f090e13`; PR #45 merge `2d2cbcbd`; Production Deploy `35616829882`; production app `2d2cbcbd`; verifier `35619733266` PASS; InventoryMovement **0**; SHADOW **ABSENT**; remaining enabled uncovered contours **0**; connected/dormant contours **12 / 12**). Dual-write **NOT STARTED**. |
+| PSR-P2 general preconditions | `PSR-Q-004` / R-07 / R-10 / R-11 remain **DEPLOYED DORMANT** (`audit/08.07`; Canonical? **YES**; first deployed at `de2e1c0`, run `35257469956`). R-04 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.08`; Canonical? **YES**; Production Deploy `35314440036`). R-05 identity = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED** (`audit/08.09`; Canonical? **YES**; production `27538a5`; Production Deploy `35329071777`). R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOYED / POST-DEPLOY VERIFIED** (`audit/08.10`; Canonical? **YES**; production `eb02b17`; Production Deploy `35337215903`). P2-GUARD/CI historical implementation status = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED**; current runtime = **DEPLOYED DORMANT** (`audit/08.12`; PR #18; merge `643c796`). Inventory writer prerequisite historical implementation status = **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / NOT DEPLOYED**; current runtime = prerequisite code **DEPLOYED DORMANT** (`audit/08.13`). Inventory SHADOW writer = **DEPLOYED DORMANT / SHADOW INACTIVE** (`audit/08.14`). Terminal production SHADOW writers = `audit/08.15` (**DEPLOYED DORMANT / SHADOW INACTIVE**). R-05 correction writer = `audit/08.16` (**DEPLOYED DORMANT / SHADOW INACTIVE**). Supply writer prerequisite = `audit/08.17` (**COMPLETE / DEPLOYED / PRODUCTION PREFLIGHT COMPLETE / TRUSTED**; latest rerun `35502680346`). Supply SHADOW writer = `audit/08.18` (**DEPLOYED DORMANT / SHADOW INACTIVE**). Raw identity prerequisite = `audit/08.19` (**IMPLEMENTED / MERGED / DEPLOYED / POST-DEPLOY VERIFIED**; Production Deploy `35502770382`). Raw SHADOW writers = `audit/08.20` (**IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED / SHADOW INACTIVE**; PR #36 merge `0bf2c77`; Production Deploy `35510094974`; deployed application `69e0f53`; source/`main` contours **9**; production dormant contours **9**). Remaining mutation / destructive discovery = `audit/08.21` (**ARCHITECTURE ACCEPTED / REVIEWED**; Canonical? **YES**; no implementation in that file). Safe destructive guards = `audit/08.22` (**IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED**; historical Package 1 Production Deploy `35524416936`; historical Package 1 application `4508ee1`). Quantity-edit identity = `audit/08.23` (**IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED**; accepted HEAD `e143e22`; PR #42 merge `b033cfad`; historical Package 2 Production Deploy `35536089109`). Quantity-edit SHADOW writers = `audit/08.24` (**IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED / SHADOW INACTIVE**; accepted HEAD `7f090e13`; PR #45 merge `2d2cbcbd`; Production Deploy `35616829882`; production app `2d2cbcbd`; verifier `35619733266` PASS; InventoryMovement **0**; SHADOW **ABSENT**; remaining enabled uncovered contours **0**; connected/dormant contours **12 / 12**). Dual-write **NOT STARTED**.  Current PSR-P2 status is `audit/08.27`, not the closeout-era dual-write sentence in this row. |
 | Audit program | STEP 0 recovery **COMPLETE**. **AUDIT 1 = COMPLETE / REVIEWED** (not reopened). **ARCH-2 = ACCEPTED / REVIEWED** (architecture contract). Not a new AUDIT 1 defect count. **AUDIT 2 is NOT started.** |
 | Production incident | **`INC-001` = `OPEN — CONTAINMENT DEPLOYED; PHYSICAL FACT REQUIRED FOR DATA CORRECTION`**. Finding **`INC-001-F1` P1 / CONFIRMED**. Generic TORCOVKA delete `CONTAINED IN PRODUCTION`. Package data **not** corrected. `ARCH-P1-001` unrelated to INC-001. |
 | `production_cost_flow` | inactive (delivery state; see `PROJECT.md`) |
 | `ARCH-P1-001` | **OPEN / CONFIRMED**. Scope = `production_cost_flow` **ACTIVE** UPAKOVKA quantity-edit path. Inactive `prepareUpakovkaEdit` already unions old ∪ current refs. Not fixed. |
-| PSR-P2 SHADOW activation control | `audit/08.25`. **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / POST-MERGE VERIFIED / NOT RUN IN PRODUCTION / SHADOW INACTIVE**. Canonical?: **YES**. Merge `2310266`. Docs merge of that closeout: `1c8b45b2` (PR #49), not a production application SHA. Production application remains `2d2cbcbd`. The 08.25 closeout recorded `PRODUCTION_ENVIRONMENT_REF_POLICY = UNSAFE`; that pre-hardening record stays in `08.25` §7. Current policy is `audit/08.26`. Not production activation. Dual-write **NOT STARTED**. PSR-P2 **NOT COMPLETE**. PSR-P3 **NOT STARTED**. |
-| Production Environment ref policy | `audit/08.26`. **COMPLETE / HEAD ACCEPTED / INDEPENDENT REVIEWED / LIVE VERIFIED / CONFIGURATION APPLIED / NO PRODUCTION ACCESS / NO DEPLOY / SHADOW INACTIVE**. Canonical?: **YES** after this docs closeout is accepted and merged. `PRODUCTION_ENVIRONMENT_REF_POLICY = SAFE / MAIN-ONLY / ADMIN-BYPASS-DISABLED`. Environment `21178616940`. Branch policy `60621333` `main` / `branch`. `can_admins_bypass = false`. `updated_at` `2026-09-21T19:32:57Z`. GitHub Environment configuration, not an application deployment. NEXT = **PSR-P2 SHADOW ACTIVATION READINESS / OWNER AUTHORIZATION GATE**. That NEXT does not authorize SHADOW activation. |
+| PSR-P2 SHADOW activation control | `audit/08.25`. **IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / POST-MERGE VERIFIED / NOT RUN IN PRODUCTION / SHADOW INACTIVE**. Canonical?: **YES**. Merge `2310266`. Docs merge of that closeout: `1c8b45b2` (PR #49), not a production application SHA. Production application remains `2d2cbcbd`. The 08.25 closeout recorded `PRODUCTION_ENVIRONMENT_REF_POLICY = UNSAFE`; that pre-hardening record stays in `08.25` §7. Current policy is `audit/08.26`. Not production activation. Dual-write **NOT STARTED**. PSR-P2 **NOT COMPLETE**. PSR-P3 **NOT STARTED**.  The NOT COMPLETE / NOT STARTED words in this row are the `08.25` closeout record. Current PSR-P2 status is `audit/08.27`. |
+| Production Environment ref policy | `audit/08.26`. **COMPLETE / HEAD ACCEPTED / INDEPENDENT REVIEWED / LIVE VERIFIED / CONFIGURATION APPLIED / NO PRODUCTION ACCESS / NO DEPLOY / SHADOW INACTIVE**. Canonical?: **YES** after this docs closeout is accepted and merged. `PRODUCTION_ENVIRONMENT_REF_POLICY = SAFE / MAIN-ONLY / ADMIN-BYPASS-DISABLED`. Environment `21178616940`. Branch policy `60621333` `main` / `branch`. `can_admins_bypass = false`. `updated_at` `2026-09-21T19:32:57Z`. GitHub Environment configuration, not an application deployment. NEXT = **PSR-P2 SHADOW ACTIVATION READINESS / OWNER AUTHORIZATION GATE**. That NEXT does not authorize SHADOW activation.  The SHADOW INACTIVE / NEXT words in this row are the `08.26` closeout record. Current PSR-P2 status is `audit/08.27`. NEXT is now PSR-P3 diagnostic reconciliation, **NOT STARTED**. |
 
-Always verify current `main` HEAD before relying on git SHA. Production **application** checkpoint = `2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf` (Production Deploy `35616829882`). GitHub `main` at the start of the `audit/08.26` closeout is `1c8b45b29acb1de1bac6eae13572dab71305de3e` (PR #49 docs merge) and is **not** a production application SHA. PR #48 control-plane merge `231026601cdbaa0ff1a8a80411f90a33b92eaef8` is also **not** a production application SHA. Historical PR #46 verifier merge `49aa1209` is also **not** a production application SHA. Historical production checkpoints include `b033cfad` (run `35536089109`, Package 2), `4508ee1` (run `35524416936`, Package 1), `69e0f53` (run `35510094974`, raw SHADOW writers), `0cc8382` (run `35502770382`, raw identity prerequisite), `eb02b17` (run `35337215903`), `27538a5` (run `35329071777`), `c14a586` (run `35314440036`), `de2e1c0` (run `35257469956`), `92532e8` (run `35228794988`), `0686d00`, `71a01b4`. Historical merge/docs SHAs `3f89fff` (PR #9) / `394f753` / `bd82aa0` / `b11c37d` / `2f8ec8d` are not rewritten.
+Always verify current `main` HEAD before relying on git SHA. Production **application** checkpoint = `678cbc1d308ddfe568b901ebf53f7e05f9a8c014` (Production Deploy `37816537899`). Current PSR-P2 status = `audit/08.27`. Prior application `2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf` (Production Deploy `35616829882`) is historical. GitHub `main` at the start of the `audit/08.26` closeout is `1c8b45b29acb1de1bac6eae13572dab71305de3e` (PR #49 docs merge) and is **not** a production application SHA. PR #48 control-plane merge `231026601cdbaa0ff1a8a80411f90a33b92eaef8` is also **not** a production application SHA. Historical PR #46 verifier merge `49aa1209` is also **not** a production application SHA. Historical production checkpoints include `b033cfad` (run `35536089109`, Package 2), `4508ee1` (run `35524416936`, Package 1), `69e0f53` (run `35510094974`, raw SHADOW writers), `0cc8382` (run `35502770382`, raw identity prerequisite), `eb02b17` (run `35337215903`), `27538a5` (run `35329071777`), `c14a586` (run `35314440036`), `de2e1c0` (run `35257469956`), `92532e8` (run `35228794988`), `0686d00`, `71a01b4`. Historical merge/docs SHAs `3f89fff` (PR #9) / `394f753` / `bd82aa0` / `b11c37d` / `2f8ec8d` are not rewritten.
 
 `08.01` = current-system architecture audit. `08.02` = accepted primary-system readiness architecture contract. They answer different questions. Do not treat 08.02 as a reopen of AUDIT 1. `ACCEPTED / REVIEWED` does **not** mean full PSR implementation complete, paper removable, or `production_cost_flow` active. PSR-P1 empty SHADOW schema **is** deployed (`08.06`); that is not primary-system readiness.
 
@@ -179,6 +179,7 @@ No `audit/01.16*` or `audit/01.17*`.
 | `audit/08.24-psr-p2-production-quantity-edit-shadow-writers.md` | PSR-P2 Package 3 production quantity-edit SHADOW writers | Implementation + deploy closeout | Starting main `4c662f96`; PR #45 accepted HEAD `7f090e13`; merge `2d2cbcbd`; Production Deploy `35616829882`; prod app `2d2cbcbd`; verifier PR #46 merge `49aa1209`; verifier `35619733266` PASS | `IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / DEPLOYED / POST-DEPLOY VERIFIED / SHADOW INACTIVE` | YES after this closeout merge | A/B/C SHADOW writer. Evidence class = **PR MERGE-REF CI / EXACT CANDIDATE-TREE VERIFIED**, not `exact-head CI`. No schema/migration. No SHADOW activation. UPAKOVKA ACTIVE still blocked. `ARCH-P1-001` OPEN. Connected/dormant contours **12 / 12**. Remaining uncovered **0**. P2 **NOT COMPLETE**. P3 **NOT STARTED**. |
 | `audit/08.25-psr-p2-shadow-activation-control.md` | PSR-P2 SHADOW activation control and start verification | Control plane + merge closeout | Starting main `693a9f12`; accepted HEAD `7e58c3df`; PR #48 merge `2310266`; candidate CI `35637791430`; post-merge CI `35638837175` | `IMPLEMENTED / MERGED TO MAIN / CI VERIFIED / POST-MERGE VERIFIED / NOT RUN IN PRODUCTION / SHADOW INACTIVE` | YES | Not a production application deploy. Production app `2d2cbcbd`. 08.25 closeout recorded `PRODUCTION_ENVIRONMENT_REF_POLICY = UNSAFE` (pre-hardening evidence preserved in §7). Current policy: `08.26`. No schema. No production mutation. Dual-write **NOT STARTED**. P2 **NOT COMPLETE**. P3 **NOT STARTED**. Historical NEXT = environment ref-policy hardening, superseded by `08.26`. |
 | `audit/08.26-psr-p2-production-environment-ref-policy-hardening.md` | PSR-P2 Production Environment ref-policy hardening | Environment configuration closeout | Starting main `1c8b45b2`; tree `102692287`; Environment `21178616940`; policy `60621333`; `updated_at` `2026-09-21T19:32:57Z` | `COMPLETE / HEAD ACCEPTED / INDEPENDENT REVIEWED / LIVE VERIFIED / CONFIGURATION APPLIED / NO PRODUCTION ACCESS / NO DEPLOY / SHADOW INACTIVE` | YES after this closeout merge | GitHub Environment configuration, not an application deploy. `PRODUCTION_ENVIRONMENT_REF_POLICY = SAFE / MAIN-ONLY / ADMIN-BYPASS-DISABLED`. `can_admins_bypass = false`. One branch policy `main` / `branch`. No tag or wildcard policy. Independent review **PASS / ACCEPT** (P0=0 / P1=0 / P2=5 non-blocking). No production access. No deploy. SHADOW **INACTIVE**. Dual-write **NOT STARTED**. P2 **NOT COMPLETE**. P3 **NOT STARTED**. NEXT = owner authorization gate before any SHADOW activation. |
+| `audit/08.27-psr-p2-runtime-dual-write-closeout.md` | PSR-P2 runtime dual-write closeout | Runtime evidence closeout | Main at start `8cb61c83`; tree `533e6bbb`; production app `678cbc1d`; Deploy `37816537899`; SOAK-04 `37827499555`; SOAK-03 `36325240805` | `COMPLETE / ALL ENABLED PHYSICAL WRITERS COVERED / SHADOW GATE ACTIVE / REAL DUAL-WRITE OBSERVED / POST-START READ-ONLY VERIFIED` | YES after this closeout merge | Does not rewrite `08.24` / `08.25` / `08.26`. Ledger **NOT AUTHORITATIVE**. `AUTHORITATIVE_COUNT` **0**. Final epoch **NOT CREATED**. `OPENING_BALANCE` **NOT CREATED**. `production_cost_flow` **INACTIVE / ABSENT**. PSR-P3 **NOT STARTED**. Paper removal **NOT AUTHORIZED**. `SOAK_COMPLETE` **NO**. `INC-001` **OPEN**. `ARCH-P1-001` **OPEN**. NEXT = PSR-P3 ledger↔projection diagnostic reconciliation in SHADOW. |
 
 ### D.8 Production incidents
 
@@ -374,7 +375,7 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Current runtime: **DEPLOYED DORMANT / SHADOW INACTIVE**.
 - Production application checkpoint: `0cc8382f307ac1ff7fa881012033f5105e689a23`.
 - Dual-write: **NOT STARTED**.
-- Runtime P2 global completeness: **NOT COMPLETE**.
+- PSR-P2 status on this card: **NOT COMPLETE** at that package closeout. Current PSR-P2 status is `audit/08.27`..
 - P3: **NOT STARTED**.
 - NEXT: **PSR-P2 RAW RECEIPT / WRITE-OFF SHADOW WRITERS IMPLEMENTATION PACKAGE**. Historical closeout next was terminal writers (`audit/08.15`).
 
@@ -391,7 +392,7 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Current runtime: **DEPLOYED DORMANT / SHADOW INACTIVE**.
 - Production application checkpoint: `0cc8382f307ac1ff7fa881012033f5105e689a23`.
 - Dual-write: **NOT STARTED**.
-- Runtime P2 global completeness: **NOT COMPLETE**.
+- PSR-P2 status on this card: **NOT COMPLETE** at that package closeout. Current PSR-P2 status is `audit/08.27`..
 - P3: **NOT STARTED**.
 - NEXT: **PSR-P2 RAW RECEIPT / WRITE-OFF SHADOW WRITERS IMPLEMENTATION PACKAGE**. Historical closeout next was R-05 writer (`audit/08.16`).
 
@@ -407,7 +408,7 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Current runtime: **DEPLOYED DORMANT / SHADOW INACTIVE**
 - Production application checkpoint: `0cc8382f307ac1ff7fa881012033f5105e689a23`
 - Dual-write: **NOT STARTED**.
-- Runtime P2 global completeness: **NOT COMPLETE**.
+- PSR-P2 status on this card: **NOT COMPLETE** at that package closeout. Current PSR-P2 status is `audit/08.27`..
 - P3: **NOT STARTED**.
 - NEXT: **PSR-P2 RAW RECEIPT / WRITE-OFF SHADOW WRITERS IMPLEMENTATION PACKAGE**. Historical closeout next was Supply prerequisite (`audit/08.17`).
 
@@ -421,7 +422,7 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Production preflight: historical trusted `35452435411`; latest rerun `35502680346` TOTAL=0 / D=0 / S=0 / O=0 / `SUPPLY_DATA_BLOCKER=NO`
 - Production application checkpoint: `0cc8382f307ac1ff7fa881012033f5105e689a23`
 - Dual-write: **NOT STARTED**.
-- Runtime P2 global completeness: **NOT COMPLETE**.
+- PSR-P2 status on this card: **NOT COMPLETE** at that package closeout. Current PSR-P2 status is `audit/08.27`..
 - P3: **NOT STARTED**.
 - Supply writer: now `audit/08.18` **DEPLOYED DORMANT / SHADOW INACTIVE**
 - NEXT: **PSR-P2 RAW RECEIPT / WRITE-OFF SHADOW WRITERS IMPLEMENTATION PACKAGE**. Not SHADOW activation.
@@ -436,7 +437,7 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Merge: `164ffca49d5200af0b442de05c8966fc3b5c70ed`
 - Production application checkpoint: `0cc8382f307ac1ff7fa881012033f5105e689a23`
 - Dual-write: **NOT STARTED**.
-- Runtime P2 global completeness: **NOT COMPLETE**.
+- PSR-P2 status on this card: **NOT COMPLETE** at that package closeout. Current PSR-P2 status is `audit/08.27`..
 - P3: **NOT STARTED**.
 - NEXT: **PSR-P2 RAW RECEIPT / WRITE-OFF SHADOW WRITERS IMPLEMENTATION PACKAGE**. Not SHADOW activation.
 
@@ -453,12 +454,12 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Historical identity-prerequisite application: `0cc8382f307ac1ff7fa881012033f5105e689a23`
 - Historical raw SHADOW writers production checkpoint: `69e0f53993d5b02f27f0fc03682cef492c02d685`
 - Historical raw SHADOW writers Production Deploy: `35510094974` SUCCESS
-- Current production application: `2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf`
+- Current production application: `678cbc1d308ddfe568b901ebf53f7e05f9a8c014` (`audit/08.27`; Production Deploy `37816537899`). Prior application `2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf` is historical.
 - Current Production Deploy: `35616829882` SUCCESS
 - Schema / migration: **APPLIED**. Identity tables LIVE / EMPTY AT CUTOVER. Historical backfill: **NO**.
 - Connected writers: **DEPLOYED DORMANT / SHADOW INACTIVE**
 - Dual-write: **NOT STARTED**.
-- Runtime P2 global completeness: **NOT COMPLETE**.
+- PSR-P2 status on this card: **NOT COMPLETE** at that package closeout. Current PSR-P2 status is `audit/08.27`..
 - P3: **NOT STARTED**.
 - Historical NEXT, superseded: **NEW HEAD TAKEOVER / PSR-P2 SHADOW ACTIVATION & DUAL-WRITE START READINESS REVIEW**. Historical 08.19 closeout NEXT was Package 2 identity. Current implementation: `audit/08.24` **DEPLOYED / POST-DEPLOY VERIFIED / SHADOW INACTIVE**. Not SHADOW activation.
 
@@ -473,7 +474,7 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Merge: `0bf2c77f25b76c183d86bd571ad685e679c577da`
 - Historical / package Production Deploy: `35510094974` SUCCESS
 - Historical / package deployment application: `69e0f53993d5b02f27f0fc03682cef492c02d685`
-- Current production application: `2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf`
+- Current production application: `678cbc1d308ddfe568b901ebf53f7e05f9a8c014` (`audit/08.27`; Production Deploy `37816537899`). Prior application `2d2cbcbdc01ee83cb9103ad8fdaa43ebf8488dcf` is historical.
 - Current Production Deploy: `35616829882` SUCCESS
 - Exact-head CI: `35507221861` SUCCESS
 - Post-merge CI: `35507868236` SUCCESS
@@ -483,7 +484,7 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Current source/`main` contours: **12**
 - Current production dormant contours: **12**
 - Dual-write: **NOT STARTED**.
-- Runtime P2 global completeness: **NOT COMPLETE**.
+- PSR-P2 status on this card: **NOT COMPLETE** at that package closeout. Current PSR-P2 status is `audit/08.27`..
 - P3: **NOT STARTED**.
 - Historical NEXT, superseded: **NEW HEAD TAKEOVER / PSR-P2 SHADOW ACTIVATION & DUAL-WRITE START READINESS REVIEW**. Historical 08.20 closeout NEXT was Package 2 identity. Current implementation: `audit/08.24` **DEPLOYED / POST-DEPLOY VERIFIED / SHADOW INACTIVE**. Not SHADOW activation.
 
@@ -502,7 +503,7 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Production access / mutation / deploy: **NO / NO / NO**
 - SHADOW activation: **NO**
 - Dual-write: **NOT STARTED**
-- Runtime P2 global completeness: **NOT COMPLETE**
+- PSR-P2 status on this card: **NOT COMPLETE** at that package closeout. Current PSR-P2 status is `audit/08.27`.
 - P3: **NOT STARTED**
 - NEXT: **PSR-P2 PRODUCTION QUANTITY-EDIT IDENTITY PREREQUISITE**. Historical 08.21 closeout NEXT. Current implementation: `audit/08.23` identity + `audit/08.24` writers. Not SHADOW activation.
 
@@ -528,7 +529,7 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Remaining enabled uncovered physical contours in production: **A / B / C = 3**
 - Source/`main` connected contours: **9** (unchanged)
 - Dual-write: **NOT STARTED**
-- Runtime P2 global completeness: **NOT COMPLETE**
+- PSR-P2 status on this card: **NOT COMPLETE** at that package closeout. Current PSR-P2 status is `audit/08.27`.
 - P3: **NOT STARTED**
 - Independent Opus: **SKIPPED BY OWNER COST POLICY**
 - NEXT: **PSR-P2 PRODUCTION QUANTITY-EDIT IDENTITY PREREQUISITE**. Historical 08.22 closeout NEXT. Current implementation: `audit/08.23`.
@@ -551,7 +552,7 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - InventoryMovement writer added: **NO**
 - Dual-write: **NOT STARTED**
 - Package 3: **NOT STARTED**
-- Runtime P2 global completeness: **NOT COMPLETE**
+- PSR-P2 status on this card: **NOT COMPLETE** at that package closeout. Current PSR-P2 status is `audit/08.27`.
 - P3: **NOT STARTED**
 - NEXT: **PSR-P2 PRODUCTION QUANTITY-EDIT SHADOW WRITERS (PACKAGE 3)**. Historical 08.23 closeout NEXT. Current implementation: `audit/08.24`.
 - Later closeout: `audit/08.24`.
@@ -587,7 +588,7 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Production dormant contours: **12**
 - Remaining enabled uncovered contours: **0**
 - Dual-write: **NOT STARTED**
-- Runtime P2 global completeness: **NOT COMPLETE**
+- PSR-P2 status on this card: **NOT COMPLETE** at that package closeout. Current PSR-P2 status is `audit/08.27`.
 - P3: **NOT STARTED**
 - Independent Opus: **COMPLETED** — implementation P0=0 / P1=0; initial evidence P2=1 closed by HEAD via PR #45 comment `5762512562`. Final acceptance P0=0 / P1=0 / P2=0.
 - Historical NEXT at the Package 3 closeout, superseded: **NEW HEAD TAKEOVER / PSR-P2 SHADOW ACTIVATION & DUAL-WRITE START READINESS REVIEW**. Not SHADOW activation. Not PSR-P3.
@@ -654,3 +655,24 @@ ARCH-2 / `08.02` does **not** silently start AUDIT 2. Audit-only when started. D
 - Production accessed / mutated: **NO / NO**
 - Deploy performed: **NO**
 - NEXT: **PSR-P2 SHADOW ACTIVATION READINESS / OWNER AUTHORIZATION GATE**. Not authorization to activate SHADOW, not a deploy, not cost-flow activation, not backfill/reset, and not PSR-P3. Owner authorization is required before any activation dispatch.
+
+### 08.27 — PSR-P2 runtime dual-write closeout
+
+- File: `audit/08.27-psr-p2-runtime-dual-write-closeout.md`
+- Status: **COMPLETE / ALL ENABLED PHYSICAL WRITERS COVERED / SHADOW GATE ACTIVE / REAL DUAL-WRITE OBSERVED / POST-START READ-ONLY VERIFIED**
+- Canonical?: **YES** after this docs closeout is accepted and merged
+- Does not rewrite `audit/08.24`, `audit/08.25`, or `audit/08.26`
+- GitHub `main` at start: `8cb61c8322f68a6a4e4f5997ed966a5b1996513f`
+- Main tree at start: `533e6bbb90e6308d9a04f7f2e110354da0250a41`
+- Production application: `678cbc1d308ddfe568b901ebf53f7e05f9a8c014`
+- Production Deploy: `37816537899` SUCCESS
+- SOAK-04: `37827499555` SUCCESS. `SHADOW_COUNT=195`. `PRODUCTION_OPS_DISTINCT=23`. `SHADOW_GATE_ACTIVATED=YES`. `SOAK_COMPLETE=NO`.
+- SOAK-03: `36325240805`. `SHADOW_COUNT=110`. `PRODUCTION_OPS_DISTINCT=14`. Delta **+85** rows and **+9** distinct production operations.
+- Ledger authoritative: **NO**. `AUTHORITATIVE_COUNT` = **0**. Final epoch **NOT CREATED**. `OPENING_BALANCE` **NOT CREATED**.
+- `production_cost_flow`: **INACTIVE / ABSENT**
+- PSR-P3: **NOT STARTED**
+- Paper removal: **NOT AUTHORIZED**
+- `INC-001`: **OPEN**. `ARCH-P1-001`: **OPEN / CONFIRMED**. Neither is closed here.
+- `PSR_P2_DUAL_WRITE_STARTED=NO` in the soak diagnostic is a static non-promotion marker. It does not cancel the `audit/08.26` three-part start rule, which HEAD accepted as now satisfied.
+- Gate continuity between snapshots: **NOT PROVEN**
+- NEXT: **PSR-P3 — Ledger↔projection diagnostic reconciliation in SHADOW**. Not implemented in this closeout.
