@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import type { Batch as PrismaBatch, Prisma, RailLot as PrismaRailLot } from "@prisma/client";
 import { prisma } from "@/server/db";
@@ -47,6 +48,7 @@ import {
   snapshotJsonValue,
   writeOffTotalQuantity,
 } from "@/server/internal/purchase-command-identity";
+import { buildBatchReceiptProvenance } from "@/server/internal/batch-receipt-provenance";
 import {
   appendBatchCreateShadowMovements,
   appendBatchWriteOffShadowMovements,
@@ -353,12 +355,24 @@ export async function createBatch(
     if (await isCostFlowActive(tx)) {
       await initializeCreatedRailLotsInTx(tx, batch);
     }
+    const commandId = randomUUID();
+    const provenance = buildBatchReceiptProvenance({
+      commandId,
+      batchId: batch.id,
+      lots: batch.railLots.map((lot) => ({
+        id: lot.id,
+        batchId: lot.batchId,
+        quantity: lot.quantity,
+      })),
+    });
     const command = await tx.batchCreationCommand.create({
       data: {
+        id: commandId,
         requestId: clientRequestId,
         batchId: batch.id,
         adminUserId: admin.id,
         requestSnapshot: snapshotJsonValue(snapshot),
+        receiptProvenanceSnapshot: snapshotJsonValue(provenance),
       },
     });
     await appendBatchCreateShadowMovements(tx, {
