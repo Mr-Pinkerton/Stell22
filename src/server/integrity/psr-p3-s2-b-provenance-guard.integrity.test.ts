@@ -24,7 +24,7 @@ type Probe = {
 };
 
 const probeFunctionSql = `
-CREATE OR REPLACE FUNCTION psr_p3_s2_b_guard_probe(op text)
+CREATE FUNCTION psr_p3_s2_b_guard_probe(op text)
 RETURNS jsonb
 LANGUAGE plpgsql
 AS $fn$
@@ -194,42 +194,119 @@ END;
 $fn$;
 `;
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isAlreadyExists(error: unknown): boolean {
+  const text = errorText(error);
+  return text.includes("42710") || text.includes("42723") || /already exists/i.test(text);
+}
+
 describe.skipIf(!enabled)("PSR-P3 Slice 2-B P1 provenance guard", () => {
   let prisma: ReturnType<typeof createIntegrityClients>["prismaA"];
   let retainedBefore = 0;
+  let roleCreatedByThisInvocation = false;
+  let functionCreatedByThisInvocation = false;
+  let cleaned = false;
+
+  async function cleanupOwnedObjects(): Promise<void> {
+    if (!prisma || cleaned) return;
+    const failures: unknown[] = [];
+    const run = async (sql: string) => {
+      try {
+        await prisma.$executeRawUnsafe(sql);
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    if (roleCreatedByThisInvocation && functionCreatedByThisInvocation) {
+      await run(`REVOKE EXECUTE ON FUNCTION psr_p3_s2_b_guard_probe(text) FROM ${ROLE}`);
+    }
+    if (roleCreatedByThisInvocation) {
+      await run(`REVOKE ALL ON TABLE "BatchCreationCommand" FROM ${ROLE}`);
+      await run(`REVOKE USAGE ON SCHEMA public FROM ${ROLE}`);
+    }
+    if (functionCreatedByThisInvocation) {
+      await run(`DROP FUNCTION psr_p3_s2_b_guard_probe(text)`);
+      if (!failures.length) functionCreatedByThisInvocation = false;
+    }
+    if (roleCreatedByThisInvocation) {
+      const failuresBeforeRoleDrop = failures.length;
+      await run(`DROP ROLE ${ROLE}`);
+      if (failures.length === failuresBeforeRoleDrop) roleCreatedByThisInvocation = false;
+    }
+    try {
+      await prisma.$disconnect();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length === 0) cleaned = true;
+    if (failures.length > 0) {
+      throw new Error(failures.map(errorText).join("\n"));
+    }
+  }
 
   beforeAll(async () => {
     const url = integrityDatabaseUrl();
     assertSafeIntegrityUrl(url);
     ensureIntegritySchema();
     ({ prismaA: prisma } = createIntegrityClients());
-    await prisma.$executeRawUnsafe(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${ROLE}') THEN
-          CREATE ROLE ${ROLE} NOLOGIN NOINHERIT;
-        END IF;
-      END
-      $$;
-    `);
-    await prisma.$executeRawUnsafe(`GRANT USAGE ON SCHEMA public TO ${ROLE}`);
-    await prisma.$executeRawUnsafe(
-      `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "BatchCreationCommand" TO ${ROLE}`,
-    );
-    await prisma.$executeRawUnsafe(probeFunctionSql);
-    await prisma.$executeRawUnsafe(
-      `GRANT EXECUTE ON FUNCTION psr_p3_s2_b_guard_probe(text) TO ${ROLE}`,
-    );
-    const before = await prisma.$queryRaw<Array<{ n: number }>>`
-      SELECT count(*)::int AS n
-      FROM "BatchCreationCommand"
-      WHERE "receiptProvenanceSnapshot" IS NOT NULL
-    `;
-    retainedBefore = before[0]?.n ?? 0;
+    try {
+      try {
+        await prisma.$executeRawUnsafe(`CREATE ROLE ${ROLE} NOLOGIN NOINHERIT`);
+      } catch (error) {
+        if (isAlreadyExists(error)) {
+          throw new Error(
+            `Refusing to reuse pre-existing cluster role ${ROLE}. Database name does not isolate CREATE ROLE.`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      roleCreatedByThisInvocation = true;
+      await prisma.$executeRawUnsafe(`GRANT USAGE ON SCHEMA public TO ${ROLE}`);
+      await prisma.$executeRawUnsafe(
+        `GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "BatchCreationCommand" TO ${ROLE}`,
+      );
+      try {
+        await prisma.$executeRawUnsafe(probeFunctionSql);
+      } catch (error) {
+        if (isAlreadyExists(error)) {
+          throw new Error(
+            "Refusing to replace pre-existing function psr_p3_s2_b_guard_probe(text).",
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      functionCreatedByThisInvocation = true;
+      await prisma.$executeRawUnsafe(
+        `GRANT EXECUTE ON FUNCTION psr_p3_s2_b_guard_probe(text) TO ${ROLE}`,
+      );
+      const before = await prisma.$queryRaw<Array<{ n: number }>>`
+        SELECT count(*)::int AS n
+        FROM "BatchCreationCommand"
+        WHERE "receiptProvenanceSnapshot" IS NOT NULL
+      `;
+      retainedBefore = before[0]?.n ?? 0;
+    } catch (error) {
+      let cleanupError: unknown;
+      try {
+        await cleanupOwnedObjects();
+      } catch (cleanupFailure) {
+        cleanupError = cleanupFailure;
+      }
+      if (cleanupError) {
+        throw new Error(`${errorText(error)}\n${errorText(cleanupError)}`, { cause: error });
+      }
+      throw error;
+    }
   });
 
   afterAll(async () => {
     if (!prisma) return;
+    let countError: unknown;
     try {
       const after = await prisma.$queryRaw<Array<{ n: number }>>`
         SELECT count(*)::int AS n
@@ -237,15 +314,20 @@ describe.skipIf(!enabled)("PSR-P3 Slice 2-B P1 provenance guard", () => {
         WHERE "receiptProvenanceSnapshot" IS NOT NULL
       `;
       expect(after[0]?.n ?? 0).toBe(retainedBefore);
-    } finally {
-      await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS psr_p3_s2_b_guard_probe(text)`);
-      await prisma.$executeRawUnsafe(
-        `REVOKE ALL ON TABLE "BatchCreationCommand" FROM ${ROLE}`,
-      );
-      await prisma.$executeRawUnsafe(`REVOKE USAGE ON SCHEMA public FROM ${ROLE}`);
-      await prisma.$executeRawUnsafe(`DROP ROLE IF EXISTS ${ROLE}`);
-      await prisma.$disconnect();
+    } catch (error) {
+      countError = error;
     }
+    let cleanupError: unknown;
+    try {
+      await cleanupOwnedObjects();
+    } catch (error) {
+      cleanupError = error;
+    }
+    if (countError && cleanupError) {
+      throw new Error(`${errorText(countError)}\n${errorText(cleanupError)}`, { cause: countError });
+    }
+    if (cleanupError) throw cleanupError;
+    if (countError) throw countError;
   });
 
   async function probe(op: string): Promise<Probe> {
