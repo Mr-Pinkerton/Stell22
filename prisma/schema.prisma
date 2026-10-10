@@ -309,6 +309,9 @@ model BatchCreationCommand {
   batchId         String   @unique
   adminUserId     String
   requestSnapshot Json
+  // Nullable forward-only receipt pairs. No default and no FK.
+  // The database guard lives in the P1 migration. This change does not write the value.
+  receiptProvenanceSnapshot Json?
   recordedAt      DateTime @default(now()) @db.Timestamptz(3)
 }
 
