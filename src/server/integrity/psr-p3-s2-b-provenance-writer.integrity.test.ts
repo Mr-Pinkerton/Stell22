@@ -40,6 +40,51 @@ import {
 
 const enabled = Boolean(process.env.INTEGRITY_TEST_DATABASE_URL);
 const txOpts = { maxWait: 20_000, timeout: 20_000 } as const;
+const REJECT_FUNCTION = "psr_p3_s2_b_p2_reject_im";
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function postgresCode(error: unknown): string {
+  if (typeof error === "object" && error !== null && "meta" in error) {
+    const code = (error as { meta?: { code?: unknown } }).meta?.code;
+    if (typeof code === "string") return code;
+  }
+  return errorText(error).match(/\b(42710|42723)\b/)?.[1] ?? "";
+}
+
+type RejectFixtureClient = {
+  $executeRawUnsafe: (query: string) => Promise<unknown>;
+};
+
+async function dropOwnedRejectFixture(
+  db: RejectFixtureClient,
+  owned: { functionCreatedByThisInvocation: boolean; triggerCreatedByThisInvocation: boolean },
+): Promise<void> {
+  const failures: unknown[] = [];
+  if (owned.triggerCreatedByThisInvocation) {
+    try {
+      await db.$executeRawUnsafe(
+        `DROP TRIGGER ${REJECT_FUNCTION} ON "InventoryMovement"`,
+      );
+      owned.triggerCreatedByThisInvocation = false;
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (owned.functionCreatedByThisInvocation) {
+    try {
+      await db.$executeRawUnsafe(`DROP FUNCTION ${REJECT_FUNCTION}()`);
+      owned.functionCreatedByThisInvocation = false;
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(failures.map(errorText).join("\n"));
+  }
+}
 
 type Provenance = {
   v: number;
@@ -209,20 +254,48 @@ describe.skipIf(!enabled)("PSR-P3 S2-B P2 receipt provenance writer", () => {
 
   it("rolls back the receipt when SHADOW append fails before commit", async () => {
     await setShadowGate(true);
-    await prismaA.$executeRawUnsafe(`
-      CREATE OR REPLACE FUNCTION psr_p3_s2_b_p2_reject_im()
-      RETURNS trigger AS $$
-      BEGIN
-        RAISE EXCEPTION 'psr_p3_s2_b_p2 forced receipt failure';
-      END;
-      $$ LANGUAGE plpgsql;
-    `);
-    await prismaA.$executeRawUnsafe(`
-      CREATE TRIGGER psr_p3_s2_b_p2_reject_im
-      BEFORE INSERT ON "InventoryMovement"
-      FOR EACH ROW EXECUTE FUNCTION psr_p3_s2_b_p2_reject_im();
-    `);
+    const owned = {
+      functionCreatedByThisInvocation: false,
+      triggerCreatedByThisInvocation: false,
+    };
+    let testError: unknown;
     try {
+      try {
+        await prismaA.$executeRawUnsafe(`
+          CREATE FUNCTION ${REJECT_FUNCTION}()
+          RETURNS trigger AS $$
+          BEGIN
+            RAISE EXCEPTION 'psr_p3_s2_b_p2 forced receipt failure';
+          END;
+          $$ LANGUAGE plpgsql;
+        `);
+      } catch (error) {
+        if (postgresCode(error) === "42723") {
+          throw new Error(
+            `Refusing to replace pre-existing function ${REJECT_FUNCTION}().`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      owned.functionCreatedByThisInvocation = true;
+      try {
+        await prismaA.$executeRawUnsafe(`
+          CREATE TRIGGER ${REJECT_FUNCTION}
+          BEFORE INSERT ON "InventoryMovement"
+          FOR EACH ROW EXECUTE FUNCTION ${REJECT_FUNCTION}();
+        `);
+      } catch (error) {
+        if (postgresCode(error) === "42710") {
+          throw new Error(
+            `Refusing to replace pre-existing trigger ${REJECT_FUNCTION} on InventoryMovement.`,
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      owned.triggerCreatedByThisInvocation = true;
+
       const suffix = `fail-${Date.now()}`;
       const material = await seedMaterial(suffix);
       await expect(
@@ -232,12 +305,38 @@ describe.skipIf(!enabled)("PSR-P3 S2-B P2 receipt provenance writer", () => {
       expect(await prismaA.railLot.count()).toBe(0);
       expect(await prismaA.batchCreationCommand.count()).toBe(0);
       expect(await prismaA.inventoryMovement.count()).toBe(0);
-    } finally {
-      await prismaA.$executeRawUnsafe(
-        `DROP TRIGGER IF EXISTS psr_p3_s2_b_p2_reject_im ON "InventoryMovement"`,
-      );
-      await prismaA.$executeRawUnsafe(`DROP FUNCTION IF EXISTS psr_p3_s2_b_p2_reject_im()`);
+    } catch (error) {
+      testError = error;
     }
+    let cleanupError: unknown;
+    try {
+      await dropOwnedRejectFixture(prismaA, owned);
+    } catch (error) {
+      cleanupError = error;
+    }
+    if (testError && cleanupError) {
+      throw new Error(`${errorText(testError)}\n${errorText(cleanupError)}`, { cause: testError });
+    }
+    if (cleanupError) throw cleanupError;
+    if (testError) throw testError;
+    const [functions, triggers] = await Promise.all([
+      prismaA.$queryRaw<Array<{ n: number }>>`
+        SELECT count(*)::int AS n
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public' AND p.proname = ${REJECT_FUNCTION}
+      `,
+      prismaA.$queryRaw<Array<{ n: number }>>`
+        SELECT count(*)::int AS n
+        FROM pg_trigger t
+        JOIN pg_class c ON c.oid = t.tgrelid
+        WHERE c.relname = 'InventoryMovement'
+          AND t.tgname = ${REJECT_FUNCTION}
+          AND NOT t.tgisinternal
+      `,
+    ]);
+    expect(functions[0]?.n ?? 0).toBe(0);
+    expect(triggers[0]?.n ?? 0).toBe(0);
   });
 
   it("replay of the same request adds no second batch, command, provenance, or RECEIPT", async () => {
