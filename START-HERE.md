@@ -26,7 +26,7 @@ Never import door-specific entities, routes, WIP assumptions, or business rules 
 
 `678cbc1d308ddfe568b901ebf53f7e05f9a8c014`
 
-This SHA is the current production **application** checkpoint. Production Deploy `37816537899` SUCCESS (2026-10-08, `workflow_dispatch`). GitHub `main` at the start of `audit/08.27` is `8cb61c8322f68a6a4e4f5997ed966a5b1996513f` (PR #56 pin alignment). That merge is **not** a new production application deploy. Canonical PSR-P2 status is only `audit/08.27`:
+This SHA is the current production **application** checkpoint. Production Deploy `37816537899` SUCCESS (2026-10-08, `workflow_dispatch`). Current GitHub `main` is `df21c3c2a8e943c509ad52c2f70e13066fefe6de` (PR #60 merge). That SHA is **not** a production application deploy. Slice 1 is **NOT DEPLOYED**. GitHub `main` at the start of `audit/08.27` is `8cb61c8322f68a6a4e4f5997ed966a5b1996513f` (PR #56 pin alignment). That earlier merge is also **not** a production application deploy. Canonical PSR-P2 status is only `audit/08.27`:
 
 ```text
 COMPLETE /
@@ -36,7 +36,7 @@ REAL DUAL-WRITE OBSERVED /
 POST-START READ-ONLY VERIFIED
 ```
 
-Ledger authoritative = **NO**. `AUTHORITATIVE_COUNT` = **0**. Final epoch = **NOT CREATED**. `OPENING_BALANCE` = **NOT CREATED**. `production_cost_flow` = **INACTIVE / ABSENT**. PSR-P3 = **NOT STARTED**. Paper removal = **NOT AUTHORIZED**. `SOAK_COMPLETE` = **NO**. SOAK-04 (`37827499555`) snapshot: `SHADOW_COUNT` = **195**, `PRODUCTION_OPS_DISTINCT` = **23**, `SHADOW_GATE_ACTIVATED` = **YES**. Gate continuity between snapshots is not claimed. Writer coverage implementation is **12 / 12**. Per-contour production exercise is not proven. `INC-001` remains **OPEN**. `ARCH-P1-001` remains **OPEN / CONFIRMED**. Package cards below keep the status recorded at their own closeout, including SHADOW inactive and PSR-P2 not complete **at that time**. They are not a second current PSR-P2 status. Always verify current GitHub `main` HEAD.
+Ledger authoritative = **NO**. `AUTHORITATIVE_COUNT` = **0**. Final epoch = **NOT CREATED**. `OPENING_BALANCE` = **NOT CREATED**. `production_cost_flow` = **INACTIVE / ABSENT**. PSR-P3 Slice 1 = **IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED** (`audit/08.29`). Invariant B = **NOT_EVALUABLE**. PSR-P3 = **PARTIAL / NOT COMPLETE**. Paper removal = **NOT AUTHORIZED**. `SOAK_COMPLETE` = **NO**. SOAK-04 (`37827499555`) snapshot: `SHADOW_COUNT` = **195**, `PRODUCTION_OPS_DISTINCT` = **23**, `SHADOW_GATE_ACTIVATED` = **YES**. Gate continuity between snapshots is not claimed. Writer coverage implementation is **12 / 12**. Per-contour production exercise is not proven. `INC-001` remains **OPEN**. `ARCH-P1-001` remains **OPEN / CONFIRMED**. Package cards below keep the status recorded at their own closeout, including SHADOW inactive and PSR-P2 not complete **at that time**. They are not a second current PSR-P2 status. Always verify current GitHub `main` HEAD.
 
 Prior production application checkpoint (**historical**, do not rewrite `audit/08.24` / `audit/08.25` / `audit/08.26`):
 
@@ -128,7 +128,7 @@ Independent Review #1 = REQUEST CHANGES (R1…R6 CLOSED/PASS). Independent Revie
 
 `ACCEPTED / REVIEWED` means the architecture **contract** is accepted. It does **not** mean PSR implementation complete, primary-system readiness achieved, ledger deployed, paper removable, or `production_cost_flow` active.
 
-**NEXT = PSR-P3 — Ledger↔projection diagnostic reconciliation in SHADOW** (`audit/08.27`). PSR-P3 is **NOT STARTED** and is not implemented here. Paper removal is **NOT AUTHORIZED**. `production_cost_flow` stays **INACTIVE / ABSENT**. `SOAK_COMPLETE` stays **NO**. `INC-001` stays **OPEN**. `ARCH-P1-001` stays **OPEN / CONFIRMED**. Writer coverage implementation remains the twelve contours in `audit/08.24` (connected 12 / deployed 12 / uncovered 0). That is not proof that each contour was exercised in production. Older sentences in this file that say SHADOW inactive or PSR-P2 not complete describe that package's own closeout.
+**NEXT = PSR-P3-S2-DISC-01 — Batch receipt provenance discovery**. Slice 1 is recorded in `audit/08.29` and is **NOT DEPLOYED**. Slice 2 is **NOT STARTED**. PSR-P3 is **PARTIAL / NOT COMPLETE**. Paper removal is **NOT AUTHORIZED**. `production_cost_flow` stays **INACTIVE / ABSENT**. `SOAK_COMPLETE` stays **NO**. `INC-001` stays **OPEN**. `ARCH-P1-001` stays **OPEN / CONFIRMED**. Writer coverage implementation remains the twelve contours in `audit/08.24` (connected 12 / deployed 12 / uncovered 0). That is not proof that each contour was exercised in production. Older sentences in this file that say SHADOW inactive or PSR-P2 not complete describe that package's own closeout.
 
 Historical documentation recovery checkpoint (no longer current on main):
 
@@ -146,7 +146,7 @@ INC-001 containment SHA (still in the running tree):
 
 ## Current work mode
 
-The project on `main`: production application = `678cbc1d308ddfe568b901ebf53f7e05f9a8c014` (Production Deploy `37816537899`). GitHub `main` at the start of `audit/08.27` is `8cb61c8322f68a6a4e4f5997ed966a5b1996513f` and is **not** a new production application SHA. Current PSR-P2 status is `audit/08.27` (**COMPLETE / ALL ENABLED PHYSICAL WRITERS COVERED / SHADOW GATE ACTIVE / REAL DUAL-WRITE OBSERVED / POST-START READ-ONLY VERIFIED**). Ledger **NOT AUTHORITATIVE**. `AUTHORITATIVE_COUNT` = **0**. Final epoch **NOT CREATED**. `OPENING_BALANCE` **NOT CREATED**. `production_cost_flow` **INACTIVE / ABSENT**. PSR-P3 **NOT STARTED**. Paper removal **NOT AUTHORIZED**. `SOAK_COMPLETE` = **NO**. SOAK-04 (`37827499555`) snapshot: `SHADOW_COUNT` = **195**, `PRODUCTION_OPS_DISTINCT` = **23**, `SHADOW_GATE_ACTIVATED` = **YES**. Gate continuity between snapshots is not claimed. Writer coverage implementation is **12 / 12**. Per-contour production exercise is not proven. INC-001 remains open. AUDIT 2 is not started.
+The project on `main`: production application = `678cbc1d308ddfe568b901ebf53f7e05f9a8c014` (Production Deploy `37816537899`). Current GitHub `main` is `df21c3c2a8e943c509ad52c2f70e13066fefe6de` and is **not** a production application deploy. Current PSR-P2 status is `audit/08.27` (**COMPLETE / ALL ENABLED PHYSICAL WRITERS COVERED / SHADOW GATE ACTIVE / REAL DUAL-WRITE OBSERVED / POST-START READ-ONLY VERIFIED**). Current PSR-P3 Slice 1 is `audit/08.29` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). Ledger **NOT AUTHORITATIVE**. `AUTHORITATIVE_COUNT` = **0**. Final epoch **NOT CREATED**. `OPENING_BALANCE` **NOT CREATED**. `production_cost_flow` **INACTIVE / ABSENT**. Invariant B is **NOT_EVALUABLE**. PSR-P3 is **PARTIAL / NOT COMPLETE**. Paper removal **NOT AUTHORIZED**. `SOAK_COMPLETE` = **NO**. SOAK-04 (`37827499555`) snapshot: `SHADOW_COUNT` = **195**, `PRODUCTION_OPS_DISTINCT` = **23**, `SHADOW_GATE_ACTIVATED` = **YES**. Gate continuity between snapshots is not claimed. Writer coverage implementation is **12 / 12**. Per-contour production exercise is not proven. INC-001 remains open. AUDIT 2 is not started.
 
 AUDIT 1 remains `COMPLETE / REVIEWED`. Do not reopen it.
 
