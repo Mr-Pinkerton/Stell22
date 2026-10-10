@@ -152,7 +152,7 @@ PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT = **PSR-P3-S2-DISC-01 — Batch receipt provenance discovery**. Slice 1 is `audit/08.29` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). Slice 2 is **NOT STARTED**. This NEXT investigates whether historically correct `{railLotId, quantity}` pairs can be recovered from independent retained business sources. It does not authorize an implementation if those sources are insufficient. It does not create a final epoch, create `OPENING_BALANCE`, make the ledger authoritative, activate `production_cost_flow`, authorize paper removal, or close `INC-001` or `ARCH-P1-001`. `SOAK_COMPLETE` stays **NO**. PSR-P3 stays **PARTIAL / NOT COMPLETE**. Package closeouts `audit/08.24`, `audit/08.25`, and `audit/08.26` keep their own historical status.
+NEXT = **HEAD REVIEW of `audit/08.30`**. That candidate is **PROPOSED / HEAD REVIEW REQUIRED**. It finds no retained source that restores historical `{railLotId, quantity}` pairs after `RailLot` deletion without using `InventoryMovement`. Slice 2 implementation is **NOT AUTHORIZED**. Slice 1 remains `audit/08.29` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). It does not create a final epoch, create `OPENING_BALANCE`, make the ledger authoritative, activate `production_cost_flow`, authorize paper removal, or close `INC-001` or `ARCH-P1-001`. `SOAK_COMPLETE` stays **NO**. PSR-P3 stays **PARTIAL / NOT COMPLETE**. Package closeouts `audit/08.24`, `audit/08.25`, and `audit/08.26` keep their own historical status.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -330,7 +330,7 @@ Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`
 
 ## 13. Current next step
 
-NEXT = **PSR-P3-S2-DISC-01 — Batch receipt provenance discovery**. Slice 1 is `audit/08.29` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). Slice 2 is **NOT STARTED**. This NEXT investigates whether historically correct `{railLotId, quantity}` pairs can be recovered from independent retained business sources. It does not authorize an implementation if those sources are insufficient. It does not create a final epoch, create `OPENING_BALANCE`, make the ledger authoritative, activate `production_cost_flow`, authorize paper removal, or close `INC-001` or `ARCH-P1-001`. `SOAK_COMPLETE` stays **NO**. PSR-P3 stays **PARTIAL / NOT COMPLETE**. Package closeouts `audit/08.24`, `audit/08.25`, and `audit/08.26` keep their own historical status.
+NEXT = **HEAD REVIEW of `audit/08.30`**. That candidate is **PROPOSED / HEAD REVIEW REQUIRED**. It finds no retained source that restores historical `{railLotId, quantity}` pairs after `RailLot` deletion without using `InventoryMovement`. Slice 2 implementation is **NOT AUTHORIZED**. Slice 1 remains `audit/08.29` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). It does not create a final epoch, create `OPENING_BALANCE`, make the ledger authoritative, activate `production_cost_flow`, authorize paper removal, or close `INC-001` or `ARCH-P1-001`. `SOAK_COMPLETE` stays **NO**. PSR-P3 stays **PARTIAL / NOT COMPLETE**. Package closeouts `audit/08.24`, `audit/08.25`, and `audit/08.26` keep their own historical status.
 
 PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime.
 
@@ -346,7 +346,7 @@ R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOY
 
 Does **not** mean dual-write, SHADOW posting, authoritative ledger, `OPENING_BALANCE` data, paper removal, `production_cost_flow` activation, or Correction Center.
 
-This NEXT is **PSR-P3-S2-DISC-01 — Batch receipt provenance discovery**. It is not started. Do not implement Slice 2 from this file. Do not treat a Slice 1 `MATCH_OBSERVED` as proof that a warehouse projection changed, or as authority to remove paper.
+This NEXT is **HEAD REVIEW of `audit/08.30`**. The discovery is proposed, not accepted. Do not implement Slice 2 from this file. Do not treat a Slice 1 `MATCH_OBSERVED` as proof that a warehouse projection changed, or as authority to remove paper.
 
 Do **not** implement the full `ProductionOperationMutation` schema or Correction Center in this package.
 
@@ -1353,3 +1353,9 @@ This journal does **not** rewrite the 08.25 closeout above. The `UNSAFE` record 
 `audit/08.29-psr-p3-slice1-invariant-a-closeout.md` records Slice 1 as **IMPLEMENTED / MERGED TO MAIN / POST-MERGE CI VERIFIED / NOT DEPLOYED**. This journal does not rewrite `audit/08.28`. Verified GitHub `main` baseline before this documentation closeout (PR #61): `df21c3c2a8e943c509ad52c2f70e13066fefe6de`. Production application remains `678cbc1d308ddfe568b901ebf53f7e05f9a8c014`. Invariant A is implemented for R-05, batch remainder write-off, and SimplePurchase. Invariant B is **NOT_EVALUABLE**. `MATCH_OBSERVED` does not prove a projection change. PSR-P3 is **PARTIAL / NOT COMPLETE**. Ledger **NOT AUTHORITATIVE**. `AUTHORITATIVE_COUNT` = **0**. Final epoch **NOT CREATED**. `OPENING_BALANCE` **NOT CREATED**. `production_cost_flow` **INACTIVE**. `SOAK_COMPLETE` = **NO**. `INC-001` **OPEN**. `ARCH-P1-001` **OPEN**. Paper removal **NOT AUTHORIZED**. Production was not accessed and was not deployed.
 
 **NEXT = PSR-P3-S2-DISC-01 — Batch receipt provenance discovery**. Not started. Not an implementation authorization.
+
+## 08.30 candidate — Batch receipt provenance discovery (2026-10-10)
+
+`audit/08.30-psr-p3-batch-receipt-provenance-discovery.md` is **PROPOSED / HEAD REVIEW REQUIRED**. Canonical?: **NO** until accepted. Verified GitHub `main` baseline at discovery start: `f21555e6fe4057af19bc6b520497eb591078732d`. Production application remains `678cbc1d308ddfe568b901ebf53f7e05f9a8c014`. No retained source restores `{railLotId, quantity}[]` after `RailLot` deletion without `InventoryMovement`. Slice 2 implementation is **NOT AUTHORIZED**. This journal does not rewrite `audit/08.27`, `audit/08.28`, or `audit/08.29`. Production was not accessed.
+
+**NEXT = HEAD REVIEW of `audit/08.30`**. Not an implementation authorization.
