@@ -32,6 +32,7 @@ let baseMockPosix = "";
 let realDate = "";
 let realGzip = "";
 let realSha256 = "";
+let realLn = "";
 
 type ShellName = "sh" | "dash";
 
@@ -192,6 +193,7 @@ function runBackup(options: {
   shell?: ShellName;
   dumpMode?: string;
   extraPath?: string;
+  lnLog?: string;
 }): RunResult {
   const shell = options.shell ?? "sh";
   const dockerLog = `${options.backupDir}/docker-calls.log`;
@@ -218,6 +220,7 @@ function runBackup(options: {
         DB_NAME: "stell22",
         STELL22_BACKUP_TEST_DUMP: options.dumpMode ?? "ok",
         STELL22_BACKUP_DOCKER_LOG: dockerLog,
+        ...(options.lnLog ? { STELL22_BACKUP_LN_LOG: options.lnLog } : {}),
         DOCKER_HOST: "unix:///tmp/stell22-backup-no-such.sock",
       },
     },
@@ -234,6 +237,27 @@ function runBackup(options: {
     combined: `${stdout}\n${stderr}`,
     backupDir: options.backupDir,
     dockerLog: posixExists(dockerLog) ? readPosix(dockerLog).trim() : "",
+  };
+}
+
+function runSignalPublication(signal: "TERM" | "KILL"): {
+  backupDir: string;
+  archive: string;
+  checksum: string;
+  combined: string;
+} {
+  const backupDir = makePosixTemp(testTemps);
+  placeLegacy(backupDir);
+  const result = runBackup({
+    backupDir,
+    dumpMode: "ok",
+    extraPath: writeExtraMocks({ ln: signalAfterChecksumLink(signal) }),
+  });
+  return {
+    backupDir,
+    archive: `${backupDir}/${ARCHIVE_NAME}`,
+    checksum: `${backupDir}/${CHECKSUM_NAME}`,
+    combined: result.combined,
   };
 }
 
@@ -307,6 +331,45 @@ function deniedWriteMock(): readonly string[] {
   return ['echo "mktemp: permission denied" >&2', "exit 1"];
 }
 
+function orderedLn(logPath: string): readonly string[] {
+  return [
+    `printf '%s\\n' "$2" >> ${shellQuote(logPath)}`,
+    `exec ${shellQuote(realLn)} "$@"`,
+  ];
+}
+
+function failArchiveLn(): readonly string[] {
+  return [
+    'case "$2" in',
+    "  *.sha256)",
+    `    printf '%s\\n' "$2" >> "\${STELL22_BACKUP_LN_LOG:?}"`,
+    `    exec ${shellQuote(realLn)} "$@"`,
+    "    ;;",
+    "esac",
+    'echo "archive publication forced failure" >&2',
+    "exit 1",
+  ];
+}
+
+function signalAfterChecksumLink(signal: "TERM" | "KILL"): readonly string[] {
+  return [
+    'case "$2" in',
+    "  *.sha256)",
+    `    ${shellQuote(realLn)} "$@" || exit 1`,
+    '    cmdline=$(tr \'\\0\' \' \' < "/proc/$PPID/cmdline" 2>/dev/null || true)',
+    '    case "$cmdline" in',
+    "      *backup-db.sh*) ;;",
+    '      *) echo "refusing to signal parent" >&2; exit 97 ;;',
+    "    esac",
+    `    kill -s ${signal} "$PPID"`,
+    "    sleep 2",
+    "    exit 0",
+    "    ;;",
+    "esac",
+    `exec ${shellQuote(realLn)} "$@"`,
+  ];
+}
+
 function findDeleteGuard(): readonly string[] {
   return [
     'printf "%s\\n" "$*" >> "${STELL22_BACKUP_FIND_LOG:?}"',
@@ -322,6 +385,7 @@ describe("backup-db.sh fail-closed producer", { timeout: 30_000 }, () => {
     realDate = commandPath("date");
     realGzip = commandPath("gzip");
     realSha256 = commandPath("sha256sum");
+    realLn = commandPath("ln");
     const bin = makeNodeTemp(suiteTemps);
     writeExec(bin, "date", [
       'if [ "${1-}" = "+%Y-%m-%d_%H-%M-%S" ]; then',
@@ -582,6 +646,124 @@ describe("backup-db.sh fail-closed producer", { timeout: 30_000 }, () => {
       expect(plain.stdout).toBe(COMPLETE_DUMP);
       expect(runShell('cd "$1" && sha256sum -c "$2"', [backupDir, CHECKSUM_NAME]).status).toBe(0);
     }
+  });
+
+  it("publishes the checksum before the archive", () => {
+    const backupDir = makePosixTemp(testTemps);
+    placeLegacy(backupDir);
+    const log = `${backupDir}/ln-order.log`;
+    const result = runBackup({
+      backupDir,
+      dumpMode: "ok",
+      extraPath: writeExtraMocks({ ln: orderedLn(log) }),
+    });
+    expect(result.status).toBe(0);
+    expect(readPosix(log).trim().split("\n")).toEqual([
+      `${backupDir}/${CHECKSUM_NAME}`,
+      `${backupDir}/${ARCHIVE_NAME}`,
+    ]);
+    expectLegacyUntouched(backupDir);
+  });
+
+  it("leaves no archive when checksum publication fails", () => {
+    const backupDir = makePosixTemp(testTemps);
+    placeLegacy(backupDir);
+    const result = runBackup({
+      backupDir,
+      dumpMode: "ok",
+      extraPath: writeExtraMocks({ ln: publishMock() }),
+    });
+    expect(result.status).not.toBe(0);
+    expectNoDumpLeak(result);
+    expect(posixExists(`${backupDir}/${ARCHIVE_NAME}`)).toBe(false);
+    expect(posixExists(`${backupDir}/${CHECKSUM_NAME}`)).toBe(false);
+    expectLegacyUntouched(backupDir);
+  });
+
+  it("removes the new checksum when archive publication fails", () => {
+    const backupDir = makePosixTemp(testTemps);
+    placeLegacy(backupDir);
+    const log = `${backupDir}/ln-archive-fail.log`;
+    const result = runBackup({
+      backupDir,
+      dumpMode: "ok",
+      extraPath: writeExtraMocks({ ln: failArchiveLn() }),
+      lnLog: log,
+    });
+    expect(result.status).not.toBe(0);
+    expectNoDumpLeak(result);
+    expect(readPosix(log).trim()).toBe(`${backupDir}/${CHECKSUM_NAME}`);
+    expect(posixExists(`${backupDir}/${ARCHIVE_NAME}`)).toBe(false);
+    expect(posixExists(`${backupDir}/${CHECKSUM_NAME}`)).toBe(false);
+    expectLegacyUntouched(backupDir);
+    expectNoTemp(backupDir);
+  });
+
+  it("cleans a checksum when SIGTERM arrives before the archive link", () => {
+    const observed = runSignalPublication("TERM");
+    expect(observed.combined).not.toContain("BACKUP SUCCESS");
+    expect(posixExists(observed.archive)).toBe(false);
+    expect(posixExists(observed.checksum)).toBe(false);
+    expectLegacyUntouched(observed.backupDir);
+  });
+
+  it("leaves no archive when SIGKILL arrives before the archive link", () => {
+    const observed = runSignalPublication("KILL");
+    expect(observed.combined).not.toContain("BACKUP SUCCESS");
+    expect(posixExists(observed.archive)).toBe(false);
+    expect(posixExists(observed.checksum)).toBe(true);
+    expect(readPosix(observed.checksum).length).toBeGreaterThan(0);
+    expectLegacyUntouched(observed.backupDir);
+  });
+
+  it("does not overwrite or delete an existing archive name", () => {
+    const backupDir = makePosixTemp(testTemps);
+    placeLegacy(backupDir);
+    const existing = `${backupDir}/${ARCHIVE_NAME}`;
+    expect(runShell('printf %s "$2" > "$1"', [existing, "existing-archive"]).status).toBe(0);
+    const result = runBackup({ backupDir, dumpMode: "ok" });
+    expect(result.status).not.toBe(0);
+    expectNoDumpLeak(result);
+    expect(readPosix(existing)).toBe("existing-archive");
+    expect(posixExists(`${backupDir}/${CHECKSUM_NAME}`)).toBe(false);
+    expectLegacyUntouched(backupDir);
+  });
+
+  it("does not overwrite or delete an existing checksum", () => {
+    const backupDir = makePosixTemp(testTemps);
+    placeLegacy(backupDir);
+    const existing = `${backupDir}/${CHECKSUM_NAME}`;
+    expect(runShell('printf %s "$2" > "$1"', [existing, "existing-checksum"]).status).toBe(0);
+    const result = runBackup({ backupDir, dumpMode: "ok" });
+    expect(result.status).not.toBe(0);
+    expectNoDumpLeak(result);
+    expect(readPosix(existing)).toBe("existing-checksum");
+    expect(posixExists(`${backupDir}/${ARCHIVE_NAME}`)).toBe(false);
+    expectLegacyUntouched(backupDir);
+  });
+
+  it("publishes both names only after the checksum is in place", () => {
+    const backupDir = makePosixTemp(testTemps);
+    placeLegacy(backupDir);
+    const log = `${backupDir}/ln-success.log`;
+    const result = runBackup({
+      backupDir,
+      dumpMode: "ok",
+      extraPath: writeExtraMocks({ ln: orderedLn(log) }),
+    });
+    expect(result.status).toBe(0);
+    const order = readPosix(log).trim().split("\n");
+    expect(order[0]).toBe(`${backupDir}/${CHECKSUM_NAME}`);
+    expect(order[1]).toBe(`${backupDir}/${ARCHIVE_NAME}`);
+    expect(posixExists(`${backupDir}/${ARCHIVE_NAME}`)).toBe(true);
+    expect(runShell('cd "$1" && sha256sum -c "$2"', [backupDir, CHECKSUM_NAME]).status).toBe(0);
+    expectLegacyUntouched(backupDir);
+  });
+
+  it("creates no final names when pg_dump fails before publication", () => {
+    const result = rejectBackup({ dumpMode: "fail-empty" });
+    expect(listNames(result.backupDir, "stell22_*.sql.gz")).toEqual([LEGACY_NAME]);
+    expect(listNames(result.backupDir, "*.sha256")).toEqual([]);
   });
 
   it("never reaches a real docker daemon or a production database", () => {

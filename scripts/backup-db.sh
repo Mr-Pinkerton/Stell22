@@ -5,8 +5,12 @@
 # по себе. gzip выполняется следующим шагом и не может скрыть ошибку дампа.
 #
 # Публикуются только оба имени:
-#   backups/stell22_<timestamp>.sql.gz
 #   backups/stell22_<timestamp>.sql.gz.sha256
+#   backups/stell22_<timestamp>.sql.gz
+# Сначала появляется checksum, затем архив. Архив — маркер публикации.
+# Две жёсткие ссылки не являются одной файловой транзакцией.
+# SIGKILL между ними может оставить checksum без архива. Это не копия.
+# fsync и устойчивость к отключению питания скрипт не обещает.
 # Строка BACKUP SUCCESS печатается только после всех проверок.
 # Она не означает RESTORE-VERIFIED: отдельного disposable restore drill нет.
 #
@@ -39,10 +43,24 @@ DEST_GZ=""
 DEST_SUM=""
 PUBLISHED_ARCHIVE=""
 PUBLISHED_CHECKSUM=""
+SUM_INODE=""
+GZ_INODE=""
 
 fail() {
   echo "[backup] ОШИБКА: $1" >&2
   exit 1
+}
+
+remove_our_link() {
+  path=$1
+  inode=$2
+  if [ -z "$path" ] || [ -z "$inode" ] || [ ! -e "$path" ]; then
+    return 0
+  fi
+  got=$(stat -c %i "$path" 2>/dev/null || true)
+  if [ "$got" = "$inode" ]; then
+    rm -f "$path" || true
+  fi
 }
 
 on_exit() {
@@ -59,12 +77,8 @@ on_exit() {
     esac
   fi
   if [ "$rc" -ne 0 ]; then
-    if [ -n "$PUBLISHED_ARCHIVE" ] && [ "$PUBLISHED_ARCHIVE" = "$DEST_GZ" ]; then
-      rm -f "$PUBLISHED_ARCHIVE" || true
-    fi
-    if [ -n "$PUBLISHED_CHECKSUM" ] && [ "$PUBLISHED_CHECKSUM" = "$DEST_SUM" ]; then
-      rm -f "$PUBLISHED_CHECKSUM" || true
-    fi
+    remove_our_link "$DEST_SUM" "$SUM_INODE"
+    remove_our_link "$DEST_GZ" "$GZ_INODE"
   fi
   exit "$rc"
 }
@@ -178,23 +192,33 @@ if ! (CDPATH= cd "$WORK" && sha256sum -c "$BASE.sha256"); then
   fail "проверка SHA-256 не пройдена. Архив не опубликован."
 fi
 
+if ! chmod 600 "$GZ" "$SUM"; then
+  fail "не удалось ограничить права архива."
+fi
+
 if [ -e "$DEST_GZ" ] || [ -e "$DEST_SUM" ]; then
   fail "имя $BASE уже занято. Перезапись запрещена. Существующие копии не изменены."
 fi
 
-if ! ln "$GZ" "$DEST_GZ"; then
-  fail "не удалось опубликовать архив. Существующие копии не изменены."
+if ! SUM_INODE=$(stat -c %i "$SUM"); then
+  fail "не удалось прочитать inode контрольной суммы."
 fi
-PUBLISHED_ARCHIVE=$DEST_GZ
+if ! GZ_INODE=$(stat -c %i "$GZ"); then
+  fail "не удалось прочитать inode архива."
+fi
 
+# Checksum first. The archive link is the publication marker and is last.
+# The two links are not one transaction. SIGKILL between them can leave
+# an orphan checksum and must not leave the .sql.gz.
 if ! ln "$SUM" "$DEST_SUM"; then
-  fail "не удалось опубликовать контрольную сумму. Новая публикация снята."
+  fail "не удалось опубликовать контрольную сумму. Архив не опубликован."
 fi
 PUBLISHED_CHECKSUM=$DEST_SUM
 
-if ! chmod 600 "$DEST_GZ" "$DEST_SUM"; then
-  fail "не удалось ограничить права опубликованных файлов."
+if ! ln "$GZ" "$DEST_GZ"; then
+  fail "не удалось опубликовать архив. Контрольная сумма этой попытки снята."
 fi
+PUBLISHED_ARCHIVE=$DEST_GZ
 
 echo "[backup] RETENTION SUSPENDED: automatic deletion is blocked. RETENTION_DAYS=${RETENTION_DAYS} is unchanged and is not applied. disk usage will grow until a separate restore drill. This archive is NOT RESTORE-VERIFIED." >&2
 echo "[backup] BACKUP SUCCESS: $DEST_GZ"
