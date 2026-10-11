@@ -146,7 +146,7 @@ docker compose -f docker-compose.prod.yml exec app \
 
 ## Шаг 9. Автоматические бэкапы базы (ВАЖНО)
 
-В проекте есть готовые скрипты `scripts/backup-db.sh` и `scripts/restore-db.sh`.
+В проекте есть `scripts/backup-db.sh`. `scripts/restore-db.sh` отключён и не восстанавливает базу.
 
 **Проверьте, что бэкап делается:**
 
@@ -168,13 +168,9 @@ crontab -e
 0 3 * * * cd /root/Stell22 && sh scripts/backup-db.sh >> /root/Stell22/backups/backup.log 2>&1
 ```
 
-Сохраните и выйдите. Копии хранятся 14 дней (старые удаляются сами).
+Сохраните и выйдите. Автоматическое удаление старых копий сейчас остановлено (`RETENTION SUSPENDED`): срок 14 дней не применяется, диск будет расти. Расписание cron выше не меняется.
 
-**Проверьте восстановление** (на тестовом окружении, до реального старта):
-
-```bash
-sh scripts/restore-db.sh backups/ИМЯ_ФАЙЛА.sql.gz
-```
+Production recovery **NOT AUTHORIZED**. Не запускайте `scripts/restore-db.sh`: команда отключена и сразу завершается с ошибкой. Disposable drill не является проверкой production backup.
 
 ---
 
