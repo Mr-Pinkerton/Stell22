@@ -48,9 +48,9 @@ docker compose -f docker-compose.prod.yml logs -f app     # смотрим ст�
 ## Бэкапы БД
 
 - Автоматически: cron каждую ночь в 03:00 (`crontab -l` для проверки).
-  Копии в `/root/Stell22/backups/`, хранятся 14 дней, лог — `backups/backup.log`.
+  Копии в `/root/Stell22/backups/`, лог — `backups/backup.log`. Автоудаление остановлено (`RETENTION SUSPENDED`): срок 14 дней не применяется.
 - Вручную: `sh scripts/backup-db.sh`
-- Восстановление: `sh scripts/restore-db.sh backups/ИМЯ_ФАЙЛА.sql.gz`
+- Восстановление production **NOT AUTHORIZED**. `scripts/restore-db.sh` отключён. Disposable drill не доказывает восстановление production-архива.
 
 ## Смена email / пароля админа
 

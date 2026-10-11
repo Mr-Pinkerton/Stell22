@@ -159,7 +159,9 @@ DATABASE  43 модели Prisma — см. 00-data-model.md
 | `prisma/seed.ts` | `npm run db:seed` | **wipe** + моки + admin user | вся БД | локально |
 | `scripts/deploy.sh` / `ci-prod-remote.sh` | SSH / GHA | backup, checkout SHA, rebuild | app + migrate via entrypoint | SSH |
 | `scripts/preflight-prod.sh` | перед деплоем | read-only проверки | нет | SSH |
-| `scripts/backup-db.sh` / `restore-db.sh` | cron / вручную | pg_dump / restore | файлы / **overwrite БД** | host |
+| `scripts/backup-db.sh` | cron / вручную | pg_dump, checksum, без автоудаления | файлы | host |
+| `scripts/restore-db.sh` | отключён | сразу код 1, базу не открывает | нет | — |
+| `scripts/restore-drill.sh` | CI disposable job | restore только в изолированный Postgres 17 | disposable базы | нет production |
 | `scripts/fetch-statements.ts` | вручную `tsx` | тот же IMAP intake | финансы | env `MAIL_*` |
 | `scripts/run-mp-sync.ts` | CLI | `syncMarketplacesAsUser(admin.id)` | Sale/Supply/ProductStock | доступ к БД |
 | `scripts/set-admin-password.ts` | CLI | upsert пароля User | `User` | CLI |

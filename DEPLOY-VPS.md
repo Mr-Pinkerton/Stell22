@@ -153,15 +153,11 @@ docker compose -f docker-compose.prod.yml exec app \
 
 ## Резервные копии базы (ОБЯЗАТЕЛЬНО)
 
-Данные себестоимости — самое ценное. Сделайте копию так:
+Данные себестоимости — самое ценное. Поддерживаемый путь — `sh scripts/backup-db.sh`.
+Перенаправление `pg_dump > backup_$(date +%F).sql` не является этим producer и не создаёт checksum.
 
-```bash
-docker compose -f docker-compose.prod.yml exec db \
-  pg_dump -U stell22 stell22 > backup_$(date +%F).sql
-```
-
-Настройте автоматический ежедневный бэкап (через `cron`) и **один раз
-проверьте восстановление** из копии. Помогу с этим отдельно.
+Автоудаление копий остановлено (`RETENTION SUSPENDED`). Production recovery **NOT AUTHORIZED**.
+`scripts/restore-db.sh` отключён. Disposable drill не проверяет production-архив.
 
 ---
 

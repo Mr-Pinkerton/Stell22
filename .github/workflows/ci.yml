@@ -1,8 +1,9 @@
 name: CI
 
 # Проверяем каждый PR и пуш в main: типы, линтер, тесты, security policy,
-# disposable PostgreSQL integrity suite, сборка.
+# disposable PostgreSQL integrity suite, disposable restore drill, сборка.
 # Деплоя здесь нет — production вызывает этот же workflow через workflow_call.
+# Job restore-drill не получает production environment и секреты PROD_*.
 
 on:
   push:
@@ -117,3 +118,45 @@ jobs:
 
       - name: Server Action manifest policy
         run: npm run security:manifest
+
+  restore-drill:
+    name: Disposable restore drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      restore-postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: stell22
+          POSTGRES_PASSWORD: stell22
+          POSTGRES_DB: stell22_restore_drill_admin
+        ports:
+          - 127.0.0.1:55432:5432
+        options: >-
+          --health-cmd "pg_isready -U stell22 -d stell22_restore_drill_admin"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --label stell22.restore-drill-run=${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_call' && inputs.ref || github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Genuine disposable restore drill
+        env:
+          STELL22_RESTORE_DRILL_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: node scripts/restore-drill-ci.mjs
