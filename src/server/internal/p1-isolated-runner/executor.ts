@@ -106,30 +106,38 @@ export function executeDisposableApply(
     try {
       result = deps.spawnPrisma({ args, env, cwd: set.root });
     } catch {
-      writeMarker(deps.destinationRoot, "ambiguous\n");
-      return stopped("BLOCKED", "AMBIGUOUS_COMPLETION", true);
+      return recordOutcome(deps.destinationRoot, "ambiguous\n", "BLOCKED", "AMBIGUOUS_COMPLETION");
     }
     if (result.status === null || result.signal) {
-      writeMarker(deps.destinationRoot, "ambiguous\n");
-      return stopped("BLOCKED", "AMBIGUOUS_COMPLETION", true);
+      return recordOutcome(deps.destinationRoot, "ambiguous\n", "BLOCKED", "AMBIGUOUS_COMPLETION");
     }
     if (result.status !== 0) {
-      writeMarker(deps.destinationRoot, "failed\n");
-      return stopped("STOP", "PRISMA_DEPLOY_FAILED", true);
+      return recordOutcome(deps.destinationRoot, "failed\n", "STOP", "PRISMA_DEPLOY_FAILED");
     }
-    revalidateMigrationSet(set);
-    const after = classifyP1State({
-      history: deps.readHistory(),
-      schema: deps.readSchema(),
-    });
-    if (after.verdict !== "ALREADY_APPLIED") {
-      writeMarker(deps.destinationRoot, "ambiguous\n");
-      return stopped("BLOCKED", "AMBIGUOUS_COMPLETION", true);
+    try {
+      revalidateMigrationSet(set);
+      const after = classifyP1State({
+        history: deps.readHistory(),
+        schema: deps.readSchema(),
+      });
+      if (after.verdict !== "ALREADY_APPLIED") {
+        return recordOutcome(
+          deps.destinationRoot,
+          "ambiguous\n",
+          "BLOCKED",
+          "AMBIGUOUS_COMPLETION",
+        );
+      }
+      return stopped("ALREADY_APPLIED", after.code, true);
+    } catch {
+      return recordOutcome(deps.destinationRoot, "ambiguous\n", "BLOCKED", "AMBIGUOUS_COMPLETION");
     }
-    return stopped("ALREADY_APPLIED", after.code, true);
   } catch (error) {
+    if (spawned) {
+      return recordOutcome(deps.destinationRoot, "ambiguous\n", "BLOCKED", "AMBIGUOUS_COMPLETION");
+    }
     if (error instanceof RunnerRefusal) {
-      return stopped(error.verdict, error.code, spawned);
+      return stopped(error.verdict, error.code, false);
     }
     throw error;
   } finally {
@@ -139,6 +147,25 @@ export function executeDisposableApply(
 
 function stopped(verdict: ApplyResult["verdict"], code: string, spawned: boolean): ApplyResult {
   return { verdict, code, spawned, retryAttempted: false };
+}
+
+/**
+ * Records a post-spawn outcome. A failed marker write cannot prove that a
+ * later call is blocked: deleting the sealed directory afterwards is outside
+ * this storage contract and is not an automatic retry by this process.
+ */
+function recordOutcome(
+  root: string,
+  contents: string,
+  verdict: ApplyResult["verdict"],
+  code: string,
+): ApplyResult {
+  try {
+    writeMarker(root, contents);
+  } catch {
+    return stopped("BLOCKED", "AMBIGUOUS_COMPLETION_UNRECORDED", true);
+  }
+  return stopped(verdict, code, true);
 }
 
 function markerPath(root: string): string {

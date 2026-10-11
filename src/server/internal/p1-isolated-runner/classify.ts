@@ -109,6 +109,7 @@ export function classifyP1State(input: {
     if (shape === "absent") return { verdict: "BLOCKED", code: "UNFINISHED_WITHOUT_OBJECTS" };
     return { verdict: "BLOCKED", code: "UNFINISHED_WITH_OBJECTS" };
   }
+  // match is structural equality in schema-contract.ts, not keyword presence.
   if (shape === "match") return { verdict: "ALREADY_APPLIED", code: "P1_APPLIED" };
   if (shape === "mismatch") return { verdict: "STOP", code: "OBJECT_CONTRACT_MISMATCH" };
   if (shape === "altered") return { verdict: "STOP", code: "UNEXPECTED_ALTERATION" };

@@ -38,6 +38,7 @@ import {
 import { RunnerRefusal } from "@/server/internal/p1-isolated-runner/refusal";
 import {
   absentP1Schema,
+  P1_FUNCTION_BODY,
   P1_HISTORY_PROBE_SQL,
   P1_IDENTITY_PROBE_SQL,
   P1_SCHEMA_PROBE_SQL,
@@ -62,21 +63,44 @@ function tempDir(): string {
 
 function matchingSchema(): P1SchemaEvidence {
   return {
-    column: { dataType: "jsonb", isNullable: "YES", columnDefault: null },
+    column: {
+      schemaName: "public",
+      tableName: "BatchCreationCommand",
+      matchCount: 1,
+      dataType: "jsonb",
+      udtName: "jsonb",
+      isNullable: "YES",
+      columnDefault: null,
+    },
     check: {
+      schemaName: "public",
+      tableName: "BatchCreationCommand",
+      constraintName: "BatchCreationCommand_receiptProvenanceSnapshot_shape",
+      matchCount: 1,
       definition:
         'CHECK ((("receiptProvenanceSnapshot" IS NULL) OR (jsonb_typeof("receiptProvenanceSnapshot") = \'object\'::text)))',
       validated: true,
     },
     functionDef: {
-      definition:
-        "CREATE FUNCTION \"batch_creation_command_provenance_guard\"() RETURNS trigger LANGUAGE plpgsql AS $function$ BEGIN RAISE EXCEPTION 'batch creation command provenance is retained'; RAISE EXCEPTION 'legacy batch creation command provenance cannot be filled'; RAISE EXCEPTION 'batch creation command provenance is immutable'; END; $function$",
+      schemaName: "public",
+      functionName: "batch_creation_command_provenance_guard",
+      identityArguments: "",
+      matchCount: 1,
+      language: "plpgsql",
       securityDefiner: false,
+      definition: `CREATE FUNCTION public."batch_creation_command_provenance_guard"() RETURNS trigger LANGUAGE plpgsql AS $function$ ${P1_FUNCTION_BODY} $function$`,
     },
     trigger: {
+      schemaName: "public",
+      tableName: "BatchCreationCommand",
+      triggerName: "batch_creation_command_provenance_guard",
+      matchCount: 1,
       enabled: "O",
+      functionSchema: "public",
+      functionName: "batch_creation_command_provenance_guard",
+      functionIdentityArguments: "",
       definition:
-        'CREATE TRIGGER "batch_creation_command_provenance_guard" BEFORE UPDATE OR DELETE ON "BatchCreationCommand" FOR EACH ROW EXECUTE FUNCTION "batch_creation_command_provenance_guard"()',
+        'CREATE TRIGGER "batch_creation_command_provenance_guard" BEFORE UPDATE OR DELETE ON public."BatchCreationCommand" FOR EACH ROW EXECUTE FUNCTION public."batch_creation_command_provenance_guard"()',
     },
     foreignKeyCount: 0,
     extraTriggerNames: [],
@@ -346,8 +370,103 @@ describe("P1 state classification", () => {
     expect(P1_SCHEMA_PROBE_SQL).toContain("prosecdef");
     expect(P1_SCHEMA_PROBE_SQL).toContain("pg_get_triggerdef");
     expect(P1_SCHEMA_PROBE_SQL).toContain("tgenabled");
+    expect(P1_SCHEMA_PROBE_SQL).not.toContain("::regclass");
+    expect(P1_SCHEMA_PROBE_SQL).toContain("pg_namespace");
+    expect(P1_SCHEMA_PROBE_SQL).toContain("pg_get_function_identity_arguments");
     expect(P1_HISTORY_PROBE_SQL).toContain("rolled_back_at");
     expect(P1_IDENTITY_PROBE_SQL).toContain("nonce");
+    expect(P1_IDENTITY_PROBE_SQL).toContain("public.stell22_p1_disposable_identity");
+  });
+});
+
+describe("catalog equivalence", () => {
+  function applied(schema: P1SchemaEvidence) {
+    return classifyP1State({
+      history: [...successfulHistoricalRows(), successfulP1Row()],
+      schema,
+    });
+  }
+
+  it("rejects a tautological CHECK that still contains the expected keywords", () => {
+    const schema = matchingSchema();
+    schema.check = {
+      ...schema.check!,
+      definition:
+        'CHECK ((true) OR (("receiptProvenanceSnapshot" IS NULL) OR (jsonb_typeof("receiptProvenanceSnapshot") = \'object\'::text)))',
+    };
+    const result = applied(schema);
+    expect(result.verdict).not.toBe("ALREADY_APPLIED");
+    expect(result.code).toBe("OBJECT_CONTRACT_MISMATCH");
+  });
+
+  it("rejects a function whose exception text exists only in a comment", () => {
+    const schema = matchingSchema();
+    schema.functionDef = {
+      ...schema.functionDef!,
+      definition:
+        'CREATE FUNCTION public."batch_creation_command_provenance_guard"() RETURNS trigger LANGUAGE plpgsql AS $fn$ BEGIN RETURN NEW; -- batch creation command provenance is retained; legacy batch creation command provenance cannot be filled; batch creation command provenance is immutable END; $fn$',
+    };
+    expect(applied(schema).verdict).not.toBe("ALREADY_APPLIED");
+  });
+
+  it("rejects a trigger that names the guard but executes another function", () => {
+    const schema = matchingSchema();
+    schema.trigger = {
+      ...schema.trigger!,
+      definition:
+        'CREATE TRIGGER "batch_creation_command_provenance_guard" BEFORE UPDATE OR DELETE ON public."BatchCreationCommand" FOR EACH ROW EXECUTE FUNCTION public.evil()',
+    };
+    expect(applied(schema).verdict).not.toBe("ALREADY_APPLIED");
+    const unqualified = matchingSchema();
+    unqualified.trigger = {
+      ...unqualified.trigger!,
+      definition:
+        'CREATE TRIGGER "batch_creation_command_provenance_guard" BEFORE UPDATE OR DELETE ON "BatchCreationCommand" FOR EACH ROW EXECUTE FUNCTION "batch_creation_command_provenance_guard"()',
+    };
+    expect(applied(unqualified).verdict).not.toBe("ALREADY_APPLIED");
+  });
+
+  it("rejects an overload and a non-public schema", () => {
+    const overload = matchingSchema();
+    overload.functionDef = {
+      ...overload.functionDef!,
+      matchCount: 2,
+    };
+    expect(applied(overload).verdict).not.toBe("ALREADY_APPLIED");
+    const otherSchema = matchingSchema();
+    otherSchema.column = {
+      ...otherSchema.column!,
+      schemaName: "other",
+    };
+    expect(applied(otherSchema).verdict).not.toBe("ALREADY_APPLIED");
+  });
+
+  it("rejects an unvalidated or NOT VALID check", () => {
+    const unvalidated = matchingSchema();
+    unvalidated.check = { ...unvalidated.check!, validated: false };
+    expect(applied(unvalidated).verdict).not.toBe("ALREADY_APPLIED");
+    const notValid = matchingSchema();
+    notValid.check = {
+      ...notValid.check!,
+      definition: `${notValid.check!.definition} NOT VALID`,
+    };
+    expect(applied(notValid).verdict).not.toBe("ALREADY_APPLIED");
+  });
+
+  it("accepts the migration function body with schema-qualified trigger identity", () => {
+    const sql = fs.readFileSync(
+      "prisma/migrations/20261010210000_psr_p3_s2_b_batch_receipt_provenance/migration.sql",
+      "utf8",
+    );
+    const marker = sql.indexOf("AS $$");
+    const close = sql.indexOf("$$;", marker);
+    const body = sql.slice(marker + "AS $$".length, close);
+    const schema = matchingSchema();
+    schema.functionDef = {
+      ...schema.functionDef!,
+      definition: `CREATE FUNCTION public."batch_creation_command_provenance_guard"() RETURNS trigger LANGUAGE plpgsql AS $function$${body}$function$`,
+    };
+    expect(applied(schema)).toMatchObject({ verdict: "ALREADY_APPLIED", code: "P1_APPLIED" });
   });
 });
 
@@ -417,6 +536,34 @@ describe("disposable target boundary", () => {
       expect(child.DATABASE_URL).not.toContain("/stell22?");
       expect(child.DATABASE_URL).toContain("/p1disp_");
       expect(process.env.DATABASE_URL).toBe(PRODUCTION_URL);
+      const disposable =
+        "postgresql://p1disp:disposable-password-value@127.0.0.1:54321/p1disp_11111111111141118111111111111111?schema=public";
+      const scrubbed = buildChildEnv(
+        {
+          PATH: "C:\\Windows",
+          path: "C:\\evil",
+          NODE_OPTIONS: "--require C:\\preload.js",
+          PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK: "1",
+          prisma_schema_path: "evil.prisma",
+          database_url: PRODUCTION_URL,
+          PGHOST: "db",
+          POSTGRES_PASSWORD: "secret",
+          PROD_DATABASE_URL: PRODUCTION_URL,
+        },
+        disposable,
+      );
+      expect(scrubbed.DATABASE_URL).toBe(disposable);
+      expect(scrubbed.PATH).toBeUndefined();
+      expect(scrubbed.path).toBeUndefined();
+      expect(scrubbed.NODE_OPTIONS).toBeUndefined();
+      expect(scrubbed.PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK).toBeUndefined();
+      expect(scrubbed.prisma_schema_path).toBeUndefined();
+      expect(scrubbed.database_url).toBeUndefined();
+      expect(scrubbed.PGHOST).toBeUndefined();
+      expect(scrubbed.POSTGRES_PASSWORD).toBeUndefined();
+      expect(scrubbed.PROD_DATABASE_URL).toBeUndefined();
+      expect(JSON.stringify(scrubbed)).not.toContain("secret");
+      expect(JSON.stringify(scrubbed)).not.toContain("preload");
     } finally {
       if (previousDatabase === undefined) delete process.env.DATABASE_URL;
       else process.env.DATABASE_URL = previousDatabase;
@@ -510,6 +657,81 @@ describe("disposable execution", { timeout: 30_000 }, () => {
       spawned: false,
     });
     expect(fixture.spawns).toHaveLength(1);
+  });
+
+  it("records ambiguous completion when post-spawn revalidation throws", () => {
+    const fixture = deps();
+    fixture.deps.spawnPrisma = (request) => {
+      fixture.spawns.push(request);
+      const sealed = path.join(
+        fixture.deps.destinationRoot,
+        "prisma/migrations/20261010210000_psr_p3_s2_b_batch_receipt_provenance/migration.sql",
+      );
+      fs.chmodSync(sealed, 0o644);
+      fs.writeFileSync(sealed, "-- tampered\n");
+      return { status: 0, signal: null };
+    };
+    const first = executeDisposableApply(attestation(), fixture.deps);
+    const second = executeDisposableApply(attestation(), fixture.deps);
+    expect(first).toMatchObject({
+      verdict: "BLOCKED",
+      code: "AMBIGUOUS_COMPLETION",
+      spawned: true,
+      retryAttempted: false,
+    });
+    expect(fs.existsSync(path.join(fixture.deps.destinationRoot, ".ambiguous-stop"))).toBe(true);
+    expect(second.spawned).toBe(false);
+    expect(fixture.spawns).toHaveLength(1);
+  });
+
+  it("records ambiguous completion when post-spawn history or schema reads throw", () => {
+    const historyFixture = deps();
+    let historyReads = 0;
+    historyFixture.deps.readHistory = () => {
+      historyReads += 1;
+      if (historyReads > 2) throw new Error("history reader failed");
+      return historyFixture.history.rows;
+    };
+    const historyResult = executeDisposableApply(attestation(), historyFixture.deps);
+    expect(historyResult).toMatchObject({
+      verdict: "BLOCKED",
+      code: "AMBIGUOUS_COMPLETION",
+      retryAttempted: false,
+    });
+    expect(executeDisposableApply(attestation(), historyFixture.deps).spawned).toBe(false);
+
+    const schemaFixture = deps();
+    let schemaReads = 0;
+    schemaFixture.deps.readSchema = () => {
+      schemaReads += 1;
+      if (schemaReads > 2) throw new Error("schema reader failed");
+      return schemaFixture.schema.value;
+    };
+    const schemaResult = executeDisposableApply(attestation(), schemaFixture.deps);
+    expect(schemaResult).toMatchObject({
+      verdict: "BLOCKED",
+      code: "AMBIGUOUS_COMPLETION",
+      retryAttempted: false,
+    });
+    expect(executeDisposableApply(attestation(), schemaFixture.deps).spawned).toBe(false);
+  });
+
+  it("does not claim a marker when the sealed directory cannot record one", () => {
+    const fixture = deps();
+    fixture.deps.spawnPrisma = (request) => {
+      fixture.spawns.push(request);
+      fs.rmSync(fixture.deps.destinationRoot, { recursive: true, force: true });
+      fs.writeFileSync(fixture.deps.destinationRoot, "not-a-directory");
+      return { status: 0, signal: null };
+    };
+    const result = executeDisposableApply(attestation(), fixture.deps);
+    expect(result).toMatchObject({
+      verdict: "BLOCKED",
+      code: "AMBIGUOUS_COMPLETION_UNRECORDED",
+      spawned: true,
+      retryAttempted: false,
+    });
+    expect(fs.existsSync(path.join(fixture.deps.destinationRoot, ".ambiguous-stop"))).toBe(false);
   });
 
   it("blocks a second overlapping run", () => {
