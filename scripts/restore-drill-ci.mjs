@@ -57,7 +57,7 @@ function parseIdentity(stdout) {
   if (!info.NONCE || !info.CONTAINER || !info.PORT) fail("incomplete drill identity");
   if (!/^[0-9a-f]{32}$/.test(info.NONCE)) fail("nonce is not a 32-hex marker");
   if (!/^[0-9a-f]{64}$/.test(info.CONTAINER)) fail("container id is not full");
-  const port = /^(?:127\.0\.0\.1|0\.0\.0\.0):([0-9]+)$/.exec(info.PORT);
+  const port = /^127\.0\.0\.1:([0-9]+)$/.exec(info.PORT);
   if (!port) fail("published port is not local");
   return { nonce: info.NONCE, container: info.CONTAINER, hostPort: port[1] };
 }
@@ -106,6 +106,23 @@ function psql(container, database, sql) {
   );
   if (result.status !== 0) fail(`psql failed on ${database}`);
   return (result.stdout ?? "").trim();
+}
+
+function registerArchive(container, nonce, archive) {
+  const hashed = run("sh", [
+    "-c",
+    "awk 'NR==1 { print $1; exit }' \"$1.sha256\"",
+    "sh",
+    archive,
+  ]);
+  if (hashed.status !== 0) fail("cannot read archive checksum");
+  const digest = (hashed.stdout ?? "").trim();
+  if (!/^[0-9a-f]{64}$/.test(digest)) fail("archive checksum is not 64 hex");
+  psql(
+    container,
+    "stell22_restore_drill_admin",
+    `INSERT INTO stell22_drill_archive_provenance (nonce, sha256) VALUES ('${nonce}', '${digest}');`,
+  );
 }
 
 function assertSameContainer(container, nonce) {
@@ -184,6 +201,7 @@ try {
   const archive = `${work}/stell22_restore_drill.sql.gz`;
 
   assertSameContainer(identity.container, identity.nonce);
+  registerArchive(identity.container, identity.nonce, archive);
   const restored = drill(["restore", archive, "stell22_restore_drill_dst"], identity.nonce);
   requireOk(restored, "restore");
   if ((restored.stdout ?? "").includes(witnessNotes[0]) || (restored.stderr ?? "").includes(witnessNotes[0])) {
@@ -230,6 +248,8 @@ try {
   ]);
   if (brokenPacked.status !== 0) fail("rollback fixture packaging failed");
   const brokenArchive = `${work}/broken.sql.gz`;
+  assertSameContainer(identity.container, identity.nonce);
+  registerArchive(identity.container, identity.nonce, brokenArchive);
   const rolled = drill(["restore", brokenArchive, "stell22_restore_drill_fail"], identity.nonce);
   if (rolled.status === 0) fail("injected SQL error was reported as success");
   const witnessAfterRollback = psql(

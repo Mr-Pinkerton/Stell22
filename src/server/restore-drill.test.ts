@@ -76,6 +76,8 @@ type MockOptions = {
   publicCount?: string;
   forceAdminDb?: string;
   psqlFail?: boolean;
+  psqlFailText?: string;
+  provenance?: "0" | "1";
 };
 
 function setupMock(options: MockOptions = {}): { bin: string; root: string; log: string } {
@@ -105,7 +107,9 @@ function setupMock(options: MockOptions = {}): { bin: string; root: string; log:
     writeText(`${root}/public-stell22_restore_drill_dst`, `${options.publicCount}\n`);
   }
   if (options.forceAdminDb !== undefined) writeText(`${root}/force-admin-db`, `${options.forceAdminDb}\n`);
-  if (options.psqlFail) writeText(`${root}/psql-fail`, "1\n");
+  if (options.psqlFailText !== undefined) writeText(`${root}/psql-fail`, options.psqlFailText);
+  else if (options.psqlFail) writeText(`${root}/psql-fail`, "1\n");
+  if (options.provenance !== "0") writeText(`${root}/provenance-ok`, "1\n");
   writeExec(bin, "docker", [
     'log=${STELL22_MOCK_LOG:?}',
     'root=${STELL22_MOCK_ROOT:?}',
@@ -152,7 +156,7 @@ function setupMock(options: MockOptions = {}): { bin: string; root: string; log:
     "    done",
     '    if [ "$restore" -eq 1 ]; then',
     '      cat > "$root/restore.sql"',
-    '      if [ -f "$root/psql-fail" ]; then echo "psql forced failure" >&2; exit 1; fi',
+    '      if [ -f "$root/psql-fail" ]; then cat "$root/psql-fail" >&2; exit 1; fi',
     "      exit 0",
     "    fi",
     '    case "$sql" in',
@@ -173,6 +177,10 @@ function setupMock(options: MockOptions = {}): { bin: string; root: string; log:
     '        if [ -f "$root/public-$db" ]; then cat "$root/public-$db"; else printf "%s\\n" 0; fi',
     "        ;;",
     '      "CREATE TABLE stell22_drill_cluster_marker (nonce text PRIMARY KEY)") ;;',
+    '      "CREATE TABLE stell22_drill_archive_provenance (nonce text NOT NULL, sha256 text NOT NULL, PRIMARY KEY (nonce, sha256))") ;;',
+    `      "SELECT count(*) FROM stell22_drill_archive_provenance WHERE nonce = '"*)`,
+    '        if [ -f "$root/provenance-ok" ]; then printf "%s\\n" 1; else printf "%s\\n" 0; fi',
+    "        ;;",
       `      "INSERT INTO stell22_drill_cluster_marker (nonce) VALUES ('"*)`,
         "        nonce=${sql#*\\'}",
         "        nonce=${nonce%%\\'*}",
@@ -443,6 +451,80 @@ describe("restore-drill.sh offline safety", { timeout: 60_000 }, () => {
     );
     expect(created.status).not.toBe(0);
     noRestoreSql(created.root);
+  });
+
+  it("rejects indented, inline, and mid-statement database switching", () => {
+    const bodies = [
+      "   \\connect stell22\n",
+      "SELECT 1; \\connect stell22\n",
+      "SELECT\n\\connect stell22\n",
+      "   \\c stell22\n",
+    ];
+    for (const body of bodies) {
+      const result = restore(writeArchive(`${DUMP}${body}`), "stell22_restore_drill_dst");
+      expect(result.status).not.toBe(0);
+      expect(result.combined).not.toContain("RESTORE OK");
+      noRestoreSql(result.root);
+    }
+  });
+
+  it("rejects include, shell, gexec, and copy meta-commands", () => {
+    for (const body of ["   \\! echo hi\n", "   \\include /tmp/x\n", "   \\ir /tmp/x\n", "   \\i /tmp/x\n", "\\gexec\n", "\\copy t TO STDOUT\n"]) {
+      const result = restore(writeArchive(`${DUMP}${body}`), "stell22_restore_drill_dst");
+      expect(result.status).not.toBe(0);
+      noRestoreSql(result.root);
+    }
+  });
+
+  it("preserves COPY data, quoted text, and restrict commands", () => {
+    const result = restore(
+      writeArchive(
+        [
+          "-- PostgreSQL database dump",
+          "COPY public.sample (note) FROM stdin;",
+          "\\connect stell22",
+          "\\.",
+          "SELECT '\\connect stell22';",
+          "\\restrict abcdef0123456789",
+          "SELECT 1;",
+          "\\unrestrict abcdef0123456789",
+          "-- PostgreSQL database dump complete",
+          "",
+        ].join("\n"),
+      ),
+      "stell22_restore_drill_dst",
+    );
+    expect(result.status).toBe(0);
+    expect(readText(`${result.root}/restore.sql`)).toContain("\\connect stell22");
+  });
+
+  it("rejects a 0.0.0.0 binding and an ambiguous port list", () => {
+    const archive = writeArchive(DUMP);
+    for (const port of ["0.0.0.0:55432", "127.0.0.1:55432\n127.0.0.1:55433"]) {
+      const result = restore(archive, "stell22_restore_drill_dst", { port: `${port}\n` });
+      expect(result.status).not.toBe(0);
+      noRestoreSql(result.root);
+    }
+    const accepted = restore(archive, "stell22_restore_drill_dst", { port: "127.0.0.1:55432\n" });
+    expect(accepted.status).toBe(0);
+  });
+
+  it("does not leak psql stderr when restore fails", () => {
+    const archive = writeArchive(DUMP);
+    const failed = restore(archive, "stell22_restore_drill_dst", {
+      psqlFailText: `ERROR: ${SENTINEL} password=${SECRET}\n`,
+    });
+    expect(failed.status).not.toBe(0);
+    expect(failed.combined).not.toContain("RESTORE OK");
+    expect(failed.combined).not.toContain(SENTINEL);
+    expect(failed.combined).not.toContain(SECRET);
+  });
+
+  it("rejects an archive this run did not register", () => {
+    const result = restore(writeArchive(DUMP), "stell22_restore_drill_dst", { provenance: "0" });
+    expect(result.status).not.toBe(0);
+    expect(result.combined).not.toContain("RESTORE OK");
+    noRestoreSql(result.root);
   });
 
   it("rejects stell22, stell22_integrity, and any other target name", () => {

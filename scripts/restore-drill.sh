@@ -142,7 +142,12 @@ EOF
   case "$binding" in
     *'
 '*|*' '*) fail "неоднозначный порт контейнера" ;;
-    127.0.0.1:[0-9]*|0.0.0.0:[0-9]*) ;;
+    127.0.0.1:[0-9]*)
+      portpart=${binding#127.0.0.1:}
+      case "$portpart" in
+        *[!0-9]*) fail "порт контейнера не локальный" ;;
+      esac
+      ;;
     *) fail "порт контейнера не локальный" ;;
   esac
   PORT_BINDING=$binding
@@ -260,11 +265,113 @@ validate_archive() {
   if ! grep -qx -e "-- PostgreSQL database dump complete" "$WORK/dump.sql"; then
     fail "в дампе нет завершающей строки plain SQL"
   fi
-  if grep -E -q -e '^\\connect([[:space:]]|$)' -e '^\\c([[:space:]]|$)' "$WORK/dump.sql"; then
-    fail "дамп содержит смену базы"
-  fi
   if grep -E -q -i '^[[:space:]]*(CREATE|DROP)[[:space:]]+DATABASE([[:space:]]|$)' "$WORK/dump.sql"; then
     fail "дамп содержит CREATE или DROP DATABASE"
+  fi
+  # PostgreSQL 17.10 psql executes a backslash command outside quotes, comments,
+  # dollar quotes and COPY data, including after whitespace or a semicolon, and
+  # \connect cancels --single-transaction. This scan is not a claim that arbitrary
+  # SQL is safe. Restore also requires run-bound provenance below.
+  if ! awk '
+    function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
+    BEGIN { state = "code"; escape = 0; depth = 0; tag = ""; stmt = ""; q = "\047" }
+    {
+      sub(/\r$/, "")
+      if (state == "copy") {
+        if ($0 == "\\.") state = "code"
+        next
+      }
+      n = length($0)
+      i = 1
+      while (i <= n) {
+        c = substr($0, i, 1)
+        if (state == "linecom") break
+        if (state == "block") {
+          if (c == "*" && substr($0, i + 1, 1) == "/") {
+            i += 2; depth--; if (depth == 0) state = "code"; continue
+          }
+          if (c == "/" && substr($0, i + 1, 1) == "*") { i += 2; depth++; continue }
+          i++; continue
+        }
+        if (state == "squote") {
+          if (escape && c == "\\") { i += 2; continue }
+          if (c == q && substr($0, i + 1, 1) == q) { i += 2; continue }
+          if (c == q) { state = "code"; i++; continue }
+          i++; continue
+        }
+        if (state == "dollar") {
+          closer = "$" tag "$"
+          if (substr($0, i, length(closer)) == closer) {
+            i += length(closer); state = "code"; continue
+          }
+          i++; continue
+        }
+        if (c == "-" && substr($0, i + 1, 1) == "-") { state = "linecom"; break }
+        if (c == "/" && substr($0, i + 1, 1) == "*") { state = "block"; depth = 1; i += 2; continue }
+        if (c == q) {
+          prev = substr($0, i - 1, 1)
+          escape = (prev == "E" || prev == "e")
+          state = "squote"; i++; continue
+        }
+        if (c == "$") {
+          rest = substr($0, i + 1)
+          if (match(rest, /^([A-Za-z_][A-Za-z0-9_]*)?\$/)) {
+            tag = substr(rest, 1, RLENGTH - 1)
+            i += 1 + RLENGTH
+            state = "dollar"
+            continue
+          }
+          i++
+          continue
+        }
+        if (c == "\\") {
+          name = ""
+          j = i + 1
+          one = substr($0, j, 1)
+          if (one == "!") name = "!"
+          else {
+            while (j <= n && substr($0, j, 1) ~ /[A-Za-z]/) {
+              name = name substr($0, j, 1)
+              j++
+            }
+          }
+          if (name != "restrict" && name != "unrestrict") exit 2
+          break
+        }
+        if (c == ";") {
+          plain = trim(stmt)
+          if (plain ~ /^[Cc][Oo][Pp][Yy][[:space:]]/ && plain ~ /[Ff][Rr][Oo][Mm][[:space:]]+[Ss][Tt][Dd][Ii][Nn][[:space:]]*$/)
+            state = "copy"
+          stmt = ""
+          i++
+          continue
+        }
+        stmt = stmt c
+        i++
+      }
+      if (state == "linecom") state = "code"
+    }
+  ' "$WORK/dump.sql"; then
+    fail "дамп содержит запрещённую meta-команду psql"
+  fi
+}
+
+prove_provenance() {
+  archive=$1
+  nonce=$2
+  hash=$(awk 'NR == 1 { print $1; exit }' "${archive}.sha256")
+  case "$hash" in
+    *[!0-9a-f]*|"") fail "не удалось прочитать checksum архива" ;;
+  esac
+  if [ "${#hash}" -ne 64 ]; then
+    fail "не удалось прочитать checksum архива"
+  fi
+  if ! registered=$(psql_at stell22_restore_drill_admin "SELECT count(*) FROM stell22_drill_archive_provenance WHERE nonce = '${nonce}' AND sha256 = '${hash}'"); then
+    fail "не удалось проверить происхождение архива"
+  fi
+  registered=$(printf '%s' "$registered" | tr -d '[:space:]')
+  if [ "$registered" != "1" ]; then
+    fail "архив не создан этим прогоном"
   fi
 }
 
@@ -290,7 +397,7 @@ restore_into() {
   fi
   if ! docker exec -i "$CONTAINER" \
     psql -U stell22 -d "$target" -q -v ON_ERROR_STOP=1 --single-transaction -f - \
-    < "$WORK/dump.sql" >/dev/null; then
+    < "$WORK/dump.sql" >/dev/null 2>"$WORK/psql.err"; then
     fail "psql не восстановил дамп в одной транзакции"
   fi
   echo "[restore-drill] RESTORE OK" >&2
@@ -323,6 +430,9 @@ case "$cmd" in
     fi
     if ! psql_at stell22_restore_drill_admin "INSERT INTO stell22_drill_cluster_marker (nonce) VALUES ('${nonce}')" >/dev/null; then
       fail "не удалось записать маркер"
+    fi
+    if ! psql_at stell22_restore_drill_admin "CREATE TABLE stell22_drill_archive_provenance (nonce text NOT NULL, sha256 text NOT NULL, PRIMARY KEY (nonce, sha256))" >/dev/null; then
+      fail "не удалось подготовить учёт архива"
     fi
     prove_marker "$nonce"
     for db in \
@@ -359,6 +469,7 @@ case "$cmd" in
       stell22|stell22_integrity) fail "целевая база не разрешена" ;;
     esac
     validate_archive "$archive"
+    prove_provenance "$archive" "$nonce"
     restore_into "$target"
     ;;
   *)
