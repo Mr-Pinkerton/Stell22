@@ -38,7 +38,7 @@ psql_at() {
   db=$1
   sql=$2
   docker exec "$CONTAINER" \
-    psql -U stell22 -d "$db" -q -v ON_ERROR_STOP=1 -At -c "$sql"
+    psql -X -U stell22 -d "$db" -q -v ON_ERROR_STOP=1 -At -c "$sql"
 }
 
 prove_container() {
@@ -226,6 +226,19 @@ validate_archive() {
   case "$base" in
     *[!A-Za-z0-9._-]*) fail "недопустимое имя архива" ;;
   esac
+  if ! WORK=$(mktemp -d "${TMPDIR:-/tmp}/stell22-restore-drill.XXXXXX"); then
+    fail "не удалось создать временный каталог"
+  fi
+  chmod 700 "$WORK" || fail "не удалось закрыть временный каталог"
+  # Snapshot first. Later steps read only this copy, then compare it with the
+  # source once so a change during the copy fails closed.
+  if ! cp -p -- "$archive" "$WORK/$base"; then
+    fail "не удалось снять копию архива"
+  fi
+  if ! cp -p -- "${archive}.sha256" "$WORK/${base}.sha256"; then
+    fail "не удалось снять копию checksum"
+  fi
+  staged="$WORK/$base"
   if ! awk -v name="$base" '
     NR == 1 {
       if (NF != 2) exit 1
@@ -240,20 +253,41 @@ validate_archive() {
       if ($0 != "") exit 1
     }
     END { if (!seen) exit 1 }
-  ' "${archive}.sha256"; then
+  ' "$WORK/${base}.sha256"; then
     fail "sidecar checksum имеет неверный формат"
   fi
-  sumdir=$(CDPATH= cd "$(dirname "$archive")" && pwd)
-  if ! (CDPATH= cd "$sumdir" && sha256sum -c "${base}.sha256" >&2); then
+  if ! staged_line=$(sha256sum -t "$staged"); then
     fail "SHA-256 архива не сошёлся"
   fi
-  if ! gzip -t "$archive"; then
+  STAGED_SHA=$(printf '%s' "$staged_line" | awk 'NR == 1 { print $1; exit }' | tr -d '\r')
+  case "$STAGED_SHA" in
+    *[!0-9a-f]*|"") fail "SHA-256 архива не сошёлся" ;;
+  esac
+  if [ "${#STAGED_SHA}" -ne 64 ]; then
+    fail "SHA-256 архива не сошёлся"
+  fi
+  if ! (CDPATH= cd "$WORK" && sha256sum -c "${base}.sha256" >&2); then
+    fail "SHA-256 архива не сошёлся"
+  fi
+  if ! source_line=$(sha256sum -t "$archive"); then
+    fail "архив изменился во время проверки"
+  fi
+  source_sha=$(printf '%s' "$source_line" | awk 'NR == 1 { print $1; exit }' | tr -d '\r')
+  if [ "$source_sha" != "$STAGED_SHA" ]; then
+    fail "архив изменился во время проверки"
+  fi
+  if ! gzip -t "$staged"; then
     fail "gzip -t не принял архив"
   fi
-  if ! WORK=$(mktemp -d "${TMPDIR:-/tmp}/stell22-restore-drill.XXXXXX"); then
-    fail "не удалось создать временный каталог"
+  if ! after_line=$(sha256sum -t "$staged"); then
+    fail "архив изменился во время проверки"
   fi
-  if ! gunzip -c "$archive" > "$WORK/dump.sql"; then
+  after_sha=$(printf '%s' "$after_line" | awk 'NR == 1 { print $1; exit }' | tr -d '\r')
+  if [ "$after_sha" != "$STAGED_SHA" ]; then
+    fail "архив изменился во время проверки"
+  fi
+  chmod a-w "$staged" "$WORK/${base}.sha256" || fail "не удалось закрыть копию архива"
+  if ! gunzip -c "$staged" > "$WORK/dump.sql"; then
     fail "gunzip завершился с ошибкой"
   fi
   if [ ! -s "$WORK/dump.sql" ]; then
@@ -269,12 +303,13 @@ validate_archive() {
     fail "дамп содержит CREATE или DROP DATABASE"
   fi
   # PostgreSQL 17.10 psql executes a backslash command outside quotes, comments,
-  # dollar quotes and COPY data, including after whitespace or a semicolon, and
-  # \connect cancels --single-transaction. This scan is not a claim that arbitrary
-  # SQL is safe. Restore also requires run-bound provenance below.
+  # dollar quotes, double-quoted identifiers and COPY data. An apostrophe inside
+  # "..." is not a string. This scan is not a complete SQL parser and is not a
+  # claim that arbitrary SQL is safe. Provenance binds the staged digest to this
+  # run; it does not prove the bytes came from pg_dump.
   if ! awk '
     function trim(s) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", s); return s }
-    BEGIN { state = "code"; escape = 0; depth = 0; tag = ""; stmt = ""; q = "\047" }
+    BEGIN { state = "code"; escape = 0; depth = 0; tag = ""; stmt = ""; q = "\047"; dq = "\042" }
     {
       sub(/\r$/, "")
       if (state == "copy") {
@@ -299,6 +334,11 @@ validate_archive() {
           if (c == q) { state = "code"; i++; continue }
           i++; continue
         }
+        if (state == "dquote") {
+          if (c == dq && substr($0, i + 1, 1) == dq) { i += 2; continue }
+          if (c == dq) { state = "code"; i++; continue }
+          i++; continue
+        }
         if (state == "dollar") {
           closer = "$" tag "$"
           if (substr($0, i, length(closer)) == closer) {
@@ -308,6 +348,7 @@ validate_archive() {
         }
         if (c == "-" && substr($0, i + 1, 1) == "-") { state = "linecom"; break }
         if (c == "/" && substr($0, i + 1, 1) == "*") { state = "block"; depth = 1; i += 2; continue }
+        if (c == dq) { state = "dquote"; i++; continue }
         if (c == q) {
           prev = substr($0, i - 1, 1)
           escape = (prev == "E" || prev == "e")
@@ -351,15 +392,17 @@ validate_archive() {
       }
       if (state == "linecom") state = "code"
     }
+    END { if (state != "code") exit 3 }
   ' "$WORK/dump.sql"; then
     fail "дамп содержит запрещённую meta-команду psql"
   fi
 }
 
 prove_provenance() {
-  archive=$1
-  nonce=$2
-  hash=$(awk 'NR == 1 { print $1; exit }' "${archive}.sha256")
+  nonce=$1
+  # Digest of the staged archive that gunzip already consumed, not a fresh
+  # read of the caller's mutable path.
+  hash=$STAGED_SHA
   case "$hash" in
     *[!0-9a-f]*|"") fail "не удалось прочитать checksum архива" ;;
   esac
@@ -396,7 +439,7 @@ restore_into() {
     fail "цель не пуста; восстановление отменено"
   fi
   if ! docker exec -i "$CONTAINER" \
-    psql -U stell22 -d "$target" -q -v ON_ERROR_STOP=1 --single-transaction -f - \
+    psql -X -U stell22 -d "$target" -q -v ON_ERROR_STOP=1 --single-transaction -f - \
     < "$WORK/dump.sql" >/dev/null 2>"$WORK/psql.err"; then
     fail "psql не восстановил дамп в одной транзакции"
   fi
@@ -469,7 +512,7 @@ case "$cmd" in
       stell22|stell22_integrity) fail "целевая база не разрешена" ;;
     esac
     validate_archive "$archive"
-    prove_provenance "$archive" "$nonce"
+    prove_provenance "$nonce"
     restore_into "$target"
     ;;
   *)

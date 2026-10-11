@@ -155,6 +155,9 @@ function setupMock(options: MockOptions = {}): { bin: string; root: string; log:
     "      prev=$arg",
     "    done",
     '    if [ "$restore" -eq 1 ]; then',
+    '      if [ -n "${STELL22_LATE_MUTATE:-}" ] && [ -n "${STELL22_LATE_REPLACEMENT:-}" ]; then',
+    '        cat "$STELL22_LATE_REPLACEMENT" > "$STELL22_LATE_MUTATE" || exit 95',
+    "      fi",
     '      cat > "$root/restore.sql"',
     '      if [ -f "$root/psql-fail" ]; then cat "$root/psql-fail" >&2; exit 1; fi',
     "      exit 0",
@@ -201,7 +204,15 @@ function setupMock(options: MockOptions = {}): { bin: string; root: string; log:
 function spawnScript(
   script: string,
   args: readonly string[],
-  options: { bin?: string; root?: string; log?: string; nonce?: string; databaseUrl?: string; input?: string } = {},
+  options: {
+    bin?: string;
+    root?: string;
+    log?: string;
+    nonce?: string;
+    databaseUrl?: string;
+    input?: string;
+    extraEnv?: Record<string, string>;
+  } = {},
 ): { status: number; stdout: string; stderr: string; combined: string } {
   const env: NodeJS.ProcessEnv = {
     NODE_ENV: "test",
@@ -223,6 +234,7 @@ function spawnScript(
   }
   if (options.nonce) env.STELL22_RESTORE_DRILL_NONCE = options.nonce;
   if (options.databaseUrl) env.DATABASE_URL = options.databaseUrl;
+  if (options.extraEnv) Object.assign(env, options.extraEnv);
   const pathPrefix = options.bin ? `${options.bin}:` : "";
   const result = spawnSync(
     "sh",
@@ -246,11 +258,20 @@ function writeArchive(sql: string): string {
   return `${dir}/stell22_restore_drill.sql.gz`;
 }
 
-function restore(archive: string, target: string, mock: MockOptions = {}, nonce = NONCE) {
+function restore(
+  archive: string,
+  target: string,
+  mock: MockOptions = {},
+  nonce = NONCE,
+  extraEnv?: Record<string, string>,
+  prepare?: (state: { bin: string; root: string; log: string }) => void,
+) {
   const state = setupMock({ marker: `${nonce}\n`, ...mock });
+  prepare?.(state);
   const result = spawnScript("scripts/restore-drill.sh", ["restore", archive, target], {
     ...state,
     nonce,
+    extraEnv,
   });
   return { ...result, ...state };
 }
@@ -485,6 +506,8 @@ describe("restore-drill.sh offline safety", { timeout: 60_000 }, () => {
           "\\connect stell22",
           "\\.",
           "SELECT '\\connect stell22';",
+          'SELECT 1 AS "it\'s";',
+          'SELECT 1 AS "it""s";',
           "\\restrict abcdef0123456789",
           "SELECT 1;",
           "\\unrestrict abcdef0123456789",
@@ -496,6 +519,83 @@ describe("restore-drill.sh offline safety", { timeout: 60_000 }, () => {
     );
     expect(result.status).toBe(0);
     expect(readText(`${result.root}/restore.sql`)).toContain("\\connect stell22");
+    expect(readText(`${result.root}/restore.sql`)).toContain('SELECT 1 AS "it\'s";');
+    expect(readText(`${result.root}/restore.sql`)).toContain('SELECT 1 AS "it""s";');
+  });
+
+  it("rejects a meta-command after an apostrophe inside a double-quoted identifier", () => {
+    const result = restore(
+      writeArchive(
+        [
+          "-- PostgreSQL database dump",
+          'SELECT 1 AS "it\'s";',
+          "\\echo DRILL_META_VISIBLE",
+          "-- PostgreSQL database dump complete",
+          "",
+        ].join("\n"),
+      ),
+      "stell22_restore_drill_dst",
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.combined).not.toContain("RESTORE OK");
+    expect(result.combined).not.toContain("DRILL_META_VISIBLE");
+    noRestoreSql(result.root);
+  });
+
+  it("rejects an archive swapped after the checksum command starts", () => {
+    const original = writeArchive(DUMP);
+    const swapped = writeArchive(
+      ["-- PostgreSQL database dump", "SELECT 'STELL22_SWAPPED_BYTES';", "-- PostgreSQL database dump complete", ""].join(
+        "\n",
+      ),
+    );
+    const result = restore(
+      original,
+      "stell22_restore_drill_dst",
+      {},
+      NONCE,
+      { STELL22_TOCTOU_REPLACEMENT: swapped },
+      (state) => {
+        writeExec(state.bin, "gzip", [
+          'if [ "$1" = "-t" ] && [ -n "${STELL22_TOCTOU_REPLACEMENT:-}" ]; then',
+          '  /usr/bin/gzip -t "$2" || exit $?',
+          '  cat "$STELL22_TOCTOU_REPLACEMENT" > "$2" || exit 97',
+          "  exit 0",
+          "fi",
+          'exec /usr/bin/gzip "$@"',
+        ]);
+      },
+    );
+    expect(result.status).not.toBe(0);
+    expect(result.combined).not.toContain("RESTORE OK");
+    expect(result.combined).not.toContain("STELL22_SWAPPED_BYTES");
+    noRestoreSql(result.root);
+  });
+
+  it("keeps staged bytes when the original archive changes only at psql time", () => {
+    const archive = writeArchive(DUMP);
+    const swapped = writeArchive(
+      ["-- PostgreSQL database dump", "SELECT 'STELL22_LATE_SWAP';", "-- PostgreSQL database dump complete", ""].join("\n"),
+    );
+    const result = restore(archive, "stell22_restore_drill_dst", {}, NONCE, {
+      STELL22_LATE_MUTATE: archive,
+      STELL22_LATE_REPLACEMENT: swapped,
+    });
+    expect(result.status).toBe(0);
+    const restored = readText(`${result.root}/restore.sql`);
+    expect(restored).toContain(SENTINEL);
+    expect(restored).not.toContain("STELL22_LATE_SWAP");
+  });
+
+  it("invokes every psql with -X and keeps a single transaction on restore", () => {
+    const result = restore(writeArchive(DUMP), "stell22_restore_drill_dst");
+    expect(result.status).toBe(0);
+    const psqlLines = readText(result.log)
+      .split("\n")
+      .filter((line) => line.includes(" psql "));
+    expect(psqlLines.length).toBeGreaterThan(0);
+    for (const line of psqlLines) expect(line).toContain(" -X ");
+    expect(psqlLines.some((line) => line.includes(" --single-transaction "))).toBe(true);
   });
 
   it("rejects a 0.0.0.0 binding and an ambiguous port list", () => {

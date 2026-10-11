@@ -91,6 +91,7 @@ function psql(container, database, sql) {
       "-i",
       container,
       "psql",
+      "-X",
       "-U",
       "stell22",
       "-d",
@@ -240,6 +241,8 @@ try {
   const expectedWitness = witnessNotes.map((note, index) => `${index + 1}:${md5(note)}`).join("\n");
   if (witness !== expectedWitness) fail("restored witness rows do not match");
 
+  // Explicit negative fixture. Registration records this digest for the run;
+  // it does not claim the bytes are pg_dump output or that arbitrary SQL is safe.
   const brokenPacked = run("sh", [
     "-c",
     "cp \"$1/dump.sql\" \"$1/broken.sql\" && printf '\\nSELECT 1/0;\\n' >> \"$1/broken.sql\" && gzip -c \"$1/broken.sql\" > \"$1/broken.sql.gz\" && cd \"$1\" && sha256sum -t broken.sql.gz > broken.sql.gz.sha256",
