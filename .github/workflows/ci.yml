@@ -49,6 +49,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_call' && inputs.ref || github.sha }}
+          fetch-depth: 0
 
       - name: Show checked-out SHA
         id: show-sha
