@@ -800,7 +800,14 @@ describe("CLI", { timeout: 30_000 }, () => {
 describe("source boundary", () => {
   it("does not call migrate resolve, docker-entrypoint, or a production override", () => {
     const dir = path.join(process.cwd(), "src/server/internal/p1-isolated-runner");
-    const names = ["executor.ts", "cli.ts", "disposable-target.ts", "env.ts", "migration-set.ts"];
+    const names = [
+      "executor.ts",
+      "cli.ts",
+      "disposable-target.ts",
+      "env.ts",
+      "migration-set.ts",
+      "live-read-probe.ts",
+    ];
     const source = names.map((name) => fs.readFileSync(path.join(dir, name), "utf8")).join("\n");
     expect(source).not.toContain("migrate resolve");
     expect(source).not.toContain("docker-entrypoint");
