@@ -17,6 +17,7 @@ import {
 } from "@/server/internal/p1-isolated-runner/container-origin";
 import { parseDisposableAttestation } from "@/server/internal/p1-isolated-runner/disposable-target";
 import { readDisposablePostgreSql } from "@/server/internal/p1-isolated-runner/live-read-probe";
+import { bindOwnedDisposableSql } from "@/server/internal/p1-isolated-runner/owned-sql-binding";
 import {
   checkMatchesContract,
   columnMatchesContract,
@@ -340,6 +341,19 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("postgresql 17 disposable read",
       await waitUntilReady(fixture);
       const confirmed = reconfirmOwnedContainer(owned);
       const raw = attestationFor(confirmed);
+      const unbound = await bindOwnedDisposableSql(owned);
+      expect(unbound.ok).toBe(false);
+      if (!unbound.ok) {
+        expect(unbound.kind).toBe("sql-identity-missing");
+        expect(unbound.code).toBe("MISSING_IDENTITY_TABLE");
+        expect(unbound.publicAuthorization).toMatchObject({
+          containerOrigin: "NOT_ESTABLISHED",
+          fullTargetAuthentication: "NOT_CLAIMED",
+          applyEnabled: false,
+        });
+        expect(JSON.stringify(unbound).includes(confirmed.nonce)).toBe(false);
+        expect(JSON.stringify(unbound).includes(confirmed.password)).toBe(false);
+      }
       const missing = await readDisposablePostgreSql(raw);
       expect(missing.evidenceSource).toBe("postgresql-query");
       expect(missing.code).toBe("MISSING_IDENTITY_TABLE");
@@ -406,6 +420,27 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("postgresql 17 disposable read",
         nonce: confirmed.nonce,
         containerId: confirmed.containerId,
       });
+      const bound = await bindOwnedDisposableSql(owned);
+      expect(bound.ok).toBe(true);
+      if (bound.ok) {
+        expect(bound.kind).toBe("verified-readonly-binding");
+        expect(bound.evidenceSource).toBe("postgresql-query");
+        expect(bound.runId).toBe(confirmed.runId);
+        expect(bound.containerId).toBe(confirmed.containerId);
+        expect(bound.databaseName).toBe(confirmed.databaseName);
+        expect(bound.serverVersionNum).toBeGreaterThanOrEqual(170000);
+        expect(bound.serverVersionNum).toBeLessThan(180000);
+        expect(bound.classification).toEqual({ verdict: "ALREADY_APPLIED", code: "P1_APPLIED" });
+        expect(bound.publicAuthorization).toEqual({
+          containerOrigin: "NOT_ESTABLISHED",
+          fullTargetAuthentication: "NOT_CLAIMED",
+          applyEnabled: false,
+          verdict: "BLOCKED",
+          code: "CONTAINER_ORIGIN_NOT_ESTABLISHED",
+        });
+        expect(JSON.stringify(bound).includes(confirmed.nonce)).toBe(false);
+        expect(JSON.stringify(bound).includes(confirmed.password)).toBe(false);
+      }
     } finally {
       try {
         await fixture?.$disconnect();
