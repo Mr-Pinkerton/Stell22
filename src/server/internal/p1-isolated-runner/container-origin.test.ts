@@ -78,11 +78,17 @@ describe("disposable container ownership", () => {
     const runtime = scripted();
     runtime.env = { DOCKER_HOST: "unix:///var/run/docker.sock" };
     expect(resolveLocalDockerEndpoint(runtime)).toBe("unix:///var/run/docker.sock");
-    runtime.execFileSync = () => {
+    runtime.execFileSync = (
+      command: string,
+      args: readonly string[],
+      env: Readonly<Record<string, string | undefined>>,
+    ) => {
+      runtime.commands.push({ command, args, env });
       throw new Error("docker offline");
     };
     expect(code(() => createOwnedDisposableContainer(runtime))).toBe("DOCKER_UNAVAILABLE");
-    expect(runtime.commands.some((command) => command.args[0] === "run")).toBe(false);
+    expect(runtime.commands.some((command) => verb(command.args) === "run")).toBe(false);
+    assertPinned(runtime, UNIX_SOCKET);
   });
 
   it("uses the desktop-linux context endpoint only when that endpoint is the local pipe", () => {
@@ -110,14 +116,14 @@ describe("disposable container ownership", () => {
     const runtime = scripted();
     runtime.daemonIds = [DAEMON, "daemon-local-2"];
     expect(code(() => createOwnedDisposableContainer(runtime))).toBe("DAEMON_IDENTITY_CHANGED");
-    expect(runtime.commands.some((command) => command.args[0] === "run")).toBe(false);
+    expect(runtime.commands.some((command) => verb(command.args) === "run")).toBe(false);
   });
 
   it("does not establish ownership when inspect returns a different container id", () => {
     const runtime = scripted();
     runtime.inspectId = OTHER_ID;
     expect(code(() => createOwnedDisposableContainer(runtime))).toBe("INSPECT_ID_MISMATCH");
-    expect(runtime.commands.some((command) => command.args[0] === "rm")).toBe(false);
+    expect(runtime.commands.some((command) => verb(command.args) === "rm")).toBe(false);
     expect(sqlOrMigration(runtime)).toBe(false);
   });
 
@@ -235,8 +241,8 @@ describe("disposable container ownership", () => {
     expect(handle.repositoryDigestStatus).toBe("UNAVAILABLE");
     expect(handle.repositoryDigestLimitation).toBe(IMAGE_REPOSITORY_DIGEST_LIMITATION);
     expect(handle.repositoryDigests).toEqual([]);
-    expect(runtime.commands.some((command) => command.args[0] === "pull")).toBe(false);
-    const run = runtime.commands.find((command) => command.args[0] === "run");
+    expect(runtime.commands.some((command) => verb(command.args) === "pull")).toBe(false);
+    const run = runtime.commands.find((command) => verb(command.args) === "run");
     expect(run?.args).toContain("--pull");
     expect(run?.args).toContain("never");
     expect(run?.args.at(-1)).toBe(POSTGRES_IMAGE_REF);
@@ -267,8 +273,14 @@ describe("disposable container ownership", () => {
     const handle = createOwnedDisposableContainer(runtime);
     runtime.commands.length = 0;
     runtime.inspectId = OTHER_ID;
-    expect(code(() => removeOwnedDisposableContainer(handle, runtime))).toBe("CLEANUP_REFUSED");
-    expect(runtime.commands.some((command) => command.args[0] === "rm")).toBe(false);
+    const refused = caught(() => removeOwnedDisposableContainer(handle, runtime));
+    expect(refused.code).toBe("INSPECT_ID_MISMATCH");
+    expect(refused.disposition).toEqual({
+      kind: "orphaned",
+      containerId: ID,
+      cleanup: "refused",
+    });
+    expect(runtime.commands.some((command) => verb(command.args) === "rm")).toBe(false);
     expect(runtime.commands.some((command) => command.args.includes("prune"))).toBe(false);
   });
 
@@ -283,8 +295,12 @@ describe("disposable container ownership", () => {
     const handle = createOwnedDisposableContainer(runtime);
     runtime.commands.length = 0;
     removeOwnedDisposableContainer(handle, runtime);
-    const removal = runtime.commands.filter((command) => command.args[0] === "rm");
-    expect(removal).toEqual([{ command: "docker", args: ["rm", "-f", ID] }]);
+    const removal = runtime.commands.filter((command) => verb(command.args) === "rm");
+    expect(removal).toHaveLength(1);
+    expect(removal[0]?.args).toEqual(["-H", "npipe:////./pipe/docker_engine", "rm", "-f", ID]);
+    expect(removal[0]?.env.DOCKER_HOST).toBe("npipe:////./pipe/docker_engine");
+    expect(removal[0]?.env.DOCKER_CONTEXT).toBeUndefined();
+    expect(removal[0]?.args).not.toContain("--context");
     expect(removal[0]?.args).not.toContain(NAME);
   });
 
@@ -294,10 +310,16 @@ describe("disposable container ownership", () => {
     runtime.daemonId = "daemon-local-2";
     runtime.daemonIds = [];
     expect(code(() => reconfirmOwnedContainer(handle, runtime))).toBe("DAEMON_IDENTITY_CHANGED");
-    expect(code(() => removeOwnedDisposableContainer(handle, runtime))).toBe("CLEANUP_REFUSED");
+    expect(caught(() => removeOwnedDisposableContainer(handle, runtime)).disposition).toEqual({
+      kind: "orphaned",
+      containerId: ID,
+      cleanup: "refused",
+    });
     runtime.env = { DOCKER_HOST: "tcp://127.0.0.1:2375" };
-    expect(code(() => removeOwnedDisposableContainer(handle, runtime))).toBe("CLEANUP_REFUSED");
-    expect(runtime.commands.some((command) => command.args[0] === "rm")).toBe(false);
+    expect(code(() => removeOwnedDisposableContainer(handle, runtime))).toBe(
+      "DOCKER_ENDPOINT_REMOTE",
+    );
+    expect(runtime.commands.some((command) => verb(command.args) === "rm")).toBe(false);
   });
 
   it("does not copy docker errors that contain the generated password", () => {
@@ -313,7 +335,7 @@ describe("disposable container ownership", () => {
     expect(refusal?.code).toBe("OWNERSHIP_UNPROVEN");
     expect(refusal?.message.includes(PASSWORD_MARK)).toBe(false);
     expect(refusal?.message.includes(NONCE_MARK)).toBe(false);
-    expect(runtime.commands.some((command) => command.args[0] === "rm")).toBe(false);
+    expect(runtime.commands.some((command) => verb(command.args) === "rm")).toBe(false);
   });
 
   it("reports removal failure instead of hiding it", () => {
@@ -335,16 +357,276 @@ describe("disposable container ownership", () => {
     expect(source.includes("migration.sql")).toBe(false);
     expect(ALLOWED_LOCAL_DOCKER_ENDPOINTS).not.toContain("tcp://127.0.0.1:2375");
   });
+
+  it("fails closed before Docker when DOCKER_HOST is local and DOCKER_CONTEXT is remote", () => {
+    const runtime = ambiguous("unix:///var/run/docker.sock", "remote-prod");
+    expect(code(() => createOwnedDisposableContainer(runtime))).toBe("DOCKER_ENDPOINT_AMBIGUOUS");
+    expect(runtime.commands).toEqual([]);
+  });
+
+  it("fails closed before Docker when DOCKER_HOST is remote and DOCKER_CONTEXT is local", () => {
+    const runtime = ambiguous("tcp://10.1.2.3:2376", "desktop-linux");
+    expect(code(() => createOwnedDisposableContainer(runtime))).toBe("DOCKER_ENDPOINT_AMBIGUOUS");
+    expect(runtime.commands).toEqual([]);
+  });
+
+  it("fails closed before Docker when both endpoint variables are local", () => {
+    const runtime = ambiguous(UNIX_SOCKET, "desktop-linux");
+    expect(code(() => createOwnedDisposableContainer(runtime))).toBe("DOCKER_ENDPOINT_AMBIGUOUS");
+    expect(runtime.commands).toEqual([]);
+  });
+
+  it("refuses a remote context without a local host override", () => {
+    const runtime = scripted();
+    runtime.env = { DOCKER_CONTEXT: "remote-prod", DOCKER_CONFIG: runtime.homedir };
+    runtime.files.set(
+      metaPath(runtime.homedir, "remote-prod"),
+      JSON.stringify({
+        Name: "remote-prod",
+        Endpoints: { docker: { Host: "tcp://10.9.8.7:2376" } },
+      }),
+    );
+    expect(code(() => createOwnedDisposableContainer(runtime))).toBe("DOCKER_ENDPOINT_REMOTE");
+    expect(runtime.commands).toEqual([]);
+  });
+
+  it("refuses a remote host without a context", () => {
+    const runtime = scripted();
+    runtime.env = { DOCKER_HOST: "tcp://192.0.2.10:2375" };
+    expect(code(() => createOwnedDisposableContainer(runtime))).toBe("DOCKER_ENDPOINT_REMOTE");
+    expect(runtime.commands).toEqual([]);
+  });
+
+  it("pins every command to the desktop-linux local pipe", () => {
+    const runtime = scripted();
+    runtime.platform = "win32";
+    runtime.env = { DOCKER_CONTEXT: "desktop-linux", DOCKER_CONFIG: runtime.homedir };
+    runtime.files.set(
+      metaPath(runtime.homedir, "desktop-linux"),
+      JSON.stringify({
+        Name: "desktop-linux",
+        Endpoints: { docker: { Host: DESKTOP_PIPE } },
+      }),
+    );
+    const handle = createOwnedDisposableContainer(runtime);
+    expect(handle.endpoint).toBe(DESKTOP_PIPE);
+    assertPinned(runtime, DESKTOP_PIPE);
+    const verbs = runtime.commands.map((command) => verb(command.args));
+    expect(verbs).toEqual(["info", "image", "info", "run", "info", "inspect", "info"]);
+  });
+
+  it("pins every command to the unix socket", () => {
+    const runtime = scripted();
+    runtime.platform = "linux";
+    runtime.env = {
+      DOCKER_HOST: UNIX_SOCKET,
+      DOCKER_TLS_VERIFY: "1",
+      DOCKER_CERT_PATH: "/tmp/certs",
+    };
+    const handle = createOwnedDisposableContainer(runtime);
+    expect(handle.endpoint).toBe(UNIX_SOCKET);
+    assertPinned(runtime, UNIX_SOCKET);
+  });
+
+  it("detects an endpoint change after creation and does not continue on the new endpoint", () => {
+    const runtime = scripted();
+    const handle = createOwnedDisposableContainer(runtime);
+    runtime.commands.length = 0;
+    runtime.env = { DOCKER_HOST: UNIX_SOCKET };
+    const error = caught(() => reconfirmOwnedContainer(handle, runtime));
+    expect(error.code).toBe("DOCKER_ENDPOINT_CHANGED");
+    expect(error.disposition.kind).toBe("not-created");
+    expect(runtime.commands).toEqual([]);
+  });
+
+  it("refuses cleanup when the endpoint changes and does not call docker", () => {
+    const runtime = scripted();
+    const handle = createOwnedDisposableContainer(runtime);
+    runtime.commands.length = 0;
+    runtime.env = { DOCKER_HOST: DESKTOP_PIPE };
+    const error = caught(() => removeOwnedDisposableContainer(handle, runtime));
+    expect(error.code).toBe("DOCKER_ENDPOINT_CHANGED");
+    expect(error.disposition).toEqual({ kind: "orphaned", containerId: ID, cleanup: "refused" });
+    expect(runtime.commands).toEqual([]);
+  });
+
+  it("detects a daemon identity change on the pinned endpoint", () => {
+    const runtime = scripted();
+    runtime.daemonIds = [DAEMON, DAEMON, "daemon-local-2"];
+    const error = caught(() => createOwnedDisposableContainer(runtime));
+    expect(error.code).toBe("DAEMON_IDENTITY_CHANGED");
+    expect(error.disposition).toEqual({ kind: "orphaned", containerId: ID, cleanup: "refused" });
+    expect(runtime.commands.some((command) => verb(command.args) === "rm")).toBe(false);
+    assertPinned(runtime, WIN_PIPE);
+  });
+
+  it("treats a failed run without an id as ambiguous and does not search for it", () => {
+    const runtime = scripted();
+    runtime.failRun = true;
+    const error = caught(() => createOwnedDisposableContainer(runtime));
+    expect(error.code).toBe("CONTAINER_CREATE_FAILED");
+    expect(error.disposition).toEqual({ kind: "ambiguous" });
+    expect(error.message.includes(PASSWORD_MARK)).toBe(false);
+    expect(runtime.commands.some((command) => verb(command.args) === "inspect")).toBe(false);
+    expect(runtime.commands.some((command) => verb(command.args) === "rm")).toBe(false);
+  });
+
+  it("treats a malformed creation id as ambiguous and does not delete", () => {
+    const runtime = scripted();
+    runtime.runStdout = "short-id\n";
+    const error = caught(() => createOwnedDisposableContainer(runtime));
+    expect(error.code).toBe("CONTAINER_ID_UNPROVEN");
+    expect(error.disposition).toEqual({ kind: "ambiguous" });
+    expect(runtime.commands.some((command) => verb(command.args) === "rm")).toBe(false);
+    expect(runtime.commands.some((command) => verb(command.args) === "inspect")).toBe(false);
+  });
+
+  it("keeps the original failure when inspect throws and refuses an unproven cleanup", () => {
+    const runtime = scripted();
+    runtime.failInspectWithSecrets = true;
+    const error = caught(() => createOwnedDisposableContainer(runtime));
+    expect(error.code).toBe("OWNERSHIP_UNPROVEN");
+    expect(error.disposition).toEqual({ kind: "orphaned", containerId: ID, cleanup: "refused" });
+    expect(JSON.stringify(error.disposition).includes(PASSWORD_MARK)).toBe(false);
+    expect(error.message.includes(NONCE_MARK)).toBe(false);
+    expect(runtime.commands.some((command) => verb(command.args) === "rm")).toBe(false);
+  });
+
+  it("removes only the exact id when a later inspect reconfirms ownership", () => {
+    const runtime = scripted();
+    runtime.inspectFailuresRemaining = 1;
+    const error = caught(() => createOwnedDisposableContainer(runtime));
+    expect(error.code).toBe("OWNERSHIP_UNPROVEN");
+    expect(error.disposition).toEqual({ kind: "removed", containerId: ID });
+    const removal = runtime.commands.filter((command) => verb(command.args) === "rm");
+    expect(removal).toHaveLength(1);
+    expect(removal[0]?.args).toEqual(["-H", WIN_PIPE, "rm", "-f", ID]);
+    assertPinned(runtime, WIN_PIPE);
+  });
+
+  it("preserves the original failure when exact-id cleanup itself fails", () => {
+    const runtime = scripted();
+    runtime.inspectFailuresRemaining = 1;
+    runtime.failRemoval = true;
+    const error = caught(() => createOwnedDisposableContainer(runtime));
+    expect(error.code).toBe("OWNERSHIP_UNPROVEN");
+    expect(error.disposition).toEqual({ kind: "orphaned", containerId: ID, cleanup: "failed" });
+    expect(error.message.includes(PASSWORD_MARK)).toBe(false);
+  });
+
+  it("refuses deletion when inspect returns the wrong id, name, label, image, or a stopped container", () => {
+    const cases: Array<{
+      mutate: (row: Record<string, unknown>) => void;
+      code: string;
+    }> = [
+      {
+        mutate: (row) => {
+          row.Id = OTHER_ID;
+        },
+        code: "INSPECT_ID_MISMATCH",
+      },
+      {
+        mutate: (row) => {
+          row.Name = "/stell22-db-prod";
+        },
+        code: "NAME_MISMATCH",
+      },
+      {
+        mutate: (row) => {
+          row.Config = {
+            Image: POSTGRES_IMAGE_REF,
+            Labels: { [OWNED_CONTAINER_LABEL]: RUN + "x" },
+          };
+        },
+        code: "LABEL_MISMATCH",
+      },
+      {
+        mutate: (row) => {
+          row.Image = OTHER_IMAGE;
+        },
+        code: "IMAGE_ID_UNEXPECTED",
+      },
+      {
+        mutate: (row) => {
+          row.State = { Running: false, Status: "exited", StartedAt: STARTED, Pid: 0 };
+        },
+        code: "CONTAINER_STOPPED",
+      },
+    ];
+    for (const item of cases) {
+      const runtime = scripted();
+      runtime.inspectMutator = item.mutate;
+      const error = caught(() => createOwnedDisposableContainer(runtime));
+      expect(error.code).toBe(item.code);
+      expect(error.disposition).toEqual({ kind: "orphaned", containerId: ID, cleanup: "refused" });
+      expect(runtime.commands.some((command) => verb(command.args) === "rm")).toBe(false);
+      expect(runtime.commands.some((command) => command.args.includes("prune"))).toBe(false);
+    }
+  });
+
+  it("refuses cleanup of an unowned id without a broad removal", () => {
+    const runtime = scripted();
+    const handle = createOwnedDisposableContainer(runtime);
+    runtime.commands.length = 0;
+    runtime.inspectMutator = (row) => {
+      row.Name = "/someone-else";
+    };
+    const error = caught(() => removeOwnedDisposableContainer(handle, runtime));
+    expect(error.code).toBe("NAME_MISMATCH");
+    expect(error.disposition).toEqual({ kind: "orphaned", containerId: ID, cleanup: "refused" });
+    expect(runtime.commands.some((command) => verb(command.args) === "rm")).toBe(false);
+  });
 });
 
+function ambiguous(host: string, contextName: string): ScriptedRuntime {
+  const runtime = scripted();
+  runtime.env = { DOCKER_HOST: host, DOCKER_CONTEXT: contextName, DOCKER_CONFIG: runtime.homedir };
+  runtime.files.set(
+    metaPath(runtime.homedir, contextName),
+    JSON.stringify({
+      Name: contextName,
+      Endpoints: {
+        docker: { Host: host.startsWith("tcp://") ? UNIX_SOCKET : "tcp://10.2.3.4:2376" },
+      },
+    }),
+  );
+  return runtime;
+}
+
 function code(run: () => unknown): string {
+  return caught(run).code;
+}
+
+function caught(run: () => unknown): ContainerOriginRefusal {
   try {
     run();
   } catch (error) {
     expect(error).toBeInstanceOf(ContainerOriginRefusal);
-    return (error as ContainerOriginRefusal).code;
+    return error as ContainerOriginRefusal;
   }
   throw new Error("expected refusal");
+}
+
+function verb(args: readonly string[]): string {
+  return args[0] === "-H" ? (args[2] ?? "") : (args[0] ?? "");
+}
+
+const WIN_PIPE = "npipe:////./pipe/docker_engine";
+const DESKTOP_PIPE = "npipe:////./pipe/dockerDesktopLinuxEngine";
+const UNIX_SOCKET = "unix:///var/run/docker.sock";
+
+function assertPinned(runtime: ScriptedRuntime, endpoint: string): void {
+  expect(runtime.commands.length).toBeGreaterThan(0);
+  for (const command of runtime.commands) {
+    expect(command.command).toBe("docker");
+    expect(command.args.slice(0, 2)).toEqual(["-H", endpoint]);
+    expect(command.args).not.toContain("--context");
+    expect(command.env.DOCKER_HOST).toBe(endpoint);
+    expect(command.env.DOCKER_CONTEXT).toBeUndefined();
+    expect(command.env.DOCKER_TLS).toBeUndefined();
+    expect(command.env.DOCKER_TLS_VERIFY).toBeUndefined();
+    expect(command.env.DOCKER_CERT_PATH).toBeUndefined();
+  }
 }
 
 function expectation(
@@ -398,8 +680,14 @@ function sqlOrMigration(runtime: ScriptedRuntime): boolean {
   );
 }
 
+type ScriptedCommand = {
+  command: string;
+  args: readonly string[];
+  env: Readonly<Record<string, string | undefined>>;
+};
+
 type ScriptedRuntime = OriginRuntime & {
-  commands: { command: string; args: readonly string[] }[];
+  commands: ScriptedCommand[];
   files: Map<string, string>;
   daemonIds: string[];
   daemonId: string;
@@ -407,6 +695,10 @@ type ScriptedRuntime = OriginRuntime & {
   repoDigests: string[] | null;
   failInspectWithSecrets: boolean;
   failRemoval: boolean;
+  failRun: boolean;
+  runStdout: string;
+  inspectFailuresRemaining: number;
+  inspectMutator: ((row: Record<string, unknown>) => void) | null;
 };
 
 function scripted(): ScriptedRuntime {
@@ -415,16 +707,20 @@ function scripted(): ScriptedRuntime {
     env: {} as Record<string, string | undefined>,
     homedir: path.join("K:", "docker-config"),
     files: new Map<string, string>(),
-    commands: [] as { command: string; args: readonly string[] }[],
+    commands: [] as ScriptedCommand[],
     daemonIds: [DAEMON],
     daemonId: DAEMON,
     inspectId: ID,
     repoDigests: null as string[] | null,
     failInspectWithSecrets: false,
     failRemoval: false,
+    failRun: false,
+    runStdout: `${ID}\n`,
+    inspectFailuresRemaining: 0,
+    inspectMutator: null as ((row: Record<string, unknown>) => void) | null,
     randomUUID: () => RUN,
     randomBytes: (size: number) => {
-      const mark = runtime.commands.some((command) => command.args[0] === "run")
+      const mark = runtime.commands.some((command) => verb(command.args) === "run")
         ? NONCE_MARK
         : PASSWORD_MARK;
       return Buffer.from(mark.padEnd(size, "x").slice(0, size));
@@ -438,15 +734,22 @@ function scripted(): ScriptedRuntime {
       }
       return contents;
     },
-    execFileSync: (command: string, args: readonly string[]) => {
-      runtime.commands.push({ command, args });
-      if (command !== "docker") throw new Error("unexpected command");
-      if (args[0] === "info") {
+    execFileSync: (
+      command: string,
+      args: readonly string[],
+      env: Readonly<Record<string, string | undefined>>,
+    ) => {
+      runtime.commands.push({ command, args, env });
+      if (command !== "docker" || args[0] !== "-H" || args.length < 3) {
+        throw new Error("unpinned docker command");
+      }
+      const action = args[2];
+      if (action === "info") {
         const next = runtime.daemonIds.shift();
         if (next !== undefined) runtime.daemonId = next;
         return `${runtime.daemonId}\n`;
       }
-      if (args[0] === "image" && args[1] === "inspect") {
+      if (action === "image" && args[3] === "inspect") {
         return JSON.stringify([
           {
             Id: IMAGE_ID,
@@ -454,23 +757,33 @@ function scripted(): ScriptedRuntime {
           },
         ]);
       }
-      if (args[0] === "run") return `${ID}\n`;
-      if (args[0] === "inspect") {
+      if (action === "run") {
+        if (runtime.failRun) throw new Error(`run failed ${PASSWORD_MARK}`);
+        return runtime.runStdout;
+      }
+      if (action === "inspect") {
         if (runtime.failInspectWithSecrets) {
-          const password = args.join(" ");
-          throw new Error(`backend ${PASSWORD_MARK} ${password} ${NONCE_MARK}`);
+          throw new Error(`backend ${PASSWORD_MARK} ${args.join(" ")} ${NONCE_MARK}`);
+        }
+        if (runtime.inspectFailuresRemaining > 0) {
+          runtime.inspectFailuresRemaining -= 1;
+          throw new Error("inspect unavailable");
         }
         return JSON.stringify(
           document((row) => {
             row.Id = runtime.inspectId;
+            runtime.inspectMutator?.(row);
           }),
         );
       }
-      if (args[0] === "rm") {
+      if (action === "rm") {
+        if (args[3] !== "-f" || args[4] !== ID || args.length !== 5) {
+          throw new Error("broad removal");
+        }
         if (runtime.failRemoval) throw new Error(`rm failed ${PASSWORD_MARK}`);
         return ID;
       }
-      throw new Error(`unexpected docker args ${args[0] ?? ""}`);
+      throw new Error(`unexpected docker args ${action ?? ""}`);
     },
   };
   return runtime;

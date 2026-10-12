@@ -60,6 +60,9 @@ const ownershipBrand = Symbol("stell22-p1-owned-container");
 const REFUSAL_TEXT = {
   DOCKER_ENDPOINT_REMOTE: "Docker endpoint is remote or not a documented local socket.",
   DOCKER_ENDPOINT_UNDETERMINED: "Docker endpoint could not be determined.",
+  DOCKER_ENDPOINT_AMBIGUOUS:
+    "DOCKER_HOST and DOCKER_CONTEXT are both set, so the daemon endpoint is ambiguous.",
+  DOCKER_ENDPOINT_CHANGED: "The Docker endpoint changed after the container was created.",
   DOCKER_UNAVAILABLE: "Docker daemon identity is unavailable.",
   DAEMON_IDENTITY_CHANGED: "Docker daemon identity changed during ownership.",
   IMAGE_INSPECT_FAILED: "The pinned PostgreSQL image could not be inspected.",
@@ -83,13 +86,27 @@ const REFUSAL_TEXT = {
 
 export type ContainerOriginCode = keyof typeof REFUSAL_TEXT;
 
+export type ContainerResourceDisposition =
+  | { readonly kind: "not-created" }
+  | { readonly kind: "ambiguous" }
+  | { readonly kind: "removed"; readonly containerId: string }
+  | {
+      readonly kind: "orphaned";
+      readonly containerId: string;
+      readonly cleanup: "refused" | "failed";
+    };
+
+const NOT_CREATED: ContainerResourceDisposition = { kind: "not-created" };
+
 export class ContainerOriginRefusal extends Error {
   readonly code: ContainerOriginCode;
+  readonly disposition: ContainerResourceDisposition;
 
-  constructor(code: ContainerOriginCode) {
+  constructor(code: ContainerOriginCode, disposition: ContainerResourceDisposition = NOT_CREATED) {
     super(REFUSAL_TEXT[code]);
     this.name = "ContainerOriginRefusal";
     this.code = code;
+    this.disposition = disposition;
   }
 }
 
@@ -98,7 +115,11 @@ export type OriginRuntime = {
   env: Readonly<Record<string, string | undefined>>;
   homedir: string;
   readFile(filePath: string): string;
-  execFileSync(command: string, args: readonly string[]): string;
+  execFileSync(
+    command: string,
+    args: readonly string[],
+    env: Readonly<Record<string, string | undefined>>,
+  ): string;
   randomUUID(): string;
   randomBytes(size: number): Buffer;
 };
@@ -170,10 +191,11 @@ export function defaultOriginRuntime(): OriginRuntime {
     env: process.env,
     homedir: homedir(),
     readFile: (filePath) => fs.readFileSync(filePath, "utf8"),
-    execFileSync: (command, args) =>
+    execFileSync: (command, args, env) =>
       execFileSync(command, [...args], {
         encoding: "utf8",
         windowsHide: true,
+        env: childEnv(env),
       }),
     randomUUID,
     randomBytes,
@@ -181,10 +203,12 @@ export function defaultOriginRuntime(): OriginRuntime {
 }
 
 export function resolveLocalDockerEndpoint(runtime: OriginRuntime): string {
-  const fromHost = runtime.env.DOCKER_HOST;
-  if (typeof fromHost === "string" && fromHost.trim().length > 0) {
-    return allowEndpoint(fromHost);
+  const host = present(runtime.env.DOCKER_HOST);
+  const context = present(runtime.env.DOCKER_CONTEXT);
+  if (host !== undefined && context !== undefined) {
+    throw new ContainerOriginRefusal("DOCKER_ENDPOINT_AMBIGUOUS");
   }
+  if (host !== undefined) return allowEndpoint(host);
   const contextName = selectedContextName(runtime);
   const metaPath = contextMetaPath(runtime, contextName);
   const meta = readOptional(runtime, metaPath);
@@ -251,9 +275,9 @@ export function createOwnedDisposableContainer(
   runtime: OriginRuntime = defaultOriginRuntime(),
 ): OwnedContainerHandle {
   const endpoint = resolveLocalDockerEndpoint(runtime);
-  const daemonId = readDaemonId(runtime);
-  const image = inspectImage(runtime);
-  requireDaemon(runtime, daemonId);
+  const daemonId = readDaemonId(runtime, endpoint);
+  const image = inspectImage(runtime, endpoint);
+  requireDaemon(runtime, endpoint, daemonId);
   const runId = runtime.randomUUID().toLowerCase();
   if (!RUN_ID.test(runId)) throw new ContainerOriginRefusal("OWNERSHIP_UNPROVEN");
   const password = runtime.randomBytes(24).toString("hex");
@@ -263,49 +287,70 @@ export function createOwnedDisposableContainer(
     throw new ContainerOriginRefusal("OWNERSHIP_UNPROVEN");
   }
   const databaseName = `p1disp_${runId.replaceAll("-", "")}`;
-  const containerId = runContainer(runtime, {
-    containerName,
-    runId,
-    password,
-    databaseName,
-  });
-  requireDaemon(runtime, daemonId);
-  const inspected = readInspect(runtime, containerId, "OWNERSHIP_UNPROVEN");
-  const proof = proveContainerOwnership({
-    creationId: containerId,
-    expectedName: containerName,
-    expectedRunId: runId,
-    expectedImageId: image.id,
-    expectedDaemonId: daemonId,
-    observedDaemonId: daemonId,
-    expectedStartedAt: null,
-    expectedPid: null,
-    expectedPort: null,
-    inspectDocument: inspected,
-  });
-  if (!proof.ok) throw new ContainerOriginRefusal(proof.code);
-  requireDaemon(runtime, daemonId);
-  return Object.freeze({
-    [ownershipBrand]: true as const,
-    runId,
-    containerId: proof.containerId,
-    containerName,
-    daemonId,
-    endpoint,
-    imageId: image.id,
-    imageRef: POSTGRES_IMAGE_REF,
-    repositoryDigests: image.repositoryDigests,
-    repositoryDigestStatus: image.repositoryDigestStatus,
-    repositoryDigestLimitation: image.repositoryDigestLimitation,
-    host: proof.host,
-    port: proof.port,
-    startedAt: proof.startedAt,
-    pid: proof.pid,
-    nonce,
-    password,
-    databaseName,
-    user: "p1disp" as const,
-  });
+  let containerId: string;
+  try {
+    containerId = runContainer(runtime, endpoint, {
+      containerName,
+      runId,
+      password,
+      databaseName,
+    });
+  } catch (error) {
+    if (
+      error instanceof ContainerOriginRefusal &&
+      (error.code === "CONTAINER_CREATE_FAILED" || error.code === "CONTAINER_ID_UNPROVEN")
+    ) {
+      throw new ContainerOriginRefusal(error.code, { kind: "ambiguous" });
+    }
+    throw error;
+  }
+  try {
+    requireDaemon(runtime, endpoint, daemonId);
+    const inspected = readInspect(runtime, endpoint, containerId, "OWNERSHIP_UNPROVEN");
+    const proof = proveContainerOwnership({
+      creationId: containerId,
+      expectedName: containerName,
+      expectedRunId: runId,
+      expectedImageId: image.id,
+      expectedDaemonId: daemonId,
+      observedDaemonId: daemonId,
+      expectedStartedAt: null,
+      expectedPid: null,
+      expectedPort: null,
+      inspectDocument: inspected,
+    });
+    if (!proof.ok) throw new ContainerOriginRefusal(proof.code);
+    requireDaemon(runtime, endpoint, daemonId);
+    return Object.freeze({
+      [ownershipBrand]: true as const,
+      runId,
+      containerId: proof.containerId,
+      containerName,
+      daemonId,
+      endpoint,
+      imageId: image.id,
+      imageRef: POSTGRES_IMAGE_REF,
+      repositoryDigests: image.repositoryDigests,
+      repositoryDigestStatus: image.repositoryDigestStatus,
+      repositoryDigestLimitation: image.repositoryDigestLimitation,
+      host: proof.host,
+      port: proof.port,
+      startedAt: proof.startedAt,
+      pid: proof.pid,
+      nonce,
+      password,
+      databaseName,
+      user: "p1disp" as const,
+    });
+  } catch (error) {
+    const code = error instanceof ContainerOriginRefusal ? error.code : "OWNERSHIP_UNPROVEN";
+    throw abandonCreated(
+      runtime,
+      endpoint,
+      { containerId, containerName, runId, imageId: image.id, daemonId },
+      code,
+    );
+  }
 }
 
 export function reconfirmOwnedContainer(
@@ -325,15 +370,21 @@ export function removeOwnedDisposableContainer(
   try {
     reconfirmProof(handle, runtime);
   } catch (error) {
-    if (error instanceof ContainerOriginRefusal) {
-      throw new ContainerOriginRefusal("CLEANUP_REFUSED");
-    }
-    throw error;
+    const code = error instanceof ContainerOriginRefusal ? error.code : "CLEANUP_REFUSED";
+    throw new ContainerOriginRefusal(code, {
+      kind: "orphaned",
+      containerId: handle.containerId,
+      cleanup: "refused",
+    });
   }
   try {
-    runtime.execFileSync("docker", ["rm", "-f", handle.containerId]);
+    callDocker(runtime, handle.endpoint, ["rm", "-f", handle.containerId]);
   } catch {
-    throw new ContainerOriginRefusal("CLEANUP_FAILED");
+    throw new ContainerOriginRefusal("CLEANUP_FAILED", {
+      kind: "orphaned",
+      containerId: handle.containerId,
+      cleanup: "failed",
+    });
   }
 }
 
@@ -342,10 +393,10 @@ function reconfirmProof(
   runtime: OriginRuntime,
 ): DockerOwnershipProof {
   const endpoint = resolveLocalDockerEndpoint(runtime);
-  if (endpoint !== handle.endpoint) throw new ContainerOriginRefusal("DAEMON_IDENTITY_CHANGED");
-  const daemonId = readDaemonId(runtime);
+  if (endpoint !== handle.endpoint) throw new ContainerOriginRefusal("DOCKER_ENDPOINT_CHANGED");
+  const daemonId = readDaemonId(runtime, endpoint);
   if (daemonId !== handle.daemonId) throw new ContainerOriginRefusal("DAEMON_IDENTITY_CHANGED");
-  const inspected = readInspect(runtime, handle.containerId, "CONTAINER_DISAPPEARED");
+  const inspected = readInspect(runtime, endpoint, handle.containerId, "CONTAINER_DISAPPEARED");
   const proof = proveContainerOwnership({
     creationId: handle.containerId,
     expectedName: handle.containerName,
@@ -359,7 +410,7 @@ function reconfirmProof(
     inspectDocument: inspected,
   });
   if (!proof.ok) throw new ContainerOriginRefusal(proof.code);
-  requireDaemon(runtime, handle.daemonId);
+  requireDaemon(runtime, endpoint, handle.daemonId);
   return proof;
 }
 
@@ -385,11 +436,12 @@ function assertHandle(handle: OwnedContainerHandle): void {
 
 function runContainer(
   runtime: OriginRuntime,
+  endpoint: string,
   input: { containerName: string; runId: string; password: string; databaseName: string },
 ): string {
   let stdout: string;
   try {
-    stdout = runtime.execFileSync("docker", [
+    stdout = callDocker(runtime, endpoint, [
       "run",
       "-d",
       "--pull",
@@ -416,7 +468,10 @@ function runContainer(
   return containerId;
 }
 
-function inspectImage(runtime: OriginRuntime): {
+function inspectImage(
+  runtime: OriginRuntime,
+  endpoint: string,
+): {
   id: string;
   repositoryDigests: readonly string[];
   repositoryDigestStatus: "RECORDED" | "UNAVAILABLE";
@@ -424,7 +479,7 @@ function inspectImage(runtime: OriginRuntime): {
 } {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(runtime.execFileSync("docker", ["image", "inspect", POSTGRES_IMAGE_REF]));
+    parsed = JSON.parse(callDocker(runtime, endpoint, ["image", "inspect", POSTGRES_IMAGE_REF]));
   } catch {
     throw new ContainerOriginRefusal("IMAGE_INSPECT_FAILED");
   }
@@ -463,10 +518,10 @@ function inspectImage(runtime: OriginRuntime): {
   };
 }
 
-function readDaemonId(runtime: OriginRuntime): string {
+function readDaemonId(runtime: OriginRuntime, endpoint: string): string {
   let stdout: string;
   try {
-    stdout = runtime.execFileSync("docker", ["info", "--format", "{{.ID}}"]);
+    stdout = callDocker(runtime, endpoint, ["info", "--format", "{{.ID}}"]);
   } catch {
     throw new ContainerOriginRefusal("DOCKER_UNAVAILABLE");
   }
@@ -475,21 +530,140 @@ function readDaemonId(runtime: OriginRuntime): string {
   return daemonId;
 }
 
-function requireDaemon(runtime: OriginRuntime, expected: string): void {
-  const actual = readDaemonId(runtime);
+function requireDaemon(runtime: OriginRuntime, endpoint: string, expected: string): void {
+  const actual = readDaemonId(runtime, endpoint);
   if (actual !== expected) throw new ContainerOriginRefusal("DAEMON_IDENTITY_CHANGED");
 }
 
 function readInspect(
   runtime: OriginRuntime,
+  endpoint: string,
   containerId: string,
   missingCode: "OWNERSHIP_UNPROVEN" | "CONTAINER_DISAPPEARED",
 ): unknown {
   try {
-    return JSON.parse(runtime.execFileSync("docker", ["inspect", containerId]));
+    return JSON.parse(callDocker(runtime, endpoint, ["inspect", containerId]));
   } catch {
     throw new ContainerOriginRefusal(missingCode);
   }
+}
+
+const STRIPPED_DOCKER_ENV = new Set([
+  "DOCKER_HOST",
+  "DOCKER_CONTEXT",
+  "DOCKER_TLS",
+  "DOCKER_TLS_VERIFY",
+  "DOCKER_CERT_PATH",
+]);
+
+// docker/cli resolveContextName uses -H, then a nonempty DOCKER_HOST, before
+// DOCKER_CONTEXT. The published docs say DOCKER_CONTEXT wins, so both values
+// are refused before any command. --host together with --context is a CLI
+// error, so each child gets -H and the same DOCKER_HOST and no DOCKER_CONTEXT.
+function callDocker(runtime: OriginRuntime, endpoint: string, args: readonly string[]): string {
+  return runtime.execFileSync(
+    "docker",
+    ["-H", endpoint, ...args],
+    pinnedEnv(runtime.env, endpoint),
+  );
+}
+
+function pinnedEnv(
+  base: Readonly<Record<string, string | undefined>>,
+  endpoint: string,
+): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(base)) {
+    if (STRIPPED_DOCKER_ENV.has(key)) continue;
+    env[key] = value;
+  }
+  env.DOCKER_HOST = endpoint;
+  return env;
+}
+
+function childEnv(env: Readonly<Record<string, string | undefined>>): NodeJS.ProcessEnv {
+  const child: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === "string") child[key] = value;
+  }
+  return child as NodeJS.ProcessEnv;
+}
+
+function present(value: string | undefined): string | undefined {
+  if (typeof value !== "string" || value.trim().length === 0) return undefined;
+  return value;
+}
+
+function abandonCreated(
+  runtime: OriginRuntime,
+  endpoint: string,
+  created: {
+    containerId: string;
+    containerName: string;
+    runId: string;
+    imageId: string;
+    daemonId: string;
+  },
+  original: ContainerOriginCode,
+): ContainerOriginRefusal {
+  return new ContainerOriginRefusal(original, releaseIfOwned(runtime, endpoint, created));
+}
+
+function releaseIfOwned(
+  runtime: OriginRuntime,
+  endpoint: string,
+  created: {
+    containerId: string;
+    containerName: string;
+    runId: string;
+    imageId: string;
+    daemonId: string;
+  },
+): ContainerResourceDisposition {
+  const orphaned = {
+    kind: "orphaned" as const,
+    containerId: created.containerId,
+    cleanup: "refused" as const,
+  };
+  let current: string;
+  try {
+    current = resolveLocalDockerEndpoint(runtime);
+  } catch {
+    return orphaned;
+  }
+  if (current !== endpoint) return orphaned;
+  let daemonId: string;
+  try {
+    daemonId = readDaemonId(runtime, endpoint);
+  } catch {
+    return orphaned;
+  }
+  if (daemonId !== created.daemonId) return orphaned;
+  let inspected: unknown;
+  try {
+    inspected = readInspect(runtime, endpoint, created.containerId, "OWNERSHIP_UNPROVEN");
+  } catch {
+    return orphaned;
+  }
+  const proof = proveContainerOwnership({
+    creationId: created.containerId,
+    expectedName: created.containerName,
+    expectedRunId: created.runId,
+    expectedImageId: created.imageId,
+    expectedDaemonId: created.daemonId,
+    observedDaemonId: daemonId,
+    expectedStartedAt: null,
+    expectedPid: null,
+    expectedPort: null,
+    inspectDocument: inspected,
+  });
+  if (!proof.ok) return orphaned;
+  try {
+    callDocker(runtime, endpoint, ["rm", "-f", created.containerId]);
+  } catch {
+    return { kind: "orphaned", containerId: created.containerId, cleanup: "failed" };
+  }
+  return { kind: "removed", containerId: created.containerId };
 }
 
 function selectedContextName(runtime: OriginRuntime): string {
