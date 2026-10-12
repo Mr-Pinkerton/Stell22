@@ -82,6 +82,31 @@ jobs:
       - name: Test
         run: npm test
 
+      # Только pull_request. workflow_call, включая Production Deploy, и push
+      # этот шаг не запускают. Флаг не попадает в npm test и не выбирает
+      # базу integrity или restore-drill.
+      - name: Disposable P1 PostgreSQL 17 live read
+        if: github.event_name == 'pull_request'
+        env:
+          P1_DISPOSABLE_LIVE: "1"
+        run: |
+          set -euo pipefail
+          docker info --format 'docker={{.ServerVersion}}'
+          docker image inspect --format '{{.Id}}' postgres:17-alpine
+          log="${RUNNER_TEMP}/p1-disposable-live-read.txt"
+          set +e
+          node scripts/vitest-run.mjs run src/server/internal/p1-isolated-runner/live-read-probe.live.test.ts | tee "$log"
+          status="${PIPESTATUS[0]}"
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "Disposable P1 live read failed with exit ${status}." >&2
+            exit "$status"
+          fi
+          if grep -q 'skipped' "$log"; then
+            echo "Disposable P1 live read reported a skipped test. A skip is not success." >&2
+            exit 1
+          fi
+
       - name: Server Action source policy
         run: npm run security:actions
 
