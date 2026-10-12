@@ -817,7 +817,9 @@ describe("source boundary", () => {
     expect(probe).not.toContain("applyEnabled: true");
     expect(probe).not.toContain("migrate deploy");
     expect(probe).not.toContain("DROP TABLE");
-    expect(probe).not.toContain("$executeRaw");
+    expect(probe).not.toContain("set_config('transaction_read_only'");
+    expect(probe.match(/\$executeRawUnsafe/g)).toEqual(["$executeRawUnsafe"]);
+    expect(probe).toContain("assertSetupStatement(statement)");
     expect(fs.readFileSync(path.join(dir, "contract.ts"), "utf8")).toContain(
       "allowProduction: false",
     );

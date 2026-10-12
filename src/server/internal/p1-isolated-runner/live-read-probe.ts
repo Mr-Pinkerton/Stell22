@@ -18,12 +18,13 @@ import type { P1SchemaEvidence } from "@/server/internal/p1-isolated-runner/sche
 
 /**
  * Read-only PostgreSQL evidence for the disposable P1 runner.
- * The session guard runs inside one repeatable-read transaction.
- * Effective read-only state, timeouts, database identity, and the nonce
- * are checked before history or catalog queries. A failed gate does not
- * issue the later queries. Structural classification stays on
- * `classification`. Container origin is not inspected, so the top-level
- * verdict cannot authorize apply.
+ * Prisma opens one repeatable-read transaction. The first statements are
+ * fixed SET TRANSACTION / SET LOCAL commands. The first SELECT only reads
+ * current_setting and must show the effective read-only snapshot before
+ * any identity, history, or catalog query. A failed gate does not issue
+ * the later queries. Structural classification stays on `classification`.
+ * Container origin is not inspected, so the top-level verdict cannot
+ * authorize apply.
  */
 
 const CONTAINER_ORIGIN = {
@@ -39,19 +40,18 @@ const FULL_AUTHENTICATION = {
 const STATEMENT_TIMEOUT_MS = 5_000;
 const LOCK_TIMEOUT_MS = 2_000;
 
-export const DISPOSABLE_SESSION_GUARD_SQL = `
-SELECT
-  pg_catalog.set_config('default_transaction_read_only', 'on', false) AS default_transaction_read_only,
-  pg_catalog.set_config('transaction_read_only', 'on', true) AS transaction_read_only,
-  pg_catalog.set_config('statement_timeout', '5000', false) AS statement_timeout,
-  pg_catalog.set_config('lock_timeout', '2000', false) AS lock_timeout,
-  pg_catalog.set_config('search_path', 'pg_catalog', false) AS search_path
-`.trim();
+export const DISPOSABLE_TRANSACTION_SETUP_SQL = [
+  "SET TRANSACTION READ ONLY",
+  "SET LOCAL statement_timeout = '5000'",
+  "SET LOCAL lock_timeout = '2000'",
+  "SET LOCAL search_path = pg_catalog",
+] as const;
+
+export type TransactionSetupStatement = (typeof DISPOSABLE_TRANSACTION_SETUP_SQL)[number];
 
 const SESSION_SQL = `
 SELECT
   pg_catalog.current_setting('transaction_read_only') AS transaction_read_only,
-  pg_catalog.current_setting('default_transaction_read_only') AS default_transaction_read_only,
   pg_catalog.current_setting('statement_timeout') AS statement_timeout,
   pg_catalog.current_setting('lock_timeout') AS lock_timeout,
   pg_catalog.current_setting('search_path') AS search_path,
@@ -254,9 +254,13 @@ const AUTHORIZATION_CODE = "CONTAINER_ORIGIN_NOT_ESTABLISHED";
 
 type SessionProof = { backendPid: number; snapshotId: string };
 
-export type ProbeSqlClient = {
+export type ProbeSnapshot = {
+  execute(statement: TransactionSetupStatement): Promise<void>;
   query(sql: string): Promise<unknown>;
-  readOnlySnapshot<T>(fn: (query: (sql: string) => Promise<unknown>) => Promise<T>): Promise<T>;
+};
+
+export type ProbeSqlClient = {
+  readOnlySnapshot<T>(fn: (snapshot: ProbeSnapshot) => Promise<T>): Promise<T>;
   end(): Promise<void>;
 };
 
@@ -375,20 +379,20 @@ async function runRead(
     if (typeof client.readOnlySnapshot !== "function") {
       return tag(
         stop(
-          "session",
-          "SESSION_PROTECTION_FAILED",
+          null,
+          "TRANSACTION_INIT_FAILED",
           "Read-only transaction protection is unavailable",
         ),
         evidenceSource,
       );
     }
-    const report = await client.readOnlySnapshot((query) =>
-      readInsideSnapshot(attestation, query),
+    const report = await client.readOnlySnapshot((snapshot) =>
+      readInsideSnapshot(attestation, snapshot),
     );
     return tag(report, evidenceSource);
   } catch {
     return tag(
-      stop(null, "SNAPSHOT_NOT_PROVEN", "Read-only snapshot could not be proven"),
+      stop(null, "TRANSACTION_INIT_FAILED", "Read-only transaction did not complete"),
       evidenceSource,
     );
   } finally {
@@ -398,17 +402,12 @@ async function runRead(
 
 async function readInsideSnapshot(
   attestation: DisposableAttestation,
-  query: (sql: string) => Promise<unknown>,
+  snapshot: ProbeSnapshot,
 ): Promise<LiveReadReport> {
+  const setupFailure = await establishTransaction(snapshot.execute);
+  if (setupFailure) return setupFailure;
+  const query = snapshot.query;
   const client = { query };
-  const guard = await readQuery(client, DISPOSABLE_SESSION_GUARD_SQL);
-  if (!Array.isArray(guard)) {
-    return stop(
-      "session",
-      codeForFailure("session", guard.sqlState),
-      failureMessage("session", guard.sqlState),
-    );
-  }
 
   const established = await takeProof(query);
   if (established.kind === "stop") return established.report;
@@ -551,15 +550,56 @@ async function connectPrisma(url: string): Promise<ProbeSqlClient> {
   const prisma = new PrismaClient({ datasourceUrl: url });
   await prisma.$connect();
   return {
-    query: (sql) => prisma.$queryRawUnsafe(sql),
     readOnlySnapshot: (fn) =>
-      prisma.$transaction((tx) => fn((sql) => tx.$queryRawUnsafe(sql)), {
-        isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
-        maxWait: 2_000,
-        timeout: 15_000,
-      }),
+      prisma.$transaction(
+        (tx) =>
+          fn({
+            execute: async (statement) => {
+              assertSetupStatement(statement);
+              await tx.$executeRawUnsafe(statement);
+            },
+            query: (sql) => tx.$queryRawUnsafe(sql),
+          }),
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+          maxWait: 2_000,
+          timeout: 15_000,
+        },
+      ),
     end: () => prisma.$disconnect(),
   };
+}
+
+function assertSetupStatement(
+  statement: string,
+): asserts statement is TransactionSetupStatement {
+  if (!(DISPOSABLE_TRANSACTION_SETUP_SQL as readonly string[]).includes(statement)) {
+    throw new Error("Disposable transaction setup refused an unexpected statement");
+  }
+}
+
+async function establishTransaction(
+  execute: (statement: TransactionSetupStatement) => Promise<void>,
+): Promise<LiveReadReport | null> {
+  for (const statement of DISPOSABLE_TRANSACTION_SETUP_SQL) {
+    try {
+      assertSetupStatement(statement);
+      await execute(statement);
+    } catch (error) {
+      return stop(
+        null,
+        "TRANSACTION_INIT_FAILED",
+        transactionInitMessage(statement, readSqlState(error)),
+      );
+    }
+  }
+  return null;
+}
+
+function transactionInitMessage(statement: TransactionSetupStatement, sqlState: string | null): string {
+  return sqlState
+    ? `Transaction initialization failed: ${statement} (${sqlState})`
+    : `Transaction initialization failed: ${statement}`;
 }
 
 async function readQuery(
@@ -625,7 +665,6 @@ function sessionProtected(rows: readonly Record<string, unknown>[]): boolean {
   if (rows.length !== 1 || !row) return false;
   return (
     row.transaction_read_only === "on" &&
-    row.default_transaction_read_only === "on" &&
     row.search_path === "pg_catalog" &&
     row.transaction_isolation === "repeatable read" &&
     timeoutMs(row.statement_timeout) === STATEMENT_TIMEOUT_MS &&

@@ -13,10 +13,12 @@ import {
 import {
   assessDisposableRead,
   DISPOSABLE_READ_SQL,
-  DISPOSABLE_SESSION_GUARD_SQL,
+  DISPOSABLE_TRANSACTION_SETUP_SQL,
   previewDisposableRead,
   type ProbeBatch,
   type ProbeQuery,
+  type ProbeSnapshot,
+  type TransactionSetupStatement,
 } from "@/server/internal/p1-isolated-runner/live-read-probe";
 import { P1_FUNCTION_BODY } from "@/server/internal/p1-isolated-runner/schema-contract";
 
@@ -56,9 +58,7 @@ function sessionProof(
   patch: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    read_only: "on",
     transaction_read_only: "on",
-    default_transaction_read_only: "on",
     search_path: "pg_catalog",
     statement_timeout: "5s",
     lock_timeout: "2s",
@@ -380,25 +380,48 @@ describe("disposable live read mapping", () => {
   });
 });
 
+const SETUP_LABEL_BY_SQL = {
+  "SET TRANSACTION READ ONLY": "set-transaction-read-only",
+  "SET LOCAL statement_timeout = '5000'": "set-statement-timeout",
+  "SET LOCAL lock_timeout = '2000'": "set-lock-timeout",
+  "SET LOCAL search_path = pg_catalog": "set-search-path",
+} as const satisfies Record<TransactionSetupStatement, string>;
+
+const SETUP_LABELS = [
+  "begin-read-only-snapshot",
+  ...DISPOSABLE_TRANSACTION_SETUP_SQL.map((statement) => SETUP_LABEL_BY_SQL[statement]),
+];
+
 function labelSql(sql: string): string {
-  if (sql === DISPOSABLE_SESSION_GUARD_SQL) return "session-guard";
   const match = (
     Object.entries(DISPOSABLE_READ_SQL) as [keyof typeof DISPOSABLE_READ_SQL, string][]
   ).find(([, statement]) => statement === sql);
   return match?.[0] ?? "unknown-sql";
 }
 
-function trackedConnector(respond: (label: string) => ProbeQuery) {
+function trackedConnector(
+  respond: (label: string) => ProbeQuery,
+  options?: { failSetup?: TransactionSetupStatement; setupSqlState?: string },
+) {
   const seen: string[] = [];
   const client = {
-    async query(sql: string) {
-      const label = labelSql(sql);
-      seen.push(label);
-      return respond(label);
-    },
-    readOnlySnapshot<T>(fn: (query: (sql: string) => Promise<unknown>) => Promise<T>) {
+    readOnlySnapshot<T>(fn: (snapshot: ProbeSnapshot) => Promise<T>) {
       seen.push("begin-read-only-snapshot");
-      return fn((sql: string) => client.query(sql));
+      return fn({
+        async execute(statement) {
+          seen.push(SETUP_LABEL_BY_SQL[statement]);
+          if (options?.failSetup === statement) {
+            const error = new Error("transaction setup failed");
+            Object.assign(error, { meta: { code: options.setupSqlState ?? "25001" } });
+            throw error;
+          }
+        },
+        async query(sql: string) {
+          const label = labelSql(sql);
+          seen.push(label);
+          return respond(label);
+        },
+      });
     },
     async end() {
       seen.push("end");
@@ -415,7 +438,6 @@ function proofRow(patch: Record<string, unknown> = {}): ProbeQuery {
 }
 
 function gateRows(label: string, raw = attestation()): ProbeQuery {
-  if (label === "session-guard") return rows([{ requested: "on" }]);
   if (label === "session") return proofRow();
   if (label === "connection") {
     return rows([{ current_database: raw.databaseName, server_version_num: 170004 }]);
@@ -439,22 +461,48 @@ function gateRows(label: string, raw = attestation()): ProbeQuery {
 }
 
 describe("disposable live read query order", () => {
-  it("does not read the session proof when the guard query fails", async () => {
-    const tracked = trackedConnector((label) => {
-      if (label === "session-guard") return failed("57014");
-      throw new Error(`forbidden query ${label}`);
-    });
+  it("does not issue a select when read-only setup fails", async () => {
+    const tracked = trackedConnector(
+      () => {
+        throw new Error("forbidden query");
+      },
+      { failSetup: "SET TRANSACTION READ ONLY", setupSqlState: "25001" },
+    );
     const report = await previewDisposableRead(attestation(), tracked.connect);
     expect(report.evidenceSource).toBe("injected-connector");
-    expect(report.code).toBe("QUERY_TIMEOUT");
+    expect(report.code).toBe("TRANSACTION_INIT_FAILED");
+    expect(report.message).toBe(
+      "Transaction initialization failed: SET TRANSACTION READ ONLY (25001)",
+    );
     expect(report.verdict).toBe("STOP");
     expect(report.schema).toBeNull();
-    expect(tracked.seen).toEqual(["begin-read-only-snapshot", "session-guard", "end"]);
+    expect(report.classification).toBeNull();
+    expect(report.applyEnabled).toBe(false);
+    expect(tracked.seen).toEqual(["begin-read-only-snapshot", "set-transaction-read-only", "end"]);
+  });
+
+  it("stops the remaining setup when a later fixed statement fails", async () => {
+    const tracked = trackedConnector(
+      () => {
+        throw new Error("forbidden query");
+      },
+      { failSetup: "SET LOCAL lock_timeout = '2000'" },
+    );
+    const report = await previewDisposableRead(attestation(), tracked.connect);
+    expect(report.code).toBe("TRANSACTION_INIT_FAILED");
+    expect(report.applyEnabled).toBe(false);
+    expect(report.schema).toBeNull();
+    expect(tracked.seen).toEqual([
+      "begin-read-only-snapshot",
+      "set-transaction-read-only",
+      "set-statement-timeout",
+      "set-lock-timeout",
+      "end",
+    ]);
   });
 
   it("does not read connection, identity, or catalog when session protection fails", async () => {
     const tracked = trackedConnector((label) => {
-      if (label === "session-guard") return rows([{ requested: "on" }]);
       if (label === "session") return proofRow({ transaction_read_only: "off" });
       throw new Error(`forbidden query ${label}`);
     });
@@ -464,12 +512,8 @@ describe("disposable live read query order", () => {
     expect(report.verdict).toBe("STOP");
     expect(report.schema).toBeNull();
     expect(report.applyEnabled).toBe(false);
-    expect(tracked.seen).toEqual([
-      "begin-read-only-snapshot",
-      "session-guard",
-      "session",
-      "end",
-    ]);
+    expect(tracked.seen).toEqual([...SETUP_LABELS, "session", "end"]);
+    expect(tracked.seen.indexOf("session")).toBe(SETUP_LABELS.length);
   });
 
   it("does not read identity, history, or catalog for the wrong database", async () => {
@@ -484,14 +528,7 @@ describe("disposable live read query order", () => {
     expect(report.verdict).toBe("STOP");
     expect(report.connection.currentDatabase).toBe("stell22");
     expect(report.schema).toBeNull();
-    expect(tracked.seen).toEqual([
-      "begin-read-only-snapshot",
-      "session-guard",
-      "session",
-      "session",
-      "connection",
-      "end",
-    ]);
+    expect(tracked.seen).toEqual([...SETUP_LABELS, "session", "session", "connection", "end"]);
   });
 
   it.each([
@@ -516,8 +553,7 @@ describe("disposable live read query order", () => {
       expect(report.verdict).toBe("STOP");
       expect(report.schema).toBeNull();
       expect(tracked.seen).toEqual([
-        "begin-read-only-snapshot",
-        "session-guard",
+        ...SETUP_LABELS,
         "session",
         "session",
         "connection",
@@ -539,8 +575,7 @@ describe("disposable live read query order", () => {
     expect(report.verdict).toBe("STOP");
     expect(report.schema).toBeNull();
     expect(tracked.seen).toEqual([
-      "begin-read-only-snapshot",
-      "session-guard",
+      ...SETUP_LABELS,
       "session",
       "session",
       "connection",
@@ -594,13 +629,7 @@ describe("disposable live read query order", () => {
     expect(report.code).toBe("CONNECTION_CONTINUITY_FAILED");
     expect(report.verdict).toBe("STOP");
     expect(report.schema).toBeNull();
-    expect(tracked.seen).toEqual([
-      "begin-read-only-snapshot",
-      "session-guard",
-      "session",
-      "session",
-      "end",
-    ]);
+    expect(tracked.seen).toEqual([...SETUP_LABELS, "session", "session", "end"]);
   });
 
   it("keeps an injected structural match blocked and separate from a live read", async () => {
@@ -623,8 +652,7 @@ describe("disposable live read query order", () => {
     expect(report.fullTargetAuthentication.status).toBe("NOT_CLAIMED");
     expect(report.containerOrigin.status).toBe("NOT_ESTABLISHED");
     expect(tracked.seen).toEqual([
-      "begin-read-only-snapshot",
-      "session-guard",
+      ...SETUP_LABELS,
       "session",
       "session",
       "connection",
@@ -647,17 +675,31 @@ describe("disposable live read query order", () => {
 });
 
 describe("disposable live read statements", () => {
-  it("sends only schema-qualified selects and leaves apply unimplemented", () => {
+  it("sends fixed transaction setup before schema-qualified selects and leaves apply unimplemented", () => {
     const source = fs.readFileSync(
       path.join(process.cwd(), "src/server/internal/p1-isolated-runner/live-read-probe.ts"),
       "utf8",
     );
     expect(source).not.toContain("migrate resolve");
     expect(source).not.toContain("migrate deploy");
-    expect(source).not.toContain("$executeRaw");
+    expect(source).not.toContain("set_config('transaction_read_only'");
+    expect(source).not.toContain("default_transaction_read_only");
     expect(source).not.toContain("::regclass");
+    expect(source.match(/\$executeRawUnsafe/g)).toEqual(["$executeRawUnsafe"]);
+    expect(source).toContain("assertSetupStatement");
     const forbidden = /\b(INSERT|UPDATE|DELETE|TRUNCATE|CREATE|ALTER|DROP|GRANT|COPY)\b/i;
-    for (const sql of [DISPOSABLE_SESSION_GUARD_SQL, ...Object.values(DISPOSABLE_READ_SQL)]) {
+    expect([...DISPOSABLE_TRANSACTION_SETUP_SQL]).toEqual([
+      "SET TRANSACTION READ ONLY",
+      "SET LOCAL statement_timeout = '5000'",
+      "SET LOCAL lock_timeout = '2000'",
+      "SET LOCAL search_path = pg_catalog",
+    ]);
+    for (const sql of DISPOSABLE_TRANSACTION_SETUP_SQL) {
+      expect(sql.startsWith("SET ")).toBe(true);
+      expect(sql.toLowerCase()).not.toContain("select");
+      expect(sql).not.toMatch(forbidden);
+    }
+    for (const sql of Object.values(DISPOSABLE_READ_SQL)) {
       expect(sql.trim().startsWith("SELECT")).toBe(true);
       expect(sql).not.toMatch(forbidden);
       expect(sql).not.toContain("::regclass");
