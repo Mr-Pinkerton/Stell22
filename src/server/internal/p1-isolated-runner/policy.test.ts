@@ -800,11 +800,26 @@ describe("CLI", { timeout: 30_000 }, () => {
 describe("source boundary", () => {
   it("does not call migrate resolve, docker-entrypoint, or a production override", () => {
     const dir = path.join(process.cwd(), "src/server/internal/p1-isolated-runner");
-    const names = ["executor.ts", "cli.ts", "disposable-target.ts", "env.ts", "migration-set.ts"];
+    const names = [
+      "executor.ts",
+      "cli.ts",
+      "disposable-target.ts",
+      "env.ts",
+      "migration-set.ts",
+      "live-read-probe.ts",
+    ];
     const source = names.map((name) => fs.readFileSync(path.join(dir, name), "utf8")).join("\n");
     expect(source).not.toContain("migrate resolve");
     expect(source).not.toContain("docker-entrypoint");
     expect(source).not.toContain("allowProduction: true");
+    const probe = fs.readFileSync(path.join(dir, "live-read-probe.ts"), "utf8");
+    expect(probe).not.toContain("executeDisposableApply");
+    expect(probe).not.toContain("applyEnabled: true");
+    expect(probe).not.toContain("migrate deploy");
+    expect(probe).not.toContain("DROP TABLE");
+    expect(probe).not.toContain("set_config('transaction_read_only'");
+    expect(probe.match(/\$executeRawUnsafe/g)).toEqual(["$executeRawUnsafe"]);
+    expect(probe).toContain("assertSetupStatement(statement)");
     expect(fs.readFileSync(path.join(dir, "contract.ts"), "utf8")).toContain(
       "allowProduction: false",
     );
