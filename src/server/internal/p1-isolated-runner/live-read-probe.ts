@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import {
   FORBIDDEN_DATABASE_NAMES,
   FORBIDDEN_HOSTS,
@@ -18,9 +18,12 @@ import type { P1SchemaEvidence } from "@/server/internal/p1-isolated-runner/sche
 
 /**
  * Read-only PostgreSQL evidence for the disposable P1 runner.
- * Rows come from SELECT catalog queries. They are not attestation echoes.
- * Container origin is not inspected here, so full target authentication
- * stays unclaimed and apply stays disabled.
+ * The session guard runs inside one repeatable-read transaction.
+ * Effective read-only state, timeouts, database identity, and the nonce
+ * are checked before history or catalog queries. A failed gate does not
+ * issue the later queries. Structural classification stays on
+ * `classification`. Container origin is not inspected, so the top-level
+ * verdict cannot authorize apply.
  */
 
 const CONTAINER_ORIGIN = {
@@ -33,9 +36,13 @@ const FULL_AUTHENTICATION = {
   reason: "Connection evidence and database identity do not establish container origin",
 };
 
+const STATEMENT_TIMEOUT_MS = 5_000;
+const LOCK_TIMEOUT_MS = 2_000;
+
 export const DISPOSABLE_SESSION_GUARD_SQL = `
 SELECT
-  pg_catalog.set_config('default_transaction_read_only', 'on', false) AS read_only,
+  pg_catalog.set_config('default_transaction_read_only', 'on', false) AS default_transaction_read_only,
+  pg_catalog.set_config('transaction_read_only', 'on', true) AS transaction_read_only,
   pg_catalog.set_config('statement_timeout', '5000', false) AS statement_timeout,
   pg_catalog.set_config('lock_timeout', '2000', false) AS lock_timeout,
   pg_catalog.set_config('search_path', 'pg_catalog', false) AS search_path
@@ -43,9 +50,14 @@ SELECT
 
 const SESSION_SQL = `
 SELECT
-  pg_catalog.current_setting('default_transaction_read_only') AS read_only,
+  pg_catalog.current_setting('transaction_read_only') AS transaction_read_only,
+  pg_catalog.current_setting('default_transaction_read_only') AS default_transaction_read_only,
+  pg_catalog.current_setting('statement_timeout') AS statement_timeout,
+  pg_catalog.current_setting('lock_timeout') AS lock_timeout,
   pg_catalog.current_setting('search_path') AS search_path,
-  pg_catalog.current_setting('statement_timeout') AS statement_timeout
+  pg_catalog.current_setting('transaction_isolation') AS transaction_isolation,
+  pg_catalog.pg_backend_pid() AS backend_pid,
+  CAST(pg_catalog.pg_current_snapshot() AS pg_catalog.text) AS snapshot_id
 `.trim();
 
 const CONNECTION_SQL = `
@@ -228,8 +240,23 @@ export type LiveReadReport = {
   message: string;
 };
 
-type ProbeSqlClient = {
+const CATALOG_QUERIES = [
+  "column",
+  "check",
+  "function",
+  "trigger",
+  "extraTriggers",
+  "unexpectedObjects",
+  "foreignKeys",
+] as const satisfies readonly (keyof typeof DISPOSABLE_READ_SQL)[];
+
+const AUTHORIZATION_CODE = "CONTAINER_ORIGIN_NOT_ESTABLISHED";
+
+type SessionProof = { backendPid: number; snapshotId: string };
+
+export type ProbeSqlClient = {
   query(sql: string): Promise<unknown>;
+  readOnlySnapshot<T>(fn: (query: (sql: string) => Promise<unknown>) => Promise<T>): Promise<T>;
   end(): Promise<void>;
 };
 
@@ -314,14 +341,7 @@ export function assessDisposableRead(raw: unknown, batch: ProbeBatch): LiveReadR
     history: mappedHistory.rows,
     schema: schema.value,
   });
-  return {
-    ...identified.report,
-    classification,
-    schema: schema.value,
-    verdict: classification.verdict,
-    code: classification.code,
-    message: "PostgreSQL rows were classified with the structural contract",
-  };
+  return sealAuthorization(identified.report, classification, schema.value);
 }
 
 export async function previewDisposableRead(
@@ -346,31 +366,164 @@ async function runRead(
   try {
     client = await connect(url);
   } catch {
-    return {
-      ...stop(null, "CONNECTION_UNAVAILABLE", "Disposable PostgreSQL connection failed"),
+    return tag(
+      stop(null, "CONNECTION_UNAVAILABLE", "Disposable PostgreSQL connection failed"),
       evidenceSource,
-    };
+    );
   }
   try {
-    const guard = await readQuery(client, DISPOSABLE_SESSION_GUARD_SQL);
-    if (!Array.isArray(guard)) {
-      return {
-        ...stop(
+    if (typeof client.readOnlySnapshot !== "function") {
+      return tag(
+        stop(
           "session",
-          codeForFailure("session", guard.sqlState),
-          failureMessage("session", guard.sqlState),
+          "SESSION_PROTECTION_FAILED",
+          "Read-only transaction protection is unavailable",
         ),
         evidenceSource,
-      };
+      );
     }
-    const batch = {} as ProbeBatch;
-    for (const name of Object.keys(DISPOSABLE_READ_SQL) as (keyof typeof DISPOSABLE_READ_SQL)[]) {
-      batch[name] = await readQuery(client, DISPOSABLE_READ_SQL[name]);
-    }
-    return { ...assessDisposableRead(attestation, batch), evidenceSource };
+    const report = await client.readOnlySnapshot((query) =>
+      readInsideSnapshot(attestation, query),
+    );
+    return tag(report, evidenceSource);
+  } catch {
+    return tag(
+      stop(null, "SNAPSHOT_NOT_PROVEN", "Read-only snapshot could not be proven"),
+      evidenceSource,
+    );
   } finally {
     await client.end();
   }
+}
+
+async function readInsideSnapshot(
+  attestation: DisposableAttestation,
+  query: (sql: string) => Promise<unknown>,
+): Promise<LiveReadReport> {
+  const client = { query };
+  const guard = await readQuery(client, DISPOSABLE_SESSION_GUARD_SQL);
+  if (!Array.isArray(guard)) {
+    return stop(
+      "session",
+      codeForFailure("session", guard.sqlState),
+      failureMessage("session", guard.sqlState),
+    );
+  }
+
+  const established = await takeProof(query);
+  if (established.kind === "stop") return established.report;
+  const confirmed = await confirmProof(query, established.proof);
+  if (confirmed.kind === "stop") return confirmed.report;
+
+  const connection = await readQuery(client, DISPOSABLE_READ_SQL.connection);
+  if (!Array.isArray(connection)) {
+    return stop(
+      "connection",
+      codeForFailure("connection", connection.sqlState),
+      failureMessage("connection", connection.sqlState),
+    );
+  }
+  const connected = readConnection(connection);
+  if (connected.kind === "malformed") {
+    return stop("connection", "MALFORMED_CATALOG_RESULT", "Connection evidence is malformed");
+  }
+  const connectedReport = base(connected.value);
+  if (
+    connected.value.currentDatabase !== attestation.databaseName ||
+    isForbiddenDatabase(connected.value.currentDatabase)
+  ) {
+    return {
+      ...connectedReport,
+      code: "WRONG_DATABASE_IDENTITY",
+      verdict: "STOP",
+      message: "Connected database is not this disposable run",
+    };
+  }
+  if (connected.value.serverVersionNum < 170000 || connected.value.serverVersionNum >= 180000) {
+    return {
+      ...connectedReport,
+      code: "WRONG_DATABASE_IDENTITY",
+      verdict: "STOP",
+      message: "Connected server is not PostgreSQL 17",
+    };
+  }
+
+  const beforeIdentity = await confirmProof(query, established.proof, connectedReport);
+  if (beforeIdentity.kind === "stop") return beforeIdentity.report;
+  const identity = await readQuery(client, DISPOSABLE_READ_SQL.identity);
+  if (!Array.isArray(identity)) {
+    return stop(
+      "identity",
+      codeForFailure("identity", identity.sqlState),
+      failureMessage("identity", identity.sqlState),
+      connectedReport,
+    );
+  }
+  const identified = readIdentity(identity, connectedReport);
+  if (identified.kind === "stop") return identified.report;
+  if (identified.row.nonce !== attestation.nonce) {
+    return {
+      ...identified.report,
+      code: "DISPOSABLE_NONCE_MISMATCH",
+      verdict: "STOP",
+      message: "Database nonce does not match the attestation",
+    };
+  }
+  if (
+    identified.row.runId !== attestation.runId ||
+    identified.row.containerId !== attestation.containerId
+  ) {
+    return {
+      ...identified.report,
+      code: "DISPOSABLE_IDENTITY_MISMATCH",
+      verdict: "STOP",
+      message: "Database run identity does not match the attestation",
+    };
+  }
+
+  const beforeHistory = await confirmProof(query, established.proof, identified.report);
+  if (beforeHistory.kind === "stop") return beforeHistory.report;
+  const history = await readQuery(client, DISPOSABLE_READ_SQL.history);
+  if (!Array.isArray(history)) {
+    return stop(
+      "history",
+      codeForFailure("history", history.sqlState),
+      failureMessage("history", history.sqlState),
+      identified.report,
+    );
+  }
+  if (readHistory(history).kind === "malformed") {
+    return stop(
+      "history",
+      "MALFORMED_CATALOG_RESULT",
+      "Migration history rows are malformed",
+      identified.report,
+    );
+  }
+
+  const beforeCatalog = await confirmProof(query, established.proof, identified.report);
+  if (beforeCatalog.kind === "stop") return beforeCatalog.report;
+  const batch = {
+    session: established.rows,
+    connection,
+    identity,
+    history,
+  } as ProbeBatch;
+  for (const name of CATALOG_QUERIES) {
+    const result = await readQuery(client, DISPOSABLE_READ_SQL[name]);
+    batch[name] = result;
+    if (!Array.isArray(result)) {
+      return stop(
+        name,
+        codeForFailure(name, result.sqlState),
+        failureMessage(name, result.sqlState),
+        identified.report,
+      );
+    }
+  }
+  const afterCatalog = await confirmProof(query, established.proof, identified.report);
+  if (afterCatalog.kind === "stop") return afterCatalog.report;
+  return assessDisposableRead(attestation, batch);
 }
 
 function buildDisposableReadUrl(attestation: DisposableAttestation): string {
@@ -399,18 +552,38 @@ async function connectPrisma(url: string): Promise<ProbeSqlClient> {
   await prisma.$connect();
   return {
     query: (sql) => prisma.$queryRawUnsafe(sql),
+    readOnlySnapshot: (fn) =>
+      prisma.$transaction((tx) => fn((sql) => tx.$queryRawUnsafe(sql)), {
+        isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+        maxWait: 2_000,
+        timeout: 15_000,
+      }),
     end: () => prisma.$disconnect(),
   };
 }
 
-async function readQuery(client: ProbeSqlClient, sql: string): Promise<ProbeQuery> {
+async function readQuery(
+  client: { query(sql: string): Promise<unknown> },
+  sql: string,
+): Promise<ProbeQuery> {
   try {
     const result = await client.query(sql);
+    if (isProbeFailure(result)) return result;
     if (!Array.isArray(result)) return { failed: true, sqlState: null };
     return result as Record<string, unknown>[];
   } catch (error) {
     return { failed: true, sqlState: readSqlState(error) };
   }
+}
+
+function isProbeFailure(value: unknown): value is ProbeFailure {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as { failed?: unknown; sqlState?: unknown };
+  return (
+    record.failed === true &&
+    (record.sqlState === null ||
+      (typeof record.sqlState === "string" && /^[0-9A-Z]{5}$/.test(record.sqlState)))
+  );
 }
 
 function stopOnQuery(
@@ -451,12 +624,131 @@ function sessionProtected(rows: readonly Record<string, unknown>[]): boolean {
   const row = rows[0];
   if (rows.length !== 1 || !row) return false;
   return (
-    row.read_only === "on" &&
+    row.transaction_read_only === "on" &&
+    row.default_transaction_read_only === "on" &&
     row.search_path === "pg_catalog" &&
-    typeof row.statement_timeout === "string" &&
-    row.statement_timeout.length > 0 &&
-    row.statement_timeout !== "0"
+    row.transaction_isolation === "repeatable read" &&
+    timeoutMs(row.statement_timeout) === STATEMENT_TIMEOUT_MS &&
+    timeoutMs(row.lock_timeout) === LOCK_TIMEOUT_MS &&
+    readSessionProof(rows) !== null
   );
+}
+
+function readSessionProof(rows: readonly Record<string, unknown>[]): SessionProof | null {
+  const row = rows[0];
+  if (!row || rows.length !== 1) return null;
+  const backendPid = readInteger(row.backend_pid);
+  if (backendPid === null || backendPid <= 0) return null;
+  if (typeof row.snapshot_id !== "string" || !/^[0-9]+:[0-9]+:[0-9,]*$/.test(row.snapshot_id)) {
+    return null;
+  }
+  return { backendPid, snapshotId: row.snapshot_id };
+}
+
+async function takeProof(
+  query: (sql: string) => Promise<unknown>,
+  prior: LiveReadReport = emptyReport(),
+): Promise<
+  | { kind: "ok"; proof: SessionProof; rows: Record<string, unknown>[] }
+  | { kind: "stop"; report: LiveReadReport }
+> {
+  const result = await readQuery({ query }, DISPOSABLE_READ_SQL.session);
+  if (!Array.isArray(result)) {
+    return {
+      kind: "stop",
+      report: stop(
+        "session",
+        codeForFailure("session", result.sqlState),
+        failureMessage("session", result.sqlState),
+        prior,
+      ),
+    };
+  }
+  const proof = readSessionProof(result);
+  if (!sessionProtected(result) || !proof) {
+    return {
+      kind: "stop",
+      report: stop(
+        "session",
+        "SESSION_PROTECTION_FAILED",
+        "Read-only session protection is not active",
+        prior,
+      ),
+    };
+  }
+  return { kind: "ok", proof, rows: result };
+}
+
+async function confirmProof(
+  query: (sql: string) => Promise<unknown>,
+  expected: SessionProof,
+  prior: LiveReadReport = emptyReport(),
+): Promise<{ kind: "ok" } | { kind: "stop"; report: LiveReadReport }> {
+  const taken = await takeProof(query, prior);
+  if (taken.kind === "stop") return taken;
+  if (taken.proof.backendPid !== expected.backendPid) {
+    return {
+      kind: "stop",
+      report: stop(
+        "session",
+        "CONNECTION_CONTINUITY_FAILED",
+        "PostgreSQL connection continuity is not proven",
+        prior,
+      ),
+    };
+  }
+  if (taken.proof.snapshotId !== expected.snapshotId) {
+    return {
+      kind: "stop",
+      report: stop(
+        "session",
+        "SNAPSHOT_NOT_PROVEN",
+        "Read-only snapshot is not consistent",
+        prior,
+      ),
+    };
+  }
+  return { kind: "ok" };
+}
+
+function timeoutMs(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const match = /^(\d+)(ms|s|min|h)?$/.exec(value.trim());
+  if (!match?.[1]) return null;
+  const amount = Number(match[1]);
+  if (!Number.isSafeInteger(amount)) return null;
+  const unit = match[2] ?? "ms";
+  const factor = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "min" ? 60_000 : 3_600_000;
+  const total = amount * factor;
+  return Number.isSafeInteger(total) ? total : null;
+}
+
+function sealAuthorization(
+  prior: LiveReadReport,
+  classification: Classification,
+  schema: P1SchemaEvidence,
+): LiveReadReport {
+  const structuralAuthorization =
+    classification.verdict === "READY_FOR_DISPOSABLE_APPLY" ||
+    classification.verdict === "ALREADY_APPLIED";
+  return {
+    ...prior,
+    classification,
+    schema,
+    containerOrigin: CONTAINER_ORIGIN,
+    fullTargetAuthentication: FULL_AUTHENTICATION,
+    applyEnabled: false,
+    verdict: structuralAuthorization ? "BLOCKED" : classification.verdict,
+    code: structuralAuthorization ? AUTHORIZATION_CODE : classification.code,
+    failedQuery: null,
+    message: structuralAuthorization
+      ? "Container origin is unverified, so structural classification is not apply authorization"
+      : "PostgreSQL rows were classified with the structural contract",
+  };
+}
+
+function tag(report: LiveReadReport, evidenceSource: LiveEvidenceSource): LiveReadReport {
+  return { ...report, evidenceSource };
 }
 
 function readConnection(

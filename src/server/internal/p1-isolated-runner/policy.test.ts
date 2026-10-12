@@ -812,6 +812,12 @@ describe("source boundary", () => {
     expect(source).not.toContain("migrate resolve");
     expect(source).not.toContain("docker-entrypoint");
     expect(source).not.toContain("allowProduction: true");
+    const probe = fs.readFileSync(path.join(dir, "live-read-probe.ts"), "utf8");
+    expect(probe).not.toContain("executeDisposableApply");
+    expect(probe).not.toContain("applyEnabled: true");
+    expect(probe).not.toContain("migrate deploy");
+    expect(probe).not.toContain("DROP TABLE");
+    expect(probe).not.toContain("$executeRaw");
     expect(fs.readFileSync(path.join(dir, "contract.ts"), "utf8")).toContain(
       "allowProduction: false",
     );

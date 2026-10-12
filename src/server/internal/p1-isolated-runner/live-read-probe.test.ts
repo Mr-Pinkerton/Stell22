@@ -52,9 +52,26 @@ function rows(value: Record<string, unknown>[]): ProbeQuery {
   return value;
 }
 
+function sessionProof(
+  patch: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    read_only: "on",
+    transaction_read_only: "on",
+    default_transaction_read_only: "on",
+    search_path: "pg_catalog",
+    statement_timeout: "5s",
+    lock_timeout: "2s",
+    transaction_isolation: "repeatable read",
+    backend_pid: 4242,
+    snapshot_id: "10:10:",
+    ...patch,
+  };
+}
+
 function readyBatch(raw: DisposableAttestation): ProbeBatch {
   return {
-    session: rows([{ read_only: "on", search_path: "pg_catalog", statement_timeout: "5s" }]),
+    session: rows([sessionProof()]),
     connection: rows([{ current_database: raw.databaseName, server_version_num: 170004 }]),
     identity: rows([{ run_id: raw.runId, nonce: raw.nonce, container_id: raw.containerId }]),
     history: rows(
@@ -156,19 +173,44 @@ describe("disposable live read mapping", () => {
     expect(report.containerOrigin.status).toBe("NOT_ESTABLISHED");
     expect(report.fullTargetAuthentication.status).toBe("NOT_CLAIMED");
     expect(report.applyEnabled).toBe(false);
-    expect(report.verdict).toBe("READY_FOR_DISPOSABLE_APPLY");
-    expect(report.code).toBe("P1_ABSENT");
+    expect(report.classification).toEqual({
+      verdict: "READY_FOR_DISPOSABLE_APPLY",
+      code: "P1_ABSENT",
+    });
+    expect(report.verdict).toBe("BLOCKED");
+    expect(report.code).toBe("CONTAINER_ORIGIN_NOT_ESTABLISHED");
     expect(report.schema?.column).toBeNull();
   });
 
-  it("maps a structural catalog match without treating it as container proof", () => {
+  it("maps a structural catalog match without granting apply authorization", () => {
     const report = assess(matchingCatalog(readyBatch(attestation())));
     expect(report.evidenceSource).toBe("caller-supplied-rows");
     expect(report.applyEnabled).toBe(false);
     expect(report.containerOrigin.status).toBe("NOT_ESTABLISHED");
-    expect(report.verdict).toBe("ALREADY_APPLIED");
-    expect(report.code).toBe("P1_APPLIED");
+    expect(report.fullTargetAuthentication.status).toBe("NOT_CLAIMED");
+    expect(report.classification).toEqual({ verdict: "ALREADY_APPLIED", code: "P1_APPLIED" });
+    expect(report.verdict).toBe("BLOCKED");
+    expect(report.code).toBe("CONTAINER_ORIGIN_NOT_ESTABLISHED");
     expect(report.schema?.column?.matchCount).toBe(1);
+  });
+
+  it("rejects a pg_get definition that differs from the pinned function body", () => {
+    const batch = matchingCatalog(readyBatch(attestation()));
+    const definition = (batch.function as Record<string, unknown>[])[0]?.definition;
+    batch.function = rows([
+      {
+        ...(batch.function as Record<string, unknown>[])[0],
+        definition: String(definition).replace("immutable", "optional"),
+      },
+    ]);
+    const report = assess(batch);
+    expect(report.classification).toEqual({
+      verdict: "STOP",
+      code: "OBJECT_CONTRACT_MISMATCH",
+    });
+    expect(report.verdict).toBe("STOP");
+    expect(report.code).toBe("OBJECT_CONTRACT_MISMATCH");
+    expect(report.applyEnabled).toBe(false);
   });
 
   it("does not treat a missing identity table as an absent migration", () => {
@@ -335,6 +377,272 @@ describe("disposable live read mapping", () => {
     expect(seen).not.toContain("/stell22");
     expect(report.message).not.toContain(PRODUCTION_URL);
     expect(report.message).not.toContain(attestation().password);
+  });
+});
+
+function labelSql(sql: string): string {
+  if (sql === DISPOSABLE_SESSION_GUARD_SQL) return "session-guard";
+  const match = (
+    Object.entries(DISPOSABLE_READ_SQL) as [keyof typeof DISPOSABLE_READ_SQL, string][]
+  ).find(([, statement]) => statement === sql);
+  return match?.[0] ?? "unknown-sql";
+}
+
+function trackedConnector(respond: (label: string) => ProbeQuery) {
+  const seen: string[] = [];
+  const client = {
+    async query(sql: string) {
+      const label = labelSql(sql);
+      seen.push(label);
+      return respond(label);
+    },
+    readOnlySnapshot<T>(fn: (query: (sql: string) => Promise<unknown>) => Promise<T>) {
+      seen.push("begin-read-only-snapshot");
+      return fn((sql: string) => client.query(sql));
+    },
+    async end() {
+      seen.push("end");
+    },
+  };
+  return {
+    seen,
+    connect: async () => client,
+  };
+}
+
+function proofRow(patch: Record<string, unknown> = {}): ProbeQuery {
+  return rows([sessionProof(patch)]);
+}
+
+function gateRows(label: string, raw = attestation()): ProbeQuery {
+  if (label === "session-guard") return rows([{ requested: "on" }]);
+  if (label === "session") return proofRow();
+  if (label === "connection") {
+    return rows([{ current_database: raw.databaseName, server_version_num: 170004 }]);
+  }
+  if (label === "identity") {
+    return rows([{ run_id: raw.runId, nonce: raw.nonce, container_id: raw.containerId }]);
+  }
+  if (label === "history") return readyBatch(raw).history;
+  if (label === "foreignKeys") return rows([{ foreign_key_count: 0 }]);
+  if (
+    label === "column" ||
+    label === "check" ||
+    label === "function" ||
+    label === "trigger" ||
+    label === "extraTriggers" ||
+    label === "unexpectedObjects"
+  ) {
+    return rows([]);
+  }
+  throw new Error(`unexpected query ${label}`);
+}
+
+describe("disposable live read query order", () => {
+  it("does not read the session proof when the guard query fails", async () => {
+    const tracked = trackedConnector((label) => {
+      if (label === "session-guard") return failed("57014");
+      throw new Error(`forbidden query ${label}`);
+    });
+    const report = await previewDisposableRead(attestation(), tracked.connect);
+    expect(report.evidenceSource).toBe("injected-connector");
+    expect(report.code).toBe("QUERY_TIMEOUT");
+    expect(report.verdict).toBe("STOP");
+    expect(report.schema).toBeNull();
+    expect(tracked.seen).toEqual(["begin-read-only-snapshot", "session-guard", "end"]);
+  });
+
+  it("does not read connection, identity, or catalog when session protection fails", async () => {
+    const tracked = trackedConnector((label) => {
+      if (label === "session-guard") return rows([{ requested: "on" }]);
+      if (label === "session") return proofRow({ transaction_read_only: "off" });
+      throw new Error(`forbidden query ${label}`);
+    });
+    const report = await previewDisposableRead(attestation(), tracked.connect);
+    expect(report.evidenceSource).toBe("injected-connector");
+    expect(report.code).toBe("SESSION_PROTECTION_FAILED");
+    expect(report.verdict).toBe("STOP");
+    expect(report.schema).toBeNull();
+    expect(report.applyEnabled).toBe(false);
+    expect(tracked.seen).toEqual([
+      "begin-read-only-snapshot",
+      "session-guard",
+      "session",
+      "end",
+    ]);
+  });
+
+  it("does not read identity, history, or catalog for the wrong database", async () => {
+    const tracked = trackedConnector((label) => {
+      if (label === "connection") {
+        return rows([{ current_database: "stell22", server_version_num: 170004 }]);
+      }
+      return gateRows(label);
+    });
+    const report = await previewDisposableRead(attestation(), tracked.connect);
+    expect(report.code).toBe("WRONG_DATABASE_IDENTITY");
+    expect(report.verdict).toBe("STOP");
+    expect(report.connection.currentDatabase).toBe("stell22");
+    expect(report.schema).toBeNull();
+    expect(tracked.seen).toEqual([
+      "begin-read-only-snapshot",
+      "session-guard",
+      "session",
+      "session",
+      "connection",
+      "end",
+    ]);
+  });
+
+  it.each([
+    ["nonce", { nonce: "x".repeat(32) }, "DISPOSABLE_NONCE_MISMATCH"],
+    ["run id", { run_id: "22222222-2222-4222-8222-222222222222" }, "DISPOSABLE_IDENTITY_MISMATCH"],
+    ["container id", { container_id: "b".repeat(64) }, "DISPOSABLE_IDENTITY_MISMATCH"],
+  ] as const)(
+    "does not read history or catalog for a wrong %s",
+    async (_label, patch, code) => {
+      const raw = attestation();
+      const tracked = trackedConnector((label) => {
+        if (label === "identity") {
+          return rows([
+            { run_id: raw.runId, nonce: raw.nonce, container_id: raw.containerId, ...patch },
+          ]);
+        }
+        return gateRows(label, raw);
+      });
+      const report = await previewDisposableRead(raw, tracked.connect);
+      expect(report.evidenceSource).toBe("injected-connector");
+      expect(report.code).toBe(code);
+      expect(report.verdict).toBe("STOP");
+      expect(report.schema).toBeNull();
+      expect(tracked.seen).toEqual([
+        "begin-read-only-snapshot",
+        "session-guard",
+        "session",
+        "session",
+        "connection",
+        "session",
+        "identity",
+        "end",
+      ]);
+    },
+  );
+
+  it("stops before catalog when the history query fails", async () => {
+    const tracked = trackedConnector((label) => {
+      if (label === "history") return failed("42P01");
+      return gateRows(label);
+    });
+    const report = await previewDisposableRead(attestation(), tracked.connect);
+    expect(report.code).toBe("QUERY_FAILED");
+    expect(report.failedQuery).toBe("history");
+    expect(report.verdict).toBe("STOP");
+    expect(report.schema).toBeNull();
+    expect(tracked.seen).toEqual([
+      "begin-read-only-snapshot",
+      "session-guard",
+      "session",
+      "session",
+      "connection",
+      "session",
+      "identity",
+      "session",
+      "history",
+      "end",
+    ]);
+  });
+
+  it("stops when effective read-only state is absent", () => {
+    const batch = readyBatch(attestation());
+    batch.session = rows([sessionProof({ transaction_read_only: "off", lock_timeout: "0" })]);
+    const stopped = assess(batch);
+    expect(stopped.code).toBe("SESSION_PROTECTION_FAILED");
+    expect(stopped.verdict).toBe("STOP");
+    expect(stopped.schema).toBeNull();
+    expect(stopped.classification).toBeNull();
+  });
+
+  it("stops when a later snapshot differs from the guarded snapshot", async () => {
+    let proofs = 0;
+    const tracked = trackedConnector((label) => {
+      if (label === "session") {
+        proofs += 1;
+        if (proofs > 4) return proofRow({ snapshot_id: "99:99:" });
+      }
+      return gateRows(label);
+    });
+    const report = await previewDisposableRead(attestation(), tracked.connect);
+    expect(report.code).toBe("SNAPSHOT_NOT_PROVEN");
+    expect(report.verdict).toBe("STOP");
+    expect(report.schema).toBeNull();
+    expect(report.classification).toBeNull();
+    expect(tracked.seen).toContain("history");
+    expect(tracked.seen).not.toContain("column");
+    expect(tracked.seen.at(-2)).toBe("session");
+  });
+
+  it("stops when the connection pid changes inside the snapshot", async () => {
+    let proofs = 0;
+    const tracked = trackedConnector((label) => {
+      if (label === "session") {
+        proofs += 1;
+        if (proofs === 2) return proofRow({ backend_pid: 7 });
+      }
+      return gateRows(label);
+    });
+    const report = await previewDisposableRead(attestation(), tracked.connect);
+    expect(report.code).toBe("CONNECTION_CONTINUITY_FAILED");
+    expect(report.verdict).toBe("STOP");
+    expect(report.schema).toBeNull();
+    expect(tracked.seen).toEqual([
+      "begin-read-only-snapshot",
+      "session-guard",
+      "session",
+      "session",
+      "end",
+    ]);
+  });
+
+  it("keeps an injected structural match blocked and separate from a live read", async () => {
+    const raw = attestation();
+    const matching = matchingCatalog(readyBatch(raw));
+    const tracked = trackedConnector((label) => {
+      if (label === "history") return matching.history;
+      if (label === "column") return matching.column;
+      if (label === "check") return matching.check;
+      if (label === "function") return matching.function;
+      if (label === "trigger") return matching.trigger;
+      return gateRows(label, raw);
+    });
+    const report = await previewDisposableRead(raw, tracked.connect);
+    expect(report.evidenceSource).toBe("injected-connector");
+    expect(report.classification).toEqual({ verdict: "ALREADY_APPLIED", code: "P1_APPLIED" });
+    expect(report.verdict).toBe("BLOCKED");
+    expect(report.code).toBe("CONTAINER_ORIGIN_NOT_ESTABLISHED");
+    expect(report.applyEnabled).toBe(false);
+    expect(report.fullTargetAuthentication.status).toBe("NOT_CLAIMED");
+    expect(report.containerOrigin.status).toBe("NOT_ESTABLISHED");
+    expect(tracked.seen).toEqual([
+      "begin-read-only-snapshot",
+      "session-guard",
+      "session",
+      "session",
+      "connection",
+      "session",
+      "identity",
+      "session",
+      "history",
+      "session",
+      "column",
+      "check",
+      "function",
+      "trigger",
+      "extraTriggers",
+      "unexpectedObjects",
+      "foreignKeys",
+      "session",
+      "end",
+    ]);
   });
 });
 
