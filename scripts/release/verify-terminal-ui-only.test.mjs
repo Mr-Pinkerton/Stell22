@@ -11,6 +11,11 @@ import {
 } from "./verify-terminal-ui-only.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const CANDIDATE_REF = "refs/heads/candidate/terminal-ui-only-01";
+
+function verifiedCiEnvironment() {
+  return process.env.GITHUB_ACTIONS === "true" && process.env.CI === "true";
+}
 
 function accepted() {
   return {
@@ -258,22 +263,56 @@ test("success text records identities and refuses deploy authority", () => {
   assert.doesNotMatch(text, /DEPLOY AUTHORIZATION:\nYES/);
 });
 
-test("the published candidate objects verify without mutating refs", () => {
-  const before = spawnSync("git", ["rev-parse", "refs/heads/candidate/terminal-ui-only-01"], {
-    cwd: root,
-    encoding: "utf8",
-  });
+test("the published candidate objects verify without mutating refs", (t) => {
+  const probe = spawnSync(
+    "git",
+    ["rev-parse", "--verify", "--end-of-options", CANDIDATE_REF],
+    { cwd: root, encoding: "utf8" },
+  );
+  if (probe.error) {
+    assert.fail(`git probe failed: ${probe.error.message}\n${probe.stderr ?? ""}`);
+  }
+  if (probe.status === 128) {
+    if (verifiedCiEnvironment()) {
+      t.skip(
+        `${CANDIDATE_REF} is absent in this verified CI checkout; positive release-object integration did not run and is not claimed as passed`,
+      );
+      return;
+    }
+    assert.fail(
+      `${CANDIDATE_REF} is absent outside a verified CI environment; positive integration is required here\n${probe.stderr ?? ""}`,
+    );
+  }
+  if (probe.status !== 0) {
+    assert.fail(
+      `git rev-parse ${CANDIDATE_REF} failed with status ${probe.status}\n${probe.stderr ?? ""}`,
+    );
+  }
+  const beforeSha = probe.stdout.trim();
+  if (!/^[0-9a-f]{40}$/.test(beforeSha)) {
+    assert.fail(`corrupt candidate ref output: ${JSON.stringify(probe.stdout)}`);
+  }
+  if (beforeSha !== RELEASE.candidateSha) {
+    assert.fail(
+      `${CANDIDATE_REF} points at ${beforeSha}, not the approved release ${RELEASE.candidateSha}`,
+    );
+  }
+
   const script = path.join(root, "scripts", "release", "verify-terminal-ui-only.mjs");
   const run = spawnSync(process.execPath, [script], { cwd: root, encoding: "utf8" });
-  const after = spawnSync("git", ["rev-parse", "refs/heads/candidate/terminal-ui-only-01"], {
-    cwd: root,
-    encoding: "utf8",
-  });
-  assert.equal(run.status, 0, run.stderr);
+  const after = spawnSync(
+    "git",
+    ["rev-parse", "--verify", "--end-of-options", CANDIDATE_REF],
+    { cwd: root, encoding: "utf8" },
+  );
+  assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
   assert.match(run.stdout, /RESULT: RELEASE SOURCE VERIFIED/);
   assert.match(run.stdout, /CI evidence:\nNOT VERIFIED BY THIS OFFLINE GATE\./);
   assert.match(run.stdout, /PRODUCTION RUNTIME:\nNOT VERIFIED\./);
   assert.match(run.stdout, /DEPLOY AUTHORIZATION:\nNO\./);
-  assert.equal(before.stdout, after.stdout);
+  if (after.error || after.status !== 0) {
+    assert.fail(`git ref check after verification failed\n${after.stderr ?? ""}`);
+  }
+  assert.equal(after.stdout.trim(), beforeSha);
   assert.equal(after.stdout.trim(), RELEASE.candidateSha);
 });
