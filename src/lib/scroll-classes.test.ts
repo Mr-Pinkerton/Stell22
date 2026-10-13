@@ -66,4 +66,29 @@ describe("terminal operation layout classes", () => {
     expect(terminalStickyOperationClass).toContain("min-h-0");
     expect(terminalStickyOperationClass).toContain("flex-1");
   });
+
+  it("stacks the docked Torcovka footer below lg and restores the row at lg", () => {
+    const docked = terminalConfirmBarClass("docked");
+    expect(docked).toContain("flex-col");
+    expect(docked).toContain("items-stretch");
+    expect(docked).toContain("lg:flex-row");
+    expect(docked).toContain("lg:items-center");
+    expect(docked).toContain("max-lg:[&>button]:w-full");
+    expect(docked).toContain("flex-none");
+    expect(docked).not.toContain("sticky");
+    expect(docked).not.toContain("bottom-0");
+    expect(docked).not.toContain("z-10");
+    expect(docked).not.toMatch(/(?:^|\s)-mx-6(?:\s|$)/);
+    expect(docked).not.toMatch(/(?:^|\s)-mb-6(?:\s|$)/);
+    expect(terminalOperationBodyClass).toContain("overflow-y-auto");
+    expect(terminalOperationBodyClass).toContain("min-h-0");
+    expect(terminalOperationBodyClass).toContain("flex-1");
+  });
+
+  it("keeps the sticky confirm bar on one centered row", () => {
+    expect(terminalConfirmBarClass("sticky")).toBe(
+      "bg-card flex items-center justify-between gap-4 border-t px-6 py-4 sticky bottom-0 z-10 -mx-6 -mb-6 mt-auto",
+    );
+    expect(terminalConfirmBarClass()).toBe(terminalConfirmBarClass("sticky"));
+  });
 });

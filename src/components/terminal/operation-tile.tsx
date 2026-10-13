@@ -81,7 +81,7 @@ export function OperationTileRow({
         ref.current = node;
         if (rowRef) rowRef.current = node;
       }}
-      className="scrollbar-thin-x flex w-full touch-pan-x cursor-grab gap-3 overflow-x-auto pb-2 select-none active:cursor-grabbing"
+      className="scrollbar-thin-x flex w-full max-w-full min-w-0 cursor-grab touch-pan-x gap-3 overflow-x-auto pb-2 select-none active:cursor-grabbing"
       onPointerDown={onPointerDown}
     >
       {children}
@@ -89,13 +89,23 @@ export function OperationTileRow({
   );
 }
 
-/** Сетка 5×N — все плитки на экране, без горизонтального скролла. */
+/**
+ * Сетка плиток. На широком экране — 5 колонок, как раньше.
+ * Ниже xl колонок меньше, чтобы карточка не сжималась до нечитаемой ширины.
+ */
 export function OperationTileGrid({ children }: { children: React.ReactNode }) {
-  return <div className="grid grid-cols-5 gap-3">{children}</div>;
+  return (
+    <div className="grid min-w-0 grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+      {children}
+    </div>
+  );
 }
 
-/** 5 плиток в ряд (разделы). gap-3 × 4 = 3rem */
-const TILE_WIDTH_SECTION = "w-[calc((100%-3rem)/5)] min-w-[calc((100%-3rem)/5)]";
+/**
+ * 5 плиток в ряд на широком экране (gap-3 × 4 = 3rem).
+ * На узком ширина не падает ниже 13.75rem — лишние уходят в скролл ряда.
+ */
+const TILE_WIDTH_SECTION = "w-[calc((100%-3rem)/5)] min-w-[13.75rem]";
 /** 3 плитки в ряд (выбор сотрудника). gap-3 × 2 = 1.5rem */
 const TILE_WIDTH_PERSON = "w-[calc((100%-1.5rem)/3)] min-w-[calc((100%-1.5rem)/3)]";
 /** Ячейка сетки деталей — на всю ширину колонки. */
@@ -106,6 +116,11 @@ interface OperationTileProps {
   disabled?: boolean;
   icon?: React.ReactNode;
   title: string;
+  /**
+   * Полный код пакета отдельной строкой. Без truncate и line-clamp:
+   * длинный код переносится, а не обрезается.
+   */
+  packageCode?: string;
   subtitle?: string;
   badge?: string;
   /** Квадратный бейдж с номером детали (1–9) — после названия. */
@@ -126,7 +141,7 @@ interface OperationTileProps {
   onClear?: () => void;
   /** Нижняя подпись и полоса остатка (compact). value 0–1. */
   meter?: { caption: string; value: number };
-  /** section — 5 в ряд со скроллом; grid — 5 колонок без скролла; person — вход; compact — иконка слева, текст справа; blank — заготовки торцовки: длина по центру, сорт бейджем. */
+  /** section — 5 в ряд со скроллом; grid — до 5 колонок, меньше на узком экране; person — вход; compact — иконка слева, текст справа; blank — заготовки торцовки: длина по центру, сорт бейджем. */
   layout?: "section" | "person" | "grid" | "compact" | "blank";
 }
 
@@ -141,6 +156,7 @@ export function OperationTile({
   disabled,
   icon,
   title,
+  packageCode,
   subtitle,
   badge,
   numberBadge,
@@ -157,23 +173,26 @@ export function OperationTile({
   const isGrid = layout === "grid";
   const isCompact = layout === "compact";
   const isBlank = layout === "blank";
+  const visiblePackageCode = packageCode || undefined;
   const showClear = active && onClear != null;
   const clickable = Boolean(onClick) && (!disabled || allowClickWhenDisabled);
 
   return (
     <Card
       className={cn(
-        "surface-card ring-0 !py-0",
+        "surface-card !py-0 ring-0",
         !isGrid && !isBlank && "shrink-0",
         isPerson
           ? "h-44"
           : isBlank
             ? "h-24"
             : isGrid
-              ? "h-48"
-              : isCompact && !meter
-                ? "h-20"
-                : "h-40",
+              ? "h-auto min-h-48"
+              : visiblePackageCode
+                ? "h-auto min-h-40"
+                : isCompact && !meter
+                  ? "h-20"
+                  : "h-40",
         isPerson ? TILE_WIDTH_PERSON : isGrid || isBlank ? TILE_WIDTH_GRID : TILE_WIDTH_SECTION,
         active && "border-brand bg-brand/5 border-2",
         clickable && "cursor-pointer active:scale-[0.98] active:opacity-90",
@@ -184,6 +203,7 @@ export function OperationTile({
       <CardContent
         className={cn(
           "flex h-full",
+          isGrid && "h-auto flex-1",
           isPerson
             ? "flex-col items-center justify-center gap-4 px-5 py-6 text-center"
             : isBlank
@@ -227,12 +247,28 @@ export function OperationTile({
               meter ? "justify-between" : "justify-center gap-1.5",
             )}
           >
-            <div className="flex min-w-0 items-center gap-3">
+            <div
+              className={cn(
+                "flex min-w-0 gap-3",
+                visiblePackageCode ? "items-start" : "items-center",
+              )}
+            >
               <span className="bg-muted text-muted-foreground flex size-11 shrink-0 items-center justify-center rounded-2xl [&_svg]:size-5 [&_svg]:stroke-[1.75]">
                 {icon}
               </span>
               <div className="min-w-0 flex-1">
-                <span className="block truncate text-lg leading-tight font-semibold">{title}</span>
+                {visiblePackageCode ? (
+                  <>
+                    <span className="block text-lg leading-tight font-semibold">{title}</span>
+                    <span className="block max-w-full text-lg leading-tight font-semibold break-words">
+                      {visiblePackageCode}
+                    </span>
+                  </>
+                ) : (
+                  <span className="block truncate text-lg leading-tight font-semibold">
+                    {title}
+                  </span>
+                )}
                 {material && (
                   <span className="mt-0.5 flex items-center gap-1.5">
                     <span className="text-muted-foreground min-w-0 truncate text-sm">
@@ -249,7 +285,12 @@ export function OperationTile({
                   </span>
                 )}
                 {subtitle && (
-                  <span className="text-muted-foreground mt-0.5 block truncate text-sm leading-snug">
+                  <span
+                    className={cn(
+                      "text-muted-foreground mt-0.5 block text-sm leading-snug",
+                      visiblePackageCode ? "break-words" : "truncate",
+                    )}
+                  >
                     {subtitle}
                   </span>
                 )}
@@ -302,13 +343,28 @@ export function OperationTile({
               )}
             </div>
 
-            <div className="flex min-h-0 flex-1 items-start justify-between gap-2">
+            <div
+              className={cn(
+                "flex items-start justify-between gap-2",
+                isGrid ? "min-w-0 flex-1" : "min-h-0 flex-1",
+              )}
+            >
               <div
                 className={cn("min-w-0 flex-1", clickable && "cursor-pointer active:opacity-90")}
                 onClick={clickable ? onClick : undefined}
               >
-                <span className="flex items-center gap-1.5">
-                  <span className="min-w-0 truncate text-lg leading-tight font-semibold">
+                <span
+                  className={cn(
+                    "flex min-w-0 gap-1.5",
+                    isGrid ? "items-start" : "items-center",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "text-lg leading-tight font-semibold",
+                      isGrid ? "min-w-0 flex-1 break-words" : "min-w-0 truncate",
+                    )}
+                  >
                     {title}
                   </span>
                   {numberBadge != null && (
@@ -321,8 +377,18 @@ export function OperationTile({
                   )}
                 </span>
                 {material && (
-                  <span className="mt-1 flex items-center gap-1.5">
-                    <span className="text-muted-foreground min-w-0 truncate text-sm">
+                  <span
+                    className={cn(
+                      "mt-1 flex gap-1.5",
+                      isGrid ? "items-start" : "items-center",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "text-muted-foreground min-w-0 text-sm",
+                        isGrid ? "break-words" : "truncate",
+                      )}
+                    >
                       {material.name}
                     </span>
                     {material.section && (
@@ -336,7 +402,12 @@ export function OperationTile({
                   </span>
                 )}
                 {subtitle && (
-                  <span className="text-muted-foreground mt-1 block truncate text-base leading-snug">
+                  <span
+                    className={cn(
+                      "text-muted-foreground mt-1 block text-base leading-snug",
+                      isGrid ? "break-words" : "truncate",
+                    )}
+                  >
                     {subtitle}
                   </span>
                 )}
