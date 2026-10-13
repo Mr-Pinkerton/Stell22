@@ -13,8 +13,65 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const CANDIDATE_REF = "refs/heads/candidate/terminal-ui-only-01";
 
-function verifiedCiEnvironment() {
-  return process.env.GITHUB_ACTIONS === "true" && process.env.CI === "true";
+function verifiedCiEnvironment(env = process.env) {
+  return env.GITHUB_ACTIONS === "true" && env.CI === "true";
+}
+
+function interpretCandidatePresence(presence, env = process.env) {
+  if (presence.error) {
+    return {
+      outcome: "fail",
+      message: `git probe failed: ${presence.error.message}\n${presence.stderr ?? ""}`,
+    };
+  }
+  if (presence.status === 1) {
+    if (verifiedCiEnvironment(env)) {
+      return {
+        outcome: "skip",
+        message: `${CANDIDATE_REF} is absent in this verified CI checkout; positive release-object integration did not run and is not claimed as passed`,
+      };
+    }
+    return {
+      outcome: "fail",
+      message: `${CANDIDATE_REF} is absent outside a verified CI environment; positive integration is required here\n${presence.stderr ?? ""}`,
+    };
+  }
+  if (presence.status !== 0) {
+    return {
+      outcome: "fail",
+      message: `git show-ref ${CANDIDATE_REF} failed with status ${presence.status}\n${presence.stderr ?? ""}`,
+    };
+  }
+  return { outcome: "present" };
+}
+
+function interpretCandidateSha(shaRead) {
+  if (shaRead.error) {
+    return {
+      outcome: "fail",
+      message: `git sha read failed: ${shaRead.error.message}\n${shaRead.stderr ?? ""}`,
+    };
+  }
+  if (shaRead.status !== 0) {
+    return {
+      outcome: "fail",
+      message: `git rev-parse ${CANDIDATE_REF} failed with status ${shaRead.status}\n${shaRead.stderr ?? ""}`,
+    };
+  }
+  const sha = String(shaRead.stdout ?? "").trim();
+  if (!/^[0-9a-f]{40}$/.test(sha)) {
+    return {
+      outcome: "fail",
+      message: `corrupt candidate ref output: ${JSON.stringify(shaRead.stdout)}`,
+    };
+  }
+  if (sha !== RELEASE.candidateSha) {
+    return {
+      outcome: "fail",
+      message: `${CANDIDATE_REF} points at ${sha}, not the approved release ${RELEASE.candidateSha}`,
+    };
+  }
+  return { outcome: "run", sha };
 }
 
 function accepted() {
@@ -263,40 +320,131 @@ test("success text records identities and refuses deploy authority", () => {
   assert.doesNotMatch(text, /DEPLOY AUTHORIZATION:\nYES/);
 });
 
+const verifiedCi = { GITHUB_ACTIONS: "true", CI: "true" };
+
+test("an absent candidate ref skips only in verified CI", () => {
+  const decision = interpretCandidatePresence(
+    { status: 1, stdout: "", stderr: "missing\n" },
+    verifiedCi,
+  );
+  assert.equal(decision.outcome, "skip");
+  assert.match(decision.message, /did not run and is not claimed as passed/);
+});
+
+test("an absent candidate ref fails outside verified CI", () => {
+  const decision = interpretCandidatePresence(
+    { status: 1, stdout: "", stderr: "" },
+    {},
+  );
+  assert.equal(decision.outcome, "fail");
+});
+
+test("an absent candidate ref fails when only CI is set", () => {
+  const decision = interpretCandidatePresence(
+    { status: 1, stdout: "", stderr: "" },
+    { CI: "true" },
+  );
+  assert.equal(decision.outcome, "fail");
+});
+
+test("an absent candidate ref fails when only GITHUB_ACTIONS is set", () => {
+  const decision = interpretCandidatePresence(
+    { status: 1, stdout: "", stderr: "" },
+    { GITHUB_ACTIONS: "true" },
+  );
+  assert.equal(decision.outcome, "fail");
+});
+
+test("git status 128 fails in verified CI even when stderr looks like a missing ref", () => {
+  const decision = interpretCandidatePresence(
+    {
+      status: 128,
+      stdout: "",
+      stderr: "fatal: Needed a single revision\n",
+    },
+    verifiedCi,
+  );
+  assert.equal(decision.outcome, "fail");
+  assert.match(decision.message, /status 128/);
+});
+
+test("any other git show-ref status fails", () => {
+  const decision = interpretCandidatePresence(
+    { status: 2, stdout: "", stderr: "boom\n" },
+    verifiedCi,
+  );
+  assert.equal(decision.outcome, "fail");
+});
+
+test("a missing Git executable fails in verified CI", () => {
+  const decision = interpretCandidatePresence(
+    { error: new Error("spawn git ENOENT"), status: null, stdout: "", stderr: "" },
+    verifiedCi,
+  );
+  assert.equal(decision.outcome, "fail");
+  assert.match(decision.message, /ENOENT/);
+});
+
+test("a fatal SHA read fails instead of skipping", () => {
+  const decision = interpretCandidateSha({
+    status: 128,
+    stdout: "",
+    stderr: "fatal: Needed a single revision\n",
+  });
+  assert.equal(decision.outcome, "fail");
+  assert.match(decision.message, /status 128/);
+});
+
+test("malformed candidate ref output fails", () => {
+  const decision = interpretCandidateSha({ status: 0, stdout: "not-a-sha\n", stderr: "" });
+  assert.equal(decision.outcome, "fail");
+  assert.match(decision.message, /corrupt candidate ref output/);
+});
+
+test("a present candidate ref at the wrong SHA fails", () => {
+  const decision = interpretCandidateSha({
+    status: 0,
+    stdout: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    stderr: "",
+  });
+  assert.equal(decision.outcome, "fail");
+  assert.match(decision.message, /points at aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/);
+});
+
+test("a present candidate ref at the approved SHA is eligible to run", () => {
+  const decision = interpretCandidateSha({
+    status: 0,
+    stdout: `${RELEASE.candidateSha}\n`,
+    stderr: "",
+  });
+  assert.equal(decision.outcome, "run");
+  assert.equal(decision.sha, RELEASE.candidateSha);
+});
+
 test("the published candidate objects verify without mutating refs", (t) => {
-  const probe = spawnSync(
+  const presence = spawnSync(
+    "git",
+    ["show-ref", "--verify", "--quiet", CANDIDATE_REF],
+    { cwd: root, encoding: "utf8" },
+  );
+  const presenceDecision = interpretCandidatePresence(presence);
+  if (presenceDecision.outcome === "skip") {
+    t.skip(presenceDecision.message);
+    return;
+  }
+  if (presenceDecision.outcome !== "present") {
+    assert.fail(presenceDecision.message);
+  }
+  const shaRead = spawnSync(
     "git",
     ["rev-parse", "--verify", "--end-of-options", CANDIDATE_REF],
     { cwd: root, encoding: "utf8" },
   );
-  if (probe.error) {
-    assert.fail(`git probe failed: ${probe.error.message}\n${probe.stderr ?? ""}`);
+  const shaDecision = interpretCandidateSha(shaRead);
+  if (shaDecision.outcome !== "run") {
+    assert.fail(shaDecision.message);
   }
-  if (probe.status === 128) {
-    if (verifiedCiEnvironment()) {
-      t.skip(
-        `${CANDIDATE_REF} is absent in this verified CI checkout; positive release-object integration did not run and is not claimed as passed`,
-      );
-      return;
-    }
-    assert.fail(
-      `${CANDIDATE_REF} is absent outside a verified CI environment; positive integration is required here\n${probe.stderr ?? ""}`,
-    );
-  }
-  if (probe.status !== 0) {
-    assert.fail(
-      `git rev-parse ${CANDIDATE_REF} failed with status ${probe.status}\n${probe.stderr ?? ""}`,
-    );
-  }
-  const beforeSha = probe.stdout.trim();
-  if (!/^[0-9a-f]{40}$/.test(beforeSha)) {
-    assert.fail(`corrupt candidate ref output: ${JSON.stringify(probe.stdout)}`);
-  }
-  if (beforeSha !== RELEASE.candidateSha) {
-    assert.fail(
-      `${CANDIDATE_REF} points at ${beforeSha}, not the approved release ${RELEASE.candidateSha}`,
-    );
-  }
+  const beforeSha = shaDecision.sha;
 
   const script = path.join(root, "scripts", "release", "verify-terminal-ui-only.mjs");
   const run = spawnSync(process.execPath, [script], { cwd: root, encoding: "utf8" });

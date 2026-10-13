@@ -23,7 +23,7 @@ describe("terminal UI release gate CI discovery", () => {
         );
       }
       expect(stdout).toContain("refuses a wrong candidate SHA even when the tree matches");
-      expect(stdout).toContain("# tests 22");
+      expect(stdout).toContain("# tests 33");
       expect(stdout).toContain("# fail 0");
     },
   );
