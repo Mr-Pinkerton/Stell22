@@ -466,8 +466,8 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
   };
 
   return (
-    <main className={terminalOperationScreenClass}>
-      <div className={terminalOperationBodyClass}>
+    <main className={cn(terminalOperationScreenClass, "min-w-0")}>
+      <div className={cn(terminalOperationBodyClass, "min-w-0")}>
       <TerminalSuccessAck ack={successAck.ack} />
       <Section
         title="1. ПАРТИЯ"
@@ -530,7 +530,8 @@ export function TorcovkaScreen({ data, employee, onDone }: TorcovkaScreenProps) 
                   layout="compact"
                   active={l.id === lotId}
                   icon={<Layers />}
-                  title={l.isPackage ? `Пакет ${l.code}` : "Поштучно"}
+                  title={l.isPackage ? "Пакет" : "Поштучно"}
+                  packageCode={l.isPackage && l.code ? l.code : undefined}
                   subtitle={`${formatLength(l.lengthM)} · ${SORT_LABEL[l.sort]} · ${RAIL_TYPE_LABEL[l.railType]}`}
                   meter={{
                     caption: `осталось ${remaining} реек`,
@@ -1033,8 +1034,8 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between">
+    <section className="min-w-0 space-y-3">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <h2 className="text-muted-foreground text-sm font-semibold tracking-wide uppercase">
           {title}
         </h2>
