@@ -187,7 +187,7 @@ export function OperationTile({
           : isBlank
             ? "h-24"
             : isGrid
-              ? "h-48"
+              ? "h-auto min-h-48"
               : visiblePackageCode
                 ? "h-auto min-h-40"
                 : isCompact && !meter
@@ -203,6 +203,7 @@ export function OperationTile({
       <CardContent
         className={cn(
           "flex h-full",
+          isGrid && "h-auto flex-1",
           isPerson
             ? "flex-col items-center justify-center gap-4 px-5 py-6 text-center"
             : isBlank
@@ -342,13 +343,28 @@ export function OperationTile({
               )}
             </div>
 
-            <div className="flex min-h-0 flex-1 items-start justify-between gap-2">
+            <div
+              className={cn(
+                "flex items-start justify-between gap-2",
+                isGrid ? "min-w-0 flex-1" : "min-h-0 flex-1",
+              )}
+            >
               <div
                 className={cn("min-w-0 flex-1", clickable && "cursor-pointer active:opacity-90")}
                 onClick={clickable ? onClick : undefined}
               >
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="min-w-0 truncate text-lg leading-tight font-semibold">
+                <span
+                  className={cn(
+                    "flex min-w-0 gap-1.5",
+                    isGrid ? "items-start" : "items-center",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "text-lg leading-tight font-semibold",
+                      isGrid ? "min-w-0 flex-1 break-words" : "min-w-0 truncate",
+                    )}
+                  >
                     {title}
                   </span>
                   {numberBadge != null && (
@@ -361,8 +377,18 @@ export function OperationTile({
                   )}
                 </span>
                 {material && (
-                  <span className="mt-1 flex items-center gap-1.5">
-                    <span className="text-muted-foreground min-w-0 truncate text-sm">
+                  <span
+                    className={cn(
+                      "mt-1 flex gap-1.5",
+                      isGrid ? "items-start" : "items-center",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "text-muted-foreground min-w-0 text-sm",
+                        isGrid ? "break-words" : "truncate",
+                      )}
+                    >
                       {material.name}
                     </span>
                     {material.section && (
@@ -376,7 +402,12 @@ export function OperationTile({
                   </span>
                 )}
                 {subtitle && (
-                  <span className="text-muted-foreground mt-1 block truncate text-base leading-snug">
+                  <span
+                    className={cn(
+                      "text-muted-foreground mt-1 block text-base leading-snug",
+                      isGrid ? "break-words" : "truncate",
+                    )}
+                  >
                     {subtitle}
                   </span>
                 )}
