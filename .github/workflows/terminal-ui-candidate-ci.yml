@@ -1,0 +1,117 @@
+name: Terminal UI candidate CI
+
+# Temporary harness for immutable candidate
+# e631faeeb0c30c13c4d6c193947095b06f0e81e9.
+# Trigger: push to validation/terminal-ui-only-ci-01 only.
+# Checks out that candidate, not the harness commit and not main.
+# Деплоя здесь нет.
+
+on:
+  push:
+    branches: [validation/terminal-ui-only-ci-01]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: stell22
+          POSTGRES_PASSWORD: stell22
+          POSTGRES_DB: stell22_integrity
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stell22 -d stell22_integrity"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    outputs:
+      sha: ${{ steps.show-sha.outputs.sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: e631faeeb0c30c13c4d6c193947095b06f0e81e9
+
+      - name: Assert checked-out candidate SHA
+        id: show-sha
+        run: |
+          SHA="$(git rev-parse HEAD)"
+          TREE="$(git rev-parse 'HEAD^{tree}')"
+          CI_BLOB="$(git rev-parse 'HEAD:.github/workflows/ci.yml')"
+          EXPECTED="e631faeeb0c30c13c4d6c193947095b06f0e81e9"
+          echo "triggering_sha=${{ github.sha }}"
+          echo "checked_out=${SHA}"
+          echo "candidate_tree=${TREE}"
+          echo "baseline_ci_blob=${CI_BLOB}"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          if [ "$SHA" != "$EXPECTED" ]; then
+            echo "ERROR: checked-out SHA (${SHA}) != candidate SHA (${EXPECTED})" >&2
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Клиент Prisma нужен для типов при typecheck, тестах и сборке.
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: TypeScript
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Server Action source policy
+        run: npm run security:actions
+
+      - name: CLI import security
+        run: npm run security:cli-imports
+
+      - name: InventoryMovement append-only policy
+        run: npm run security:inventory-movement-append-only
+
+      - name: InventoryMovement SHADOW write-gate control policy
+        run: npm run security:inventory-movement-shadow-write-control
+
+      - name: InventoryMovement INSERT confinement
+        run: npm run security:inventory-movement-insert-confinement
+
+      - name: Supply production preflight workflow safety
+        run: npm run security:supply-preflight-workflow
+
+      - name: SHADOW activation control policy
+        run: npm run security:shadow-activation-control
+
+      - name: SHADOW soak evidence policy
+        run: npm run security:shadow-soak-evidence
+
+      - name: PostgreSQL-backed integrity suite
+        env:
+          INTEGRITY_TEST_DATABASE_URL: postgresql://stell22:stell22@127.0.0.1:5432/stell22_integrity?schema=public
+          DATABASE_URL: postgresql://stell22:stell22@127.0.0.1:5432/stell22_integrity?schema=public
+        run: npm run test:integrity:ci
+
+      # Сборка без подключения к БД (как в Dockerfile) — ловим ошибки
+      # типов и битые страницы до ручного деплоя на прод.
+      - name: Build
+        run: npm run build
+
+      - name: Server Action manifest policy
+        run: npm run security:manifest
