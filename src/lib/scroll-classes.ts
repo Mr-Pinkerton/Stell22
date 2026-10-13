@@ -59,6 +59,11 @@ export type TerminalConfirmBarLayout = "sticky" | "docked";
 
 export function terminalConfirmBarClass(layout: TerminalConfirmBarLayout = "sticky"): string {
   const base = "bg-card flex items-center justify-between gap-4 border-t px-6 py-4";
-  if (layout === "docked") return cn(base, "flex-none");
+  if (layout === "docked") {
+    return cn(
+      base,
+      "flex-none flex-col items-stretch lg:flex-row lg:items-center max-lg:[&>button]:w-full",
+    );
+  }
   return cn(base, "sticky bottom-0 z-10 -mx-6 -mb-6 mt-auto");
 }
