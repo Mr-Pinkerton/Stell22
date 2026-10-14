@@ -38,6 +38,7 @@ export type OwnedSqlBindingKind =
   | "sql-identity-mismatch"
   | "session-continuity-failure"
   | "docker-identity-drift"
+  | "sql-query-failed"
   | "injected-not-live-proof"
   | "verified-readonly-binding";
 
@@ -78,6 +79,7 @@ const FAILURE_TEXT: Record<BindingFailureKind, string> = {
   "sql-identity-mismatch": "Disposable SQL identity does not match the owned container.",
   "session-continuity-failure": "Read-only PostgreSQL session continuity failed.",
   "docker-identity-drift": "Docker identity changed around the SQL read.",
+  "sql-query-failed": "A required disposable SQL query failed.",
   "injected-not-live-proof": "Injected SQL rows are not live PostgreSQL evidence.",
 };
 
@@ -116,37 +118,25 @@ export async function bindOwnedDisposableSql(
     return dockerFailure(error);
   }
 
-  let report: LiveReadReport;
+  let report: LiveReadReport | null = null;
+  let readStarted = false;
   try {
     const attestation = parseDisposableAttestation(probeInput(connection, handle));
+    readStarted = true;
     report = dependencies.connect
       ? await previewDisposableRead(attestation, dependencies.connect)
       : await readDisposablePostgreSql(attestation);
   } catch {
-    return failure("ownership-not-confirmed", "PROBE_INPUT_REFUSED", null);
+    report = null;
   }
+
+  const drifted = reconfirmAfter(handle, runtime, connection, report);
+  if (drifted) return drifted;
+  if (!readStarted) return failure("ownership-not-confirmed", "PROBE_INPUT_REFUSED", null);
+  if (report === null) return failure("sql-query-failed", "SQL_QUERY_FAILED", null);
 
   const interpreted = interpretProbe(report);
   if (interpreted.ok === false) return interpreted;
-
-  try {
-    const after = reconfirmOwnedContainer(handle, runtime);
-    if (
-      after.containerId !== connection.containerId ||
-      after.port !== connection.port ||
-      after.databaseName !== connection.databaseName ||
-      after.runId !== connection.runId
-    ) {
-      return failure(
-        "docker-identity-drift",
-        "DOCKER_IDENTITY_DRIFT",
-        report.classification,
-        report.verdict,
-      );
-    }
-  } catch (error) {
-    return dockerFailure(error, report.classification, report.verdict);
-  }
 
   if (report.evidenceSource !== "postgresql-query") {
     return failure(
@@ -212,7 +202,34 @@ function interpretProbe(report: LiveReadReport): OwnedSqlBindingResult | { ok: t
   if (report.postgresIdentity.status !== "row-read" || report.postgresIdentity.rowCount !== 1) {
     return failure("sql-identity-missing", report.code, report.classification, report.verdict);
   }
+  if (report.schema === null || report.classification === null) {
+    return failure("sql-query-failed", report.code, report.classification, report.verdict);
+  }
   return { ok: true };
+}
+
+function reconfirmAfter(
+  handle: OwnedContainerHandle,
+  runtime: OriginRuntime | undefined,
+  connection: OwnedConnection,
+  report: LiveReadReport | null,
+): OwnedSqlBindingResult | null {
+  const classification = report?.classification ?? null;
+  const verdict = report?.verdict ?? "NOT_RUN";
+  try {
+    const after = reconfirmOwnedContainer(handle, runtime);
+    if (
+      after.containerId !== connection.containerId ||
+      after.port !== connection.port ||
+      after.databaseName !== connection.databaseName ||
+      after.runId !== connection.runId
+    ) {
+      return failure("docker-identity-drift", "DOCKER_IDENTITY_DRIFT", classification, verdict);
+    }
+    return null;
+  } catch (error) {
+    return dockerFailure(error, classification, verdict);
+  }
 }
 
 function failureKind(report: LiveReadReport): BindingFailureKind | null {
@@ -238,6 +255,9 @@ function failureKind(report: LiveReadReport): BindingFailureKind | null {
   }
   if (report.failedQuery === "identity") return "sql-identity-missing";
   if (report.failedQuery === "session") return "session-continuity-failure";
+  if (report.failedQuery !== null || report.connection.status !== "established") {
+    return "sql-query-failed";
+  }
   return null;
 }
 

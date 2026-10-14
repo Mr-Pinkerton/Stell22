@@ -219,14 +219,85 @@ describe("owned disposable SQL binding", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.kind).toBe("injected-not-live-proof");
+    expect(result.kind).not.toBe("sql-query-failed");
     expect(result.publicAuthorization).toMatchObject({
       containerOrigin: "NOT_ESTABLISHED",
       fullTargetAuthentication: "NOT_CLAIMED",
       applyEnabled: false,
     });
-    expect(result.classification).not.toBeNull();
+    expect(result.classification).toMatchObject({ verdict: "STOP" });
     expect(textOf(result).includes(NONCE)).toBe(false);
     expect(textOf(result).includes(PASSWORD)).toBe(false);
+    expect(textOf(result).includes("postgresql://")).toBe(false);
+  });
+
+  it("refuses history and catalog failures after a valid identity", async () => {
+    for (const failQuery of ["history", "catalog", "history-incomplete"] as const) {
+      const result = await bound({ failQuery });
+      expect(result.ok).toBe(false);
+      if (result.ok) continue;
+      expect(result.kind).toBe("sql-query-failed");
+      expect(result.kind).not.toBe("sql-identity-missing");
+      expect(result.kind).not.toBe("verified-readonly-binding");
+      expect(result.code).toBe("QUERY_FAILED");
+      expect(result.publicAuthorization).toMatchObject({
+        containerOrigin: "NOT_ESTABLISHED",
+        fullTargetAuthentication: "NOT_CLAIMED",
+        applyEnabled: false,
+      });
+      expect(textOf(result).includes(NONCE)).toBe(false);
+      expect(textOf(result).includes(PASSWORD)).toBe(false);
+      expect(textOf(result).includes("postgresql://")).toBe(false);
+    }
+  });
+
+  it("reconfirms Docker after a failed SQL read and after a thrown client error", async () => {
+    const missing = scripted();
+    const missingHandle = createOwnedDisposableContainer(missing);
+    const missingResult = await bindOwnedDisposableSql(missingHandle, {
+      runtime: missing,
+      connect: async (url) =>
+        client(url, {
+          identity: "absent-table",
+          onEnd: () => {
+            missing.daemonId = "daemon-local-2";
+            missing.daemonIds = [];
+          },
+        }),
+    });
+    expect(missingResult).toMatchObject({
+      ok: false,
+      kind: "docker-identity-drift",
+      code: "DAEMON_IDENTITY_CHANGED",
+    });
+    expect(missingResult.publicAuthorization.applyEnabled).toBe(false);
+
+    const thrown = scripted();
+    const thrownHandle = createOwnedDisposableContainer(thrown);
+    const thrownResult = await bindOwnedDisposableSql(thrownHandle, {
+      runtime: thrown,
+      connect: async (url) =>
+        client(url, {
+          failEnd: true,
+          onEnd: () => {
+            thrown.daemonId = "daemon-local-2";
+            thrown.daemonIds = [];
+          },
+        }),
+    });
+    expect(thrownResult.ok).toBe(false);
+    if (!thrownResult.ok) expect(thrownResult.kind).toBe("docker-identity-drift");
+    expect(textOf(thrownResult).includes(PASSWORD)).toBe(false);
+    expect(textOf(thrownResult).includes(NONCE)).toBe(false);
+
+    const stableThrow = await bound({ failEnd: true });
+    expect(stableThrow).toMatchObject({
+      ok: false,
+      kind: "sql-query-failed",
+      code: "SQL_QUERY_FAILED",
+    });
+    expect(textOf(stableThrow).includes(PASSWORD)).toBe(false);
+    expect(textOf(stableThrow).includes("postgresql://")).toBe(false);
   });
 
   it("refuses Docker drift after the SQL read and does not clean up by a broad command", async () => {
@@ -310,6 +381,8 @@ type SqlPatch = {
   pidDrift?: boolean;
   snapshotDrift?: boolean;
   onEnd?: () => void;
+  failQuery?: "history" | "catalog" | "history-incomplete";
+  failEnd?: boolean;
 };
 
 function client(url: string, patch: SqlPatch = {}): ProbeSqlClient {
@@ -339,6 +412,15 @@ function client(url: string, patch: SqlPatch = {}): ProbeSqlClient {
               },
             ];
           }
+          if (patch.failQuery === "history" && sql.includes("_prisma_migrations")) {
+            throw new Error("history query failed");
+          }
+          if (patch.failQuery === "history-incomplete" && sql.includes("_prisma_migrations")) {
+            return { failed: false };
+          }
+          if (patch.failQuery === "catalog" && sql.includes("receiptProvenanceSnapshot")) {
+            throw new Error("catalog query failed");
+          }
           if (sql.includes("stell22_p1_disposable_identity")) {
             if (patch.identity === "absent-table") {
               const error = new Error("missing") as Error & { meta?: { code?: string } };
@@ -360,6 +442,7 @@ function client(url: string, patch: SqlPatch = {}): ProbeSqlClient {
     end: async () => {
       patch.onEnd?.();
       void url;
+      if (patch.failEnd) throw new Error(PASSWORD);
     },
   };
 }
