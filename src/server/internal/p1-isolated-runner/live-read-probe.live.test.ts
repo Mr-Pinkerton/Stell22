@@ -18,6 +18,7 @@ import {
 import { parseDisposableAttestation } from "@/server/internal/p1-isolated-runner/disposable-target";
 import { readDisposablePostgreSql } from "@/server/internal/p1-isolated-runner/live-read-probe";
 import { bindOwnedDisposableSql } from "@/server/internal/p1-isolated-runner/owned-sql-binding";
+import { assessOwnedDisposablePreapply } from "@/server/internal/p1-isolated-runner/owned-preapply-gate";
 import {
   checkMatchesContract,
   columnMatchesContract,
@@ -354,6 +355,21 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("postgresql 17 disposable read",
         expect(JSON.stringify(unbound).includes(confirmed.nonce)).toBe(false);
         expect(JSON.stringify(unbound).includes(confirmed.password)).toBe(false);
       }
+      const refused = await assessOwnedDisposablePreapply(owned);
+      expect(refused).toMatchObject({
+        status: "refused",
+        reason: "binding",
+        bindingKind: "sql-identity-missing",
+        code: "MISSING_IDENTITY_TABLE",
+        executionAuthorized: false,
+      });
+      expect(refused.publicAuthorization).toMatchObject({
+        containerOrigin: "NOT_ESTABLISHED",
+        fullTargetAuthentication: "NOT_CLAIMED",
+        applyEnabled: false,
+      });
+      expect(JSON.stringify(refused).includes(confirmed.nonce)).toBe(false);
+      expect(JSON.stringify(refused).includes(confirmed.password)).toBe(false);
       const missing = await readDisposablePostgreSql(raw);
       expect(missing.evidenceSource).toBe("postgresql-query");
       expect(missing.code).toBe("MISSING_IDENTITY_TABLE");
@@ -441,6 +457,78 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("postgresql 17 disposable read",
         expect(JSON.stringify(bound).includes(confirmed.nonce)).toBe(false);
         expect(JSON.stringify(bound).includes(confirmed.password)).toBe(false);
       }
+      const gated = await assessOwnedDisposablePreapply(owned);
+      expect(gated).toMatchObject({
+        status: "already-applied",
+        code: "P1_APPLIED",
+        executionAuthorized: false,
+        repeatMigrationAuthorized: false,
+      });
+      expect(gated.publicAuthorization).toEqual({
+        containerOrigin: "NOT_ESTABLISHED",
+        fullTargetAuthentication: "NOT_CLAIMED",
+        applyEnabled: false,
+        verdict: "BLOCKED",
+        code: "CONTAINER_ORIGIN_NOT_ESTABLISHED",
+      });
+      expect(JSON.stringify(gated).includes(confirmed.nonce)).toBe(false);
+      expect(JSON.stringify(gated).includes(confirmed.password)).toBe(false);
+      expect(JSON.stringify(gated).includes("postgresql://")).toBe(false);
+    } finally {
+      try {
+        await fixture?.$disconnect();
+      } finally {
+        removeOwnedDisposableContainer(owned);
+      }
+    }
+  }, 120_000);
+
+  it("keeps STOP, BLOCKED, and diagnostic-ready reads from authorizing execution", async () => {
+    const owned = createOwnedDisposableContainer();
+    let fixture: PrismaClient | null = null;
+    try {
+      const connection = reconfirmOwnedContainer(owned);
+      fixture = new PrismaClient({ datasourceUrl: fixtureUrl(connection) });
+      await waitUntilReady(fixture);
+      const confirmed = reconfirmOwnedContainer(owned);
+      await installIdentity(fixture, confirmed);
+      const stopped = await assessOwnedDisposablePreapply(owned);
+      expect(stopped).toMatchObject({
+        status: "not-ready",
+        structuralVerdict: "STOP",
+        code: "OTHER_PENDING_MIGRATION",
+        executionAuthorized: false,
+      });
+      expect(stopped.publicAuthorization.applyEnabled).toBe(false);
+
+      for (const row of successfulHistoricalRows()) {
+        await insertHistory(fixture, row);
+      }
+      const ready = await assessOwnedDisposablePreapply(owned);
+      expect(ready).toMatchObject({
+        status: "diagnostic-ready",
+        code: "P1_ABSENT",
+        executionAuthorized: false,
+        prismaExecutionAuthorized: false,
+      });
+      expect(ready.publicAuthorization).toMatchObject({
+        containerOrigin: "NOT_ESTABLISHED",
+        fullTargetAuthentication: "NOT_CLAIMED",
+        applyEnabled: false,
+      });
+      expect(JSON.stringify(ready).includes(confirmed.nonce)).toBe(false);
+      expect(JSON.stringify(ready).includes(confirmed.password)).toBe(false);
+
+      const p1 = successfulP1Row();
+      await insertHistory(fixture, { ...p1, finishedAt: null, appliedStepsCount: 0 });
+      const blocked = await assessOwnedDisposablePreapply(owned);
+      expect(blocked).toMatchObject({
+        status: "not-ready",
+        structuralVerdict: "BLOCKED",
+        code: "UNFINISHED_WITHOUT_OBJECTS",
+        executionAuthorized: false,
+      });
+      expect(blocked.publicAuthorization.applyEnabled).toBe(false);
     } finally {
       try {
         await fixture?.$disconnect();
@@ -450,6 +538,68 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("postgresql 17 disposable read",
     }
   }, 120_000);
 });
+
+async function installIdentity(
+  fixture: PrismaClient,
+  identity: { runId: string; nonce: string; containerId: string },
+): Promise<void> {
+  await fixture.$executeRawUnsafe(`
+    CREATE TABLE public.stell22_p1_disposable_identity (
+      singleton boolean PRIMARY KEY,
+      run_id text NOT NULL,
+      nonce text NOT NULL,
+      container_id text NOT NULL,
+      CONSTRAINT stell22_p1_disposable_identity_singleton CHECK (singleton)
+    )
+  `);
+  await fixture.$executeRawUnsafe(
+    `
+      INSERT INTO public.stell22_p1_disposable_identity
+        (singleton, run_id, nonce, container_id)
+      VALUES (true, $1, $2, $3)
+    `,
+    identity.runId,
+    identity.nonce,
+    identity.containerId,
+  );
+  await fixture.$executeRawUnsafe(`
+    CREATE TABLE public."_prisma_migrations" (
+      id varchar(36) PRIMARY KEY,
+      checksum varchar(64) NOT NULL,
+      finished_at timestamptz,
+      migration_name varchar(255) NOT NULL,
+      logs text,
+      rolled_back_at timestamptz,
+      started_at timestamptz NOT NULL,
+      applied_steps_count integer NOT NULL
+    )
+  `);
+}
+
+async function insertHistory(
+  fixture: PrismaClient,
+  row: {
+    migrationName: string;
+    checksum: string;
+    startedAt: string | null;
+    finishedAt: string | null;
+    appliedStepsCount: number;
+  },
+): Promise<void> {
+  await fixture.$executeRawUnsafe(
+    `
+      INSERT INTO public."_prisma_migrations"
+        (id, checksum, finished_at, migration_name, started_at, applied_steps_count)
+      VALUES ($1, $2, $3::timestamptz, $4, $5::timestamptz, $6)
+    `,
+    randomUUID(),
+    row.checksum,
+    row.finishedAt,
+    row.migrationName,
+    row.startedAt,
+    row.appliedStepsCount,
+  );
+}
 
 function fixtureUrl(connection: {
   host: "127.0.0.1";
