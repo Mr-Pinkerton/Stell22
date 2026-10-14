@@ -1118,6 +1118,26 @@ function readSqlState(error: unknown): string | null {
   return null;
 }
 
+/**
+ * Maps one already executed probe batch through the existing history and
+ * catalog readers. It does not open a connection and it does not authorize
+ * a migration.
+ */
+export function disposableEvidenceFromQueries(batch: ProbeBatch): {
+  history: PrismaMigrationRow[];
+  schema: P1SchemaEvidence;
+} {
+  if (!Array.isArray(batch.history)) {
+    throw new Error("malformed history batch");
+  }
+  const history = readHistory(batch.history);
+  const schema = readSchema(batch, emptyReport());
+  if (history.kind !== "ok" || schema.kind !== "ok") {
+    throw new Error("malformed probe batch");
+  }
+  return { history: history.rows, schema: schema.value };
+}
+
 function emptyReport(): LiveReadReport {
   return {
     evidenceSource: "caller-supplied-rows",
