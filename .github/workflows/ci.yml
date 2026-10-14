@@ -95,7 +95,7 @@ jobs:
           docker image inspect --format '{{.Id}}' postgres:17-alpine
           log="${RUNNER_TEMP}/p1-disposable-live-read.txt"
           set +e
-          node scripts/vitest-run.mjs run src/server/internal/p1-isolated-runner/live-read-probe.live.test.ts | tee "$log"
+          node scripts/vitest-run.mjs run --no-file-parallelism src/server/internal/p1-isolated-runner/live-read-probe.live.test.ts src/server/internal/p1-isolated-runner/disposable-real-migration.live.test.ts | tee "$log"
           status="${PIPESTATUS[0]}"
           set -e
           if [ "$status" -ne 0 ]; then
