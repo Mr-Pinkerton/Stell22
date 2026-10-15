@@ -1,0 +1,30 @@
+name: P1-only migration
+
+# Ручной запуск. Не деплоит приложение и не открывает production environment.
+# Текущий результат — отказ: подлинная аутентификация production-цели отсутствует.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refuse-production-apply:
+    name: Refuse production P1 apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Refuse production apply
+        run: node node_modules/tsx/dist/cli.mjs scripts/p1-only-production-gate.ts

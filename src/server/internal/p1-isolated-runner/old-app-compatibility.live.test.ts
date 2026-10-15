@@ -35,6 +35,7 @@ import {
 } from "@/server/internal/p1-isolated-runner/disposable-migration-harness";
 import { buildChildEnv } from "@/server/internal/p1-isolated-runner/env";
 import { executeDisposableApply } from "@/server/internal/p1-isolated-runner/executor";
+import { executeP1OnlyMigration } from "@/server/internal/p1-isolated-runner/p1-only-migration";
 import { createRepoGitSource } from "@/server/internal/p1-isolated-runner/git-source";
 import {
   disposableEvidenceFromQueries,
@@ -482,8 +483,308 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")(
       },
       480_000,
     );
+
+    it(
+      "applies P1 through the migration-only path while the historical application stays loaded",
+      async () => {
+        const owned = createOwnedDisposableContainer();
+        const runtime = fs.mkdtempSync(path.join(process.cwd(), ".p1-historical-runtime-"));
+        const queryScript = writeQueryChild(path.join(process.cwd(), "node_modules", ".cache"));
+        const sharedClient = path.join(process.cwd(), "node_modules", ".prisma", "client", "index.d.ts");
+        const sharedClientBefore = fs.readFileSync(sharedClient);
+        let fixture: PrismaClient | null = null;
+        let failure: unknown;
+        try {
+          expect(owned.host).toBe("127.0.0.1");
+          expect(owned.user).toBe("p1disp");
+          expect(owned.databaseName.startsWith("p1disp_")).toBe(true);
+          const ready = reconfirmOwnedContainer(owned);
+          expect(sameTarget(owned, ready)).toBe(true);
+          fixture = new PrismaClient({ datasourceUrl: ownedUrl(ready) });
+          await waitUntilReady(fixture);
+          await fixture.$disconnect();
+          fixture = null;
+
+          fs.mkdirSync(runtime, { recursive: true });
+          const historicalSchema = materializeHistorical(path.join(runtime, "migrations"));
+          const historical = reconfirmOwnedContainer(owned);
+          expect(deployPrisma(historicalSchema, ownedUrl(historical)).status).toBe(0);
+          const identified = reconfirmOwnedContainer(owned);
+          fixture = new PrismaClient({ datasourceUrl: ownedUrl(identified) });
+          await installIdentity(fixture, identified);
+          await fixture.$disconnect();
+          fixture = null;
+
+          const before = reconfirmOwnedContainer(owned);
+          const beforeUrl = ownedUrl(before);
+          const beforeEvidence = disposableEvidenceFromQueries(queryOwned(queryScript, beforeUrl));
+          expect(beforeEvidence.history).toHaveLength(EXPECTED_HISTORICAL_MIGRATION_COUNT);
+          expect(beforeEvidence.schema.column).toBeNull();
+
+          const appRoot = path.join(runtime, "app");
+          extractHistorical(appRoot);
+          const purchasesPath = path.join(appRoot, "src", "server", "purchases.ts");
+          const schemaPath = path.join(appRoot, "prisma", "schema.prisma");
+          const purchasesBlob = gitBlob(purchasesPath);
+          expect(purchasesBlob).toBe(gitBlobAt("src/server/purchases.ts"));
+          expect(gitBlob(schemaPath)).toBe(gitBlobAt("prisma/schema.prisma"));
+          fs.mkdirSync(path.join(appRoot, "node_modules", "@prisma"), { recursive: true });
+          fs.cpSync(path.join(process.cwd(), "node_modules", "prisma"), path.join(appRoot, "node_modules", "prisma"), {
+            recursive: true,
+            dereference: true,
+          });
+          fs.cpSync(
+            path.join(process.cwd(), "node_modules", "@prisma", "client"),
+            path.join(appRoot, "node_modules", "@prisma", "client"),
+            { recursive: true, dereference: true },
+          );
+          const generated = generateHistoricalClient(appRoot, schemaPath, beforeUrl);
+          expect(generated.status, generated.detail).toBe(0);
+          if (!fs.readFileSync(sharedClient).equals(sharedClientBefore)) {
+            throw new Error("shared prisma client types were replaced");
+          }
+          expect(clientIdentity(appRoot, beforeUrl)).toBe("HISTORICAL_CLIENT");
+          const testOnly = path.join(appRoot, "test-only");
+          fs.mkdirSync(testOnly, { recursive: true });
+          fs.writeFileSync(path.join(testOnly, "admin-shim.ts"), AUTH_SHIM);
+          fs.writeFileSync(path.join(testOnly, "runner.ts"), RUNNER);
+          fs.writeFileSync(path.join(testOnly, "entry.cjs"), ENTRY);
+          const shimPath = path.join(testOnly, "admin-shim.ts");
+          const built = await esbuild.build({
+            absWorkingDir: appRoot,
+            entryPoints: [path.join(testOnly, "runner.ts")],
+            outfile: path.join(testOnly, "historical-app.cjs"),
+            bundle: true,
+            platform: "node",
+            format: "cjs",
+            packages: "external",
+            metafile: true,
+            logLevel: "silent",
+            plugins: [
+              {
+                name: "historical-alias",
+                setup(build) {
+                  build.onResolve({ filter: /^@\// }, (args) => {
+                    if (args.path === "@/server/session") return { path: shimPath };
+                    const base = path.join(appRoot, "src", args.path.slice(2));
+                    const found = [`${base}.ts`, `${base}.tsx`, path.join(base, "index.ts")].find((item) =>
+                      fs.existsSync(item),
+                    );
+                    if (!found) return { errors: [{ text: `missing historical import ${args.path}` }] };
+                    return { path: found };
+                  });
+                },
+              },
+            ],
+          });
+          const inputs = Object.keys(built.metafile?.inputs ?? {}).map((item) => item.replaceAll("\\", "/"));
+          expect(inputs.some((item) => item.includes("psr-p3"))).toBe(false);
+          expect(namedContainers("stell22-app")).toBe("");
+          expect(namedContainers("stell22-caddy")).toBe("");
+
+          const seeded = runHistorical(testOnly, beforeUrl, "seed", {});
+          const materialId = String(seeded.materialId ?? "");
+          expect(materialId.length).toBeGreaterThan(0);
+
+          const parentEnv = { ...process.env, DATABASE_URL: "postgresql://blocked.example/stell22" };
+          const depsFor = (url: string, spawn: ApplySpawn) => ({
+            git: createRepoGitSource(process.cwd()),
+            destinationRoot: path.join(runtime, `p1-${spawn.label}`),
+            lockPath: path.join(runtime, `p1-${spawn.label}.lock`),
+            parentEnv,
+            readHistory: () =>
+              spawn.history ?? disposableEvidenceFromQueries(queryOwned(queryScript, url)).history,
+            readSchema: () => disposableEvidenceFromQueries(queryOwned(queryScript, url)).schema,
+            probeIdentity: () => identityFrom(queryOwned(queryScript, url)),
+            spawnPrisma: spawn.run,
+          });
+          let spawns = 0;
+          const confirmed = reconfirmOwnedContainer(owned);
+          const confirmedUrl = ownedUrl(confirmed);
+          const wrong = executeP1OnlyMigration(
+            { ...attestationFor(confirmed), containerId: "b".repeat(64) },
+            depsFor(confirmedUrl, {
+              label: "wrong-target",
+              run: () => {
+                spawns += 1;
+                return { status: 1, signal: null };
+              },
+            }),
+          );
+          expect(wrong.code).toBe("DISPOSABLE_IDENTITY_MISMATCH");
+          expect(wrong.spawned).toBe(false);
+          const damagedHistory = disposableEvidenceFromQueries(queryOwned(queryScript, confirmedUrl)).history.map(
+            (row) => ({ ...row, checksum: "0".repeat(64) }),
+          );
+          const damaged = executeP1OnlyMigration(
+            attestationFor(confirmed),
+            depsFor(confirmedUrl, {
+              label: "bad-checksum",
+              history: damagedHistory,
+              run: () => {
+                spawns += 1;
+                return { status: 1, signal: null };
+              },
+            }),
+          );
+          expect(damaged.code).toBe("UNEXPECTED_CHECKSUM");
+          expect(damaged.spawned).toBe(false);
+          const incomplete = executeP1OnlyMigration(
+            attestationFor(confirmed),
+            depsFor(confirmedUrl, {
+              label: "incomplete-history",
+              history: disposableEvidenceFromQueries(queryOwned(queryScript, confirmedUrl)).history.slice(1),
+              run: () => {
+                spawns += 1;
+                return { status: 1, signal: null };
+              },
+            }),
+          );
+          expect(incomplete.code).toBe("OTHER_PENDING_MIGRATION");
+          expect(incomplete.spawned).toBe(false);
+          expect(spawns).toBe(0);
+          expect(
+            disposableEvidenceFromQueries(queryOwned(queryScript, confirmedUrl)).history,
+          ).toHaveLength(EXPECTED_HISTORICAL_MIGRATION_COUNT);
+
+          let prismaDetail = "";
+          const first = executeP1OnlyMigration(
+            attestationFor(confirmed),
+            depsFor(confirmedUrl, {
+              label: "apply",
+              run: (request) => {
+                spawns += 1;
+                const target = new URL(String(request.env.DATABASE_URL));
+                const database = decodeURIComponent(target.pathname.replace(/^\//, ""));
+                const targetOk =
+                  target.hostname === "127.0.0.1" &&
+                  target.port === String(confirmed.port) &&
+                  target.username === "p1disp" &&
+                  database === confirmed.databaseName &&
+                  !Object.values(request.env).some((value) => String(value).includes("blocked.example"));
+                if (!targetOk || request.args[0] !== "migrate" || request.args[1] !== "deploy") {
+                  prismaDetail = "refusing prisma target";
+                  return { status: 1, signal: null };
+                }
+                const result = runPrisma(request.args, request.cwd, request.env);
+                prismaDetail = result.detail || "no prisma text";
+                return result;
+              },
+            }),
+          );
+          if (first.verdict !== "ALREADY_APPLIED") {
+            throw new Error(postApplySummary(queryScript, confirmedUrl, first, prismaDetail));
+          }
+          expect(first.appContainerReplaced).toBe(false);
+          expect(first.applicationSha).toBe(HISTORICAL_APPLICATION_COMMIT);
+          expect(first.migrationOnly).toBe(true);
+          expect(spawns).toBe(1);
+          expect(gitBlob(purchasesPath)).toBe(purchasesBlob);
+          expect(namedContainers("stell22-app")).toBe("");
+          expect(namedContainers("stell22-caddy")).toBe("");
+          assertP1Schema(queryScript, confirmedUrl);
+
+          const values = batchValues(materialId, "Партия только P1");
+          const created = runHistorical(testOnly, confirmedUrl, "create", {
+            requestId: "p1-only-rollout-request-1",
+            values,
+          });
+          const batchId = String(created.id ?? "");
+          const replayed = runHistorical(testOnly, confirmedUrl, "create", {
+            requestId: "p1-only-rollout-request-1",
+            values,
+          });
+          expect(replayed.id).toBe(batchId);
+          const updated = runHistorical(testOnly, confirmedUrl, "update", {
+            batchId,
+            values: batchValues(materialId, "Партия только P1 обновлена"),
+          });
+          expect(updated.name).toBe("Партия только P1 обновлена");
+          const business = querySelects(queryScript, confirmedUrl, {
+            provenance: `
+              SELECT (count(*))::int AS command_count,
+                     (count(*) FILTER (WHERE "receiptProvenanceSnapshot" IS NULL))::int AS sql_null_count
+              FROM public."BatchCreationCommand"
+            `,
+            batch: `
+              SELECT (count(*))::int AS updated_count
+              FROM public."Batch"
+              WHERE name = 'Партия только P1 обновлена'
+            `,
+            settings: `
+              SELECT count(*)::int AS setting_count
+              FROM public."Setting"
+            `,
+          });
+          expect(business.provenance).toEqual([{ command_count: 1, sql_null_count: 1 }]);
+          expect(business.batch).toEqual([{ updated_count: 1 }]);
+          expect(business.settings).toEqual([{ setting_count: 0 }]);
+
+          const second = executeP1OnlyMigration(
+            attestationFor(reconfirmOwnedContainer(owned)),
+            depsFor(confirmedUrl, {
+              label: "repeat",
+              run: () => {
+                spawns += 1;
+                return { status: 1, signal: null };
+              },
+            }),
+          );
+          expect(second).toMatchObject({
+            verdict: "ALREADY_APPLIED",
+            code: "P1_APPLIED",
+            spawned: false,
+            retryAttempted: false,
+            appContainerReplaced: false,
+          });
+          expect(spawns).toBe(1);
+          expect(tableCounts(queryScript, confirmedUrl).get("_prisma_migrations")).toBe(
+            EXPECTED_MIGRATION_SQL_COUNT,
+          );
+        } catch (error) {
+          failure = error;
+        } finally {
+          await fixture?.$disconnect().catch(() => undefined);
+          try {
+            removeOwnedDisposableContainer(owned);
+          } catch (error) {
+            failure ??= error;
+          }
+          fs.rmSync(queryScript, { force: true });
+          for (let attempt = 0; attempt < 10; attempt += 1) {
+            try {
+              fs.rmSync(runtime, { recursive: true, force: true });
+              break;
+            } catch {
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            }
+          }
+        }
+        if (failure) throw failure;
+      },
+      480_000,
+    );
   },
 );
+
+type ApplySpawn = {
+  label: string;
+  history?: ReturnType<typeof disposableEvidenceFromQueries>["history"];
+  run: (request: {
+    args: readonly string[];
+    env: Readonly<Record<string, string | undefined>>;
+    cwd: string;
+  }) => { status: number | null; signal: NodeJS.Signals | null };
+};
+
+function namedContainers(name: string): string {
+  const listed = spawnSync("docker", ["ps", "-aq", "--filter", `name=${name}`], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (listed.status !== 0) throw new Error("docker container list failed");
+  return listed.stdout.trim();
+}
 
 function assertP1Schema(script: string, url: string): void {
   const evidence = disposableEvidenceFromQueries(queryOwned(script, url));

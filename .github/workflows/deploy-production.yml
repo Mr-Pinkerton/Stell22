@@ -63,6 +63,15 @@ jobs:
             exit 1
           fi
 
+      - name: Checkout the deploy SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-sha.outputs.sha }}
+          fetch-depth: 1
+
+      - name: Refuse a deploy that migrates and starts the application together
+        run: node scripts/assert-production-deploy-separation.mjs
+
       - name: Check required secrets
         env:
           PROD_HOST: ${{ secrets.PROD_HOST }}
