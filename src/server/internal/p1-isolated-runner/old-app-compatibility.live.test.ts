@@ -423,18 +423,14 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")(
               FROM public."Batch"
             `,
             settings: `
-              SELECT (count(*))::int AS setting_count,
-                     (count(*) FILTER (WHERE key = 'production_cost_flow'))::int AS cost_flow_count,
-                     (count(*) FILTER (WHERE key = 'inventory_movement_shadow_write'))::int AS shadow_count
+              SELECT count(*)::int AS setting_count
               FROM public."Setting"
             `,
             movements: `SELECT (count(*))::int AS movement_count FROM public."InventoryMovement"`,
           });
           expect(business.provenance).toEqual([{ command_count: 1, sql_null_count: 1 }]);
           expect(business.batch).toEqual([{ batch_count: 1, updated_count: 1 }]);
-          expect(business.settings).toEqual([
-            { setting_count: 0, cost_flow_count: 0, shadow_count: 0 },
-          ]);
+          expect(business.settings).toEqual([{ setting_count: 0 }]);
           expect(business.movements).toEqual([{ movement_count: 0 }]);
           assertP1Schema(queryScript, migratedUrl);
           expect(tableCounts(queryScript, migratedUrl).get("_prisma_migrations")).toBe(
