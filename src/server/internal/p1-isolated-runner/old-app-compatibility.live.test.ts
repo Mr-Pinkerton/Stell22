@@ -64,7 +64,7 @@ import {
 const LIVE_FLAG = "P1_DISPOSABLE_LIVE";
 const REQUEST_ID = "old-app-compat-request-1";
 
-const AUTH_SHIM = `import { prisma } from "@/server/db";
+export const AUTH_SHIM = `import { prisma } from "@/server/db";
 
 /**
  * TEST-ONLY AUTH SUBSTITUTION.
@@ -84,7 +84,7 @@ export async function requireAdmin() {
 }
 `;
 
-const RUNNER = `import { createRequire } from "node:module";
+export const RUNNER = `import { createRequire } from "node:module";
 import { prisma } from "@/server/db";
 import { createBatch, updateBatch } from "@/server/purchases";
 
@@ -135,7 +135,7 @@ export async function run(mode: string, payload: Payload) {
 }
 `;
 
-const ENTRY = `const { AsyncLocalStorage } = require("node:async_hooks");
+export const ENTRY = `const { AsyncLocalStorage } = require("node:async_hooks");
 const fs = require("node:fs");
 globalThis.AsyncLocalStorage = AsyncLocalStorage;
 const secret = process.env.DATABASE_URL || "";
@@ -511,7 +511,7 @@ function assertP1Schema(script: string, url: string): void {
   expect(evidence.schema.foreignKeyCount).toBe(0);
 }
 
-function extractHistorical(root: string): void {
+export function extractHistorical(root: string): void {
   fs.mkdirSync(root, { recursive: true });
   const tarPath = path.join(root, "source.tar");
   const archived = spawnSync(
@@ -554,7 +554,7 @@ function gitBlobAt(file: string): string {
   return child.stdout.trim();
 }
 
-function generateHistoricalClient(
+export function generateHistoricalClient(
   root: string,
   schemaPath: string,
   url: string,
@@ -600,7 +600,7 @@ process.exit(child.status === null ? 1 : child.status);
   return { status: child.status, detail };
 }
 
-function clientIdentity(root: string, url: string): string {
+export function clientIdentity(root: string, url: string): string {
   const script = path.join(root, "test-only", "client-identity.cjs");
   fs.mkdirSync(path.dirname(script), { recursive: true });
   fs.writeFileSync(
@@ -625,7 +625,7 @@ function clientIdentity(root: string, url: string): string {
   return child.stdout.trim();
 }
 
-function runHistorical(
+export function runHistorical(
   testOnly: string,
   url: string,
   mode: string,
@@ -664,7 +664,7 @@ function runHistorical(
   return parsed as Record<string, unknown>;
 }
 
-function querySelects(
+export function querySelects(
   script: string,
   url: string,
   queries: Record<string, string>,
@@ -690,7 +690,7 @@ function querySelects(
   }
 }
 
-function tableCounts(script: string, url: string): Map<string, number> {
+export function tableCounts(script: string, url: string): Map<string, number> {
   const rows = querySelects(script, url, {
     counts: `
       SELECT c.relname AS table_name,
@@ -714,7 +714,7 @@ function tableCounts(script: string, url: string): Map<string, number> {
   return counts;
 }
 
-function countDiff(before: Map<string, number>, after: Map<string, number>): string[] {
+export function countDiff(before: Map<string, number>, after: Map<string, number>): string[] {
   const names = new Set([...before.keys(), ...after.keys()]);
   const changes: string[] = [];
   for (const name of names) {
@@ -725,7 +725,7 @@ function countDiff(before: Map<string, number>, after: Map<string, number>): str
   return changes.sort();
 }
 
-function batchValues(materialId: string, name: string) {
+export function batchValues(materialId: string, name: string) {
   return {
     name,
     materialId,
