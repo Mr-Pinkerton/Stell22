@@ -12,7 +12,16 @@ import { verifyPinnedHistoricalPlusP1 } from "@/server/internal/p1-isolated-runn
 import { acquireHostLock } from "@/server/internal/p1-isolated-runner/lock";
 import { refusal, RunnerRefusal } from "@/server/internal/p1-isolated-runner/refusal";
 import type { P1SchemaEvidence } from "@/server/internal/p1-isolated-runner/schema-contract";
-import { verifyExplicitAuthorization } from "@/server/internal/p1-production-adapter/authorization";
+import {
+  fileReplayStore,
+  memoryReplayStore,
+  readInstalledSignedAuthorization,
+  readInstalledTrustPublicKey,
+  verifySignedAuthorization,
+  type ReplayStore,
+} from "@/server/internal/p1-production-adapter/authorization";
+import { resolveDockerSession, type DockerSession, type VolumeMount } from "@/server/internal/p1-production-adapter/docker-runtime";
+import { executeTrustedRestore, isTrustedRestoreEvidence, type RestoreContainerFact } from "@/server/internal/p1-production-adapter/restore-controller";
 import {
   IMAGE_GIT_SHA,
   type AdapterIntent,
@@ -28,8 +37,8 @@ import {
 } from "@/server/internal/p1-production-adapter/identity";
 import { planProductionOneShot } from "@/server/internal/p1-production-adapter/oneshot";
 import {
+  readClaimedWitness,
   recheckArchiveSha,
-  verifyReleaseRecovery,
   type RecoverySnapshot,
 } from "@/server/internal/p1-production-adapter/recovery";
 
@@ -57,6 +66,11 @@ export type AdapterRequest = {
   recoveryWitness?: unknown;
 };
 
+export type OneShotPlan = {
+  argv: readonly string[];
+  env: NodeJS.ProcessEnv;
+};
+
 export type OneShotResult = {
   status: number | null;
   signal: NodeJS.Signals | null;
@@ -73,9 +87,19 @@ export type AdapterDependencies = {
   readSchema: () => P1SchemaEvidence;
   readArchive: () => Buffer;
   readLiveRecovery: () => RecoverySnapshot;
-  readRestoredRecovery: () => RecoverySnapshot & { exitCode: number };
+  inspectSourceMounts: () => readonly VolumeMount[];
+  inspectRestore: () => RestoreContainerFact;
+  runRestore: (containerId: string, sql: Buffer) => number;
+  readRestoredCatalog: (containerId: string) => RecoverySnapshot;
   readLockOwner: () => string | null;
-  spawnOneShot: (plan: { argv: readonly string[] }) => OneShotResult;
+  /**
+   * Test-owned scope may inject a Docker resolver or a test trust key.
+   * Production scope ignores both and uses the real resolver and the fixed trust path.
+   */
+  resolveDockerSession?: (env: Readonly<Record<string, string | undefined>>) => DockerSession;
+  testTrustPublicKey?: string;
+  replay?: ReplayStore;
+  spawnOneShot: (plan: OneShotPlan) => OneShotResult;
 };
 
 /**
@@ -96,7 +120,15 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     if (request.scope === "PRODUCTION" && deps.env.GITHUB_ACTIONS === "true") {
       throw refusal("STOP", "PRODUCTION_SCOPE_FORBIDDEN_IN_CI", "Production scope is refused in GitHub Actions");
     }
+    if (hasShortcut(request.authorization)) {
+      throw refusal("STOP", "SHORTCUT_AUTHORIZATION", "A flag cannot authorize production apply");
+    }
+    const resolve = request.scope === "PRODUCTION" ? resolveDockerSession : (deps.resolveDockerSession ?? resolveDockerSession);
+    const session = resolve(deps.env);
     const observed = failClosed(() => deps.inspect(), "RUNTIME_UNAUTHENTICATED", "Runtime inspect failed");
+    if (observed.daemonId !== session.daemonId) {
+      throw refusal("STOP", "DAEMON_IDENTITY_CHANGED", "Observed daemon does not match the resolved Docker endpoint");
+    }
     authenticateTarget({
       scope: request.scope,
       declared: request.declared,
@@ -121,19 +153,31 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     if (request.intent === "PREFLIGHT") {
       return result("PREFLIGHT_ONLY", "PREFLIGHT_RECORDED", "READ_ONLY_PREFLIGHT", false, null, targetClass, dossierSha256, null);
     }
-    const restored = deps.readRestoredRecovery();
-    const recovery = verifyReleaseRecovery({
-      witness: request.recoveryWitness,
-      archive: deps.readArchive(),
-      live: deps.readLiveRecovery(),
-      restored,
-      restoreExitCode: restored.exitCode,
+    if (request.intent === "APPLY" && request.scope === "PRODUCTION" && readInstalledTrustPublicKey() === null) {
+      throw refusal(
+        "STOP",
+        "PRODUCTION_TRUST_UNPROVISIONED",
+        "Production apply has no independently provisioned owner trust key",
+      );
+    }
+    const claimed = readClaimedWitness(request.recoveryWitness);
+    const evidence = executeTrustedRestore({
       attemptId: request.attemptId,
+      archive: deps.readArchive(),
       source: observed.db,
+      sourceMounts: deps.inspectSourceMounts(),
       databaseName: observed.databaseName,
       roleName: observed.roleName,
+      live: deps.readLiveRecovery(),
+      claimed,
+      inspectRestore: deps.inspectRestore,
+      runRestore: deps.runRestore,
+      readRestored: deps.readRestoredCatalog,
     });
-    recheckArchiveSha(deps.readArchive(), recovery.archiveSha256);
+    if (!isTrustedRestoreEvidence(evidence)) {
+      throw refusal("STOP", "FORGED_RESTORE_EVIDENCE", "Restore evidence was not produced by the restore controller");
+    }
+    recheckArchiveSha(deps.readArchive(), evidence.archiveSha256);
     if (request.intent === "RECOVERY") {
       return result(
         "RECOVERY_VERIFIED",
@@ -143,14 +187,12 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
         null,
         targetClass,
         dossierSha256,
-        recovery.recoverySha256,
+        evidence.recoverySha256,
       );
     }
-    verifyExplicitAuthorization(request.authorization, {
-      scope: request.scope,
-      attemptId: request.attemptId,
+    authorize(request, deps, {
       dossierSha256,
-      recoverySha256: recovery.recoverySha256,
+      recoverySha256: evidence.recoverySha256,
       daemonId: observed.daemonId,
     });
     lock = acquireHostLock(deps.lockPath, request.attemptId);
@@ -159,6 +201,9 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
       throw refusal("STOP", "LOST_LOCK", "The host lock is no longer held for this attempt");
     }
     const immediate = failClosed(() => deps.inspect(), "RUNTIME_UNAUTHENTICATED", "Runtime inspect failed before the one-shot");
+    if (immediate.daemonId !== session.daemonId) {
+      throw refusal("STOP", "DAEMON_IDENTITY_CHANGED", "Observed daemon does not match the resolved Docker endpoint");
+    }
     authenticateTarget({
       scope: request.scope,
       declared: request.declared,
@@ -175,10 +220,17 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
         null,
         targetClass,
         dossierSha256,
-        recovery.recoverySha256,
+        evidence.recoverySha256,
       );
     }
-    recheckArchiveSha(deps.readArchive(), recovery.archiveSha256);
+    const rebound = resolve(deps.env);
+    if (rebound.endpoint !== session.endpoint) {
+      throw refusal("STOP", "DOCKER_ENDPOINT_CHANGED", "Docker endpoint changed before the one-shot");
+    }
+    if (rebound.daemonId !== session.daemonId) {
+      throw refusal("STOP", "DAEMON_IDENTITY_CHANGED", "Docker daemon identity changed before the one-shot");
+    }
+    recheckArchiveSha(deps.readArchive(), evidence.archiveSha256);
     verifyPinnedHistoricalPlusP1(deps.git);
     const set = materializeMigrationSet(deps.git, deps.destinationRoot);
     const observedDigest = hashMaterializedRoot(set.root);
@@ -209,7 +261,7 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     spawned = true;
     let spawnResult: OneShotResult;
     try {
-      spawnResult = deps.spawnOneShot(plan);
+      spawnResult = deps.spawnOneShot({ argv: plan.argv, env: rebound.env });
     } catch {
       return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256);
     }
@@ -245,7 +297,7 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
         true,
         targetClass,
         dossierSha256,
-        recovery.recoverySha256,
+        evidence.recoverySha256,
       );
     } catch {
       return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256);
@@ -262,6 +314,61 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     lock?.release();
     if (credentialDir) fs.rmSync(credentialDir, { recursive: true, force: true });
   }
+}
+
+function authorize(
+  request: AdapterRequest,
+  deps: AdapterDependencies,
+  expected: { dossierSha256: string; recoverySha256: string; daemonId: string },
+): void {
+  if (request.scope === "PRODUCTION") {
+    const trust = readInstalledTrustPublicKey();
+    if (trust === null) {
+      throw refusal(
+        "STOP",
+        "PRODUCTION_TRUST_UNPROVISIONED",
+        "Production apply has no independently provisioned owner trust key",
+      );
+    }
+    const installed = readInstalledSignedAuthorization();
+    if (installed === undefined) {
+      throw refusal("STOP", "AUTHORIZATION_REQUIRED", "Production apply has no installed signed authorization");
+    }
+    verifySignedAuthorization(
+      installed,
+      trust,
+      {
+        scope: "PRODUCTION",
+        attemptId: request.attemptId,
+        dossierSha256: expected.dossierSha256,
+        recoverySha256: expected.recoverySha256,
+        daemonId: expected.daemonId,
+      },
+      fileReplayStore(),
+    );
+    return;
+  }
+  if (!deps.testTrustPublicKey) {
+    throw refusal("STOP", "AUTHORIZATION_REQUIRED", "Test-owned apply has no isolated trust key");
+  }
+  verifySignedAuthorization(
+    request.authorization,
+    deps.testTrustPublicKey,
+    {
+      scope: request.scope,
+      attemptId: request.attemptId,
+      dossierSha256: expected.dossierSha256,
+      recoverySha256: expected.recoverySha256,
+      daemonId: expected.daemonId,
+    },
+    deps.replay ?? memoryReplayStore(),
+  );
+}
+
+function hasShortcut(value: unknown): boolean {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = new Set(["authorized", "allowProduction", "force", "yes", "approve", "bypass"]);
+  return Object.keys(value as Record<string, unknown>).some((key) => keys.has(key));
 }
 
 function phaseFor(intent: AdapterIntent): ExecutionPhase {

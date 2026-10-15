@@ -225,6 +225,11 @@ function toCatalog(snapshot: RecoverySnapshot): CatalogProbe {
   };
 }
 
+export function readClaimedWitness(value: unknown): ReleaseBackupWitness | null {
+  if (value === undefined) return null;
+  return parseWitness(value);
+}
+
 function parseWitness(value: unknown): ReleaseBackupWitness {
   if (typeof value === "string" || value === null || typeof value !== "object" || Array.isArray(value)) {
     throw refusal("STOP", "RESTORE_WORD_REJECTED", "A recovery word is not a backup proof");

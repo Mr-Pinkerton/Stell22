@@ -25,6 +25,15 @@ export { PRODUCTION_NETWORK_NAME };
  */
 export const PRODUCTION_DAEMON_PIN_PATH = "/var/lib/stell22/p1-production-daemon-pin.json" as const;
 
+/**
+ * Fixed paths. The repository does not contain these files.
+ * The trust path holds an Ed25519 public key only.
+ * The executor never reads a private signing key.
+ */
+export const PRODUCTION_AUTHORIZATION_TRUST_PATH = "/var/lib/stell22/p1-owner-authorization.pub" as const;
+export const PRODUCTION_SIGNED_AUTHORIZATION_PATH = "/var/lib/stell22/p1-owner-authorization.json" as const;
+export const PRODUCTION_AUTHORIZATION_REPLAY_PATH = "/var/lib/stell22/p1-owner-authorization-replay.log" as const;
+
 export const TEST_ROLE_NAME = "p1pa" as const;
 
 export const EXECUTION_PHASES = [

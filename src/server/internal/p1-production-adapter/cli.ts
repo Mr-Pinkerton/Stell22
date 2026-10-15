@@ -1,21 +1,16 @@
 import fs from "node:fs";
-import {
-  DAEMON_ID,
-  PRODUCTION_DAEMON_PIN_PATH,
-  SHORTCUT_FLAGS,
-} from "@/server/internal/p1-production-adapter/contract";
+import { DAEMON_ID, PRODUCTION_DAEMON_PIN_PATH, SHORTCUT_FLAGS } from "@/server/internal/p1-production-adapter/contract";
 
 /**
  * Operator entry.
  * preflight and verify-recovery do not apply P1.
- * apply has no shortcut flag. A missing daemon pin file stops production apply.
+ * apply is not wired. A JSON file is not production authority.
+ * The daemon pin is a daemon identity record, not an owner signature.
  */
 
 export type CliIo = {
   log?: (line: string) => void;
   readPin?: () => string | null;
-  readAuthorization?: (filePath: string) => unknown;
-  execute?: (authorization: unknown, daemonPin: string) => { code: string };
   preflight?: () => string;
   verifyRecovery?: () => string;
 };
@@ -64,28 +59,15 @@ export function runProductionAdapterCli(argv: readonly string[], io: CliIo = {})
     log("STOP PRODUCTION_SCOPE_FORBIDDEN_IN_CI");
     return 2;
   }
-  try {
-    const readAuthorization = io.readAuthorization ?? ((filePath: string) => JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown);
-    const authorization = readAuthorization(argv[authorizationFlag + 1] ?? "");
-    const execute = io.execute;
-    if (!execute) {
-      log("STOP PRODUCTION_APPLY_NOT_WIRED_TO_THIS_CLI");
-      return 2;
-    }
-    const result = execute(authorization, pin);
-    log(result.code);
-    return result.code === "P1_APPLIED" ? 0 : 2;
-  } catch {
-    log("STOP AUTHORIZATION_REQUIRED");
-    return 2;
-  }
+  log("STOP PRODUCTION_APPLY_NOT_WIRED_TO_THIS_CLI");
+  return 2;
 }
 
 export function readInstalledDaemonPin(): string | null {
   if (!fs.existsSync(PRODUCTION_DAEMON_PIN_PATH)) return null;
   try {
     const parsed = JSON.parse(fs.readFileSync(PRODUCTION_DAEMON_PIN_PATH, "utf8")) as Record<string, unknown>;
-    if (parsed.kind !== "PRODUCTION_DAEMON_PIN" || parsed.source !== "OWNER_RECORDED_READONLY") return null;
+    if (parsed.kind !== "PRODUCTION_DAEMON_PIN") return null;
     return typeof parsed.daemonId === "string" ? parsed.daemonId : null;
   } catch {
     return null;

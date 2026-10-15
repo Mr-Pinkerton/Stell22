@@ -1,3 +1,4 @@
+import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,7 @@ import { createRepoGitSource } from "@/server/internal/p1-isolated-runner/git-so
 import { productionReleaseAuthorized } from "@/server/internal/p1-isolated-runner/p1-release-gate";
 import { absentP1Schema, P1_FUNCTION_BODY } from "@/server/internal/p1-isolated-runner/schema-contract";
 import type { P1SchemaEvidence } from "@/server/internal/p1-isolated-runner/schema-contract";
+import { memoryReplayStore, verifySignedAuthorization } from "@/server/internal/p1-production-adapter/authorization";
 import { runProductionAdapterCli } from "@/server/internal/p1-production-adapter/cli";
 import {
   PRODUCTION_APP_CONTAINER,
@@ -21,18 +23,22 @@ import {
   testDatabaseName,
   testDbName,
   testNetworkName,
+  testRestoreName,
 } from "@/server/internal/p1-production-adapter/contract";
-import { containerFactFromInspect } from "@/server/internal/p1-production-adapter/docker-runtime";
+import { containerFactFromInspect, resolveDockerSession, type DockerSession, type VolumeMount } from "@/server/internal/p1-production-adapter/docker-runtime";
 import {
   executeProductionAdapter,
   type AdapterDependencies,
   type AdapterRequest,
 } from "@/server/internal/p1-production-adapter/execute";
 import {
+  canonicalJson,
   declarationFromFacts,
   type ContainerFact,
   type TargetFacts,
 } from "@/server/internal/p1-production-adapter/identity";
+import { RunnerRefusal } from "@/server/internal/p1-isolated-runner/refusal";
+import { isTrustedRestoreEvidence, type RestoreContainerFact } from "@/server/internal/p1-production-adapter/restore-controller";
 import {
   publishReleaseBackup,
   type BackupIo,
@@ -158,9 +164,8 @@ describe("production P1 adapter", () => {
 
     const mismatch = worldFor("TEST_OWNED");
     mismatch.request.intent = "RECOVERY";
-    mismatch.deps.readRestoredRecovery = () => ({
+    mismatch.deps.readRestoredCatalog = () => ({
       ...mismatch.snapshot,
-      exitCode: 0,
       aggregates: [{ table: "User", rowCount: 9 }],
     });
     expect(executeProductionAdapter(mismatch.request, mismatch.deps).code).toBe("RESTORE_MISMATCH");
@@ -246,27 +251,106 @@ describe("production P1 adapter", () => {
     expect(world.spawns).toBe(1);
   }, 30_000);
 
-  it("can apply on a production-shaped target only when the pin and owner authorization match", () => {
-    const world = readyApply("PRODUCTION");
-    let applied = false;
-    world.deps.readHistory = () => (applied ? [...successfulHistoricalRows(), successfulP1Row()] : successfulHistoricalRows());
-    world.deps.readSchema = () => (applied ? appliedSchema() : absentP1Schema());
-    world.deps.spawnOneShot = (plan) => {
-      world.spawns += 1;
-      applied = true;
-      expect(plan.argv.join("\n")).not.toContain("docker-entrypoint.sh");
-      expect(plan.argv).toContain(PRODUCTION_NETWORK_NAME);
-      return { status: 0, signal: null };
+  it("does not apply production from a self-authored authorization object", () => {
+    const world = worldFor("PRODUCTION");
+    world.request.intent = "APPLY";
+    world.request.authorization = {
+      kind: "OWNER_AUTHORIZATION",
+      scope: "PRODUCTION",
+      decision: "AUTHORIZE_P1_ONLY_APPLY",
+      attemptId: ATTEMPT,
+      dossierSha256: "a".repeat(64),
+      recoverySha256: "b".repeat(64),
+      daemonId: world.facts.daemonId,
     };
-    const result = executeProductionAdapter(world.request, world.deps);
-    expect(result.targetClass).toBe("PRODUCTION");
-    expect(result.code).toBe("P1_APPLIED");
-    expect(world.spawns).toBe(1);
+    world.deps.testTrustPublicKey = "injected-test-key";
+    expect(executeProductionAdapter(world.request, world.deps)).toMatchObject({
+      code: "PRODUCTION_TRUST_UNPROVISIONED",
+      spawned: false,
+      targetClass: "PRODUCTION",
+    });
+    expect(world.spawns).toBe(0);
 
-    const shortcut = readyApply("PRODUCTION");
+    const shortcut = worldFor("PRODUCTION");
     shortcut.request.authorization = { authorized: true };
     expect(executeProductionAdapter(shortcut.request, shortcut.deps).code).toBe("SHORTCUT_AUTHORIZATION");
     expect(shortcut.spawns).toBe(0);
+  });
+
+  it("rejects an unsigned object, a forged restore report, a shared volume, and a replayed signature", () => {
+    const unsigned = readyApply("TEST_OWNED");
+    unsigned.request.authorization = {
+      kind: "OWNER_AUTHORIZATION",
+      scope: "TEST_OWNED",
+      decision: "AUTHORIZE_P1_ONLY_APPLY",
+      attemptId: ATTEMPT,
+      dossierSha256: "a".repeat(64),
+      recoverySha256: "b".repeat(64),
+      daemonId: DAEMON,
+    };
+    expect(executeProductionAdapter(unsigned.request, unsigned.deps).code).toBe("AUTHORIZATION_REQUIRED");
+    expect(unsigned.spawns).toBe(0);
+
+    expect(
+      isTrustedRestoreEvidence({
+        attemptId: ATTEMPT,
+        archiveSha256: "a".repeat(64),
+        restoreContainerId: "e".repeat(64),
+        restoreImageId: DB_IMAGE,
+        restoreExitCode: 0,
+        recoverySha256: "b".repeat(64),
+      }),
+    ).toBe(false);
+
+    const shared = worldFor("TEST_OWNED");
+    shared.deps.inspectRestore = () => ({
+      ...restoreFact(),
+      mounts: [
+        {
+          type: "volume",
+          name: "stell22_pgdata",
+          source: "/var/lib/docker/volumes/stell22_pgdata/_data",
+          destination: "/var/lib/postgresql/data",
+        },
+      ],
+    });
+    shared.request.intent = "RECOVERY";
+    expect(executeProductionAdapter(shared.request, shared.deps).code).toBe("RESTORE_VOLUME_SHARED");
+
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const replay = memoryReplayStore();
+    const pem = publicKey.export({ type: "spki", format: "pem" }).toString();
+    const payload = signedPayload("TEST_OWNED", "c".repeat(64), "d".repeat(64), DAEMON);
+    const signed = signPayload(privateKey, payload);
+    verifySignedAuthorization(signed, pem, { scope: "TEST_OWNED", attemptId: ATTEMPT, dossierSha256: payload.dossierSha256, recoverySha256: payload.recoverySha256, daemonId: DAEMON }, replay);
+    expect(() =>
+      verifySignedAuthorization(signed, pem, { scope: "TEST_OWNED", attemptId: ATTEMPT, dossierSha256: payload.dossierSha256, recoverySha256: payload.recoverySha256, daemonId: DAEMON }, replay),
+    ).toThrow(RunnerRefusal);
+  }, 30_000);
+
+  it("stops when the Docker endpoint or daemon identity changes before apply", () => {
+    const endpoint = readyApply("TEST_OWNED");
+    let calls = 0;
+    endpoint.deps.resolveDockerSession = () => {
+      calls += 1;
+      const host = calls === 1 ? "npipe:////./pipe/dockerDesktopLinuxEngine" : "npipe:////./pipe/docker_engine";
+      return { endpoint: host, daemonId: DAEMON, env: { NODE_ENV: process.env.NODE_ENV, DOCKER_HOST: host, PATH: process.env.PATH } };
+    };
+    expect(executeProductionAdapter(endpoint.request, endpoint.deps)).toMatchObject({
+      code: "DOCKER_ENDPOINT_CHANGED",
+      spawned: false,
+    });
+
+    const daemon = readyApply("TEST_OWNED");
+    let daemonCalls = 0;
+    daemon.deps.resolveDockerSession = () => {
+      daemonCalls += 1;
+      return fakeSession(daemonCalls === 1 ? DAEMON : "daemon-changed-9");
+    };
+    expect(executeProductionAdapter(daemon.request, daemon.deps)).toMatchObject({
+      code: "DAEMON_IDENTITY_CHANGED",
+      spawned: false,
+    });
   }, 30_000);
 
   it("does not treat a published database port as closed", () => {
@@ -296,6 +380,18 @@ describe("production P1 adapter", () => {
       }),
     ).toBe(2);
     expect(lines).toContain("STOP PRODUCTION_DAEMON_UNPINNED");
+    const wired: string[] = [];
+    expect(
+      runProductionAdapterCli(["apply", "--authorization", "owner.json"], {
+        log: (line) => wired.push(line),
+        readPin: () => DAEMON,
+      }),
+    ).toBe(2);
+    expect(wired).toContain(
+      process.env.GITHUB_ACTIONS === "true"
+        ? "STOP PRODUCTION_SCOPE_FORBIDDEN_IN_CI"
+        : "STOP PRODUCTION_APPLY_NOT_WIRED_TO_THIS_CLI",
+    );
   });
 });
 
@@ -324,7 +420,7 @@ function worldFor(scope: "TEST_OWNED" | "PRODUCTION"): World {
   const spawns = { count: 0, argv: [] as string[] };
   const lockPath = path.join(directory, "adapter.lock");
   const deps: AdapterDependencies = {
-    productionDaemonPin: scope === "PRODUCTION" ? DAEMON : null,
+    productionDaemonPin: scope === "PRODUCTION" ? facts.daemonId : null,
     git: createRepoGitSource(process.cwd()),
     destinationRoot: path.join(directory, "sealed"),
     lockPath,
@@ -334,8 +430,13 @@ function worldFor(scope: "TEST_OWNED" | "PRODUCTION"): World {
     readSchema: () => absentP1Schema(),
     readArchive: () => archive,
     readLiveRecovery: () => snapshot,
-    readRestoredRecovery: () => ({ ...snapshot, exitCode: 0 }),
+    inspectSourceMounts: () => sourceMounts(),
+    inspectRestore: () => restoreFact(),
+    runRestore: () => 0,
+    readRestoredCatalog: () => snapshot,
     readLockOwner: () => (fs.existsSync(lockPath) ? fs.readFileSync(lockPath, "utf8") : null),
+    resolveDockerSession: scope === "TEST_OWNED" ? () => fakeSession(facts.daemonId) : undefined,
+    replay: memoryReplayStore(),
     spawnOneShot: (plan) => {
       spawns.count += 1;
       spawns.argv = [...plan.argv];
@@ -375,20 +476,69 @@ function readyApply(scope: "TEST_OWNED" | "PRODUCTION"): World {
   const world = worldFor(scope);
   const recovery = executeProductionAdapter({ ...world.request, intent: "RECOVERY" }, world.deps);
   expect(recovery.verdict).toBe("RECOVERY_VERIFIED");
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  world.deps.testTrustPublicKey = publicKey.export({ type: "spki", format: "pem" }).toString();
+  const payload = signedPayload(scope, recovery.dossierSha256 ?? "", recovery.recoverySha256 ?? "", world.facts.daemonId);
   world.request = {
     ...world.request,
     intent: "APPLY",
-    authorization: {
-      kind: "OWNER_AUTHORIZATION",
-      scope,
-      decision: "AUTHORIZE_P1_ONLY_APPLY",
-      attemptId: ATTEMPT,
-      dossierSha256: recovery.dossierSha256,
-      recoverySha256: recovery.recoverySha256,
-      daemonId: world.facts.daemonId,
-    },
+    authorization: signPayload(privateKey, payload),
   };
   return world;
+}
+
+function signedPayload(scope: "TEST_OWNED" | "PRODUCTION", dossierSha256: string, recoverySha256: string, daemonId: string) {
+  const now = Date.now();
+  return {
+    kind: "OWNER_SIGNED_AUTHORIZATION" as const,
+    operation: "P1_ONLY_APPLY" as const,
+    decision: "AUTHORIZE_P1_ONLY_APPLY" as const,
+    scope,
+    attemptId: ATTEMPT,
+    dossierSha256,
+    recoverySha256,
+    daemonId,
+    nonce: "ab".repeat(16),
+    notBefore: new Date(now - 60_000).toISOString(),
+    notAfter: new Date(now + 60 * 60_000).toISOString(),
+  };
+}
+
+function signPayload(privateKey: KeyObject, payload: ReturnType<typeof signedPayload>) {
+  return {
+    payload,
+    signature: sign(null, Buffer.from(canonicalJson(payload)), privateKey).toString("base64"),
+  };
+}
+
+function fakeSession(daemonId: string): DockerSession {
+  const endpoint = "npipe:////./pipe/dockerDesktopLinuxEngine";
+  return { endpoint, daemonId, env: { NODE_ENV: process.env.NODE_ENV, DOCKER_HOST: endpoint, PATH: process.env.PATH } };
+}
+
+function sourceMounts(): VolumeMount[] {
+  return [
+    {
+      type: "volume",
+      name: "source-data",
+      source: "/var/lib/docker/volumes/source-data/_data",
+      destination: "/var/lib/postgresql/data",
+    },
+  ];
+}
+
+function restoreFact(): RestoreContainerFact {
+  return {
+    ...container(testRestoreName(ATTEMPT), "e".repeat(64), DB_IMAGE, "postgres:17-alpine", `p1pa-restore-net-${ATTEMPT}`, false),
+    mounts: [
+      {
+        type: "volume",
+        name: `p1pa-data-${ATTEMPT}`,
+        source: `/var/lib/docker/volumes/p1pa-data-${ATTEMPT}/_data`,
+        destination: "/var/lib/postgresql/data",
+      },
+    ],
+  };
 }
 
 function testFacts(): TargetFacts {
@@ -408,6 +558,7 @@ function testFacts(): TargetFacts {
 
 function productionFacts(): TargetFacts {
   const facts = testFacts();
+  facts.daemonId = resolveDockerSession({}).daemonId;
   return {
     ...facts,
     scope: "PRODUCTION",

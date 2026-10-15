@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
@@ -24,9 +24,10 @@ import {
   testNetworkName,
   testRestoreName,
 } from "@/server/internal/p1-production-adapter/contract";
-import { dumpDatabase, inspectContainer, readCatalog, readDaemonId, restoreArchive } from "@/server/internal/p1-production-adapter/docker-runtime";
+import { dumpDatabase, inspectContainer, inspectMounts, readCatalog, readDaemonId, restoreArchive } from "@/server/internal/p1-production-adapter/docker-runtime";
 import { executeProductionAdapter, type AdapterDependencies } from "@/server/internal/p1-production-adapter/execute";
-import { declarationFromFacts, type TargetFacts } from "@/server/internal/p1-production-adapter/identity";
+import { canonicalJson, declarationFromFacts, type TargetFacts } from "@/server/internal/p1-production-adapter/identity";
+import type { RestoreContainerFact } from "@/server/internal/p1-production-adapter/restore-controller";
 import { planProductionOneShot } from "@/server/internal/p1-production-adapter/oneshot";
 import { assertIndependentRestore, publishReleaseBackup } from "@/server/internal/p1-production-adapter/recovery";
 
@@ -98,7 +99,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
         expect(stale.db.publishedDbPort).toBe(false);
         const wrong = executeProductionAdapter(
           { intent: "PREFLIGHT", scope: "TEST_OWNED", attemptId, declared: { ...declarationFromFacts(stale), appId: "f".repeat(64) }, databasePassword: password },
-          dependencies(runtime, stale, () => Buffer.alloc(0), () => { throw new Error("archive unused"); }),
+          dependencies(runtime, stale, () => Buffer.alloc(0), null),
         );
         expect(wrong).toMatchObject({ code: "RUNTIME_IDENTITY_MISMATCH", spawned: false, targetClass: "TEST_OWNED_NOT_PRODUCTION" });
 
@@ -106,7 +107,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
         waitReady(dbName, databaseName);
         const restarted = executeProductionAdapter(
           { intent: "PREFLIGHT", scope: "TEST_OWNED", attemptId, declared: declarationFromFacts(stale), databasePassword: password },
-          dependencies(runtime, stale, () => Buffer.alloc(0), () => { throw new Error("archive unused"); }),
+          dependencies(runtime, stale, () => Buffer.alloc(0), null),
         );
         expect(restarted.code).toBe("RUNTIME_IDENTITY_MISMATCH");
 
@@ -132,7 +133,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
               roleName: "p1pa",
             },
           },
-          dependencies(path.join(runtime, "incomplete"), live, () => Buffer.from("tiny"), () => liveCatalog(dbName, databaseName).recovery),
+          dependencies(path.join(runtime, "incomplete"), live, () => Buffer.from("tiny"), null),
         );
         expect(incomplete.code).toBe("BACKUP_INCOMPLETE");
 
@@ -150,14 +151,17 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
         startRestore(restoreName, `${networkName}-restore`, databaseName, password);
         restoreStarted = true;
         assertIndependentRestore(live.db, inspectContainer(restoreName), attemptId);
-        expect(restoreArchive(inspectContainer(restoreName).id, "p1pa", databaseName, zlib.gunzipSync(archive))).toBe(0);
-        execSql(restoreName, databaseName, "INSERT INTO public.p1pa_release_probe (id) VALUES (2);");
-        const mismatch = executeProductionAdapter(
-          recoveryRequest(attemptId, password, live, witness),
-          dependencies(path.join(runtime, "mismatch"), live, () => fs.readFileSync(path.join(runtime, "backup", "backup.sql.gz")), () => liveCatalog(restoreName, databaseName).recovery),
-        );
+        const mismatchDeps = dependencies(path.join(runtime, "mismatch"), live, () => fs.readFileSync(path.join(runtime, "backup", "backup.sql.gz")), restoreName);
+        const restoreOnly = mismatchDeps.runRestore;
+        mismatchDeps.runRestore = (id, sql) => {
+          const status = restoreOnly(id, sql);
+          execSql(restoreName, databaseName, "INSERT INTO public.p1pa_release_probe (id) VALUES (2);");
+          return status;
+        };
+        const mismatch = executeProductionAdapter(recoveryRequest(attemptId, password, live, witness), mismatchDeps);
         expect(mismatch.code).toBe("RESTORE_MISMATCH");
-        execSql(restoreName, databaseName, "DELETE FROM public.p1pa_release_probe WHERE id = 2;");
+        spawnSync("docker", ["rm", "-f", restoreName], { windowsHide: true });
+        startRestore(restoreName, `${networkName}-restore`, databaseName, password);
         const beforeCatalog = liveCatalog(dbName, databaseName);
         expect(beforeCatalog.recovery.successfulMigrationCount).toBe(EXPECTED_HISTORICAL_MIGRATION_COUNT);
         const appBefore = inspectContainer(appName);
@@ -165,9 +169,12 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
         let spawns = 0;
         const recovery = executeProductionAdapter(
           recoveryRequest(attemptId, password, live, witness),
-          dependencies(path.join(runtime, "recovery"), live, () => fs.readFileSync(path.join(runtime, "backup", "backup.sql.gz")), () => liveCatalog(restoreName, databaseName).recovery),
+          dependencies(path.join(runtime, "recovery"), live, () => fs.readFileSync(path.join(runtime, "backup", "backup.sql.gz")), restoreName),
         );
         expect(recovery.verdict).toBe("RECOVERY_VERIFIED");
+        spawnSync("docker", ["rm", "-f", restoreName], { windowsHide: true });
+        startRestore(restoreName, `${networkName}-restore`, databaseName, password);
+        const { publicKey, privateKey } = generateKeyPairSync("ed25519");
         const applied = executeProductionAdapter(
           {
             intent: "APPLY",
@@ -176,21 +183,25 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
             declared: declarationFromFacts(live),
             databasePassword: password,
             recoveryWitness: witness,
-            authorization: {
-              kind: "OWNER_AUTHORIZATION",
-              scope: "TEST_OWNED",
-              decision: "AUTHORIZE_P1_ONLY_APPLY",
+            authorization: signLive(privateKey, {
+              dossierSha256: recovery.dossierSha256 ?? "",
+              recoverySha256: recovery.recoverySha256 ?? "",
               attemptId,
-              dossierSha256: recovery.dossierSha256,
-              recoverySha256: recovery.recoverySha256,
               daemonId,
-            },
+            }),
           },
           {
-            ...dependencies(path.join(runtime, "apply"), live, () => fs.readFileSync(path.join(runtime, "backup", "backup.sql.gz")), () => liveCatalog(restoreName, databaseName).recovery),
+            ...dependencies(path.join(runtime, "apply"), live, () => fs.readFileSync(path.join(runtime, "backup", "backup.sql.gz")), restoreName),
+            testTrustPublicKey: publicKey.export({ type: "spki", format: "pem" }).toString(),
             spawnOneShot: (plan) => {
               spawns += 1;
-              const child = spawnSync("docker", [...plan.argv], { encoding: "utf8", windowsHide: true, timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
+              const child = spawnSync("docker", [...plan.argv], {
+                encoding: "utf8",
+                windowsHide: true,
+                timeout: 180_000,
+                maxBuffer: 8 * 1024 * 1024,
+                env: plan.env,
+              });
               detail = redact(`${child.stdout}\n${child.stderr}`);
               return { status: child.status, signal: child.signal };
             },
@@ -222,7 +233,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
         expect(triggerMatchesContract(requirePart(after.schema.trigger))).toBe(true);
         const repeat = executeProductionAdapter(
           { intent: "APPLY", scope: "TEST_OWNED", attemptId, declared: declarationFromFacts(live), databasePassword: password, recoveryWitness: "RESTORE_VERIFIED" },
-          dependencies(path.join(runtime, "repeat"), live, () => { throw new Error("repeat must not read the archive"); }, () => { throw new Error("repeat must not read the restore"); }),
+          dependencies(path.join(runtime, "repeat"), live, () => { throw new Error("repeat must not read the archive"); }, null),
         );
         expect(repeat.spawned).toBe(false);
         expect(repeat.code).toBe("P1_APPLIED");
@@ -279,7 +290,7 @@ function dependencies(
   root: string,
   live: TargetFacts,
   readArchive: () => Buffer,
-  readRestored: () => ReturnType<typeof liveCatalog>["recovery"],
+  restoreName: string | null,
 ): AdapterDependencies {
   const lockPath = path.join(root, "adapter.lock");
   return {
@@ -293,12 +304,43 @@ function dependencies(
     readSchema: () => liveCatalog(live.db.name, live.databaseName).schema,
     readArchive,
     readLiveRecovery: () => liveCatalog(live.db.name, live.databaseName).recovery,
-    readRestoredRecovery: () => ({ ...readRestored(), exitCode: 0 }),
+    inspectSourceMounts: () => inspectMounts(live.db.id),
+    inspectRestore: () => {
+      if (!restoreName) throw new Error("restore container is not part of this call");
+      return restoreFact(restoreName);
+    },
+    runRestore: (id, sql) => restoreArchive(id, "p1pa", live.databaseName, sql),
+    readRestoredCatalog: (id) => readCatalog(id, "p1pa", live.databaseName).recovery,
     readLockOwner: () => (fs.existsSync(lockPath) ? fs.readFileSync(lockPath, "utf8") : null),
     spawnOneShot: () => {
       throw new Error("this dependency must be replaced before apply");
     },
   };
+}
+
+function restoreFact(name: string): RestoreContainerFact {
+  return { ...inspectContainer(name), mounts: inspectMounts(name) };
+}
+
+function signLive(
+  privateKey: KeyObject,
+  binding: { dossierSha256: string; recoverySha256: string; attemptId: string; daemonId: string },
+) {
+  const now = Date.now();
+  const payload = {
+    kind: "OWNER_SIGNED_AUTHORIZATION" as const,
+    operation: "P1_ONLY_APPLY" as const,
+    decision: "AUTHORIZE_P1_ONLY_APPLY" as const,
+    scope: "TEST_OWNED" as const,
+    attemptId: binding.attemptId,
+    dossierSha256: binding.dossierSha256,
+    recoverySha256: binding.recoverySha256,
+    daemonId: binding.daemonId,
+    nonce: randomBytes(16).toString("hex"),
+    notBefore: new Date(now - 60_000).toISOString(),
+    notAfter: new Date(now + 60 * 60_000).toISOString(),
+  };
+  return { payload, signature: sign(null, Buffer.from(canonicalJson(payload)), privateKey).toString("base64") };
 }
 
 function startRestore(name: string, network: string, databaseName: string, password: string): void {
