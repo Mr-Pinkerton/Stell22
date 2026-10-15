@@ -50,6 +50,11 @@ git show "${EXPECTED_SHA}:scripts/preflight-prod.sh" > "$TMP_DIR/preflight-prod.
 chmod +x "$TMP_DIR/preflight-prod.sh"
 bash "$TMP_DIR/preflight-prod.sh"
 
+echo "===== STAGE: p1 writer prerequisite ====="
+git show "${EXPECTED_SHA}:scripts/p1-writer-preflight.sh" > "$TMP_DIR/p1-writer-preflight.sh"
+chmod +x "$TMP_DIR/p1-writer-preflight.sh"
+sh "$TMP_DIR/p1-writer-preflight.sh"
+
 # SHA, который реально работал до этого деплоя. Фиксируем ДО checkout:
 # иначе deploy.sh увидит HEAD = EXPECTED_SHA и «откатится» на новый релиз.
 PREVIOUS_SHA="$(git rev-parse HEAD)"

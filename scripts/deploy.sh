@@ -78,6 +78,9 @@ rollback_app() {
   exit 1
 }
 
+echo "==> [0/5] Проверка P1 перед выкатом нового писателя"
+sh scripts/p1-writer-preflight.sh
+
 echo "==> [1/5] Бэкап базы перед деплоем"
 sh scripts/backup-db.sh
 LAST_BACKUP="$(ls -1t backups/stell22_*.sql.gz 2>/dev/null | head -1 || true)"
