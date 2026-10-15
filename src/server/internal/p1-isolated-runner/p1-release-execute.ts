@@ -23,13 +23,24 @@ import {
 import { refusal, RunnerRefusal } from "@/server/internal/p1-isolated-runner/refusal";
 import type { P1SchemaEvidence } from "@/server/internal/p1-isolated-runner/schema-contract";
 
-export const ONE_SHOT_COMMAND = [
+export const ONE_SHOT_LAUNCHER = "/opt/p1-migrate.cjs";
+
+const LAUNCHER_SOURCE = String.raw`const fs = require("node:fs");
+const { spawnSync } = require("node:child_process");
+const raw = fs.readFileSync("/run/secrets/p1-database.env", "utf8");
+const lines = raw.split(/\n/).filter((line) => line.length > 0 && line.startsWith("DATABASE_URL="));
+if (lines.length !== 1) process.exit(2);
+process.env.DATABASE_URL = lines[0].slice("DATABASE_URL=".length);
+const child = spawnSync(process.execPath, [
   "/opt/migrator/node_modules/prisma/build/index.js",
   "migrate",
   "deploy",
   "--schema",
   "/sealed/prisma/schema.prisma",
-] as const;
+], { env: process.env, stdio: "inherit" });
+if (child.error || child.signal) process.exit(1);
+process.exit(child.status === null ? 1 : child.status);
+`;
 
 export type OneShotPlan = {
   argv: readonly string[];
@@ -80,6 +91,7 @@ export type ReleaseDependencies = {
 export function executeP1OnlyRelease(request: ReleaseRequest, deps: ReleaseDependencies): ReleaseResult {
   let spawned = false;
   let lock: { release: () => void } | null = null;
+  let credentialDir: string | null = null;
   try {
     assertPolicyIntact();
     if (request.databaseUrl !== undefined) {
@@ -148,7 +160,8 @@ export function executeP1OnlyRelease(request: ReleaseRequest, deps: ReleaseDepen
       "Runtime inspect failed before the one-shot",
     );
     authenticateTopology(request.declared, immediate);
-    const plan = planOneShot(request, deps.destinationRoot);
+    credentialDir = writeCredentialFiles(request, deps.destinationRoot);
+    const plan = planOneShot(request, deps.destinationRoot, credentialDir);
     if (plan.argv.some((arg) => arg.includes("docker-entrypoint.sh") || arg === "resolve" || arg === "dev" || arg === "reset")) {
       throw refusal("STOP", "FORBIDDEN_PRISMA_COMMAND", "One-shot command is not migrate deploy");
     }
@@ -200,21 +213,21 @@ export function executeP1OnlyRelease(request: ReleaseRequest, deps: ReleaseDepen
     throw error;
   } finally {
     lock?.release();
+    if (credentialDir) fs.rmSync(credentialDir, { recursive: true, force: true });
   }
 }
 
-export function planOneShot(request: ReleaseRequest, sealedRoot: string): OneShotPlan {
-  const url = new URL("postgresql://placeholder");
-  url.username = request.declared.roleName;
-  url.password = request.databasePassword;
-  url.hostname = request.declared.db.name;
-  url.port = "5432";
-  url.pathname = `/${request.declared.databaseName}`;
-  url.searchParams.set("schema", "public");
-  url.searchParams.set("connect_timeout", "5");
-  if (url.hostname !== request.declared.db.name || url.hostname === "127.0.0.1") {
+export function planOneShot(
+  request: ReleaseRequest,
+  sealedRoot: string,
+  credentialDir: string,
+): OneShotPlan {
+  const connectionTarget = databaseTarget(request);
+  if (connectionTarget.hostname !== request.declared.db.name || connectionTarget.hostname === "127.0.0.1") {
     throw refusal("STOP", "DATABASE_URL_REJECTED", "One-shot target must be the inspected database container");
   }
+  const launcherPath = path.join(credentialDir, "migrate.cjs");
+  const secretPath = path.join(credentialDir, "database.env");
   const argv = [
     "run",
     "--rm",
@@ -226,14 +239,63 @@ export function planOneShot(request: ReleaseRequest, sealedRoot: string): OneSho
     "node",
     "--workdir",
     "/tmp",
-    "-e",
-    `DATABASE_URL=${url.toString()}`,
     "-v",
     `${dockerPath(sealedRoot)}:/sealed:ro`,
+    "-v",
+    `${dockerPath(secretPath)}:/run/secrets/p1-database.env:ro`,
+    "-v",
+    `${dockerPath(launcherPath)}:/opt/p1-migrate.cjs:ro`,
     ONE_SHOT_IMAGE,
-    ...ONE_SHOT_COMMAND,
+    ONE_SHOT_LAUNCHER,
   ];
+  if (argv.some((arg) => revealsCredential(arg, request.databasePassword))) {
+    throw refusal("STOP", "CREDENTIAL_LEAK", "One-shot arguments would expose a database credential");
+  }
   return { argv, appContainerId: request.declared.app.id };
+}
+
+function writeCredentialFiles(request: ReleaseRequest, destinationRoot: string): string {
+  const target = databaseTarget(request);
+  const directory = path.join(path.dirname(destinationRoot), "p1-credentials");
+  fs.rmSync(directory, { recursive: true, force: true });
+  fs.mkdirSync(directory, { recursive: false });
+  const secretPath = path.join(directory, "database.env");
+  const handle = fs.openSync(secretPath, "wx", 0o600);
+  try {
+    fs.writeFileSync(handle, `DATABASE_URL=${target.href}\n`);
+  } finally {
+    fs.closeSync(handle);
+  }
+  fs.chmodSync(secretPath, 0o600);
+  const launcherPath = path.join(directory, "migrate.cjs");
+  if (LAUNCHER_SOURCE.includes(request.databasePassword) || /postgres(?:ql)?:\/\//i.test(LAUNCHER_SOURCE)) {
+    throw refusal("STOP", "CREDENTIAL_LEAK", "Migration launcher contains a credential");
+  }
+  fs.writeFileSync(launcherPath, LAUNCHER_SOURCE, { mode: 0o600 });
+  return directory;
+}
+
+function databaseTarget(request: ReleaseRequest): URL {
+  if (request.databasePassword.length < 8 || /[\r\n]/.test(request.databasePassword)) {
+    throw refusal("STOP", "RUNTIME_UNAUTHENTICATED", "Database credential is not usable");
+  }
+  const url = new URL("postgresql://placeholder");
+  url.username = request.declared.roleName;
+  url.password = request.databasePassword;
+  url.hostname = request.declared.db.name;
+  url.port = "5432";
+  url.pathname = `/${request.declared.databaseName}`;
+  url.searchParams.set("schema", "public");
+  url.searchParams.set("connect_timeout", "5");
+  return url;
+}
+
+function revealsCredential(arg: string, password: string): boolean {
+  return (
+    arg.includes(password) ||
+    arg.includes("DATABASE_URL=") ||
+    /postgres(?:ql)?:\/\//i.test(arg)
+  );
 }
 
 function failClosed<T>(fn: () => T, code: string, message: string): T {

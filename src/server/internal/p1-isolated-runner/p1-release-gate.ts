@@ -149,27 +149,103 @@ export function migrationHistoryFingerprint(
   return createHash("sha256").update(lines.join("\n")).digest("hex");
 }
 
+export type LogicalColumn = {
+  schema: string;
+  table: string;
+  column: string;
+  type: string;
+  nullable: string;
+  columnDefault: string | null;
+  identity: string;
+  generated: string;
+  collation: string | null;
+};
+
+export type LogicalConstraint = {
+  schema: string;
+  table: string;
+  name: string;
+  type: string;
+  validated: boolean;
+  deferrable: boolean;
+  initiallyDeferred: boolean;
+  definition: string;
+};
+
+/**
+ * Recovery fingerprint. Parentheses stay in the definition because they
+ * can change boolean meaning. Only whitespace outside quoted literals is
+ * collapsed. OID and attnum are not part of the identity.
+ */
 export function logicalSchemaFingerprint(input: {
-  columns: readonly { schema: string; table: string; column: string; type: string; nullable: string }[];
-  constraints: readonly {
-    schema: string;
-    table: string;
-    name: string;
-    type: string;
-    validated: boolean;
-    definition: string;
-  }[];
+  columns: readonly LogicalColumn[];
+  constraints: readonly LogicalConstraint[];
 }): string {
   const columns = input.columns
-    .map((row) => `${row.schema}|${row.table}|${row.column}|${row.type}|${row.nullable}`)
+    .map(
+      (row) =>
+        [
+          row.schema,
+          row.table,
+          row.column,
+          row.type,
+          row.nullable,
+          `default=${presentOrNull(row.columnDefault)}`,
+          `identity=${presentOrNull(row.identity)}`,
+          `generated=${presentOrNull(row.generated)}`,
+          `collation=${presentOrNull(row.collation)}`,
+        ].join("|"),
+    )
     .sort();
   const constraints = input.constraints
     .map(
       (row) =>
-        `${row.schema}|${row.table}|${row.name}|${row.type}|${row.validated ? "1" : "0"}|${row.definition.replace(/[()]/g, "")}`,
+        [
+          row.schema,
+          row.table,
+          row.name,
+          row.type,
+          row.validated ? "validated" : "not-validated",
+          row.deferrable ? "deferrable" : "not-deferrable",
+          row.initiallyDeferred ? "initially-deferred" : "not-initially-deferred",
+          normalizeConstraintDefinition(row.definition),
+        ].join("|"),
     )
     .sort();
   return createHash("sha256").update(`${columns.join("\n")}\n--\n${constraints.join("\n")}`).digest("hex");
+}
+
+export function normalizeConstraintDefinition(definition: string): string {
+  let out = "";
+  let quoted = false;
+  for (let index = 0; index < definition.length; index += 1) {
+    const char = definition[index] ?? "";
+    if (quoted) {
+      out += char;
+      if (char === "'" && definition[index + 1] === "'") {
+        out += "'";
+        index += 1;
+        continue;
+      }
+      if (char === "'") quoted = false;
+      continue;
+    }
+    if (char === "'") {
+      quoted = true;
+      out += char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (!out.endsWith(" ")) out += " ";
+      continue;
+    }
+    out += char;
+  }
+  return out.trim();
+}
+
+function presentOrNull(value: string | null): string {
+  return value === null ? "\\N" : value;
 }
 
 export function authenticateTopology(

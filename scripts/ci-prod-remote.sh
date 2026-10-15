@@ -52,6 +52,7 @@ bash "$TMP_DIR/preflight-prod.sh"
 
 echo "===== STAGE: p1 writer prerequisite ====="
 git show "${EXPECTED_SHA}:scripts/p1-writer-preflight.sh" > "$TMP_DIR/p1-writer-preflight.sh"
+git show "${EXPECTED_SHA}:scripts/p1-writer-preflight.sql" > "$TMP_DIR/p1-writer-preflight.sql"
 chmod +x "$TMP_DIR/p1-writer-preflight.sh"
 sh "$TMP_DIR/p1-writer-preflight.sh"
 

@@ -12,16 +12,20 @@ import { createRepoGitSource } from "@/server/internal/p1-isolated-runner/git-so
 import { acquireHostLock } from "@/server/internal/p1-isolated-runner/lock";
 import {
   assessWriterDeployPrerequisite,
+  logicalSchemaFingerprint,
   productionReleaseAuthorized,
   sha256Bytes,
   verifyPinnedHistoricalPlusP1,
   type CatalogProbe,
   type ContainerIdentity,
+  type LogicalColumn,
+  type LogicalConstraint,
   type RestoredProbe,
   type TopologyObservation,
 } from "@/server/internal/p1-isolated-runner/p1-release-gate";
 import {
   executeP1OnlyRelease,
+  planOneShot,
   type OneShotPlan,
   type ReleaseDependencies,
   type ReleaseRequest,
@@ -117,6 +121,45 @@ function matchingSchema(): P1SchemaEvidence {
   };
 }
 
+function assertNoCredential(value: string, password: string): void {
+  if (
+    value.includes(password) ||
+    value.includes("DATABASE_URL=") ||
+    /postgres(?:ql)?:\/\//i.test(value)
+  ) {
+    throw new Error("credential appeared in diagnostic output");
+  }
+}
+
+function column(overrides: Partial<LogicalColumn> = {}): LogicalColumn {
+  return {
+    schema: "public",
+    table: "Example",
+    column: "a",
+    type: "integer",
+    nullable: "YES",
+    columnDefault: null,
+    identity: "",
+    generated: "",
+    collation: null,
+    ...overrides,
+  };
+}
+
+function constraint(definition: string, overrides: Partial<LogicalConstraint> = {}): LogicalConstraint {
+  return {
+    schema: "public",
+    table: "Example",
+    name: "example_check",
+    type: "c",
+    validated: true,
+    deferrable: false,
+    initiallyDeferred: false,
+    definition,
+    ...overrides,
+  };
+}
+
 function harness(input: {
   history?: PrismaMigrationRow[];
   schema?: P1SchemaEvidence;
@@ -126,13 +169,20 @@ function harness(input: {
   restored?: RestoredProbe;
   spawn?: (plan: OneShotPlan) => { status: number | null; signal: NodeJS.Signals | null };
   identity?: { databaseName: string; roleName: string };
-}): { deps: ReleaseDependencies; request: ReleaseRequest; plans: OneShotPlan[]; root: string } {
+}): {
+  deps: ReleaseDependencies;
+  request: ReleaseRequest;
+  plans: OneShotPlan[];
+  root: string;
+  receivedTarget: () => { hostname: string; username: string; database: string } | null;
+} {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "p1-release-"));
   const archive = input.archive ?? Buffer.from("backup-bytes");
   const declared = input.observed ?? topology();
   let history = input.history ?? successfulHistoricalRows();
   let schema = input.schema ?? absentP1Schema();
   const plans: OneShotPlan[] = [];
+  let receivedTarget: { hostname: string; username: string; database: string } | null = null;
   const deps: ReleaseDependencies = {
     git: createRepoGitSource(process.cwd()),
     destinationRoot: path.join(root, "sealed"),
@@ -146,6 +196,26 @@ function harness(input: {
     readRestoredCatalog: () => input.restored ?? { ...probe(), exitCode: 0 },
     spawnOneShot: (plan) => {
       plans.push(plan);
+      const credentialDir = path.join(path.dirname(deps.destinationRoot), "p1-credentials");
+      const launcher = fs.readFileSync(path.join(credentialDir, "migrate.cjs"), "utf8");
+      if (
+        launcher.includes("Pw9xQ2mL7k") ||
+        /postgres(?:ql)?:\/\//i.test(launcher) ||
+        !launcher.includes("migrate") ||
+        !launcher.includes("deploy")
+      ) {
+        throw new Error("launcher is missing the pinned command or contains a credential");
+      }
+      const secretPath = path.join(credentialDir, "database.env");
+      const raw = fs.readFileSync(secretPath, "utf8");
+      const line = raw.split("\n").find((item) => item.startsWith("DATABASE_URL="));
+      if (!line) throw new Error("credential transport is missing");
+      const parsed = new URL(line.slice("DATABASE_URL=".length));
+      receivedTarget = {
+        hostname: parsed.hostname,
+        username: decodeURIComponent(parsed.username),
+        database: decodeURIComponent(parsed.pathname.replace(/^\//, "")),
+      };
       if (input.spawn) return input.spawn(plan);
       history = [...successfulHistoricalRows(), successfulP1Row()];
       schema = matchingSchema();
@@ -155,10 +225,10 @@ function harness(input: {
   const request: ReleaseRequest = {
     attemptId: declared.attemptId,
     declared,
-    databasePassword: "0123456789abcdef",
+    databasePassword: "Pw9xQ2mL7k",
     recoveryClaim: { attemptId: declared.attemptId, archiveSha256: sha256Bytes(archive) },
   };
-  return { deps, request, plans, root };
+  return { deps, request, plans, root, receivedTarget: () => receivedTarget };
 }
 
 describe("P1-only release gate", { timeout: 30_000 }, () => {
@@ -293,10 +363,20 @@ describe("P1-only release gate", { timeout: 30_000 }, () => {
     });
     const argv = applied.plans[0]?.argv.join("\n") ?? "";
     expect(argv).toContain("--entrypoint\nnode");
-    expect(argv).toContain("migrate\ndeploy\n--schema\n/sealed/prisma/schema.prisma");
+    expect(argv).toContain("/opt/p1-migrate.cjs");
+    expect(argv.split("\n")).not.toContain("migrate");
+    expect(argv.split("\n")).not.toContain("deploy");
     expect(argv).not.toContain("docker-entrypoint.sh");
     expect(argv).not.toContain(applied.request.declared.app.id);
     expect(argv).not.toContain("stell22-app");
+    assertNoCredential(argv, applied.request.databasePassword);
+    assertNoCredential(JSON.stringify(outcome), applied.request.databasePassword);
+    expect(applied.receivedTarget()).toEqual({
+      hostname: applied.request.declared.db.name,
+      username: "p1disp",
+      database: applied.request.declared.databaseName,
+    });
+    expect(fs.existsSync(path.join(applied.root, "p1-credentials"))).toBe(false);
     fs.rmSync(applied.root, { recursive: true, force: true });
 
     const lying = harness({ spawn: () => ({ status: 0, signal: null }) });
@@ -335,8 +415,14 @@ describe("P1-only release gate", { timeout: 30_000 }, () => {
       }),
     ).toEqual({ allow: true, code: "P1_APPLIED" });
     const shell = fs.readFileSync(path.join(process.cwd(), "scripts", "p1-writer-preflight.sh"), "utf8");
+    const sql = fs.readFileSync(path.join(process.cwd(), "scripts", "p1-writer-preflight.sql"), "utf8");
     const deploy = fs.readFileSync(path.join(process.cwd(), "scripts", "deploy.sh"), "utf8");
-    expect(shell).toContain(P1_SHA256);
+    expect(sql).toContain(P1_SHA256);
+    expect(sql).toContain("P1_APPLIED");
+    expect(sql).toContain("pg_get_constraintdef");
+    expect(sql).toContain("pg_get_functiondef");
+    expect(sql).toContain("pg_get_triggerdef");
+    expect(shell).toContain("p1-writer-preflight.sql");
     expect(shell).toContain("P1_APPLIED");
     expect(shell).not.toContain("exit 2");
     expect(deploy.indexOf("p1-writer-preflight.sh")).toBeGreaterThan(-1);
@@ -364,9 +450,70 @@ describe("P1-only release gate", { timeout: 30_000 }, () => {
   });
 });
 
+describe("recovery schema equivalence", () => {
+  it("does not hash different boolean groupings as the same schema", () => {
+    const grouped = logicalSchemaFingerprint({
+      columns: [column()],
+      constraints: [constraint("CHECK ((a = 1 OR b = 2) AND c = 3)")],
+    });
+    const regrouped = logicalSchemaFingerprint({
+      columns: [column()],
+      constraints: [constraint("CHECK (a = 1 OR (b = 2 AND c = 3))")],
+    });
+    expect(grouped).not.toBe(regrouped);
+  });
+
+  it("distinguishes defaults, identity, generated columns, collation, and constraint properties", () => {
+    const base = logicalSchemaFingerprint({
+      columns: [column()],
+      constraints: [constraint("CHECK (a > 0)")],
+    });
+    const differ = (next: { columns?: LogicalColumn[]; constraints?: LogicalConstraint[] }) =>
+      logicalSchemaFingerprint({
+        columns: next.columns ?? [column()],
+        constraints: next.constraints ?? [constraint("CHECK (a > 0)")],
+      });
+    expect(differ({ columns: [column({ columnDefault: "0" })] })).not.toBe(base);
+    expect(differ({ columns: [column({ columnDefault: "" })] })).not.toBe(base);
+    expect(differ({ columns: [column({ identity: "a" })] })).not.toBe(base);
+    expect(differ({ columns: [column({ generated: "s" })] })).not.toBe(base);
+    expect(differ({ columns: [column({ collation: "C" })] })).not.toBe(base);
+    expect(differ({ constraints: [constraint("CHECK (a > 0)", { validated: false })] })).not.toBe(base);
+    expect(differ({ constraints: [constraint("CHECK (a > 0)", { deferrable: true })] })).not.toBe(base);
+    expect(differ({ constraints: [constraint("CHECK (a > 0)", { initiallyDeferred: true })] })).not.toBe(base);
+    expect(differ({ columns: [column({ schema: "other" })] })).not.toBe(base);
+    expect(differ({ constraints: [constraint("CHECK  (a   > 0)")] })).toBe(base);
+    expect(differ({ constraints: [constraint("CHECK (a = 'b  c')")] })).not.toBe(
+      differ({ constraints: [constraint("CHECK (a = 'b c')")] }),
+    );
+  });
+});
+
+describe("one-shot credential transport", () => {
+  it("refuses a loopback target without exposing the password", () => {
+    const wrong = harness({});
+    wrong.request.declared = {
+      ...wrong.request.declared,
+      db: { ...wrong.request.declared.db, name: "127.0.0.1" },
+    };
+    const credentialDir = path.join(wrong.root, "p1-credentials");
+    fs.mkdirSync(credentialDir);
+    let message = "";
+    try {
+      planOneShot(wrong.request, path.join(wrong.root, "sealed"), credentialDir);
+    } catch (error) {
+      message = error instanceof Error ? error.message : "unknown";
+    }
+    expect(message).toBe("One-shot target must be the inspected database container");
+    assertNoCredential(message, wrong.request.databasePassword);
+    fs.rmSync(wrong.root, { recursive: true, force: true });
+  });
+});
+
 describe("writer preflight script stays a shell file", () => {
   it("is invoked from the production remote script before checkout", () => {
     const remote = fs.readFileSync(path.join(process.cwd(), "scripts", "ci-prod-remote.sh"), "utf8");
+    expect(remote.indexOf("p1-writer-preflight.sql")).toBeGreaterThan(-1);
     expect(remote.indexOf("p1-writer-preflight.sh")).toBeGreaterThan(-1);
     expect(remote.indexOf("p1-writer-preflight.sh")).toBeLessThan(remote.indexOf("git reset --hard"));
   });

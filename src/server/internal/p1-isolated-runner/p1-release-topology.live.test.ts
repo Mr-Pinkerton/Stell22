@@ -114,6 +114,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("isolated P1-only release topolo
         expect(
           assessWriterDeployPrerequisite({ history: before.history, schema: before.schema }).allow,
         ).toBe(false);
+        expect(writerVerdict(owned.containerName, owned.databaseName)).toBe("P1_BLOCKED");
 
         docker(["network", "create", networkName]);
         networkStarted = true;
@@ -267,6 +268,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("isolated P1-only release topolo
         expect(
           assessWriterDeployPrerequisite({ history: after.history, schema: after.schema }),
         ).toEqual({ allow: true, code: "P1_APPLIED" });
+        expect(writerVerdict(owned.containerName, owned.databaseName)).toBe("P1_APPLIED");
 
         const appRoot = path.join(runtime, "app");
         extractHistorical(appRoot);
@@ -337,6 +339,14 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("isolated P1-only release topolo
           values: batchValues(materialId, "Партия релиза обновлена"),
         });
         expect(updated.name).toBe("Партия релиза обновлена");
+
+        const restoredUrl = ownedUrl(reconfirmOwnedContainer(restored));
+        expect(writerVerdict(restored.containerName, restored.databaseName)).toBe("P1_BLOCKED");
+        const sealedSchema = path.join(runtime, "sealed", "prisma", "schema.prisma");
+        const restoredDeploy = deployPrisma(sealedSchema, restoredUrl);
+        expect(restoredDeploy.status, restoredDeploy.detail).toBe(0);
+        expect(writerVerdict(restored.containerName, restored.databaseName)).toBe("P1_APPLIED");
+        proveWriterRefusals(restored.containerName, restored.databaseName, queryScript, restoredUrl);
 
         const second = executeP1OnlyRelease(
           {
@@ -454,16 +464,24 @@ function readCatalog(script: string, url: string): CatalogProbe {
     columns: `
       SELECT n.nspname AS schema, c.relname AS "table", a.attname AS column,
              format_type(a.atttypid, a.atttypmod) AS type,
-             CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS nullable
+             CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END AS nullable,
+             pg_catalog.pg_get_expr(ad.adbin, ad.adrelid) AS "columnDefault",
+             a.attidentity AS identity,
+             a.attgenerated AS generated,
+             CASE WHEN a.attcollation = 0 THEN NULL ELSE col.collname END AS collation
       FROM pg_catalog.pg_attribute a
       JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+      LEFT JOIN pg_catalog.pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+      LEFT JOIN pg_catalog.pg_collation col ON col.oid = a.attcollation
       WHERE n.nspname = 'public' AND a.attnum > 0 AND NOT a.attisdropped AND c.relkind = 'r'
     `,
     constraints: `
       SELECT n.nspname AS schema, c.relname AS "table", con.conname AS name,
              con.contype::text AS type, con.convalidated AS validated,
-             pg_catalog.pg_get_constraintdef(con.oid) AS definition
+             con.condeferrable AS deferrable,
+             con.condeferred AS "initiallyDeferred",
+             pg_catalog.pg_get_constraintdef(con.oid, true) AS definition
       FROM pg_catalog.pg_constraint con
       JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
       JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -504,6 +522,10 @@ function readCatalog(script: string, url: string): CatalogProbe {
           column: text(record.column),
           type: text(record.type),
           nullable: text(record.nullable),
+          columnDefault: optionalText(record.columnDefault),
+          identity: text(record.identity),
+          generated: text(record.generated),
+          collation: optionalText(record.collation),
         };
       }),
       constraints: (rows.constraints ?? []).map((row) => {
@@ -514,6 +536,8 @@ function readCatalog(script: string, url: string): CatalogProbe {
           name: text(record.name),
           type: text(record.type),
           validated: bool(record.validated),
+          deferrable: bool(record.deferrable),
+          initiallyDeferred: bool(record.initiallyDeferred),
           definition: text(record.definition),
         };
       }),
@@ -641,9 +665,122 @@ function recordOf(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function writerVerdict(containerName: string, databaseName: string): string {
+  const sql = fs.readFileSync(path.join(process.cwd(), "scripts", "p1-writer-preflight.sql"), "utf8");
+  const child = spawnSync(
+    "docker",
+    ["exec", "-i", containerName, "psql", "-U", "p1disp", "-d", databaseName, "-X", "-v", "ON_ERROR_STOP=1", "-At", "-f", "-"],
+    { input: sql, encoding: "utf8", windowsHide: true },
+  );
+  if (child.status !== 0) throw new Error("writer preflight query failed");
+  return child.stdout.replace(/\s/g, "");
+}
+
+function proveWriterRefusals(containerName: string, databaseName: string, script: string, url: string): void {
+  const originals = querySelects(script, url, {
+    check: `
+      SELECT pg_catalog.pg_get_constraintdef(con.oid, true) AS definition
+      FROM pg_catalog.pg_constraint AS con
+      JOIN pg_catalog.pg_class AS c ON c.oid = con.conrelid
+      JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = 'BatchCreationCommand'
+        AND con.conname = 'BatchCreationCommand_receiptProvenanceSnapshot_shape'
+    `,
+    fn: `
+      SELECT pg_catalog.pg_get_functiondef(p.oid) AS definition
+      FROM pg_catalog.pg_proc AS p
+      JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname = 'batch_creation_command_provenance_guard'
+    `,
+    tg: `
+      SELECT pg_catalog.pg_get_triggerdef(t.oid, true) AS definition
+      FROM pg_catalog.pg_trigger AS t
+      JOIN pg_catalog.pg_class AS c ON c.oid = t.tgrelid
+      JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relname = 'BatchCreationCommand'
+        AND NOT t.tgisinternal AND t.tgname = 'batch_creation_command_provenance_guard'
+    `,
+  });
+  const checkDef = text(oneRow(originals.check, "check").definition);
+  const functionDef = text(oneRow(originals.fn, "function").definition);
+  const triggerDef = text(oneRow(originals.tg, "trigger").definition);
+
+  psql(
+    containerName,
+    databaseName,
+    `ALTER TABLE public."BatchCreationCommand" DROP CONSTRAINT "BatchCreationCommand_receiptProvenanceSnapshot_shape";
+     ALTER TABLE public."BatchCreationCommand" ADD CONSTRAINT "BatchCreationCommand_receiptProvenanceSnapshot_shape" CHECK (jsonb_typeof("receiptProvenanceSnapshot") = 'array');`,
+  );
+  expect(writerVerdict(containerName, databaseName)).toBe("P1_BLOCKED");
+  psql(
+    containerName,
+    databaseName,
+    `ALTER TABLE public."BatchCreationCommand" DROP CONSTRAINT "BatchCreationCommand_receiptProvenanceSnapshot_shape";
+     ALTER TABLE public."BatchCreationCommand" ADD CONSTRAINT "BatchCreationCommand_receiptProvenanceSnapshot_shape" ${checkDef};`,
+  );
+  expect(writerVerdict(containerName, databaseName)).toBe("P1_APPLIED");
+
+  psql(
+    containerName,
+    databaseName,
+    `CREATE OR REPLACE FUNCTION public.batch_creation_command_provenance_guard() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN RETURN NEW; END; $body$;`,
+  );
+  expect(writerVerdict(containerName, databaseName)).toBe("P1_BLOCKED");
+  psql(containerName, databaseName, functionDef);
+  expect(writerVerdict(containerName, databaseName)).toBe("P1_APPLIED");
+
+  psql(
+    containerName,
+    databaseName,
+    `DROP TRIGGER batch_creation_command_provenance_guard ON public."BatchCreationCommand";
+     CREATE TRIGGER batch_creation_command_provenance_guard AFTER INSERT ON public."BatchCreationCommand" FOR EACH ROW EXECUTE FUNCTION batch_creation_command_provenance_guard();`,
+  );
+  expect(writerVerdict(containerName, databaseName)).toBe("P1_BLOCKED");
+  psql(
+    containerName,
+    databaseName,
+    `DROP TRIGGER batch_creation_command_provenance_guard ON public."BatchCreationCommand";\n${triggerDef};`,
+  );
+  expect(writerVerdict(containerName, databaseName)).toBe("P1_APPLIED");
+
+  psql(
+    containerName,
+    databaseName,
+    `UPDATE public."_prisma_migrations" SET checksum = repeat('ab', 32) WHERE migration_name = '${P1_MIGRATION_NAME}';`,
+  );
+  expect(writerVerdict(containerName, databaseName)).toBe("P1_BLOCKED");
+  psql(
+    containerName,
+    databaseName,
+    `UPDATE public."_prisma_migrations" SET checksum = '${P1_SHA256}' WHERE migration_name = '${P1_MIGRATION_NAME}';`,
+  );
+  expect(writerVerdict(containerName, databaseName)).toBe("P1_APPLIED");
+
+  psql(
+    containerName,
+    databaseName,
+    `DELETE FROM public."_prisma_migrations" WHERE migration_name = '20260629154204_init';`,
+  );
+  expect(writerVerdict(containerName, databaseName)).toBe("P1_BLOCKED");
+}
+
+function psql(containerName: string, databaseName: string, sql: string): void {
+  const child = spawnSync(
+    "docker",
+    ["exec", "-i", containerName, "psql", "-U", "p1disp", "-d", databaseName, "-v", "ON_ERROR_STOP=1"],
+    { input: sql, encoding: "utf8", windowsHide: true },
+  );
+  if (child.status !== 0) throw new Error("disposable writer mutation failed");
+}
+
 function text(value: unknown): string {
   if (typeof value !== "string") throw new Error("text field is missing");
   return value;
+}
+
+function optionalText(value: unknown): string | null {
+  if (value === null) return null;
+  return text(value);
 }
 
 function bool(value: unknown): boolean {
