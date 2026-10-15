@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+/.p1-historical-runtime*
 
 # next.js
 /.next/
