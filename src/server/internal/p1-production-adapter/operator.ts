@@ -227,6 +227,7 @@ function withRestore(
   const owned: OwnedDisposable[] = [];
   let result: AdapterResult | null = null;
   let cleanupError: unknown = null;
+  let primaryCleanup: OperatorCleanupError | null = null;
   let sealedCreated = false;
   try {
     assertDisposableNamesFree(request, session.env, dockerRun);
@@ -271,30 +272,31 @@ function withRestore(
     result = executed.result;
     sealedCreated = intent === "APPLY" && executed.sealedCreated;
   } catch (error) {
+    if (error instanceof OperatorCleanupError) primaryCleanup = error;
     result = fromError(error, request);
   } finally {
     try {
       retireOwnedDisposable(owned, (args, env) => invokeDocker(args, env, dockerRun), session.env);
     } catch (error) {
       cleanupError = error;
-      try {
-        writeCleanupEvidence(paths.root, error);
-      } catch {
-        // The cleanup error remains the caller-visible result. A second write failure must not replace it.
-      }
     }
   }
-  if (!cleanupError && sealedCreated) {
+  if (primaryCleanup || cleanupError) {
+    const cleanupCode = cleanupCodeOf(cleanupError ?? primaryCleanup);
+    try {
+      writeCleanupEvidence(paths.root, {
+        primaryCode: primaryCleanup?.primaryCode ?? result?.code ?? null,
+        cleanupCode,
+        earlierCleanupCode: cleanupError && primaryCleanup ? primaryCleanup.code : null,
+      });
+    } catch {
+      // Evidence write must not hide the cleanup failure already in hand.
+    }
+  }
+  if (!cleanupError && !primaryCleanup && sealedCreated) {
     fs.rmSync(paths.sealed, { recursive: true, force: true });
   }
-  if (cleanupError && result && (result.verdict === "RECOVERY_VERIFIED" || result.verdict === "ALREADY_APPLIED")) {
-    return stopped(
-      "STOP",
-      cleanupError instanceof RunnerRefusal ? cleanupError.code : "DISPOSABLE_CLEANUP_FAILED",
-      phaseFor(request.command),
-      request.scope,
-    );
-  }
+  if (cleanupError && result) return mergeOperatorCleanup(result, cleanupError);
   return result ?? stopped("STOP", "RUNTIME_UNAUTHENTICATED", phaseFor(request.command), request.scope);
 }
 
@@ -509,16 +511,18 @@ export function startOwnedDisposable(input: {
   invoke: OperatorDocker;
 }): void {
   assertNotProtected(input.name, input.networkName);
-  if (dockerObjectExists(["container", "inspect", "--format", "{{.Id}}", input.name], input.env, input.invoke)) {
-    throw refusal("STOP", "DISPOSABLE_NAME_COLLISION", "A container already uses the disposable restore name");
-  }
-  if (dockerObjectExists(["network", "inspect", "--format", "{{.Id}}", input.networkName], input.env, input.invoke)) {
-    throw refusal("STOP", "DISPOSABLE_NAME_COLLISION", "A network already uses the disposable restore name");
-  }
   const envFile = path.join(input.secretDirectory, "postgres.env");
-  writeRestoreCredential(input.secretDirectory, envFile, input.role, input.database, input.password);
+  const created = { directory: false, owner: false, env: false };
   let failure: unknown = null;
+  let secretCleanup: unknown = null;
   try {
+    claimRestoreCredential(input.secretDirectory, envFile, input.invocationId, input.role, input.database, input.password, created);
+    if (dockerNameExists(["container", "inspect", "--format", "{{.Id}}", input.name], input.env, input.invoke, "container")) {
+      throw refusal("STOP", "DISPOSABLE_NAME_COLLISION", "A container already uses the disposable restore name");
+    }
+    if (dockerNameExists(["network", "inspect", "--format", "{{.Id}}", input.networkName], input.env, input.invoke, "network")) {
+      throw refusal("STOP", "DISPOSABLE_NAME_COLLISION", "A network already uses the disposable restore name");
+    }
     const networkId = requireId(
       [
         "network",
@@ -563,11 +567,18 @@ export function startOwnedDisposable(input: {
   } catch (error) {
     failure = error;
   } finally {
-    try {
-      removeRestoreCredential(envFile, input.secretDirectory);
-    } catch (error) {
-      if (!failure) failure = error;
+    if (created.directory) {
+      try {
+        releaseOwnedSecret(input.secretDirectory, input.invocationId, created);
+      } catch (error) {
+        secretCleanup = error;
+      }
     }
+  }
+  if (secretCleanup) {
+    const cleanupCode = secretCleanup instanceof RunnerRefusal ? secretCleanup.code : "SECRET_CLEANUP_FAILED";
+    const primaryCode = failure instanceof RunnerRefusal ? failure.code : failure ? "DISPOSABLE_START_FAILED" : null;
+    throw new OperatorCleanupError(cleanupCode, primaryCode);
   }
   if (failure) throw failure;
 }
@@ -600,13 +611,25 @@ function inspectOwned(resource: OwnedDisposable, invoke: OperatorDocker, env: No
     resource.kind === "disposable-restore-container"
       ? `{{.Id}}|{{.Name}}|{{index .Config.Labels "${DISPOSABLE_INVOCATION_LABEL}"}}|{{index .Config.Labels "${DISPOSABLE_ATTEMPT_LABEL}"}}|{{index .Config.Labels "${DISPOSABLE_KIND_LABEL}"}}`
       : `{{.Id}}|{{.Name}}|{{index .Labels "${DISPOSABLE_INVOCATION_LABEL}"}}|{{index .Labels "${DISPOSABLE_ATTEMPT_LABEL}"}}|{{index .Labels "${DISPOSABLE_KIND_LABEL}"}}`;
-  const args = resource.kind === "disposable-restore-container" ? ["inspect", "--format", format, resource.id] : ["network", "inspect", "--format", format, resource.id];
+  const kind = resource.kind === "disposable-restore-container" ? "container" : "network";
+  const args = kind === "container" ? ["inspect", "--format", format, resource.id] : ["network", "inspect", "--format", format, resource.id];
   const result = invoke(args, env);
-  if (result.status !== 0 || result.signal) return "absent";
-  const [id, rawName, invocationId, attemptId, kind] = result.stdout.trim().split("|");
+  if (confirmedDockerAbsence(result, kind)) return "absent";
+  if (result.signal || result.status !== 0) {
+    throw refusal("STOP", "DISPOSABLE_INSPECT_FAILED", "Docker inspect did not prove the disposable resource id");
+  }
+  const fields = result.stdout.trim().split("|");
+  if (fields.length !== 5 || !/^[0-9a-f]{64}$/.test(fields[0] ?? "")) {
+    throw refusal("STOP", "DISPOSABLE_INSPECT_FAILED", "Docker inspect output is not a disposable resource record");
+  }
+  const [id, rawName, invocationId, attemptId, labelKind] = fields;
   const name = (rawName ?? "").replace(/^\//, "");
+  if (!id || !rawName || !invocationId || !attemptId || !labelKind) {
+    throw refusal("STOP", "DISPOSABLE_INSPECT_FAILED", "Docker inspect output is not a disposable resource record");
+  }
+  if (invocationId === "<no value>" || attemptId === "<no value>" || labelKind === "<no value>") return "foreign";
   if (PROTECTED_CONTAINER_NAMES.has(name) || PROTECTED_NETWORK_NAMES.has(name)) return "foreign";
-  if (id !== resource.id || name !== resource.name || invocationId !== resource.invocationId || attemptId !== resource.attemptId || kind !== resource.kind) {
+  if (id !== resource.id || name !== resource.name || invocationId !== resource.invocationId || attemptId !== resource.attemptId || labelKind !== resource.kind) {
     return "foreign";
   }
   return "match";
@@ -617,10 +640,10 @@ function assertDisposableNamesFree(request: OperatorRequest, env: NodeJS.Process
   const networkName = `${testNetworkName(request.attemptId)}-restore`;
   assertNotProtected(name, networkName);
   const invoke = (args: readonly string[], runEnv: NodeJS.ProcessEnv) => invokeDocker(args, runEnv, dockerRun);
-  if (dockerObjectExists(["container", "inspect", "--format", "{{.Id}}", name], env, invoke)) {
+  if (dockerNameExists(["container", "inspect", "--format", "{{.Id}}", name], env, invoke, "container")) {
     throw refusal("STOP", "DISPOSABLE_NAME_COLLISION", "A container already uses the disposable restore name");
   }
-  if (dockerObjectExists(["network", "inspect", "--format", "{{.Id}}", networkName], env, invoke)) {
+  if (dockerNameExists(["network", "inspect", "--format", "{{.Id}}", networkName], env, invoke, "network")) {
     throw refusal("STOP", "DISPOSABLE_NAME_COLLISION", "A network already uses the disposable restore name");
   }
 }
@@ -631,34 +654,147 @@ function assertNotProtected(containerName: string, networkName: string): void {
   }
 }
 
-function writeRestoreCredential(directory: string, envFile: string, role: string, database: string, password: string): void {
-  fs.rmSync(directory, { recursive: true, force: true });
-  fs.mkdirSync(directory, { recursive: false, mode: 0o700 });
-  const body = `POSTGRES_USER=${role}\nPOSTGRES_PASSWORD=${password}\nPOSTGRES_DB=${database}\nPOSTGRES_HOST_AUTH_METHOD=scram-sha-256\n`;
-  const handle = fs.openSync(envFile, "wx", 0o600);
+function claimRestoreCredential(
+  directory: string,
+  envFile: string,
+  invocationId: string,
+  role: string,
+  database: string,
+  password: string,
+  created: { directory: boolean; owner: boolean; env: boolean },
+): void {
+  if (secretPathKind(directory) !== "absent") {
+    throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Disposable credential directory already exists");
+  }
+  try {
+    fs.mkdirSync(directory, { recursive: false, mode: 0o700 });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") {
+      throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Disposable credential directory already exists");
+    }
+    throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Disposable credential directory could not be created");
+  }
+  created.directory = true;
+  if (secretPathKind(directory) !== "directory") {
+    throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Disposable credential directory is not a real directory");
+  }
+  const ownerPath = path.join(directory, "owner");
+  writeExclusiveFile(ownerPath, `${invocationId}\n`);
+  created.owner = true;
+  writeExclusiveFile(envFile, `POSTGRES_USER=${role}\nPOSTGRES_PASSWORD=${password}\nPOSTGRES_DB=${database}\nPOSTGRES_HOST_AUTH_METHOD=scram-sha-256\n`);
+  created.env = true;
+}
+
+function writeExclusiveFile(filePath: string, body: string): void {
+  if (secretPathKind(filePath) !== "absent") {
+    throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Disposable credential file already exists");
+  }
+  const handle = fs.openSync(filePath, "wx", 0o600);
   try {
     fs.writeFileSync(handle, body, { encoding: "utf8" });
   } finally {
     fs.closeSync(handle);
   }
-  fs.chmodSync(envFile, 0o600);
+  fs.chmodSync(filePath, 0o600);
+  if (secretPathKind(filePath) !== "file") {
+    throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Disposable credential file is not a regular file");
+  }
 }
 
-function removeRestoreCredential(envFile: string, directory: string): void {
-  if (fs.existsSync(envFile)) fs.rmSync(envFile);
-  if (fs.existsSync(directory)) fs.rmdirSync(directory);
+function releaseOwnedSecret(
+  directory: string,
+  invocationId: string,
+  created: { directory: boolean; owner: boolean; env: boolean },
+): void {
+  const directoryKind = secretPathKind(directory);
+  if (directoryKind === "absent") return;
+  if (directoryKind !== "directory") {
+    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Disposable credential directory is no longer a real directory");
+  }
+  const ownerPath = path.join(directory, "owner");
+  const envFile = path.join(directory, "postgres.env");
+  if (created.owner) {
+    if (secretPathKind(ownerPath) !== "file") {
+      throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Disposable credential owner file is not a regular file");
+    }
+    if (fs.readFileSync(ownerPath, "utf8").trim() !== invocationId) {
+      throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Disposable credential directory is not owned by this invocation");
+    }
+  }
+  if (created.env) {
+    const envKind = secretPathKind(envFile);
+    if (envKind === "symlink" || envKind === "directory" || envKind === "other") {
+      throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Disposable credential file is not a regular file");
+    }
+    if (envKind === "file") fs.rmSync(envFile);
+  }
+  if (created.owner && secretPathKind(ownerPath) === "file") fs.rmSync(ownerPath);
+  if (fs.readdirSync(directory).length > 0) {
+    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Disposable credential directory still holds files");
+  }
+  if (secretPathKind(directory) !== "directory") {
+    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Disposable credential directory changed before removal");
+  }
+  fs.rmdirSync(directory);
 }
 
-function writeCleanupEvidence(root: string, error: unknown): void {
-  const code = error instanceof RunnerRefusal ? error.code : "DISPOSABLE_CLEANUP_FAILED";
+function secretPathKind(target: string): "absent" | "symlink" | "directory" | "file" | "other" {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+    throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Disposable credential path could not be classified");
+  }
+  if (stat.isSymbolicLink()) return "symlink";
+  if (stat.isDirectory()) return "directory";
+  if (stat.isFile()) return "file";
+  return "other";
+}
+
+export function cleanupEvidenceBody(evidence: {
+  primaryCode: string | null;
+  cleanupCode: string;
+  earlierCleanupCode: string | null;
+}): string {
+  return `${JSON.stringify({
+    kind: "DISPOSABLE_CLEANUP_INCOMPLETE",
+    primaryCode: evidence.primaryCode,
+    cleanupCode: evidence.cleanupCode,
+    earlierCleanupCode: evidence.earlierCleanupCode,
+  })}\n`;
+}
+
+function writeCleanupEvidence(
+  root: string,
+  evidence: { primaryCode: string | null; cleanupCode: string; earlierCleanupCode: string | null },
+): void {
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const target = path.join(root, "disposable-cleanup-incomplete.json");
   const handle = fs.openSync(target, "wx", 0o600);
   try {
-    fs.writeFileSync(handle, `${JSON.stringify({ kind: "DISPOSABLE_CLEANUP_INCOMPLETE", code })}\n`, "utf8");
+    fs.writeFileSync(handle, cleanupEvidenceBody(evidence), "utf8");
   } finally {
     fs.closeSync(handle);
   }
+}
+
+class OperatorCleanupError extends RunnerRefusal {
+  readonly primaryCode: string | null;
+
+  constructor(code: string, primaryCode: string | null) {
+    super("STOP", code, "Disposable cleanup did not finish");
+    this.primaryCode = primaryCode;
+  }
+}
+
+export function mergeOperatorCleanup(primary: AdapterResult, cleanup: unknown): AdapterResult {
+  return { ...primary, verdict: "STOP", code: cleanupCodeOf(cleanup) };
+}
+
+function cleanupCodeOf(cleanup: unknown): string {
+  return cleanup instanceof RunnerRefusal ? cleanup.code : "DISPOSABLE_CLEANUP_FAILED";
 }
 
 function acquireOperatorLock(lockPath: string, token: string): { release: () => void } {
@@ -689,9 +825,26 @@ function acquireOperatorLock(lockPath: string, token: string): { release: () => 
   };
 }
 
-function dockerObjectExists(args: readonly string[], env: NodeJS.ProcessEnv, invoke: OperatorDocker): boolean {
+function dockerNameExists(
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+  invoke: OperatorDocker,
+  kind: "container" | "network",
+): boolean {
   const result = invoke(args, env);
-  return result.status === 0 && !result.signal;
+  if (result.status === 0 && !result.signal) return true;
+  if (confirmedDockerAbsence(result, kind)) return false;
+  throw refusal("STOP", "DISPOSABLE_INSPECT_FAILED", "Docker inspect did not prove whether the disposable name exists");
+}
+
+function confirmedDockerAbsence(result: OperatorDockerResult, kind: "container" | "network"): boolean {
+  if (result.signal || result.status !== 1) return false;
+  const stdout = result.stdout.trim();
+  if (stdout !== "" && stdout !== "[]") return false;
+  const stderr = result.stderr;
+  if (/no such file/i.test(stderr)) return false;
+  if (kind === "container") return /no such object:/i.test(stderr) || /no such container:/i.test(stderr);
+  return /no such object:/i.test(stderr) || /network \S+ not found/i.test(stderr);
 }
 
 function requireId(args: readonly string[], env: NodeJS.ProcessEnv, invoke: OperatorDocker): string {

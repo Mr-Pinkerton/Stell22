@@ -380,7 +380,9 @@ function recordingDocker(password: string, argvLog: string[][], onCall: (args: r
       timeout: 180_000,
       maxBuffer: 32 * 1024 * 1024,
     });
-    return { status: child.status, signal: child.signal, stdout: child.stdout ?? "", stderr: "" };
+    const stderr = child.stderr ?? "";
+    const leaked = stderr.includes(password) || stderr.includes("POSTGRES_PASSWORD=") || /postgres(?:ql)?:\/\//i.test(stderr);
+    return { status: child.status, signal: child.signal, stdout: child.stdout ?? "", stderr: leaked ? "" : stderr };
   };
 }
 

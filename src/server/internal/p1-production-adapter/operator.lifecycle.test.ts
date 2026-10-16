@@ -2,10 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { RunnerRefusal } from "@/server/internal/p1-isolated-runner/refusal";
+import { RunnerRefusal, refusal } from "@/server/internal/p1-isolated-runner/refusal";
+import type { AdapterResult } from "@/server/internal/p1-production-adapter/execute";
 import { PRODUCTION_POSTGRES_IMAGE, testNetworkName, testRestoreName } from "@/server/internal/p1-production-adapter/contract";
 import {
+  cleanupEvidenceBody,
   disposablePostgresArgv,
+  mergeOperatorCleanup,
   OPERATOR_LOCK_FILE,
   retireOwnedDisposable,
   runOperatorCommand,
@@ -49,10 +52,13 @@ describe("operator credential, ownership, and preflight boundaries", () => {
           expect(args.join("\n")).not.toContain("POSTGRES_PASSWORD=");
           expect(args.join("\n")).not.toMatch(/postgres(?:ql)?:\/\//i);
           if (args[0] === "network" && args[1] === "create") return ok(`${NETWORK_ID}\n`);
-          if (args[0] === "run") {
+            if (args[0] === "run") {
             expect(fs.existsSync(envFile)).toBe(true);
             expect(fs.readFileSync(envFile, "utf8")).toContain(`POSTGRES_PASSWORD=${PASSWORD}\n`);
-            if (process.platform !== "win32") expect(fs.statSync(envFile).mode & 0o777).toBe(0o600);
+            if (process.platform !== "win32") {
+              expect(fs.statSync(envFile).mode & 0o777).toBe(0o600);
+              expect(fs.lstatSync(secretDirectory).mode & 0o777).toBe(0o700);
+            }
             return ok(`${CONTAINER_ID}\n`);
           }
           return missing();
@@ -339,7 +345,227 @@ describe("operator credential, ownership, and preflight boundaries", () => {
       fs.rmSync(workRoot, { recursive: true, force: true });
     }
   });
+
+  it("preserves an occupied credential directory and does not mutate Docker", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "p1-operator-occupied-"));
+    const secret = path.join(root, ".restore-secret");
+    const calls: string[][] = [];
+    try {
+      fs.mkdirSync(secret);
+      fs.writeFileSync(path.join(secret, "sentinel"), "keep");
+      expect(() => startDisposable(secret, (args) => {
+        calls.push([...args]);
+        return missing();
+      })).toThrow(expect.objectContaining({ code: "SECRET_DIRECTORY_COLLISION" }));
+      expect(fs.readFileSync(path.join(secret, "sentinel"), "utf8")).toBe("keep");
+      expect(calls).toEqual([]);
+
+      fs.writeFileSync(path.join(root, "secret-file"), "file-sentinel");
+      expect(() => startDisposable(path.join(root, "secret-file"), () => missing())).toThrow(
+        expect.objectContaining({ code: "SECRET_DIRECTORY_COLLISION" }),
+      );
+      expect(fs.readFileSync(path.join(root, "secret-file"), "utf8")).toBe("file-sentinel");
+
+      const target = path.join(root, "target");
+      fs.mkdirSync(target);
+      fs.writeFileSync(path.join(target, "sentinel"), "linked");
+      const link = path.join(root, "secret-link");
+      fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+      expect(() => startDisposable(link, () => missing())).toThrow(expect.objectContaining({ code: "SECRET_DIRECTORY_COLLISION" }));
+      expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(fs.readFileSync(path.join(target, "sentinel"), "utf8")).toBe("linked");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans only its credential files after a signaled run and reports a failed secret cleanup", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "p1-operator-signal-"));
+    const secret = path.join(root, ".restore-secret");
+    try {
+      expect(() =>
+        startDisposable(secret, (args) => {
+          if (args[0] === "run") return { status: null, signal: "SIGTERM", stdout: "", stderr: "" };
+          if (args[0] === "network" && args[1] === "create") return ok(`${NETWORK_ID}\n`);
+          return missing();
+        }),
+      ).toThrow(expect.objectContaining({ code: "DISPOSABLE_START_FAILED" }));
+      expect(fs.existsSync(secret)).toBe(false);
+
+      let nestedDocker = false;
+      startDisposable(secret, (args) => {
+        if (args[0] === "run") {
+          expect(() => startDisposable(secret, () => {
+            nestedDocker = true;
+            return missing();
+          })).toThrow(expect.objectContaining({ code: "SECRET_DIRECTORY_COLLISION" }));
+          expect(fs.existsSync(path.join(secret, "postgres.env"))).toBe(true);
+          return ok(`${CONTAINER_ID}\n`);
+        }
+        if (args[0] === "network" && args[1] === "create") return ok(`${NETWORK_ID}\n`);
+        return missing();
+      });
+      expect(nestedDocker).toBe(false);
+      expect(fs.existsSync(secret)).toBe(false);
+
+      expect(() =>
+        startDisposable(secret, (args) => {
+          if (args[0] === "run") {
+            fs.writeFileSync(path.join(secret, "owner"), "other-invocation\n");
+            fs.writeFileSync(path.join(secret, "sentinel"), "keep");
+            return { status: 1, signal: null, stdout: "", stderr: "docker run failed" };
+          }
+          if (args[0] === "network" && args[1] === "create") return ok(`${NETWORK_ID}\n`);
+          return missing();
+        }),
+      ).toThrow(expect.objectContaining({ code: "SECRET_CLEANUP_FAILED", primaryCode: "DISPOSABLE_START_FAILED" }));
+      expect(fs.readFileSync(path.join(secret, "sentinel"), "utf8")).toBe("keep");
+      expect(String((() => {
+        try {
+          startDisposable(secret, () => missing());
+          return "";
+        } catch (error) {
+          return error instanceof Error ? error.message : "";
+        }
+      })())).not.toContain(PASSWORD);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not treat an uncertain docker inspect as resource absence", () => {
+    const resource: OwnedDisposable = {
+      id: CONTAINER_ID,
+      name: testRestoreName(ATTEMPT),
+      kind: "disposable-restore-container",
+      attemptId: ATTEMPT,
+      invocationId: INVOCATION,
+    };
+    const cases: OperatorDockerResult[] = [
+      { status: 1, signal: null, stdout: "", stderr: "Cannot connect to the Docker daemon\n" },
+      { status: null, signal: "SIGTERM", stdout: "", stderr: "" },
+      { status: 1, signal: "SIGKILL", stdout: "", stderr: "error: no such object: gone\n" },
+      { status: 0, signal: null, stdout: "not-a-record\n", stderr: "" },
+    ];
+    for (const result of cases) {
+      const calls: string[][] = [];
+      expect(() => retireOwnedDisposable([resource], (args) => {
+        calls.push([...args]);
+        return result;
+      }, process.env)).toThrow(expect.objectContaining({ code: "DISPOSABLE_INSPECT_FAILED" }));
+      expect(calls.some((args) => args[0] === "rm" || args[1] === "rm")).toBe(false);
+    }
+
+    const mismatched: string[][] = [];
+    expect(() => retireOwnedDisposable([resource], (args) => {
+      mismatched.push([...args]);
+      return ok(`${REPLACEMENT_ID}|/${resource.name}|${INVOCATION}|${ATTEMPT}|disposable-restore-container\n`);
+    }, process.env)).toThrow(expect.objectContaining({ code: "DISPOSABLE_CLEANUP_REFUSED" }));
+    expect(mismatched.some((args) => args[0] === "rm")).toBe(false);
+
+    const unlabeled: string[][] = [];
+    expect(() => retireOwnedDisposable([resource], (args) => {
+      unlabeled.push([...args]);
+      return ok(`${CONTAINER_ID}|/${resource.name}|<no value>|<no value>|<no value>\n`);
+    }, process.env)).toThrow(expect.objectContaining({ code: "DISPOSABLE_CLEANUP_REFUSED" }));
+    expect(unlabeled.some((args) => args[0] === "rm")).toBe(false);
+
+    const absent: string[][] = [];
+    retireOwnedDisposable([resource], (args) => {
+      absent.push([...args]);
+      return { status: 1, signal: null, stdout: "[]\n", stderr: "error: no such object: gone\n" };
+    }, process.env);
+    expect(absent.some((args) => args[0] === "rm")).toBe(false);
+    const networkName = `${testNetworkName(ATTEMPT)}-restore`;
+    retireOwnedDisposable(
+      [{ id: NETWORK_ID, name: networkName, kind: "disposable-restore-network", attemptId: ATTEMPT, invocationId: INVOCATION }],
+      () => ({ status: 1, signal: null, stdout: "[]\n", stderr: `Error response from daemon: network ${networkName} not found\n` }),
+      process.env,
+    );
+
+    const removed: string[][] = [];
+    retireOwnedDisposable([resource], (args) => {
+      removed.push([...args]);
+      if (args[0] === "inspect") return ok(`${CONTAINER_ID}|/${resource.name}|${INVOCATION}|${ATTEMPT}|disposable-restore-container\n`);
+      return ok("");
+    }, process.env);
+    expect(removed).toContainEqual(["rm", "-f", CONTAINER_ID]);
+  });
+
+  it("accepts Docker's missing-container wording and rejects a socket error", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "p1-operator-absence-"));
+    try {
+      const calls: string[][] = [];
+      expect(() =>
+        startDisposable(path.join(root, "secret"), (args) => {
+          calls.push([...args]);
+          if (args[0] === "container") {
+            return { status: 1, signal: null, stdout: "\n", stderr: "Error response from daemon: No such container: name\n" };
+          }
+          if (args[0] === "network" && args[1] === "inspect") return ok(`${NETWORK_ID}\n`);
+          return missing();
+        }),
+      ).toThrow(expect.objectContaining({ code: "DISPOSABLE_NAME_COLLISION" }));
+      expect(calls.some((args) => args[0] === "network" && args[1] === "create")).toBe(false);
+      expect(fs.existsSync(path.join(root, "secret"))).toBe(false);
+
+      const socket: string[][] = [];
+      expect(() =>
+        startDisposable(path.join(root, "secret-socket"), (args) => {
+          socket.push([...args]);
+          return { status: 1, signal: null, stdout: "", stderr: "error during connect: open //./pipe/docker_engine: no such file or directory\n" };
+        }),
+      ).toThrow(expect.objectContaining({ code: "DISPOSABLE_INSPECT_FAILED" }));
+      expect(socket.some((args) => args.includes("create") || args[0] === "rm")).toBe(false);
+      expect(fs.existsSync(path.join(root, "secret-socket"))).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a restore failure visible beside a cleanup failure without credentials", () => {
+    const primary: AdapterResult = {
+      verdict: "STOP",
+      code: "RESTORE_FAILED",
+      phase: "RECOVERY_VERIFICATION",
+      spawned: false,
+      retryAttempted: false,
+      imageGitSha: "UNVERIFIED",
+      targetClass: "TEST_OWNED_NOT_PRODUCTION",
+      appUnchanged: null,
+      dossierSha256: null,
+      recoverySha256: null,
+    };
+    const merged = mergeOperatorCleanup(primary, refusal("STOP", "DISPOSABLE_INSPECT_FAILED", `inspect failed near ${PASSWORD}`));
+    expect(merged).toMatchObject({ verdict: "STOP", code: "DISPOSABLE_INSPECT_FAILED", spawned: false });
+    expect(JSON.stringify(merged)).not.toContain(PASSWORD);
+    const evidence = cleanupEvidenceBody({
+      primaryCode: primary.code,
+      cleanupCode: merged.code,
+      earlierCleanupCode: null,
+    });
+    expect(evidence).toContain("RESTORE_FAILED");
+    expect(evidence).toContain("DISPOSABLE_INSPECT_FAILED");
+    expect(evidence).not.toContain(PASSWORD);
+  });
 });
+
+function startDisposable(secretDirectory: string, invoke: OperatorDocker): void {
+  startOwnedDisposable({
+    attemptId: ATTEMPT,
+    invocationId: INVOCATION,
+    name: testRestoreName(ATTEMPT),
+    networkName: `${testNetworkName(ATTEMPT)}-restore`,
+    image: PRODUCTION_POSTGRES_IMAGE,
+    role: "stell22",
+    database: "stell22",
+    password: PASSWORD,
+    secretDirectory,
+    env: process.env,
+    owned: [],
+    invoke,
+  });
+}
 
 function recordingDocker(calls: string[]): OperatorDocker {
   return (args) => {
@@ -361,5 +587,5 @@ function ok(stdout: string): OperatorDockerResult {
 }
 
 function missing(): OperatorDockerResult {
-  return { status: 1, signal: null, stdout: "", stderr: "" };
+  return { status: 1, signal: null, stdout: "", stderr: "error: no such object: missing\n" };
 }
