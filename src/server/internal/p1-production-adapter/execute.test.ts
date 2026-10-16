@@ -386,30 +386,22 @@ describe("production P1 adapter", () => {
     expect(fact.imageId).toBe(DB_IMAGE);
   });
 
-  it("refuses CLI shortcuts and does not apply from the CLI without a runtime", () => {
-    expect(runProductionAdapterCli(["apply", "--authorize"])).toBe(2);
-    expect(runProductionAdapterCli(["--database-url", "postgresql://stell22:secret@db/stell22"])).toBe(2);
-    expect(runProductionAdapterCli(["preflight"])).toBe(2);
-    expect(runProductionAdapterCli(["verify-recovery"])).toBe(2);
+  it("refuses CLI shortcuts and does not take a caller authorization path", () => {
     const lines: string[] = [];
-    expect(
-      runProductionAdapterCli(["apply", "--authorization", "owner.json"], {
-        log: (line) => lines.push(line),
-        readPin: () => null,
-      }),
-    ).toBe(2);
-    expect(lines).toContain("STOP PRODUCTION_DAEMON_UNPINNED");
-    const wired: string[] = [];
-    expect(
-      runProductionAdapterCli(["apply", "--authorization", "owner.json"], {
-        log: (line) => wired.push(line),
-        readPin: () => DAEMON,
-      }),
-    ).toBe(2);
-    expect(wired).toContain(
-      process.env.GITHUB_ACTIONS === "true"
-        ? "STOP PRODUCTION_SCOPE_FORBIDDEN_IN_CI"
-        : "STOP PRODUCTION_APPLY_NOT_WIRED_TO_THIS_CLI",
+    const log = (line: string) => lines.push(line);
+    expect(runProductionAdapterCli(["apply", "--authorize"], log)).toBe(2);
+    expect(runProductionAdapterCli(["--database-url", "postgresql://stell22:secret@db/stell22"], log)).toBe(2);
+    expect(runProductionAdapterCli(["preflight"], log)).toBe(2);
+    expect(runProductionAdapterCli(["verify-recovery"], log)).toBe(2);
+    expect(runProductionAdapterCli(["apply", "--authorization", "owner.json"], log)).toBe(2);
+    expect(lines).toContain("STOP SHORTCUT_AUTHORIZATION");
+    expect(lines).toContain("STOP ATTEMPT_REQUIRED");
+    expect(lines).toContain("STOP AUTHORIZATION_PATH_REJECTED");
+    expect(lines).not.toContain("STOP PRODUCTION_APPLY_NOT_WIRED_TO_THIS_CLI");
+    const blocked: string[] = [];
+    expect(runProductionAdapterCli(["apply", "--attempt", ATTEMPT], (line) => blocked.push(line))).toBe(2);
+    expect(blocked).toContain(
+      process.env.GITHUB_ACTIONS === "true" ? "STOP PRODUCTION_SCOPE_FORBIDDEN_IN_CI" : "STOP PRODUCTION_DAEMON_UNPINNED",
     );
   });
 
