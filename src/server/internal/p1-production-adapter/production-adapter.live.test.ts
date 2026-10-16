@@ -413,7 +413,7 @@ function ensureImages(): void {
   const context = fs.mkdtempSync(path.join(process.cwd(), ".p1-oneshot-image-"));
   try {
     fs.copyFileSync(path.join(process.cwd(), "docker/p1-oneshot/Dockerfile"), path.join(context, "Dockerfile"));
-    docker(["build", "--pull", "false", "-t", ONE_SHOT_IMAGE, context]);
+    docker(["build", "-t", ONE_SHOT_IMAGE, context]);
   } finally {
     fs.rmSync(context, { recursive: true, force: true });
   }
