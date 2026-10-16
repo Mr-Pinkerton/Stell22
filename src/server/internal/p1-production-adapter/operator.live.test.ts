@@ -6,6 +6,7 @@ import zlib from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { EXPECTED_HISTORICAL_MIGRATION_COUNT, EXPECTED_MIGRATION_SQL_COUNT, P1_SHA256 } from "@/server/internal/p1-isolated-runner/contract";
 import { materializeHistorical } from "@/server/internal/p1-isolated-runner/disposable-migration-harness";
+import { attachReviewedImageToOperatorTag, buildReviewedOneShotImage } from "@/server/internal/p1-isolated-runner/oneshot-recipe-build";
 import { ONE_SHOT_BASE_IMAGE, ONE_SHOT_IMAGE } from "@/server/internal/p1-isolated-runner/p1-release-gate";
 import {
   checkMatchesContract,
@@ -465,14 +466,11 @@ function ensureImages(): void {
     const pulled = spawnSync("docker", ["pull", ONE_SHOT_BASE_IMAGE], { windowsHide: true, timeout: 180_000 });
     if (pulled.status !== 0) throw new Error(`${ONE_SHOT_BASE_IMAGE} is unavailable`);
   }
-  const oneshot = spawnSync("docker", ["image", "inspect", ONE_SHOT_IMAGE], { windowsHide: true });
-  if (oneshot.status === 0) return;
-  const context = fs.mkdtempSync(path.join(process.cwd(), ".p1-oneshot-image-"));
+  const built = buildReviewedOneShotImage();
   try {
-    fs.copyFileSync(path.join(process.cwd(), "docker/p1-oneshot/Dockerfile"), path.join(context, "Dockerfile"));
-    docker(["build", "-t", ONE_SHOT_IMAGE, context]);
+    attachReviewedImageToOperatorTag(built);
   } finally {
-    fs.rmSync(context, { recursive: true, force: true });
+    built.remove();
   }
 }
 

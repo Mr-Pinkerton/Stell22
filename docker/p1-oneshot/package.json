@@ -1,0 +1,9 @@
+{
+  "name": "stell22-p1-oneshot",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Pinned Prisma CLI for the reviewed P1 one-shot migrator. Not the Stell22 application.",
+  "dependencies": {
+    "prisma": "6.19.3"
+  }
+}

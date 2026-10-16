@@ -669,12 +669,24 @@ describe("production P1 adapter", () => {
     expect(lines.join("\n")).not.toMatch(/postgres(?:ql)?:\/\//i);
   });
 
-  it("pins the one-shot image recipe to node 22 and prisma 6.19.3", () => {
-    const recipe = fs.readFileSync(path.join(process.cwd(), "docker/p1-oneshot/Dockerfile"), "utf8");
-    expect(recipe).toContain(`FROM ${ONE_SHOT_BASE_IMAGE}`);
-    expect(recipe).toContain(`prisma@${PRISMA_VERSION}`);
+  it("pins the one-shot image recipe to a digest, a lockfile, and prisma 6.19.3", () => {
+    const recipeDir = path.join(process.cwd(), "docker/p1-oneshot");
+    const recipe = fs.readFileSync(path.join(recipeDir, "Dockerfile"), "utf8");
+    const manifest = JSON.parse(fs.readFileSync(path.join(recipeDir, "package.json"), "utf8")) as { dependencies?: { prisma?: string } };
+    const lock = JSON.parse(fs.readFileSync(path.join(recipeDir, "package-lock.json"), "utf8")) as {
+      packages?: Record<string, { version?: string; integrity?: string }>;
+    };
+    expect(recipe).toContain(`FROM ${ONE_SHOT_BASE_IMAGE}@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392`);
+    expect(recipe).toContain("npm ci --omit=dev");
+    expect(recipe).toContain("openssl=3.0.22-1~deb12u1");
+    expect(recipe).toContain("snapshot.debian.org/archive/debian-security/20261005T020725Z");
+    expect(recipe).not.toMatch(/npm install/i);
     expect(recipe).not.toMatch(/:latest/i);
     expect(recipe).not.toMatch(/\bpull\b/i);
+    expect(manifest.dependencies?.prisma).toBe(PRISMA_VERSION);
+    const locked = lock.packages?.["node_modules/prisma"];
+    expect(locked?.version).toBe(PRISMA_VERSION);
+    expect(locked?.integrity).toMatch(/^sha512-/);
     expect(ONE_SHOT_IMAGE).toBe("stell22-p1-oneshot:node22");
   });
 });
