@@ -1,8 +1,10 @@
 import { readInstalledSignedAuthorization } from "@/server/internal/p1-production-adapter/authorization";
-import { ATTEMPT_ID, DAEMON_ID, SHORTCUT_FLAGS } from "@/server/internal/p1-production-adapter/contract";
+import { ATTEMPT_ID, DAEMON_ID, IMAGE_ID, SHORTCUT_FLAGS } from "@/server/internal/p1-production-adapter/contract";
 import {
   formatOperatorResult,
+  formatUnsignedStop,
   readInstalledDaemonPin,
+  readInstalledOneShotImagePin,
   runOperatorCommand,
   type OperatorCommand,
 } from "@/server/internal/p1-production-adapter/operator";
@@ -19,25 +21,30 @@ export { readInstalledDaemonPin };
 
 export function runProductionAdapterCli(argv: readonly string[], log: (line: string) => void = (line) => console.log(line)): number {
   if (argv.some((token) => SHORTCUT_FLAGS.includes(token as (typeof SHORTCUT_FLAGS)[number]) || token.includes("DATABASE_URL"))) {
-    log("STOP SHORTCUT_AUTHORIZATION");
+    log(formatUnsignedStop("SHORTCUT_AUTHORIZATION", null));
     return 2;
   }
   if (argv.includes("--authorization")) {
-    log("STOP AUTHORIZATION_PATH_REJECTED");
+    log(formatUnsignedStop("AUTHORIZATION_PATH_REJECTED", null));
     return 2;
   }
   const parsed = parseCommand(argv);
   if ("error" in parsed) {
-    log(parsed.error);
+    log(formatUnsignedStop(parsed.error.replace(/^STOP /, ""), null));
     return 2;
   }
   if (process.env.GITHUB_ACTIONS === "true") {
-    log("STOP PRODUCTION_SCOPE_FORBIDDEN_IN_CI");
+    log(formatUnsignedStop("PRODUCTION_SCOPE_FORBIDDEN_IN_CI", parsed.attemptId));
     return 2;
   }
   const pin = readInstalledDaemonPin();
   if (pin === null || !DAEMON_ID.test(pin)) {
-    log("STOP PRODUCTION_DAEMON_UNPINNED");
+    log(formatUnsignedStop("PRODUCTION_DAEMON_UNPINNED", parsed.attemptId));
+    return 2;
+  }
+  const imagePin = readInstalledOneShotImagePin();
+  if (imagePin === null || !IMAGE_ID.test(imagePin)) {
+    log(formatUnsignedStop("ONESHOT_IMAGE_UNPINNED", parsed.attemptId));
     return 2;
   }
   if (parsed.command === "apply") {
@@ -45,11 +52,11 @@ export function runProductionAdapterCli(argv: readonly string[], log: (line: str
     try {
       installed = readInstalledSignedAuthorization();
     } catch {
-      log("STOP AUTHORIZATION_REQUIRED");
+      log(formatUnsignedStop("AUTHORIZATION_REQUIRED", parsed.attemptId));
       return 2;
     }
     if (installed === undefined) {
-      log("STOP AUTHORIZATION_REQUIRED");
+      log(formatUnsignedStop("AUTHORIZATION_REQUIRED", parsed.attemptId));
       return 2;
     }
   }

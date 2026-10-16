@@ -71,9 +71,11 @@ describe("production operator boundaries", () => {
   it("keeps the public CLI on the production scope and off caller authorization files", () => {
     const lines: string[] = [];
     expect(runProductionAdapterCli(["verify-recovery", "--attempt", ATTEMPT], (line) => lines.push(line))).toBe(2);
-    expect(lines.at(-1)).toBe(
-      process.env.GITHUB_ACTIONS === "true" ? "STOP PRODUCTION_SCOPE_FORBIDDEN_IN_CI" : "STOP PRODUCTION_DAEMON_UNPINNED",
+    expect(lines.at(-1)).toContain(
+      process.env.GITHUB_ACTIONS === "true" ? "code=PRODUCTION_SCOPE_FORBIDDEN_IN_CI" : "code=PRODUCTION_DAEMON_UNPINNED",
     );
+    expect(lines.at(-1)).toContain("signingInputs=NOT_SIGNABLE");
+    expect(lines.at(-1)).toContain("recoverySha256=UNAVAILABLE");
     expect(lines.join("\n")).not.toContain("DATABASE_URL");
   });
 });

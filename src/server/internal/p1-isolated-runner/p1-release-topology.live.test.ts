@@ -19,7 +19,6 @@ import {
   HISTORICAL_APPLICATION_COMMIT,
   P1_MIGRATION_NAME,
   P1_SHA256,
-  PRISMA_VERSION,
 } from "@/server/internal/p1-isolated-runner/contract";
 import {
   deployPrisma,
@@ -584,19 +583,8 @@ function ensureNodeImage(): void {
   if (oneshot.status === 0) return;
   const context = fs.mkdtempSync(path.join(process.cwd(), ".p1-oneshot-image-"));
   try {
-    fs.writeFileSync(
-      path.join(context, "Dockerfile"),
-      [
-        `FROM ${ONE_SHOT_BASE_IMAGE}`,
-        "RUN apt-get update \\",
-        "  && apt-get install -y --no-install-recommends openssl ca-certificates \\",
-        "  && rm -rf /var/lib/apt/lists/*",
-        "WORKDIR /opt/migrator",
-        `RUN npm install --omit=dev --no-audit --no-fund prisma@${PRISMA_VERSION}`,
-        "",
-      ].join("\n"),
-    );
-    docker(["build", "-t", ONE_SHOT_IMAGE, context]);
+    fs.copyFileSync(path.join(process.cwd(), "docker/p1-oneshot/Dockerfile"), path.join(context, "Dockerfile"));
+    docker(["build", "--pull", "false", "-t", ONE_SHOT_IMAGE, context]);
   } finally {
     fs.rmSync(context, { recursive: true, force: true });
   }

@@ -26,6 +26,13 @@ export { PRODUCTION_NETWORK_NAME };
 export const PRODUCTION_DAEMON_PIN_PATH = "/var/lib/stell22/p1-production-daemon-pin.json" as const;
 
 /**
+ * Fixed path. The repository does not contain the file.
+ * `imageId` is the Docker image id (`sha256:` + 64 hex), not the mutable tag.
+ * Installing it is a separate production authorization. The operator never builds the image.
+ */
+export const PRODUCTION_ONESHOT_IMAGE_PIN_PATH = "/var/lib/stell22/p1-oneshot-image-pin.json" as const;
+
+/**
  * Fixed paths. The repository does not contain these files.
  * The trust path holds an Ed25519 public key only.
  * The executor never reads a private signing key.

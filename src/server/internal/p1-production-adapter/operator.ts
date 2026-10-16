@@ -10,6 +10,9 @@ import {
   ATTEMPT_ID,
   DAEMON_ID,
   IMAGE_GIT_SHA,
+  IMAGE_ID,
+  PRODUCTION_ONESHOT_IMAGE_PIN_PATH,
+  SHA256,
   PRODUCTION_APP_CONTAINER,
   PRODUCTION_DAEMON_PIN_PATH,
   PRODUCTION_DATABASE_NAME,
@@ -28,7 +31,9 @@ import {
   type ExecutionPhase,
 } from "@/server/internal/p1-production-adapter/contract";
 import { readCatalog, dumpDatabase, inspectContainer, inspectMounts, resolveDockerSession, restoreArchive, type DockerSession } from "@/server/internal/p1-production-adapter/docker-runtime";
-import { executeProductionAdapter, type AdapterResult, type OneShotPlan, type OneShotResult } from "@/server/internal/p1-production-adapter/execute";
+import { executeProductionAdapter, type AdapterResult, type OneShotPlan, type OneShotResult, type RecoveryEvidenceState, type SigningInputsState } from "@/server/internal/p1-production-adapter/execute";
+import { ONE_SHOT_IMAGE } from "@/server/internal/p1-isolated-runner/p1-release-gate";
+import type { OneShotImageObservation } from "@/server/internal/p1-production-adapter/oneshot";
 import { declarationFromFacts, type TargetFacts } from "@/server/internal/p1-production-adapter/identity";
 import { publishReleaseBackup, type ReleaseBackupWitness } from "@/server/internal/p1-production-adapter/recovery";
 import type { RestoreContainerFact } from "@/server/internal/p1-production-adapter/restore-controller";
@@ -65,9 +70,10 @@ export type OperatorRequest = {
   testSpawn?: (plan: OneShotPlan) => OneShotResult;
   testLockOwner?: () => string | null;
   testDocker?: OperatorDocker;
+  testApprovedOneShotImageId?: string;
 };
 
-const INJECTED_KEYS = ["workRoot", "testTrustPublicKey", "authorization", "testEnv", "testSpawn", "testLockOwner", "testDocker"] as const;
+const INJECTED_KEYS = ["workRoot", "testTrustPublicKey", "authorization", "testEnv", "testSpawn", "testLockOwner", "testDocker", "testApprovedOneShotImageId"] as const;
 
 export type OperatorDockerResult = {
   status: number | null;
@@ -100,32 +106,78 @@ export function runOperatorCommand(request: OperatorRequest): AdapterResult {
       if (pin === null || !DAEMON_ID.test(pin)) {
         throw refusal("STOP", "PRODUCTION_DAEMON_UNPINNED", "Production Docker daemon id is not independently pinned");
       }
+      const imagePin = readInstalledOneShotImagePin();
+      if (imagePin === null || !IMAGE_ID.test(imagePin)) {
+        throw refusal("STOP", "ONESHOT_IMAGE_UNPINNED", "Production one-shot image id is not independently pinned");
+      }
       if (request.command === "apply") {
         if (readInstalledTrustPublicKey() === null) {
           throw refusal("STOP", "PRODUCTION_TRUST_UNPROVISIONED", "Production apply has no independently provisioned owner trust key");
         }
       }
-      return runBound(request, operatorAttemptRoot(PRODUCTION_OPERATOR_WORK_ROOT, request.attemptId), pin);
+      return runBound(request, operatorAttemptRoot(PRODUCTION_OPERATOR_WORK_ROOT, request.attemptId), pin, imagePin);
     }
     if (!request.workRoot) {
       throw refusal("STOP", "OPERATOR_WORK_ROOT_REQUIRED", "Test-owned operator work is not rooted");
     }
-    return runBound(request, operatorAttemptRoot(request.workRoot, request.attemptId), null);
+    return runBound(request, operatorAttemptRoot(request.workRoot, request.attemptId), null, null);
   } catch (error) {
     return fromError(error, request);
   }
 }
 
 export function formatOperatorResult(result: AdapterResult): string {
+  const evidence: RecoveryEvidenceState = result.recoveryEvidence === "VERIFIED" ? "VERIFIED" : "NONE";
+  const dossier = digestOrUnavailable(result.dossierSha256);
+  const recovery = evidence === "VERIFIED" ? digestOrUnavailable(result.recoverySha256) : "UNAVAILABLE";
+  const signing: SigningInputsState =
+    result.verdict === "STOP" || result.verdict === "BLOCKED"
+      ? "NOT_SIGNABLE"
+      : dossier !== "UNAVAILABLE" && recovery !== "UNAVAILABLE"
+        ? "COMPLETE"
+        : dossier !== "UNAVAILABLE"
+          ? "INCOMPLETE"
+          : "NOT_SIGNABLE";
+  const image = result.oneShotImageId !== null && IMAGE_ID.test(result.oneShotImageId) ? result.oneShotImageId : "UNAVAILABLE";
+  const attempt = ATTEMPT_ID.test(result.attemptId) ? result.attemptId : "UNAVAILABLE";
   return [
-    result.verdict,
-    result.code,
+    `verdict=${result.verdict}`,
+    `code=${result.code}`,
     `phase=${result.phase}`,
+    `attempt=${attempt}`,
     `imageGitSha=${result.imageGitSha}`,
+    `oneShotImageId=${image}`,
+    `dossierSha256=${dossier}`,
+    `recoverySha256=${recovery}`,
+    `recoveryEvidence=${evidence}`,
+    `signingInputs=${signing}`,
     `spawned=${result.spawned}`,
     `retryAttempted=${result.retryAttempted}`,
     `targetClass=${result.targetClass}`,
   ].join(" ");
+}
+
+export function formatUnsignedStop(code: string, attemptId: string | null): string {
+  return formatOperatorResult({
+    verdict: "STOP",
+    code,
+    phase: "READ_ONLY_PREFLIGHT",
+    attemptId: attemptId ?? "",
+    spawned: false,
+    retryAttempted: false,
+    imageGitSha: IMAGE_GIT_SHA,
+    oneShotImageId: null,
+    targetClass: "PRODUCTION",
+    appUnchanged: null,
+    dossierSha256: null,
+    recoverySha256: null,
+    recoveryEvidence: "NONE",
+    signingInputs: "NOT_SIGNABLE",
+  });
+}
+
+function digestOrUnavailable(value: string | null): string {
+  return value !== null && SHA256.test(value) ? value : "UNAVAILABLE";
 }
 
 export function operatorAttemptRoot(workRoot: string, attemptId: string): string {
@@ -144,15 +196,32 @@ export function readInstalledDaemonPin(): string | null {
   }
 }
 
-function runBound(request: OperatorRequest, workRoot: string, productionDaemonPin: string | null): AdapterResult {
+export function readInstalledOneShotImagePin(): string | null {
+  const pinPath = PRODUCTION_ONESHOT_IMAGE_PIN_PATH;
+  if (!fs.existsSync(pinPath)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(pinPath, "utf8")) as Record<string, unknown>;
+    if (parsed.kind !== "PRODUCTION_ONESHOT_IMAGE_PIN") return null;
+    return typeof parsed.imageId === "string" && IMAGE_ID.test(parsed.imageId) ? parsed.imageId : null;
+  } catch {
+    return null;
+  }
+}
+
+function runBound(
+  request: OperatorRequest,
+  workRoot: string,
+  productionDaemonPin: string | null,
+  productionOneShotImagePin: string | null,
+): AdapterResult {
   const env = request.scope === "TEST_OWNED" && request.testEnv ? request.testEnv : process.env;
   const dockerRun = request.scope === "TEST_OWNED" ? (request.testDocker ?? null) : null;
   const session = resolveDockerSession(env, dockerRun ? dockerRunAdapter(dockerRun) : undefined);
   const paths = attemptPaths(workRoot);
   if (request.command === "preflight") {
     return executeProductionAdapter(
-      { intent: "PREFLIGHT", scope: request.scope, attemptId: request.attemptId, declared: declarationFromFacts(inspectLive(request, session)) },
-      dependencies(request, session, paths, null, productionDaemonPin),
+        { intent: "PREFLIGHT", scope: request.scope, attemptId: request.attemptId, declared: declarationFromFacts(inspectLive(request, session)) },
+      dependencies(request, session, paths, null, productionDaemonPin, productionOneShotImagePin, dockerRun),
     );
   }
   const invocationId = randomBytes(16).toString("hex");
@@ -165,7 +234,7 @@ function runBound(request: OperatorRequest, workRoot: string, productionDaemonPi
     if (request.command === "verify-recovery") {
       const preview = executeProductionAdapter(
         { intent: "PREFLIGHT", scope: request.scope, attemptId: request.attemptId, declared: declarationFromFacts(inspectLive(request, session)) },
-        dependencies(request, session, paths, null, productionDaemonPin),
+        dependencies(request, session, paths, null, productionDaemonPin, productionOneShotImagePin, dockerRun),
       );
       if (preview.verdict !== "PREFLIGHT_ONLY") {
         result = preview;
@@ -179,11 +248,11 @@ function runBound(request: OperatorRequest, workRoot: string, productionDaemonPi
           databaseName: live.databaseName,
           roleName: live.roleName,
         });
-        result = withRestore(request, session, paths, witness, "RECOVERY", productionDaemonPin, invocationId, dockerRun);
+        result = withRestore(request, session, paths, witness, "RECOVERY", productionDaemonPin, productionOneShotImagePin, invocationId, dockerRun);
       }
     } else {
       const witness = readPersistedWitness(paths.backup);
-      result = withRestore(request, session, paths, witness, "APPLY", productionDaemonPin, invocationId, dockerRun);
+      result = withRestore(request, session, paths, witness, "APPLY", productionDaemonPin, productionOneShotImagePin, invocationId, dockerRun);
     }
   } catch (error) {
     result = fromError(error, request);
@@ -199,7 +268,7 @@ function runBound(request: OperatorRequest, workRoot: string, productionDaemonPi
   if (lockReleaseError && result && (result.verdict === "RECOVERY_VERIFIED" || result.verdict === "ALREADY_APPLIED")) {
     return fromError(lockReleaseError, request);
   }
-  return result ?? stopped("STOP", "RUNTIME_UNAUTHENTICATED", phaseFor(request.command), request.scope);
+  return result ?? stopped("STOP", "RUNTIME_UNAUTHENTICATED", phaseFor(request.command), request.scope, request.attemptId);
 }
 
 function executeOwned(
@@ -218,6 +287,7 @@ function withRestore(
   witness: ReleaseBackupWitness,
   intent: "RECOVERY" | "APPLY",
   productionDaemonPin: string | null,
+  productionOneShotImagePin: string | null,
   invocationId: string,
   dockerRun: OperatorDocker | null,
 ): AdapterResult {
@@ -267,7 +337,7 @@ function withRestore(
         recoveryWitness: witness,
         authorization: request.scope === "TEST_OWNED" ? request.authorization : undefined,
       },
-      dependencies(request, session, paths, { start, containerId: () => identity.containerId }, productionDaemonPin),
+      dependencies(request, session, paths, { start, containerId: () => identity.containerId }, productionDaemonPin, productionOneShotImagePin, dockerRun),
     );
     result = executed.result;
     sealedCreated = intent === "APPLY" && executed.sealedCreated;
@@ -297,7 +367,7 @@ function withRestore(
     fs.rmSync(paths.sealed, { recursive: true, force: true });
   }
   if (cleanupError && result) return mergeOperatorCleanup(result, cleanupError);
-  return result ?? stopped("STOP", "RUNTIME_UNAUTHENTICATED", phaseFor(request.command), request.scope);
+  return result ?? stopped("STOP", "RUNTIME_UNAUTHENTICATED", phaseFor(request.command), request.scope, request.attemptId);
 }
 
 type AttemptPaths = { root: string; backup: string; sealed: string; lock: string; replay: string };
@@ -319,11 +389,16 @@ function dependencies(
   paths: AttemptPaths,
   restore: { start: () => void; containerId: () => string } | null,
   productionDaemonPin: string | null,
+  productionOneShotImagePin: string | null,
+  dockerRun: OperatorDocker | null,
 ) {
   const names = namesFor(request);
   const catalogOf = (containerId: string) => readCatalog(containerId, names.role, names.database, session.env);
   return {
     productionDaemonPin,
+    productionOneShotImagePin: request.scope === "PRODUCTION" ? productionOneShotImagePin : null,
+    approvedOneShotImageId: request.scope === "TEST_OWNED" ? (request.testApprovedOneShotImageId ?? null) : null,
+    inspectOneShotImage: () => observeOneShotImage(session.env, dockerRun),
     git: createRepoGitSource(process.cwd()),
     destinationRoot: paths.sealed,
     lockPath: paths.lock,
@@ -869,6 +944,31 @@ function requireStdout(
   return result.stdout;
 }
 
+function observeOneShotImage(env: NodeJS.ProcessEnv, dockerRun: OperatorDocker | null): OneShotImageObservation {
+  const tag = invokeDocker(["image", "inspect", "--format", "{{.Id}}", ONE_SHOT_IMAGE], env, dockerRun);
+  if (oneShotImageAbsent(tag)) {
+    throw refusal("STOP", "ONESHOT_IMAGE_MISSING", "One-shot image is not present on the local daemon");
+  }
+  if (tag.status !== 0 || tag.signal) {
+    throw refusal("STOP", "ONESHOT_IMAGE_UNAVAILABLE", "One-shot image inspect did not return an image id");
+  }
+  const tagId = tag.stdout.trim();
+  const confirmed = invokeDocker(["image", "inspect", "--format", "{{.Id}}", tagId], env, dockerRun);
+  if (oneShotImageAbsent(confirmed)) {
+    throw refusal("STOP", "ONESHOT_IMAGE_MISSING", "One-shot image id is not present on the local daemon");
+  }
+  if (confirmed.status !== 0 || confirmed.signal) {
+    throw refusal("STOP", "ONESHOT_IMAGE_UNAVAILABLE", "One-shot image id inspect did not return an image id");
+  }
+  return { tagId, idInspect: confirmed.stdout.trim() };
+}
+
+function oneShotImageAbsent(result: OperatorDockerResult): boolean {
+  if (result.signal || result.status !== 1) return false;
+  if (/no such file/i.test(result.stderr)) return false;
+  return /no such image/i.test(result.stderr);
+}
+
 function invokeDocker(args: readonly string[], env: NodeJS.ProcessEnv, invoke: OperatorDocker | null): OperatorDockerResult {
   if (invoke) return invoke(args, env);
   const child: SpawnSyncReturns<string> = spawnSync("docker", [...args], {
@@ -899,9 +999,9 @@ function assertAttempt(attemptId: string): void {
 
 function fromError(error: unknown, request: OperatorRequest): AdapterResult {
   if (error instanceof RunnerRefusal) {
-    return stopped(error.verdict, error.code, phaseFor(request.command), request.scope);
+    return stopped(error.verdict, error.code, phaseFor(request.command), request.scope, request.attemptId);
   }
-  return stopped("STOP", "RUNTIME_UNAUTHENTICATED", phaseFor(request.command), request.scope);
+  return stopped("STOP", "RUNTIME_UNAUTHENTICATED", phaseFor(request.command), request.scope, request.attemptId);
 }
 
 function phaseFor(command: OperatorCommand): ExecutionPhase {
@@ -915,6 +1015,7 @@ function stopped(
   code: string,
   phase: ExecutionPhase,
   scope: AdapterScope,
+  attemptId: string,
 ): AdapterResult {
   return {
     verdict,
@@ -922,11 +1023,15 @@ function stopped(
     phase,
     spawned: false,
     retryAttempted: false,
+    attemptId,
     imageGitSha: IMAGE_GIT_SHA,
+    oneShotImageId: null,
     targetClass: scope === "PRODUCTION" ? "PRODUCTION" : "TEST_OWNED_NOT_PRODUCTION",
     appUnchanged: null,
     dossierSha256: null,
     recoverySha256: null,
+    recoveryEvidence: "NONE",
+    signingInputs: "NOT_SIGNABLE",
   };
 }
 

@@ -3,7 +3,37 @@ import path from "node:path";
 import { ONE_SHOT_IMAGE } from "@/server/internal/p1-isolated-runner/p1-release-gate";
 import { ONE_SHOT_LAUNCHER } from "@/server/internal/p1-isolated-runner/p1-release-execute";
 import { refusal } from "@/server/internal/p1-isolated-runner/refusal";
-import { PRODUCTION_DNS_ALIAS } from "@/server/internal/p1-production-adapter/contract";
+import { IMAGE_ID, PRODUCTION_DNS_ALIAS } from "@/server/internal/p1-production-adapter/contract";
+
+export type OneShotImageObservation = {
+  tagId: string;
+  idInspect: string;
+};
+
+/**
+ * The tag id and the id inspect must be the same Docker digest.
+ * A tag move after the dossier was bound is `ONESHOT_IMAGE_CHANGED`.
+ * A different digest than the approved pin is `ONESHOT_IMAGE_UNAPPROVED`.
+ */
+export function acceptOneShotImage(
+  observation: OneShotImageObservation,
+  expected: string,
+  previouslyBound: string | null,
+): string {
+  if (!IMAGE_ID.test(observation.tagId) || !IMAGE_ID.test(observation.idInspect) || !IMAGE_ID.test(expected)) {
+    throw refusal("STOP", "ONESHOT_IMAGE_MALFORMED", "One-shot image id is not a Docker image digest");
+  }
+  if (observation.tagId !== observation.idInspect) {
+    throw refusal("STOP", "ONESHOT_IMAGE_CHANGED", "One-shot tag and image id diverged");
+  }
+  if (previouslyBound !== null && observation.tagId !== previouslyBound) {
+    throw refusal("STOP", "ONESHOT_IMAGE_CHANGED", "One-shot image id changed before spawn");
+  }
+  if (observation.tagId !== expected) {
+    throw refusal("STOP", "ONESHOT_IMAGE_UNAPPROVED", "One-shot image id is not the approved image");
+  }
+  return observation.tagId;
+}
 
 const LAUNCHER_SOURCE = String.raw`const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
@@ -37,12 +67,16 @@ export function planProductionOneShot(input: {
   appContainerId: string;
   appContainerName: string;
   dbContainerName: string;
+  imageId: string;
 }): OneShotPlan {
   if (input.dnsAlias !== PRODUCTION_DNS_ALIAS) {
     throw refusal("STOP", "NETWORK_ALIAS_MISMATCH", "One-shot hostname is not the compose dns alias");
   }
   if (input.password.length < 16 || /[\r\n]/.test(input.password)) {
     throw refusal("STOP", "RUNTIME_UNAUTHENTICATED", "Database credential is not usable");
+  }
+  if (!IMAGE_ID.test(input.imageId)) {
+    throw refusal("STOP", "ONESHOT_IMAGE_MALFORMED", "One-shot image id is not a Docker image digest");
   }
   const launcherPath = path.join(input.credentialDir, "migrate.cjs");
   const secretPath = path.join(input.credentialDir, "database.env");
@@ -64,7 +98,7 @@ export function planProductionOneShot(input: {
     `${dockerPath(secretPath)}:/run/secrets/p1-database.env:ro`,
     "-v",
     `${dockerPath(launcherPath)}:/opt/${path.basename(ONE_SHOT_LAUNCHER)}:ro`,
-    ONE_SHOT_IMAGE,
+    input.imageId,
     ONE_SHOT_LAUNCHER,
   ];
   if (argv.some((arg) => typeof arg !== "string" || arg.length === 0)) {
@@ -83,7 +117,8 @@ export function planProductionOneShot(input: {
         arg === "--build" ||
         arg === "resolve" ||
         arg === "dev" ||
-        arg === "reset",
+        arg === "reset" ||
+        arg === ONE_SHOT_IMAGE,
     )
   ) {
     throw refusal("STOP", "APP_REPLACEMENT_FORBIDDEN", "One-shot plan is not an isolated migrate deploy");

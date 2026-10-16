@@ -528,13 +528,17 @@ describe("operator credential, ownership, and preflight boundaries", () => {
       verdict: "STOP",
       code: "RESTORE_FAILED",
       phase: "RECOVERY_VERIFICATION",
+      attemptId: ATTEMPT,
       spawned: false,
       retryAttempted: false,
       imageGitSha: "UNVERIFIED",
+      oneShotImageId: null,
       targetClass: "TEST_OWNED_NOT_PRODUCTION",
       appUnchanged: null,
       dossierSha256: null,
       recoverySha256: null,
+      recoveryEvidence: "NONE",
+      signingInputs: "NOT_SIGNABLE",
     };
     const merged = mergeOperatorCleanup(primary, refusal("STOP", "DISPOSABLE_INSPECT_FAILED", `inspect failed near ${PASSWORD}`));
     expect(merged).toMatchObject({ verdict: "STOP", code: "DISPOSABLE_INSPECT_FAILED", spawned: false });

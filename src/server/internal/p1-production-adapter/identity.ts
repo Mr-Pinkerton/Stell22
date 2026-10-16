@@ -109,7 +109,10 @@ export function sameAppIdentity(left: ContainerFact, right: ContainerFact): bool
   );
 }
 
-export function dossierDigest(facts: TargetFacts): string {
+export function dossierDigest(facts: TargetFacts, oneShotImageId: string): string {
+  if (!IMAGE_ID.test(oneShotImageId)) {
+    throw refusal("STOP", "ONESHOT_IMAGE_MALFORMED", "One-shot image id is not a Docker image digest");
+  }
   const body = canonicalJson({
     scope: facts.scope,
     attemptId: facts.attemptId,
@@ -119,6 +122,7 @@ export function dossierDigest(facts: TargetFacts): string {
     databaseName: facts.databaseName,
     roleName: facts.roleName,
     serverVersionNum: facts.serverVersionNum,
+    oneShotImageId,
     imageGitSha: IMAGE_GIT_SHA,
     app: {
       id: facts.app.id,
