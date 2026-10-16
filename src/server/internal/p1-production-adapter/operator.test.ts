@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { runProductionAdapterCli } from "@/server/internal/p1-production-adapter/cli";
-import { OBSERVED_PRODUCTION_TOPOLOGY, runOperatorCommand } from "@/server/internal/p1-production-adapter/operator";
+import { OBSERVED_PRODUCTION_TOPOLOGY, OPERATOR_LOCK_FILE, runOperatorCommand } from "@/server/internal/p1-production-adapter/operator";
 
 const ATTEMPT = "0123456789abcdef";
 
@@ -31,10 +31,21 @@ describe("production operator boundaries", () => {
         authorization: { kind: "OWNER_SIGNED_AUTHORIZATION" },
       }).code,
     ).toBe("INJECTED_PRODUCTION_DEPENDENCY");
+    expect(
+      runOperatorCommand({
+        command: "verify-recovery",
+        scope: "PRODUCTION",
+        attemptId: ATTEMPT,
+        testDocker: () => ({ status: 0, signal: null, stdout: "", stderr: "" }),
+      }).code,
+    ).toBe("INJECTED_PRODUCTION_DEPENDENCY");
   });
 
   it("stops a remote Docker endpoint before any catalog read", () => {
     const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), "p1-operator-endpoint-"));
+    const sealed = path.join(workRoot, ATTEMPT, "sealed", "keep");
+    fs.mkdirSync(path.dirname(sealed), { recursive: true });
+    fs.writeFileSync(sealed, "foreign-sealed");
     try {
       const result = runOperatorCommand({
         command: "preflight",
@@ -49,7 +60,9 @@ describe("production operator boundaries", () => {
         imageGitSha: "UNVERIFIED",
         targetClass: "TEST_OWNED_NOT_PRODUCTION",
       });
+      expect(fs.readFileSync(sealed, "utf8")).toBe("foreign-sealed");
       expect(fs.existsSync(path.join(workRoot, ATTEMPT, "backup"))).toBe(false);
+      expect(fs.existsSync(path.join(workRoot, ATTEMPT, OPERATOR_LOCK_FILE))).toBe(false);
     } finally {
       fs.rmSync(workRoot, { recursive: true, force: true });
     }

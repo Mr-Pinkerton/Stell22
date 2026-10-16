@@ -13,11 +13,12 @@ import {
   functionMatchesContract,
   triggerMatchesContract,
 } from "@/server/internal/p1-isolated-runner/schema-contract";
-import { PRODUCTION_POSTGRES_IMAGE, testAppName, testDatabaseName, testDbName, testNetworkName } from "@/server/internal/p1-production-adapter/contract";
+import { PRODUCTION_POSTGRES_IMAGE, testAppName, testDatabaseName, testDbName, testNetworkName, testRestoreName } from "@/server/internal/p1-production-adapter/contract";
 import { inspectContainer, readCatalog, readDaemonId } from "@/server/internal/p1-production-adapter/docker-runtime";
+import type { AdapterResult } from "@/server/internal/p1-production-adapter/execute";
 import { canonicalJson } from "@/server/internal/p1-production-adapter/identity";
 import { planProductionOneShot } from "@/server/internal/p1-production-adapter/oneshot";
-import { operatorAttemptRoot, runOperatorCommand, type OperatorRequest } from "@/server/internal/p1-production-adapter/operator";
+import { operatorAttemptRoot, runOperatorCommand, type OperatorDocker, type OperatorRequest } from "@/server/internal/p1-production-adapter/operator";
 
 const LIVE_FLAG = "P1_DISPOSABLE_LIVE";
 
@@ -72,6 +73,11 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
       execSql(dbName, databaseName, "CREATE TABLE public.p1pa_release_probe (id integer PRIMARY KEY); INSERT INTO public.p1pa_release_probe (id) VALUES (1);");
 
       const before = inspectContainer(appName);
+      const sentinel = path.join(workRoot, "preflight-sentinel");
+      const sealedKeep = path.join(attemptRoot, "foreign-keep");
+      fs.mkdirSync(attemptRoot, { recursive: true });
+      fs.writeFileSync(sentinel, "unchanged");
+      fs.writeFileSync(sealedKeep, "foreign-sealed");
       const preflight = runOperatorCommand(owned(attemptId, workRoot, "preflight"));
       expect(preflight).toMatchObject({
         verdict: "PREFLIGHT_ONLY",
@@ -81,12 +87,45 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
         imageGitSha: "UNVERIFIED",
         targetClass: "TEST_OWNED_NOT_PRODUCTION",
       });
+      expect(fs.readFileSync(sentinel, "utf8")).toBe("unchanged");
+      expect(fs.readFileSync(sealedKeep, "utf8")).toBe("foreign-sealed");
       expect(fs.existsSync(path.join(attemptRoot, "backup"))).toBe(false);
+      expect(fs.existsSync(path.join(attemptRoot, "operator.lock"))).toBe(false);
       expect(readCatalog(inspectContainer(dbName).id, "p1pa", databaseName).recovery.successfulMigrationCount).toBe(EXPECTED_HISTORICAL_MIGRATION_COUNT);
       expect(appResponds(appName)).toBe(true);
 
-      const recovery = runOperatorCommand(owned(attemptId, workRoot, "verify-recovery"));
+      const restoreName = testRestoreName(attemptId);
+      const restoreNetwork = `${testNetworkName(attemptId)}-restore`;
+      docker(["run", "-d", "--pull", "never", "--name", restoreName, "--restart", "no", "--entrypoint", "sleep", PRODUCTION_POSTGRES_IMAGE, "300"]);
+      const foreignContainer = runOperatorCommand(owned(attemptId, workRoot, "verify-recovery"));
+      expect(foreignContainer).toMatchObject({ code: "DISPOSABLE_NAME_COLLISION", spawned: false });
+      expect(spawnSync("docker", ["inspect", restoreName], { windowsHide: true }).status).toBe(0);
+      expect(fs.existsSync(path.join(attemptRoot, "backup"))).toBe(false);
+      spawnSync("docker", ["rm", "-f", restoreName], { windowsHide: true });
+      docker(["network", "create", restoreNetwork]);
+      const foreignNetwork = runOperatorCommand(owned(attemptId, workRoot, "verify-recovery"));
+      expect(foreignNetwork).toMatchObject({ code: "DISPOSABLE_NAME_COLLISION", spawned: false });
+      expect(spawnSync("docker", ["network", "inspect", restoreNetwork], { windowsHide: true }).status).toBe(0);
+      expect(fs.readFileSync(sealedKeep, "utf8")).toBe("foreign-sealed");
+      docker(["network", "rm", restoreNetwork]);
+
+      const dockerArgs: string[][] = [];
+      const concurrent: { result: AdapterResult | null } = { result: null };
+      const recovery = runOperatorCommand({
+        ...owned(attemptId, workRoot, "verify-recovery"),
+        testDocker: recordingDocker(password, dockerArgs, (args) => {
+          if (concurrent.result || args[0] !== "network" || args[1] !== "create") return;
+          concurrent.result = runOperatorCommand(owned(attemptId, workRoot, "verify-recovery"));
+        }),
+      });
       expect(recovery).toMatchObject({ verdict: "RECOVERY_VERIFIED", spawned: false, imageGitSha: "UNVERIFIED" });
+      expect(concurrent.result?.code).toBe("CONCURRENT_EXECUTION");
+      expect(dockerArgs.some((args) => args.includes(password) || args.includes("POSTGRES_PASSWORD=") || args.join("\n").match(/postgres(?:ql)?:\/\//i))).toBe(false);
+      expect(dockerArgs.some((args) => args[0] === "run" && args.includes("--env-file"))).toBe(true);
+      expect(fs.existsSync(path.join(attemptRoot, ".restore-secret", "postgres.env"))).toBe(false);
+      expect(spawnSync("docker", ["inspect", restoreName], { windowsHide: true }).status).not.toBe(0);
+      expect(spawnSync("docker", ["network", "inspect", restoreNetwork], { windowsHide: true }).status).not.toBe(0);
+      expect(fs.readFileSync(sealedKeep, "utf8")).toBe("foreign-sealed");
       const archivePath = path.join(attemptRoot, "backup", "backup.sql.gz");
       const checksumPath = path.join(attemptRoot, "backup", "backup.sql.gz.sha256");
       const witnessPath = path.join(attemptRoot, "backup", "backup.witness.json");
@@ -112,6 +151,8 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
       fs.writeFileSync(witnessPath, `${canonicalJson(badWitness)}\n`);
       const failedRestore = runOperatorCommand(owned(attemptId, workRoot, "apply"));
       expect(failedRestore).toMatchObject({ code: "RESTORE_FAILED", spawned: false });
+      expect(fs.existsSync(path.join(attemptRoot, ".restore-secret", "postgres.env"))).toBe(false);
+      expect(spawnSync("docker", ["inspect", restoreName], { windowsHide: true }).status).not.toBe(0);
       fs.writeFileSync(archivePath, archive);
       fs.writeFileSync(checksumPath, `${recorded}\n`);
       fs.writeFileSync(witnessPath, savedWitness);
@@ -178,6 +219,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
         ...owned(attemptId, workRoot, "apply"),
         testTrustPublicKey: pem,
         authorization: signOwner(privateKey, { ...binding, nonce: randomBytes(16).toString("hex") }),
+        testDocker: recordingDocker(password, dockerArgs, () => {}),
       });
       expect(applied).toMatchObject({
         verdict: "ALREADY_APPLIED",
@@ -202,6 +244,10 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
       expect(checkMatchesContract(requirePart(catalog.schema.check))).toBe(true);
       expect(functionMatchesContract(requirePart(catalog.schema.functionDef))).toBe(true);
       expect(triggerMatchesContract(requirePart(catalog.schema.trigger))).toBe(true);
+      expect(dockerArgs.some((args) => args.includes(password) || args.some((arg) => arg.includes("POSTGRES_PASSWORD=")))).toBe(false);
+      expect(fs.existsSync(path.join(attemptRoot, ".restore-secret"))).toBe(false);
+      expect(fs.readFileSync(witnessPath)).toEqual(savedWitness);
+      expect(fs.readFileSync(sealedKeep, "utf8")).toBe("foreign-sealed");
 
       const second = runOperatorCommand({
         ...owned(attemptId, workRoot, "apply"),
@@ -318,6 +364,25 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
     }
   }, 180_000);
 });
+
+function recordingDocker(password: string, argvLog: string[][], onCall: (args: readonly string[]) => void): OperatorDocker {
+  return (args, env) => {
+    argvLog.push([...args]);
+    onCall(args);
+    const rendered = args.join("\n");
+    if (rendered.includes(password) || rendered.includes("POSTGRES_PASSWORD=") || /postgres(?:ql)?:\/\//i.test(rendered)) {
+      return { status: 97, signal: null, stdout: "", stderr: "" };
+    }
+    const child = spawnSync("docker", [...args], {
+      env,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 180_000,
+      maxBuffer: 32 * 1024 * 1024,
+    });
+    return { status: child.status, signal: child.signal, stdout: child.stdout ?? "", stderr: "" };
+  };
+}
 
 function owned(attemptId: string, workRoot: string, command: OperatorRequest["command"]): OperatorRequest {
   return { command, scope: "TEST_OWNED", attemptId, workRoot };

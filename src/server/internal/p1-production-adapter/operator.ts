@@ -1,4 +1,5 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
@@ -40,10 +41,12 @@ import type { RestoreContainerFact } from "@/server/internal/p1-production-adapt
  * image Git SHA is never inferred from an image id.
  *
  * Boundaries:
- * - preflight reads containers and the catalog. It does not write a backup or spawn Prisma.
+ * - preflight reads containers and the catalog. It does not create directories, delete files, or mutate Docker.
  * - verify-recovery is the separate authorization to create this attempt's backup and a disposable restore.
+ *   It holds an exclusive attempt lock and removes only the disposable resources that invocation created.
  * - apply uses the persisted backup, the installed production approval, and one pinned P1 migrate.
  *   It does not replace an existing backup and it does not retry an ambiguous migrate.
+ * Disposable database credentials travel in a mode 0600 env file. They are not Docker arguments.
  */
 
 export const PRODUCTION_OPERATOR_WORK_ROOT = "/var/lib/stell22/p1-operator-work";
@@ -61,9 +64,27 @@ export type OperatorRequest = {
   testEnv?: Readonly<Record<string, string | undefined>>;
   testSpawn?: (plan: OneShotPlan) => OneShotResult;
   testLockOwner?: () => string | null;
+  testDocker?: OperatorDocker;
 };
 
-const INJECTED_KEYS = ["workRoot", "testTrustPublicKey", "authorization", "testEnv", "testSpawn", "testLockOwner"] as const;
+const INJECTED_KEYS = ["workRoot", "testTrustPublicKey", "authorization", "testEnv", "testSpawn", "testLockOwner", "testDocker"] as const;
+
+export type OperatorDockerResult = {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+};
+
+export type OperatorDocker = (args: readonly string[], env: NodeJS.ProcessEnv) => OperatorDockerResult;
+
+export const OPERATOR_LOCK_FILE = "operator.lock";
+export const DISPOSABLE_INVOCATION_LABEL = "stell22.p1.operator.invocation";
+export const DISPOSABLE_ATTEMPT_LABEL = "stell22.p1.operator.attempt";
+export const DISPOSABLE_KIND_LABEL = "stell22.p1.operator.kind";
+
+const PROTECTED_CONTAINER_NAMES = new Set<string>([PRODUCTION_APP_CONTAINER, PRODUCTION_DB_CONTAINER, "stell22-caddy"]);
+const PROTECTED_NETWORK_NAMES = new Set<string>([PRODUCTION_NETWORK_NAME, "bridge", "host", "none"]);
 
 export function runOperatorCommand(request: OperatorRequest): AdapterResult {
   try {
@@ -125,44 +146,69 @@ export function readInstalledDaemonPin(): string | null {
 
 function runBound(request: OperatorRequest, workRoot: string, productionDaemonPin: string | null): AdapterResult {
   const env = request.scope === "TEST_OWNED" && request.testEnv ? request.testEnv : process.env;
-  const session = resolveDockerSession(env);
+  const dockerRun = request.scope === "TEST_OWNED" ? (request.testDocker ?? null) : null;
+  const session = resolveDockerSession(env, dockerRun ? dockerRunAdapter(dockerRun) : undefined);
   const paths = attemptPaths(workRoot);
-  fs.mkdirSync(paths.root, { recursive: true, mode: 0o700 });
   if (request.command === "preflight") {
-    return executeAndRelease(
+    return executeProductionAdapter(
       { intent: "PREFLIGHT", scope: request.scope, attemptId: request.attemptId, declared: declarationFromFacts(inspectLive(request, session)) },
       dependencies(request, session, paths, null, productionDaemonPin),
     );
   }
-  if (request.command === "verify-recovery") {
-    const preview = executeAndRelease(
-      { intent: "PREFLIGHT", scope: request.scope, attemptId: request.attemptId, declared: declarationFromFacts(inspectLive(request, session)) },
-      dependencies(request, session, paths, null, productionDaemonPin),
-    );
-    if (preview.verdict !== "PREFLIGHT_ONLY") return preview;
-    const live = inspectLive(request, session);
-    const archive = zlib.gzipSync(dumpDatabase(live.db.id, live.roleName, live.databaseName, session.env));
-    const witness = publishReleaseBackup(paths.backup, archive, {
-      attemptId: request.attemptId,
-      container: live.db,
-      databaseName: live.databaseName,
-      roleName: live.roleName,
-    });
-    return withRestore(request, session, paths, witness, "RECOVERY", productionDaemonPin);
+  const invocationId = randomBytes(16).toString("hex");
+  let lock: { release: () => void } | null = null;
+  let lockReleaseError: unknown = null;
+  let result: AdapterResult | null = null;
+  try {
+    fs.mkdirSync(paths.root, { recursive: true, mode: 0o700 });
+    lock = acquireOperatorLock(path.join(paths.root, OPERATOR_LOCK_FILE), `${request.attemptId}:${invocationId}`);
+    if (request.command === "verify-recovery") {
+      const preview = executeProductionAdapter(
+        { intent: "PREFLIGHT", scope: request.scope, attemptId: request.attemptId, declared: declarationFromFacts(inspectLive(request, session)) },
+        dependencies(request, session, paths, null, productionDaemonPin),
+      );
+      if (preview.verdict !== "PREFLIGHT_ONLY") {
+        result = preview;
+      } else {
+        assertDisposableNamesFree(request, session.env, dockerRun);
+        const live = inspectLive(request, session);
+        const archive = zlib.gzipSync(dumpDatabase(live.db.id, live.roleName, live.databaseName, session.env));
+        const witness = publishReleaseBackup(paths.backup, archive, {
+          attemptId: request.attemptId,
+          container: live.db,
+          databaseName: live.databaseName,
+          roleName: live.roleName,
+        });
+        result = withRestore(request, session, paths, witness, "RECOVERY", productionDaemonPin, invocationId, dockerRun);
+      }
+    } else {
+      const witness = readPersistedWitness(paths.backup);
+      result = withRestore(request, session, paths, witness, "APPLY", productionDaemonPin, invocationId, dockerRun);
+    }
+  } catch (error) {
+    result = fromError(error, request);
+  } finally {
+    if (lock) {
+      try {
+        lock.release();
+      } catch (error) {
+        lockReleaseError = error;
+      }
+    }
   }
-  const witness = readPersistedWitness(paths.backup);
-  return withRestore(request, session, paths, witness, "APPLY", productionDaemonPin);
+  if (lockReleaseError && result && (result.verdict === "RECOVERY_VERIFIED" || result.verdict === "ALREADY_APPLIED")) {
+    return fromError(lockReleaseError, request);
+  }
+  return result ?? stopped("STOP", "RUNTIME_UNAUTHENTICATED", phaseFor(request.command), request.scope);
 }
 
-function executeAndRelease(
+function executeOwned(
   request: Parameters<typeof executeProductionAdapter>[0],
   deps: Parameters<typeof executeProductionAdapter>[1],
-): AdapterResult {
-  try {
-    return executeProductionAdapter(request, deps);
-  } finally {
-    fs.rmSync(deps.destinationRoot, { recursive: true, force: true });
-  }
+): { result: AdapterResult; sealedCreated: boolean } {
+  const sealedBefore = fs.existsSync(deps.destinationRoot);
+  const result = executeProductionAdapter(request, deps);
+  return { result, sealedCreated: !sealedBefore && fs.existsSync(deps.destinationRoot) };
 }
 
 function withRestore(
@@ -172,45 +218,45 @@ function withRestore(
   witness: ReleaseBackupWitness,
   intent: "RECOVERY" | "APPLY",
   productionDaemonPin: string | null,
+  invocationId: string,
+  dockerRun: OperatorDocker | null,
 ): AdapterResult {
+  const names = namesFor(request);
   const restoreName = testRestoreName(request.attemptId);
   const restoreNetwork = `${testNetworkName(request.attemptId)}-restore`;
-  let started = false;
+  const owned: OwnedDisposable[] = [];
+  let result: AdapterResult | null = null;
+  let cleanupError: unknown = null;
+  let sealedCreated = false;
   try {
-    removeDisposable(restoreName, restoreNetwork, session.env);
-    const password = readDatabasePassword(inspectLive(request, session).db.id, session.env);
+    assertDisposableNamesFree(request, session.env, dockerRun);
+    const password = readDatabasePassword(inspectLive(request, session).db.id, session.env, dockerRun);
+    let started = false;
+    const identity = { containerId: "" };
     const start = () => {
       if (started) return;
-      docker(["network", "create", restoreNetwork], session.env);
-      docker(
-        [
-          "run",
-          "-d",
-          "--pull",
-          "never",
-          "--name",
-          restoreName,
-          "--network",
-          restoreNetwork,
-          "--restart",
-          "no",
-          "-e",
-          `POSTGRES_USER=${namesFor(request).role}`,
-          "-e",
-          `POSTGRES_PASSWORD=${password}`,
-          "-e",
-          `POSTGRES_DB=${namesFor(request).database}`,
-          "-e",
-          "POSTGRES_HOST_AUTH_METHOD=scram-sha-256",
-          PRODUCTION_POSTGRES_IMAGE,
-        ],
-        session.env,
-      );
-      waitReady(restoreName, namesFor(request).role, namesFor(request).database, session.env);
+      startOwnedDisposable({
+        attemptId: request.attemptId,
+        invocationId,
+        name: restoreName,
+        networkName: restoreNetwork,
+        image: PRODUCTION_POSTGRES_IMAGE,
+        role: names.role,
+        database: names.database,
+        password,
+        secretDirectory: path.join(paths.root, ".restore-secret"),
+        env: session.env,
+        owned,
+        invoke: (args, env) => invokeDocker(args, env, dockerRun),
+      });
+      const container = owned.find((resource) => resource.kind === "disposable-restore-container");
+      if (!container) throw refusal("STOP", "DISPOSABLE_START_FAILED", "Disposable restore did not record a container id");
+      identity.containerId = container.id;
+      waitReady(container.id, names.role, names.database, session.env);
       started = true;
     };
     const live = inspectLive(request, session);
-    return executeAndRelease(
+    const executed = executeOwned(
       {
         intent,
         scope: request.scope,
@@ -220,11 +266,36 @@ function withRestore(
         recoveryWitness: witness,
         authorization: request.scope === "TEST_OWNED" ? request.authorization : undefined,
       },
-      dependencies(request, session, paths, { start, restoreName, password }, productionDaemonPin),
+      dependencies(request, session, paths, { start, containerId: () => identity.containerId }, productionDaemonPin),
     );
+    result = executed.result;
+    sealedCreated = intent === "APPLY" && executed.sealedCreated;
+  } catch (error) {
+    result = fromError(error, request);
   } finally {
-    removeDisposable(restoreName, restoreNetwork, session.env);
+    try {
+      retireOwnedDisposable(owned, (args, env) => invokeDocker(args, env, dockerRun), session.env);
+    } catch (error) {
+      cleanupError = error;
+      try {
+        writeCleanupEvidence(paths.root, error);
+      } catch {
+        // The cleanup error remains the caller-visible result. A second write failure must not replace it.
+      }
+    }
   }
+  if (!cleanupError && sealedCreated) {
+    fs.rmSync(paths.sealed, { recursive: true, force: true });
+  }
+  if (cleanupError && result && (result.verdict === "RECOVERY_VERIFIED" || result.verdict === "ALREADY_APPLIED")) {
+    return stopped(
+      "STOP",
+      cleanupError instanceof RunnerRefusal ? cleanupError.code : "DISPOSABLE_CLEANUP_FAILED",
+      phaseFor(request.command),
+      request.scope,
+    );
+  }
+  return result ?? stopped("STOP", "RUNTIME_UNAUTHENTICATED", phaseFor(request.command), request.scope);
 }
 
 type AttemptPaths = { root: string; backup: string; sealed: string; lock: string; replay: string };
@@ -244,7 +315,7 @@ function dependencies(
   request: OperatorRequest,
   session: DockerSession,
   paths: AttemptPaths,
-  restore: { start: () => void; restoreName: string; password: string } | null,
+  restore: { start: () => void; containerId: () => string } | null,
   productionDaemonPin: string | null,
 ) {
   const names = namesFor(request);
@@ -265,7 +336,7 @@ function dependencies(
     inspectRestore: (): RestoreContainerFact => {
       if (!restore) throw refusal("STOP", "RESTORE_NOT_AUTHORIZED", "This command does not start a disposable restore");
       restore.start();
-      const fact = inspectContainer(restore.restoreName, session.env);
+      const fact = inspectContainer(restore.containerId(), session.env);
       return { ...fact, mounts: inspectMounts(fact.id, session.env) };
     },
     runRestore: (containerId: string, sql: Buffer) => {
@@ -353,14 +424,19 @@ function readPersistedWitness(backupDirectory: string): ReleaseBackupWitness {
   return parsed as ReleaseBackupWitness;
 }
 
-function readDatabasePassword(containerId: string, env: NodeJS.ProcessEnv): string {
-  const raw = docker(["inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", containerId], env);
+function readDatabasePassword(containerId: string, env: NodeJS.ProcessEnv, dockerRun: OperatorDocker | null): string {
+  const raw = requireStdout(
+    ["inspect", "--format", "{{range .Config.Env}}{{println .}}{{end}}", containerId],
+    env,
+    dockerRun,
+    "RUNTIME_UNAUTHENTICATED",
+  );
   const matches = raw.split(/\n/).filter((line) => line.startsWith("POSTGRES_PASSWORD="));
   if (matches.length !== 1) {
     throw refusal("STOP", "RUNTIME_UNAUTHENTICATED", "Database credential is not usable");
   }
   const password = matches[0]?.slice("POSTGRES_PASSWORD=".length) ?? "";
-  if (password.length < 16 || /[\r\n]/.test(password)) {
+  if (password.length < 16 || /[\r\n\0]/.test(password)) {
     throw refusal("STOP", "RUNTIME_UNAUTHENTICATED", "Database credential is not usable");
   }
   return password;
@@ -379,23 +455,287 @@ function waitReady(containerName: string, role: string, database: string, env: N
   throw refusal("STOP", "RESTORE_FAILED", "Disposable restore did not become ready");
 }
 
-function removeDisposable(name: string, network: string, env: NodeJS.ProcessEnv): void {
-  spawnSync("docker", ["rm", "-f", name], { env, windowsHide: true });
-  spawnSync("docker", ["network", "rm", network], { env, windowsHide: true });
+export type OwnedDisposable = {
+  id: string;
+  name: string;
+  kind: "disposable-restore-container" | "disposable-restore-network";
+  attemptId: string;
+  invocationId: string;
+};
+
+export function disposablePostgresArgv(input: {
+  name: string;
+  networkName: string;
+  envFile: string;
+  image: string;
+  attemptId: string;
+  invocationId: string;
+}): readonly string[] {
+  return [
+    "run",
+    "-d",
+    "--pull",
+    "never",
+    "--name",
+    input.name,
+    "--network",
+    input.networkName,
+    "--restart",
+    "no",
+    "--label",
+    `${DISPOSABLE_INVOCATION_LABEL}=${input.invocationId}`,
+    "--label",
+    `${DISPOSABLE_ATTEMPT_LABEL}=${input.attemptId}`,
+    "--label",
+    `${DISPOSABLE_KIND_LABEL}=disposable-restore-container`,
+    "--env-file",
+    input.envFile,
+    input.image,
+  ];
 }
 
-function docker(args: readonly string[], env: NodeJS.ProcessEnv): string {
-  const child = spawnSync("docker", [...args], {
+export function startOwnedDisposable(input: {
+  attemptId: string;
+  invocationId: string;
+  name: string;
+  networkName: string;
+  image: string;
+  role: string;
+  database: string;
+  password: string;
+  secretDirectory: string;
+  env: NodeJS.ProcessEnv;
+  owned: OwnedDisposable[];
+  invoke: OperatorDocker;
+}): void {
+  assertNotProtected(input.name, input.networkName);
+  if (dockerObjectExists(["container", "inspect", "--format", "{{.Id}}", input.name], input.env, input.invoke)) {
+    throw refusal("STOP", "DISPOSABLE_NAME_COLLISION", "A container already uses the disposable restore name");
+  }
+  if (dockerObjectExists(["network", "inspect", "--format", "{{.Id}}", input.networkName], input.env, input.invoke)) {
+    throw refusal("STOP", "DISPOSABLE_NAME_COLLISION", "A network already uses the disposable restore name");
+  }
+  const envFile = path.join(input.secretDirectory, "postgres.env");
+  writeRestoreCredential(input.secretDirectory, envFile, input.role, input.database, input.password);
+  let failure: unknown = null;
+  try {
+    const networkId = requireId(
+      [
+        "network",
+        "create",
+        "--label",
+        `${DISPOSABLE_INVOCATION_LABEL}=${input.invocationId}`,
+        "--label",
+        `${DISPOSABLE_ATTEMPT_LABEL}=${input.attemptId}`,
+        "--label",
+        `${DISPOSABLE_KIND_LABEL}=disposable-restore-network`,
+        input.networkName,
+      ],
+      input.env,
+      input.invoke,
+    );
+    input.owned.push({
+      id: networkId,
+      name: input.networkName,
+      kind: "disposable-restore-network",
+      attemptId: input.attemptId,
+      invocationId: input.invocationId,
+    });
+    const argv = disposablePostgresArgv({
+      name: input.name,
+      networkName: input.networkName,
+      envFile,
+      image: input.image,
+      attemptId: input.attemptId,
+      invocationId: input.invocationId,
+    });
+    if (argv.some((arg) => arg.includes(input.password) || arg.includes("POSTGRES_PASSWORD=") || /postgres(?:ql)?:\/\//i.test(arg))) {
+      throw refusal("STOP", "CREDENTIAL_LEAK", "Disposable database command contains a credential");
+    }
+    const containerId = requireId(argv, input.env, input.invoke);
+    input.owned.push({
+      id: containerId,
+      name: input.name,
+      kind: "disposable-restore-container",
+      attemptId: input.attemptId,
+      invocationId: input.invocationId,
+    });
+  } catch (error) {
+    failure = error;
+  } finally {
+    try {
+      removeRestoreCredential(envFile, input.secretDirectory);
+    } catch (error) {
+      if (!failure) failure = error;
+    }
+  }
+  if (failure) throw failure;
+}
+
+export function retireOwnedDisposable(owned: readonly OwnedDisposable[], invoke: OperatorDocker, env: NodeJS.ProcessEnv): void {
+  const containers = owned.filter((resource) => resource.kind === "disposable-restore-container");
+  const networks = owned.filter((resource) => resource.kind === "disposable-restore-network");
+  for (const resource of containers) retireOne(resource, invoke, env);
+  for (const resource of networks) retireOne(resource, invoke, env);
+}
+
+function retireOne(resource: OwnedDisposable, invoke: OperatorDocker, env: NodeJS.ProcessEnv): void {
+  const inspected = inspectOwned(resource, invoke, env);
+  if (inspected === "absent") return;
+  if (inspected === "foreign") {
+    throw refusal("STOP", "DISPOSABLE_CLEANUP_REFUSED", "Disposable cleanup refused a resource this invocation does not own");
+  }
+  const args = resource.kind === "disposable-restore-container" ? ["rm", "-f", resource.id] : ["network", "rm", resource.id];
+  if (args.some((arg) => arg === resource.name || PROTECTED_CONTAINER_NAMES.has(arg) || PROTECTED_NETWORK_NAMES.has(arg))) {
+    throw refusal("STOP", "DISPOSABLE_CLEANUP_REFUSED", "Disposable cleanup refused a protected name");
+  }
+  const removed = invoke(args, env);
+  if (removed.status !== 0 || removed.signal) {
+    throw refusal("STOP", "DISPOSABLE_CLEANUP_FAILED", "Disposable cleanup did not remove an owned resource");
+  }
+}
+
+function inspectOwned(resource: OwnedDisposable, invoke: OperatorDocker, env: NodeJS.ProcessEnv): "match" | "absent" | "foreign" {
+  const format =
+    resource.kind === "disposable-restore-container"
+      ? `{{.Id}}|{{.Name}}|{{index .Config.Labels "${DISPOSABLE_INVOCATION_LABEL}"}}|{{index .Config.Labels "${DISPOSABLE_ATTEMPT_LABEL}"}}|{{index .Config.Labels "${DISPOSABLE_KIND_LABEL}"}}`
+      : `{{.Id}}|{{.Name}}|{{index .Labels "${DISPOSABLE_INVOCATION_LABEL}"}}|{{index .Labels "${DISPOSABLE_ATTEMPT_LABEL}"}}|{{index .Labels "${DISPOSABLE_KIND_LABEL}"}}`;
+  const args = resource.kind === "disposable-restore-container" ? ["inspect", "--format", format, resource.id] : ["network", "inspect", "--format", format, resource.id];
+  const result = invoke(args, env);
+  if (result.status !== 0 || result.signal) return "absent";
+  const [id, rawName, invocationId, attemptId, kind] = result.stdout.trim().split("|");
+  const name = (rawName ?? "").replace(/^\//, "");
+  if (PROTECTED_CONTAINER_NAMES.has(name) || PROTECTED_NETWORK_NAMES.has(name)) return "foreign";
+  if (id !== resource.id || name !== resource.name || invocationId !== resource.invocationId || attemptId !== resource.attemptId || kind !== resource.kind) {
+    return "foreign";
+  }
+  return "match";
+}
+
+function assertDisposableNamesFree(request: OperatorRequest, env: NodeJS.ProcessEnv, dockerRun: OperatorDocker | null): void {
+  const name = testRestoreName(request.attemptId);
+  const networkName = `${testNetworkName(request.attemptId)}-restore`;
+  assertNotProtected(name, networkName);
+  const invoke = (args: readonly string[], runEnv: NodeJS.ProcessEnv) => invokeDocker(args, runEnv, dockerRun);
+  if (dockerObjectExists(["container", "inspect", "--format", "{{.Id}}", name], env, invoke)) {
+    throw refusal("STOP", "DISPOSABLE_NAME_COLLISION", "A container already uses the disposable restore name");
+  }
+  if (dockerObjectExists(["network", "inspect", "--format", "{{.Id}}", networkName], env, invoke)) {
+    throw refusal("STOP", "DISPOSABLE_NAME_COLLISION", "A network already uses the disposable restore name");
+  }
+}
+
+function assertNotProtected(containerName: string, networkName: string): void {
+  if (PROTECTED_CONTAINER_NAMES.has(containerName) || PROTECTED_NETWORK_NAMES.has(networkName)) {
+    throw refusal("STOP", "DISPOSABLE_NAME_COLLISION", "Disposable restore names overlap a protected resource");
+  }
+}
+
+function writeRestoreCredential(directory: string, envFile: string, role: string, database: string, password: string): void {
+  fs.rmSync(directory, { recursive: true, force: true });
+  fs.mkdirSync(directory, { recursive: false, mode: 0o700 });
+  const body = `POSTGRES_USER=${role}\nPOSTGRES_PASSWORD=${password}\nPOSTGRES_DB=${database}\nPOSTGRES_HOST_AUTH_METHOD=scram-sha-256\n`;
+  const handle = fs.openSync(envFile, "wx", 0o600);
+  try {
+    fs.writeFileSync(handle, body, { encoding: "utf8" });
+  } finally {
+    fs.closeSync(handle);
+  }
+  fs.chmodSync(envFile, 0o600);
+}
+
+function removeRestoreCredential(envFile: string, directory: string): void {
+  if (fs.existsSync(envFile)) fs.rmSync(envFile);
+  if (fs.existsSync(directory)) fs.rmdirSync(directory);
+}
+
+function writeCleanupEvidence(root: string, error: unknown): void {
+  const code = error instanceof RunnerRefusal ? error.code : "DISPOSABLE_CLEANUP_FAILED";
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const target = path.join(root, "disposable-cleanup-incomplete.json");
+  const handle = fs.openSync(target, "wx", 0o600);
+  try {
+    fs.writeFileSync(handle, `${JSON.stringify({ kind: "DISPOSABLE_CLEANUP_INCOMPLETE", code })}\n`, "utf8");
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function acquireOperatorLock(lockPath: string, token: string): { release: () => void } {
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+  let handle: number;
+  try {
+    handle = fs.openSync(lockPath, "wx", 0o600);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") {
+      throw refusal("BLOCKED", "CONCURRENT_EXECUTION", "Another operator invocation holds this attempt");
+    }
+    throw refusal("STOP", "OPERATOR_LOCK_FAILED", "Operator attempt lock could not be created");
+  }
+  fs.writeFileSync(handle, `${token}\n`, "utf8");
+  let released = false;
+  return {
+    release() {
+      if (released) return;
+      released = true;
+      fs.closeSync(handle);
+      const current = fs.existsSync(lockPath) ? fs.readFileSync(lockPath, "utf8").trim() : "";
+      if (current !== token) {
+        throw refusal("STOP", "LOST_LOCK", "Operator lock changed before release");
+      }
+      fs.unlinkSync(lockPath);
+    },
+  };
+}
+
+function dockerObjectExists(args: readonly string[], env: NodeJS.ProcessEnv, invoke: OperatorDocker): boolean {
+  const result = invoke(args, env);
+  return result.status === 0 && !result.signal;
+}
+
+function requireId(args: readonly string[], env: NodeJS.ProcessEnv, invoke: OperatorDocker): string {
+  const raw = requireStdout(args, env, invoke, "DISPOSABLE_START_FAILED").trim();
+  const id = raw.split(/\n/).find((line) => /^[0-9a-f]{64}$/.test(line)) ?? "";
+  if (!/^[0-9a-f]{64}$/.test(id)) {
+    throw refusal("STOP", "DISPOSABLE_START_FAILED", "Disposable Docker command did not return a resource id");
+  }
+  return id;
+}
+
+function requireStdout(
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+  invoke: OperatorDocker | null,
+  code: string,
+): string {
+  const result = invokeDocker(args, env, invoke);
+  if (result.status !== 0 || result.signal) {
+    throw refusal("STOP", code, "Docker command failed");
+  }
+  return result.stdout;
+}
+
+function invokeDocker(args: readonly string[], env: NodeJS.ProcessEnv, invoke: OperatorDocker | null): OperatorDockerResult {
+  if (invoke) return invoke(args, env);
+  const child: SpawnSyncReturns<string> = spawnSync("docker", [...args], {
     env,
     encoding: "utf8",
     windowsHide: true,
     timeout: 180_000,
     maxBuffer: 32 * 1024 * 1024,
   });
-  if (child.status !== 0) {
-    throw refusal("STOP", "RUNTIME_UNAUTHENTICATED", "Docker command failed");
-  }
-  return child.stdout;
+  return { status: child.status, signal: child.signal, stdout: child.stdout ?? "", stderr: child.stderr ?? "" };
+}
+
+function dockerRunAdapter(invoke: OperatorDocker): (args: readonly string[], env: NodeJS.ProcessEnv) => string {
+  return (args, env) => {
+    const result = invoke(args, env);
+    if (result.status !== 0 || result.signal) {
+      throw refusal("STOP", "DOCKER_ENDPOINT_UNTRUSTED", "Docker endpoint could not be resolved");
+    }
+    return result.stdout;
+  };
 }
 
 function assertAttempt(attemptId: string): void {
