@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveDockerSession, type DockerRun } from "@/server/internal/p1-production-adapter/docker-runtime";
+import { mountsFromInspect, resolveDockerSession, type DockerRun } from "@/server/internal/p1-production-adapter/docker-runtime";
 import { RunnerRefusal } from "@/server/internal/p1-isolated-runner/refusal";
 
 const LOCAL = "npipe:////./pipe/dockerDesktopLinuxEngine";
@@ -57,6 +57,41 @@ describe("Docker endpoint authentication", () => {
     expect(session.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
     expect(session.env.DOCKER_AUTH_CONFIG).toBeUndefined();
     expect(seen[0]?.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+  });
+});
+
+describe("Docker mount inspection", () => {
+  it("accepts a verified empty mount list and a legitimate isolated volume", () => {
+    expect(mountsFromInspect({ Mounts: [] })).toEqual([]);
+    expect(mountsFromInspect([{ Mounts: [] }])).toEqual([]);
+    expect(
+      mountsFromInspect({
+        Mounts: [
+          {
+            Type: "volume",
+            Name: "p1pa-data",
+            Source: "/var/lib/docker/volumes/p1pa-data/_data",
+            Destination: "/var/lib/postgresql/data",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        type: "volume",
+        name: "p1pa-data",
+        source: "/var/lib/docker/volumes/p1pa-data/_data",
+        destination: "/var/lib/postgresql/data",
+      },
+    ]);
+  });
+
+  it("fails closed when Mounts is missing, null, or malformed", () => {
+    expect(codeOf(() => mountsFromInspect({ Id: "abc" }))).toBe("RESTORE_MOUNTS_UNVERIFIED");
+    expect(codeOf(() => mountsFromInspect({ Mounts: null }))).toBe("RESTORE_MOUNTS_UNVERIFIED");
+    expect(codeOf(() => mountsFromInspect({ Mounts: {} }))).toBe("RESTORE_MOUNTS_UNVERIFIED");
+    expect(codeOf(() => mountsFromInspect({ Mounts: [null] }))).toBe("RESTORE_MOUNTS_UNVERIFIED");
+    expect(codeOf(() => mountsFromInspect({ Mounts: [{ Type: "volume" }] }))).toBe("RESTORE_MOUNTS_UNVERIFIED");
+    expect(codeOf(() => mountsFromInspect(null))).toBe("RESTORE_MOUNTS_UNVERIFIED");
   });
 });
 

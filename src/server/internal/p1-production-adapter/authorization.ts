@@ -3,14 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   ATTEMPT_ID,
-  PRODUCTION_AUTHORIZATION_REPLAY_PATH,
+  PRODUCTION_AUTHORIZATION_REPLAY_DIR,
   PRODUCTION_AUTHORIZATION_TRUST_PATH,
   PRODUCTION_SIGNED_AUTHORIZATION_PATH,
   SHA256,
   type AdapterScope,
 } from "@/server/internal/p1-production-adapter/contract";
 import { canonicalJson, sha256Text } from "@/server/internal/p1-production-adapter/identity";
-import { refusal } from "@/server/internal/p1-isolated-runner/refusal";
+import { refusal, RunnerRefusal } from "@/server/internal/p1-isolated-runner/refusal";
 
 /**
  * Owner authorization is a signed approval.
@@ -101,11 +101,7 @@ export function verifySignedAuthorization(
   if (now < start || now > end) {
     throw refusal("STOP", "AUTHORIZATION_REPLAY", "Signed authorization is outside its time window");
   }
-  const digest = sha256Text(`${canonicalJson(payload)}.${signed.signature}`);
-  if (replay.seen(digest)) {
-    throw refusal("STOP", "AUTHORIZATION_REPLAY", "Signed authorization was already used");
-  }
-  replay.consume(digest);
+  replay.consume(sha256Text(`${canonicalJson(payload)}.${signed.signature}`));
   return payload;
 }
 
@@ -128,6 +124,8 @@ export function readInstalledTrustPublicKey(): string | null {
   return pem;
 }
 
+const durableReplay = Symbol("durable-replay");
+
 export function memoryReplayStore(): ReplayStore {
   const seen = new Set<string>();
   return {
@@ -135,34 +133,100 @@ export function memoryReplayStore(): ReplayStore {
       return seen.has(digest);
     },
     consume(digest) {
+      if (seen.has(digest)) {
+        throw refusal("STOP", "AUTHORIZATION_REPLAY", "Signed authorization was already used");
+      }
       seen.add(digest);
     },
   };
 }
 
-export function fileReplayStore(filePath = PRODUCTION_AUTHORIZATION_REPLAY_PATH): ReplayStore {
-  const load = (): Set<string> => {
-    if (!fs.existsSync(filePath)) return new Set();
-    return new Set(
-      fs
-        .readFileSync(filePath, "utf8")
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0),
-    );
+export function isDurableReplayStore(store: ReplayStore): boolean {
+  return (store as Record<symbol, unknown>)[durableReplay] === true;
+}
+
+/**
+ * Production replay is one exclusive-create marker per digest.
+ * A rewriteable log is not single-use. An in-memory set is not durable.
+ */
+export function fileReplayStore(directory: string = PRODUCTION_AUTHORIZATION_REPLAY_DIR): ReplayStore {
+  const consume = (digest: string): void => {
+    if (!/^[0-9a-f]{64}$/.test(digest)) {
+      throw refusal("STOP", "AUTHORIZATION_REPLAY_UNAVAILABLE", "Replay digest is not a sha256");
+    }
+    const dir = secureReplayDirectory(directory);
+    const marker = path.join(dir, digest);
+    try {
+      const existing = fs.lstatSync(marker);
+      if (existing.isSymbolicLink() || existing.isFile() || existing.isDirectory()) {
+        throw refusal("STOP", "AUTHORIZATION_REPLAY", "Signed authorization was already used");
+      }
+    } catch (error) {
+      if (error instanceof RunnerRefusal) throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw refusal("STOP", "AUTHORIZATION_REPLAY_UNAVAILABLE", "Replay storage is not usable");
+      }
+    }
+    let handle: number | null = null;
+    try {
+      handle = fs.openSync(marker, "wx", 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw refusal("STOP", "AUTHORIZATION_REPLAY", "Signed authorization was already used");
+      }
+      throw refusal("STOP", "AUTHORIZATION_REPLAY_UNAVAILABLE", "Replay storage is not usable");
+    } finally {
+      if (handle !== null) fs.closeSync(handle);
+    }
   };
-  return {
+  const store: ReplayStore = {
     seen(digest) {
-      return load().has(digest);
+      try {
+        const stat = fs.lstatSync(path.join(secureReplayDirectory(directory), digest));
+        return stat.isFile() && !stat.isSymbolicLink();
+      } catch (error) {
+        if (error instanceof RunnerRefusal) throw error;
+        return false;
+      }
     },
-    consume(digest) {
-      const next = load();
-      if (next.has(digest)) return;
-      next.add(digest);
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, `${[...next].join("\n")}\n`, { mode: 0o600 });
-    },
+    consume,
   };
+  Object.defineProperty(store, durableReplay, { value: true });
+  return store;
+}
+
+function secureReplayDirectory(directory: string): string {
+  const resolved = path.resolve(directory);
+  const parent = path.dirname(resolved);
+  let parentStat: fs.Stats;
+  try {
+    parentStat = fs.lstatSync(parent);
+  } catch {
+    throw refusal("STOP", "AUTHORIZATION_REPLAY_UNAVAILABLE", "Replay storage is not usable");
+  }
+  if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) {
+    throw refusal("STOP", "AUTHORIZATION_REPLAY_UNAVAILABLE", "Replay storage parent is not a real directory");
+  }
+  if (process.platform !== "win32" && (parentStat.mode & 0o022) !== 0) {
+    throw refusal("STOP", "AUTHORIZATION_REPLAY_UNAVAILABLE", "Replay storage parent is group or world writable");
+  }
+  if (!fs.existsSync(resolved)) {
+    try {
+      fs.mkdirSync(resolved, { mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw refusal("STOP", "AUTHORIZATION_REPLAY_UNAVAILABLE", "Replay storage is not usable");
+      }
+    }
+  }
+  const stat = fs.lstatSync(resolved);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw refusal("STOP", "AUTHORIZATION_REPLAY_UNAVAILABLE", "Replay storage is not a real directory");
+  }
+  if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) {
+    throw refusal("STOP", "AUTHORIZATION_REPLAY_UNAVAILABLE", "Replay storage permissions are unsafe");
+  }
+  return resolved;
 }
 
 function assertSignature(signed: SignedAuthorization, publicKeyPem: string): void {

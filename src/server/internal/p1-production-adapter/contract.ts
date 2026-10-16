@@ -32,7 +32,8 @@ export const PRODUCTION_DAEMON_PIN_PATH = "/var/lib/stell22/p1-production-daemon
  */
 export const PRODUCTION_AUTHORIZATION_TRUST_PATH = "/var/lib/stell22/p1-owner-authorization.pub" as const;
 export const PRODUCTION_SIGNED_AUTHORIZATION_PATH = "/var/lib/stell22/p1-owner-authorization.json" as const;
-export const PRODUCTION_AUTHORIZATION_REPLAY_PATH = "/var/lib/stell22/p1-owner-authorization-replay.log" as const;
+/** Directory of exclusive-create replay markers. Not a rewriteable log. */
+export const PRODUCTION_AUTHORIZATION_REPLAY_DIR = "/var/lib/stell22/p1-owner-authorization-replay" as const;
 
 export const TEST_ROLE_NAME = "p1pa" as const;
 

@@ -9,7 +9,7 @@ import { createRepoGitSource } from "@/server/internal/p1-isolated-runner/git-so
 import { productionReleaseAuthorized } from "@/server/internal/p1-isolated-runner/p1-release-gate";
 import { absentP1Schema, P1_FUNCTION_BODY } from "@/server/internal/p1-isolated-runner/schema-contract";
 import type { P1SchemaEvidence } from "@/server/internal/p1-isolated-runner/schema-contract";
-import { memoryReplayStore, verifySignedAuthorization } from "@/server/internal/p1-production-adapter/authorization";
+import { fileReplayStore, memoryReplayStore, verifySignedAuthorization } from "@/server/internal/p1-production-adapter/authorization";
 import { runProductionAdapterCli } from "@/server/internal/p1-production-adapter/cli";
 import {
   PRODUCTION_APP_CONTAINER,
@@ -38,11 +38,13 @@ import {
   type TargetFacts,
 } from "@/server/internal/p1-production-adapter/identity";
 import { RunnerRefusal } from "@/server/internal/p1-isolated-runner/refusal";
-import { isTrustedRestoreEvidence, type RestoreContainerFact } from "@/server/internal/p1-production-adapter/restore-controller";
+import { executeTrustedRestore, isTrustedRestoreEvidence, type RestoreContainerFact } from "@/server/internal/p1-production-adapter/restore-controller";
 import {
+  loadPersistedReleaseBackup,
   publishReleaseBackup,
   type BackupIo,
   type RecoverySnapshot,
+  type ReleaseBackupWitness,
 } from "@/server/internal/p1-production-adapter/recovery";
 
 const ATTEMPT = "0123456789abcdef";
@@ -160,7 +162,7 @@ describe("production P1 adapter", () => {
     const incomplete = worldFor("TEST_OWNED");
     incomplete.request.intent = "RECOVERY";
     incomplete.deps.readArchive = () => incomplete.archive.subarray(0, 4);
-    expect(executeProductionAdapter(incomplete.request, incomplete.deps).code).toBe("BACKUP_INCOMPLETE");
+    expect(executeProductionAdapter(incomplete.request, incomplete.deps).code).toBe("CHECKSUM_DRIFT");
 
     const mismatch = worldFor("TEST_OWNED");
     mismatch.request.intent = "RECOVERY";
@@ -195,6 +197,22 @@ describe("production P1 adapter", () => {
     expect(writes).toEqual(["backup.sql.gz.sha256", "backup.sql.gz", "backup.witness.json"]);
     expect(witness.createdForRelease).toBe(true);
     expect(witness.attemptId).toBe(ATTEMPT);
+
+    const durable = fs.mkdtempSync(path.join(os.tmpdir(), "p1pa-backup-once-"));
+    publishReleaseBackup(durable, Buffer.from("archive-bytes"), {
+      attemptId: ATTEMPT,
+      container: facts.db,
+      databaseName: facts.databaseName,
+      roleName: facts.roleName,
+    });
+    expect(() =>
+      publishReleaseBackup(durable, Buffer.from("archive-bytes"), {
+        attemptId: ATTEMPT,
+        container: facts.db,
+        databaseName: facts.databaseName,
+        roleName: facts.roleName,
+      }),
+    ).toThrow(RunnerRefusal);
   });
 
   it("stops when the lock is lost and does not retry an ambiguous Prisma result", () => {
@@ -202,6 +220,7 @@ describe("production P1 adapter", () => {
     lost.deps.readLockOwner = () => null;
     expect(executeProductionAdapter(lost.request, lost.deps)).toMatchObject({ code: "LOST_LOCK", spawned: false });
     expect(lost.spawns).toBe(0);
+    expect(fs.existsSync(lost.replayDir)).toBe(false);
 
     const ambiguous = readyApply("TEST_OWNED");
     ambiguous.deps.spawnOneShot = () => {
@@ -393,6 +412,109 @@ describe("production P1 adapter", () => {
         : "STOP PRODUCTION_APPLY_NOT_WIRED_TO_THIS_CLI",
     );
   });
+
+  it("refuses a missing, null, or fabricated witness and does not mint one", () => {
+    const missing = worldFor("TEST_OWNED");
+    missing.request.intent = "RECOVERY";
+    delete missing.request.recoveryWitness;
+    expect(executeProductionAdapter(missing.request, missing.deps).code).toBe("BACKUP_EVIDENCE_INVALID");
+
+    const absent = worldFor("TEST_OWNED");
+    absent.request.intent = "RECOVERY";
+    absent.request.recoveryWitness = null;
+    expect(executeProductionAdapter(absent.request, absent.deps).code).toBe("BACKUP_EVIDENCE_INVALID");
+
+    const fabricated = worldFor("TEST_OWNED");
+    fabricated.request.intent = "RECOVERY";
+    fabricated.request.recoveryWitness = { ...(fabricated.request.recoveryWitness as ReleaseBackupWitness), archiveSha256: "c".repeat(64) };
+    expect(executeProductionAdapter(fabricated.request, fabricated.deps).code).toBe("BACKUP_EVIDENCE_INVALID");
+
+    expect(() =>
+      executeTrustedRestore({
+        attemptId: ATTEMPT,
+        archive: Buffer.from("archive-bytes"),
+        source: testFacts().db,
+        sourceMounts: sourceMounts(),
+        databaseName: "db",
+        roleName: "role",
+        live: snapshotOf(),
+        claimed: null,
+        inspectRestore: () => restoreFact(),
+        runRestore: () => 0,
+        readRestored: () => snapshotOf(),
+      }),
+    ).toThrow(RunnerRefusal);
+  });
+
+  it("refuses the wrong attempt, an old archive, a changed checksum, and a witness that does not match the archive", () => {
+    const wrong = worldFor("TEST_OWNED");
+    wrong.request.intent = "RECOVERY";
+    const other = "fedcba9876543210";
+    const rewritten = { ...(wrong.request.recoveryWitness as ReleaseBackupWitness), attemptId: other };
+    fs.writeFileSync(path.join(wrong.backupDirectory, "backup.witness.json"), `${canonicalJson(rewritten)}\n`);
+    wrong.request.recoveryWitness = rewritten;
+    expect(executeProductionAdapter(wrong.request, wrong.deps).code).toBe("HISTORICAL_BACKUP_NOT_SUFFICIENT");
+
+    const oldArchive = worldFor("TEST_OWNED");
+    oldArchive.request.intent = "RECOVERY";
+    fs.writeFileSync(path.join(oldArchive.backupDirectory, "backup.sql.gz"), Buffer.from("different-archive-bytes"));
+    expect(executeProductionAdapter(oldArchive.request, oldArchive.deps).code).toBe("CHECKSUM_DRIFT");
+
+    const checksum = worldFor("TEST_OWNED");
+    checksum.request.intent = "RECOVERY";
+    fs.writeFileSync(path.join(checksum.backupDirectory, "backup.sql.gz.sha256"), `${"d".repeat(64)}\n`);
+    expect(executeProductionAdapter(checksum.request, checksum.deps).code).toBe("CHECKSUM_DRIFT");
+
+    const mismatched = worldFor("TEST_OWNED");
+    mismatched.request.intent = "RECOVERY";
+    const drifted = { ...(mismatched.request.recoveryWitness as ReleaseBackupWitness), archiveSha256: "e".repeat(64) };
+    fs.writeFileSync(path.join(mismatched.backupDirectory, "backup.witness.json"), `${canonicalJson(drifted)}\n`);
+    mismatched.request.recoveryWitness = drifted;
+    expect(executeProductionAdapter(mismatched.request, mismatched.deps).code).toBe("CHECKSUM_DRIFT");
+    expect(() => loadPersistedReleaseBackup(mismatched.backupDirectory)).toThrow(RunnerRefusal);
+  });
+
+  it("accepts an empty verified mount list and refuses a production bind or shared volume", () => {
+    const empty = worldFor("TEST_OWNED");
+    empty.request.intent = "RECOVERY";
+    empty.deps.inspectRestore = () => ({ ...restoreFact(), mounts: [] });
+    expect(executeProductionAdapter(empty.request, empty.deps).verdict).toBe("RECOVERY_VERIFIED");
+
+    const bound = worldFor("TEST_OWNED");
+    bound.request.intent = "RECOVERY";
+    bound.deps.inspectRestore = () => ({
+      ...restoreFact(),
+      mounts: [{ type: "bind", name: null, source: "/root/Stell22", destination: "/var/lib/postgresql/data" }],
+    });
+    expect(executeProductionAdapter(bound.request, bound.deps).code).toBe("RESTORE_VOLUME_SHARED");
+  });
+
+  it("does not consume approval before the lock and rejects the same approval after restart", () => {
+    const lost = readyApply("TEST_OWNED");
+    lost.deps.readLockOwner = () => null;
+    expect(executeProductionAdapter(lost.request, lost.deps).code).toBe("LOST_LOCK");
+    expect(fs.existsSync(lost.replayDir)).toBe(false);
+    lost.deps.readLockOwner = () => (fs.existsSync(lost.deps.lockPath) ? fs.readFileSync(lost.deps.lockPath, "utf8") : null);
+    let applied = false;
+    lost.deps.readHistory = () => (applied ? [...successfulHistoricalRows(), successfulP1Row()] : successfulHistoricalRows());
+    lost.deps.readSchema = () => (applied ? appliedSchema() : absentP1Schema());
+    lost.deps.spawnOneShot = (plan) => {
+      lost.spawns += 1;
+      lost.argv = plan.argv;
+      applied = true;
+      return { status: 0, signal: null };
+    };
+    expect(executeProductionAdapter(lost.request, lost.deps).code).toBe("P1_APPLIED");
+    expect(fs.readdirSync(lost.replayDir)).toHaveLength(1);
+    applied = false;
+    lost.deps.destinationRoot = path.join(path.dirname(lost.deps.destinationRoot), "sealed-again");
+    const replayed = executeProductionAdapter(lost.request, lost.deps);
+    expect(replayed.code).toBe("AUTHORIZATION_REPLAY");
+    expect(lost.spawns).toBe(1);
+
+    const restarted = fileReplayStore(lost.replayDir);
+    expect(() => restarted.consume(fs.readdirSync(lost.replayDir)[0] ?? "")).toThrow(RunnerRefusal);
+  }, 30_000);
 });
 
 type World = {
@@ -402,6 +524,8 @@ type World = {
   archive: Buffer;
   snapshot: RecoverySnapshot;
   password: string;
+  backupDirectory: string;
+  replayDir: string;
   spawns: number;
   argv: readonly string[];
 };
@@ -410,13 +534,15 @@ function worldFor(scope: "TEST_OWNED" | "PRODUCTION"): World {
   const facts = scope === "TEST_OWNED" ? testFacts() : productionFacts();
   const snapshot = snapshotOf();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "p1pa-unit-"));
+  const backupDirectory = path.join(directory, "backup");
+  const replayDir = path.join(directory, "replay");
   const archive = Buffer.from("gzip-archive-bytes");
-  const witness = publishReleaseBackup(
-    directory,
-    archive,
-    { attemptId: ATTEMPT, container: facts.db, databaseName: facts.databaseName, roleName: facts.roleName },
-    memoryIo(),
-  );
+  const witness = publishReleaseBackup(backupDirectory, archive, {
+    attemptId: ATTEMPT,
+    container: facts.db,
+    databaseName: facts.databaseName,
+    roleName: facts.roleName,
+  });
   const spawns = { count: 0, argv: [] as string[] };
   const lockPath = path.join(directory, "adapter.lock");
   const deps: AdapterDependencies = {
@@ -429,6 +555,7 @@ function worldFor(scope: "TEST_OWNED" | "PRODUCTION"): World {
     readHistory: () => successfulHistoricalRows(),
     readSchema: () => absentP1Schema(),
     readArchive: () => archive,
+    backupDirectory,
     readLiveRecovery: () => snapshot,
     inspectSourceMounts: () => sourceMounts(),
     inspectRestore: () => restoreFact(),
@@ -436,7 +563,7 @@ function worldFor(scope: "TEST_OWNED" | "PRODUCTION"): World {
     readRestoredCatalog: () => snapshot,
     readLockOwner: () => (fs.existsSync(lockPath) ? fs.readFileSync(lockPath, "utf8") : null),
     resolveDockerSession: scope === "TEST_OWNED" ? () => fakeSession(facts.daemonId) : undefined,
-    replay: memoryReplayStore(),
+    replay: fileReplayStore(replayDir),
     spawnOneShot: (plan) => {
       spawns.count += 1;
       spawns.argv = [...plan.argv];
@@ -457,6 +584,8 @@ function worldFor(scope: "TEST_OWNED" | "PRODUCTION"): World {
     archive,
     snapshot,
     password: "adapter-secret-value",
+    backupDirectory,
+    replayDir,
     get spawns() {
       return spawns.count;
     },
@@ -662,17 +791,3 @@ function appliedSchema(): P1SchemaEvidence {
   };
 }
 
-function memoryIo(): BackupIo {
-  const files = new Map<string, Buffer>();
-  return {
-    writeNew(filePath, bytes) {
-      if (files.has(filePath)) throw new Error("exists");
-      files.set(filePath, Buffer.from(bytes));
-    },
-    read(filePath) {
-      const found = files.get(filePath);
-      if (!found) throw new Error("missing");
-      return found;
-    },
-  };
-}

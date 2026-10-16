@@ -25,6 +25,7 @@ import {
   testRestoreName,
 } from "@/server/internal/p1-production-adapter/contract";
 import { dumpDatabase, inspectContainer, inspectMounts, readCatalog, readDaemonId, restoreArchive } from "@/server/internal/p1-production-adapter/docker-runtime";
+import { fileReplayStore } from "@/server/internal/p1-production-adapter/authorization";
 import { executeProductionAdapter, type AdapterDependencies } from "@/server/internal/p1-production-adapter/execute";
 import { canonicalJson, declarationFromFacts, type TargetFacts } from "@/server/internal/p1-production-adapter/identity";
 import type { RestoreContainerFact } from "@/server/internal/p1-production-adapter/restore-controller";
@@ -99,7 +100,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
         expect(stale.db.publishedDbPort).toBe(false);
         const wrong = executeProductionAdapter(
           { intent: "PREFLIGHT", scope: "TEST_OWNED", attemptId, declared: { ...declarationFromFacts(stale), appId: "f".repeat(64) }, databasePassword: password },
-          dependencies(runtime, stale, () => Buffer.alloc(0), null),
+          dependencies(runtime, stale, () => Buffer.alloc(0), null, path.join(runtime, "unused-backup")),
         );
         expect(wrong).toMatchObject({ code: "RUNTIME_IDENTITY_MISMATCH", spawned: false, targetClass: "TEST_OWNED_NOT_PRODUCTION" });
 
@@ -107,7 +108,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
         waitReady(dbName, databaseName);
         const restarted = executeProductionAdapter(
           { intent: "PREFLIGHT", scope: "TEST_OWNED", attemptId, declared: declarationFromFacts(stale), databasePassword: password },
-          dependencies(runtime, stale, () => Buffer.alloc(0), null),
+          dependencies(runtime, stale, () => Buffer.alloc(0), null, path.join(runtime, "unused-backup")),
         );
         expect(restarted.code).toBe("RUNTIME_IDENTITY_MISMATCH");
 
@@ -133,9 +134,9 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
               roleName: "p1pa",
             },
           },
-          dependencies(path.join(runtime, "incomplete"), live, () => Buffer.from("tiny"), null),
+          dependencies(path.join(runtime, "incomplete"), live, () => Buffer.from("tiny"), null, path.join(runtime, "missing-backup")),
         );
-        expect(incomplete.code).toBe("BACKUP_INCOMPLETE");
+        expect(incomplete.code).toBe("BACKUP_EVIDENCE_INVALID");
 
         const archive = zlib.gzipSync(dumpDatabase(inspectContainer(dbName).id, "p1pa", databaseName));
         const witness = publishReleaseBackup(path.join(runtime, "backup"), archive, {
@@ -151,7 +152,8 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
         startRestore(restoreName, `${networkName}-restore`, databaseName, password);
         restoreStarted = true;
         assertIndependentRestore(live.db, inspectContainer(restoreName), attemptId);
-        const mismatchDeps = dependencies(path.join(runtime, "mismatch"), live, () => fs.readFileSync(path.join(runtime, "backup", "backup.sql.gz")), restoreName);
+        const backupDirectory = path.join(runtime, "backup");
+        const mismatchDeps = dependencies(path.join(runtime, "mismatch"), live, () => fs.readFileSync(path.join(backupDirectory, "backup.sql.gz")), restoreName, backupDirectory);
         const restoreOnly = mismatchDeps.runRestore;
         mismatchDeps.runRestore = (id, sql) => {
           const status = restoreOnly(id, sql);
@@ -169,7 +171,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
         let spawns = 0;
         const recovery = executeProductionAdapter(
           recoveryRequest(attemptId, password, live, witness),
-          dependencies(path.join(runtime, "recovery"), live, () => fs.readFileSync(path.join(runtime, "backup", "backup.sql.gz")), restoreName),
+          dependencies(path.join(runtime, "recovery"), live, () => fs.readFileSync(path.join(backupDirectory, "backup.sql.gz")), restoreName, backupDirectory),
         );
         expect(recovery.verdict).toBe("RECOVERY_VERIFIED");
         spawnSync("docker", ["rm", "-f", restoreName], { windowsHide: true });
@@ -191,7 +193,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
             }),
           },
           {
-            ...dependencies(path.join(runtime, "apply"), live, () => fs.readFileSync(path.join(runtime, "backup", "backup.sql.gz")), restoreName),
+            ...dependencies(path.join(runtime, "apply"), live, () => fs.readFileSync(path.join(backupDirectory, "backup.sql.gz")), restoreName, backupDirectory),
             testTrustPublicKey: publicKey.export({ type: "spki", format: "pem" }).toString(),
             spawnOneShot: (plan) => {
               spawns += 1;
@@ -233,7 +235,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
         expect(triggerMatchesContract(requirePart(after.schema.trigger))).toBe(true);
         const repeat = executeProductionAdapter(
           { intent: "APPLY", scope: "TEST_OWNED", attemptId, declared: declarationFromFacts(live), databasePassword: password, recoveryWitness: "RESTORE_VERIFIED" },
-          dependencies(path.join(runtime, "repeat"), live, () => { throw new Error("repeat must not read the archive"); }, null),
+          dependencies(path.join(runtime, "repeat"), live, () => { throw new Error("repeat must not read the archive"); }, null, backupDirectory),
         );
         expect(repeat.spawned).toBe(false);
         expect(repeat.code).toBe("P1_APPLIED");
@@ -291,8 +293,12 @@ function dependencies(
   live: TargetFacts,
   readArchive: () => Buffer,
   restoreName: string | null,
+  backupDirectory: string,
 ): AdapterDependencies {
   const lockPath = path.join(root, "adapter.lock");
+  const replayParent = path.join(root, "replay-parent");
+  fs.mkdirSync(replayParent, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") fs.chmodSync(replayParent, 0o700);
   return {
     productionDaemonPin: null,
     git: createRepoGitSource(process.cwd()),
@@ -303,6 +309,7 @@ function dependencies(
     readHistory: () => liveCatalog(live.db.name, live.databaseName).history,
     readSchema: () => liveCatalog(live.db.name, live.databaseName).schema,
     readArchive,
+    backupDirectory,
     readLiveRecovery: () => liveCatalog(live.db.name, live.databaseName).recovery,
     inspectSourceMounts: () => inspectMounts(live.db.id),
     inspectRestore: () => {
@@ -312,6 +319,7 @@ function dependencies(
     runRestore: (id, sql) => restoreArchive(id, "p1pa", live.databaseName, sql),
     readRestoredCatalog: (id) => readCatalog(id, "p1pa", live.databaseName).recovery,
     readLockOwner: () => (fs.existsSync(lockPath) ? fs.readFileSync(lockPath, "utf8") : null),
+    replay: fileReplayStore(path.join(replayParent, "replay")),
     spawnOneShot: () => {
       throw new Error("this dependency must be replaced before apply");
     },

@@ -50,24 +50,25 @@ export function executeTrustedRestore(input: {
   runRestore: (containerId: string, sql: Buffer) => number;
   readRestored: (containerId: string) => RecoverySnapshot;
 }): TrustedRestoreEvidence {
+  if (input.claimed === null) {
+    throw refusal("STOP", "BACKUP_EVIDENCE_INVALID", "Recovery cannot mint a release witness");
+  }
   if (input.archive.length < 8) {
     throw refusal("STOP", "BACKUP_INCOMPLETE", "Backup archive is incomplete");
   }
   const archiveSha256 = sha256Bytes(input.archive);
-  if (input.claimed && input.claimed.archiveSha256 !== archiveSha256) {
-    throw refusal("STOP", "CHECKSUM_DRIFT", "Claimed backup checksum does not match the archive bytes");
+  if (input.claimed.archiveSha256 !== archiveSha256 || input.claimed.archiveByteLength !== input.archive.length) {
+    throw refusal("STOP", "CHECKSUM_DRIFT", "Persisted backup checksum does not match the archive bytes");
   }
   if (
-    input.claimed &&
-    (input.claimed.attemptId !== input.attemptId ||
-      input.claimed.sourceContainerId !== input.source.id ||
-      input.claimed.sourceImageId !== input.source.imageId ||
-      input.claimed.sourceStartedAt !== input.source.startedAt ||
-      input.claimed.databaseName !== input.databaseName ||
-      input.claimed.roleName !== input.roleName ||
-      input.claimed.archiveByteLength !== input.archive.length)
+    input.claimed.attemptId !== input.attemptId ||
+    input.claimed.sourceContainerId !== input.source.id ||
+    input.claimed.sourceImageId !== input.source.imageId ||
+    input.claimed.sourceStartedAt !== input.source.startedAt ||
+    input.claimed.databaseName !== input.databaseName ||
+    input.claimed.roleName !== input.roleName
   ) {
-    throw refusal("STOP", "HISTORICAL_BACKUP_NOT_SUFFICIENT", "Claimed backup is not this source");
+    throw refusal("STOP", "HISTORICAL_BACKUP_NOT_SUFFICIENT", "Persisted backup is not this source");
   }
   const restore = input.inspectRestore();
   assertIndependentRestore(input.source, restore, input.attemptId);
@@ -77,21 +78,8 @@ export function executeTrustedRestore(input: {
     throw refusal("STOP", "RESTORE_FAILED", "Restore command did not exit 0");
   }
   const restored = input.readRestored(restore.id);
-  const witness: ReleaseBackupWitness = {
-    kind: "RELEASE_BACKUP",
-    createdForRelease: true,
-    creator: "p1-production-adapter",
-    attemptId: input.attemptId,
-    archiveSha256,
-    archiveByteLength: input.archive.length,
-    sourceContainerId: input.source.id,
-    sourceImageId: input.source.imageId,
-    sourceStartedAt: input.source.startedAt,
-    databaseName: input.databaseName,
-    roleName: input.roleName,
-  };
   const checked = verifyReleaseRecovery({
-    witness,
+    witness: input.claimed,
     archive: input.archive,
     live: input.live,
     restored,

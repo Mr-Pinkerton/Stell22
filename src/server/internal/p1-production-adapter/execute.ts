@@ -14,7 +14,7 @@ import { refusal, RunnerRefusal } from "@/server/internal/p1-isolated-runner/ref
 import type { P1SchemaEvidence } from "@/server/internal/p1-isolated-runner/schema-contract";
 import {
   fileReplayStore,
-  memoryReplayStore,
+  isDurableReplayStore,
   readInstalledSignedAuthorization,
   readInstalledTrustPublicKey,
   verifySignedAuthorization,
@@ -30,6 +30,7 @@ import {
 } from "@/server/internal/p1-production-adapter/contract";
 import {
   authenticateTarget,
+  canonicalJson,
   dossierDigest,
   sameAppIdentity,
   type TargetDeclaration,
@@ -37,6 +38,7 @@ import {
 } from "@/server/internal/p1-production-adapter/identity";
 import { planProductionOneShot } from "@/server/internal/p1-production-adapter/oneshot";
 import {
+  loadPersistedReleaseBackup,
   readClaimedWitness,
   recheckArchiveSha,
   type RecoverySnapshot,
@@ -86,6 +88,7 @@ export type AdapterDependencies = {
   readHistory: () => readonly PrismaMigrationRow[];
   readSchema: () => P1SchemaEvidence;
   readArchive: () => Buffer;
+  backupDirectory: string;
   readLiveRecovery: () => RecoverySnapshot;
   inspectSourceMounts: () => readonly VolumeMount[];
   inspectRestore: () => RestoreContainerFact;
@@ -161,15 +164,22 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
       );
     }
     const claimed = readClaimedWitness(request.recoveryWitness);
+    const persisted = loadPersistedReleaseBackup(deps.backupDirectory);
+    if (canonicalJson(claimed) !== canonicalJson(persisted.witness)) {
+      throw refusal("STOP", "BACKUP_EVIDENCE_INVALID", "A caller witness is not the persisted release backup");
+    }
+    if (!persisted.archive.equals(deps.readArchive())) {
+      throw refusal("STOP", "CHECKSUM_DRIFT", "Archive bytes do not match the persisted release backup");
+    }
     const evidence = executeTrustedRestore({
       attemptId: request.attemptId,
-      archive: deps.readArchive(),
+      archive: persisted.archive,
       source: observed.db,
       sourceMounts: deps.inspectSourceMounts(),
       databaseName: observed.databaseName,
       roleName: observed.roleName,
       live: deps.readLiveRecovery(),
-      claimed,
+      claimed: persisted.witness,
       inspectRestore: deps.inspectRestore,
       runRestore: deps.runRestore,
       readRestored: deps.readRestoredCatalog,
@@ -190,11 +200,6 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
         evidence.recoverySha256,
       );
     }
-    authorize(request, deps, {
-      dossierSha256,
-      recoverySha256: evidence.recoverySha256,
-      daemonId: observed.daemonId,
-    });
     lock = acquireHostLock(deps.lockPath, request.attemptId);
     const locked = deps.readLockOwner()?.trim() ?? null;
     if (locked !== request.attemptId) {
@@ -258,6 +263,11 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     if (stillLocked !== request.attemptId) {
       throw refusal("STOP", "LOST_LOCK", "The host lock disappeared before the one-shot");
     }
+    authorize(request, deps, {
+      dossierSha256,
+      recoverySha256: evidence.recoverySha256,
+      daemonId: observed.daemonId,
+    });
     spawned = true;
     let spawnResult: OneShotResult;
     try {
@@ -351,6 +361,9 @@ function authorize(
   if (!deps.testTrustPublicKey) {
     throw refusal("STOP", "AUTHORIZATION_REQUIRED", "Test-owned apply has no isolated trust key");
   }
+  if (!deps.replay || !isDurableReplayStore(deps.replay)) {
+    throw refusal("STOP", "AUTHORIZATION_REPLAY_UNAVAILABLE", "Test-owned apply has no durable replay store");
+  }
   verifySignedAuthorization(
     request.authorization,
     deps.testTrustPublicKey,
@@ -361,7 +374,7 @@ function authorize(
       recoverySha256: expected.recoverySha256,
       daemonId: expected.daemonId,
     },
-    deps.replay ?? memoryReplayStore(),
+    deps.replay,
   );
 }
 

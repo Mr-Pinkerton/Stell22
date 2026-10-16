@@ -11,7 +11,7 @@ import {
   type LogicalColumn,
   type LogicalConstraint,
 } from "@/server/internal/p1-isolated-runner/p1-release-gate";
-import { refusal } from "@/server/internal/p1-isolated-runner/refusal";
+import { refusal, RunnerRefusal } from "@/server/internal/p1-isolated-runner/refusal";
 import { SHA256, testRestoreName } from "@/server/internal/p1-production-adapter/contract";
 import { canonicalJson, sha256Text, type ContainerFact } from "@/server/internal/p1-production-adapter/identity";
 
@@ -225,9 +225,53 @@ function toCatalog(snapshot: RecoverySnapshot): CatalogProbe {
   };
 }
 
-export function readClaimedWitness(value: unknown): ReleaseBackupWitness | null {
-  if (value === undefined) return null;
+export function loadPersistedReleaseBackup(
+  directory: string,
+  io: BackupIo = fsBackupIo(),
+): { witness: ReleaseBackupWitness; archive: Buffer } {
+  const checksumPath = path.join(directory, "backup.sql.gz.sha256");
+  const archivePath = path.join(directory, "backup.sql.gz");
+  const witnessPath = path.join(directory, "backup.witness.json");
+  let checksumRaw: Buffer;
+  let archive: Buffer;
+  let witnessRaw: Buffer;
+  try {
+    checksumRaw = io.read(checksumPath);
+    archive = io.read(archivePath);
+    witnessRaw = io.read(witnessPath);
+  } catch (error) {
+    if (isRefusal(error)) throw error;
+    throw refusal("STOP", "BACKUP_EVIDENCE_INVALID", "The persisted release backup for this attempt is missing");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(witnessRaw.toString("utf8")) as unknown;
+  } catch {
+    throw refusal("STOP", "BACKUP_EVIDENCE_INVALID", "The persisted release witness is not intact");
+  }
+  const witness = parseWitness(parsed);
+  const recorded = checksumRaw.toString("utf8").trim().split(/\s+/)[0] ?? "";
+  const actual = sha256Bytes(archive);
+  if (
+    recorded !== actual ||
+    recorded !== witness.archiveSha256 ||
+    archive.length !== witness.archiveByteLength ||
+    !SHA256.test(recorded)
+  ) {
+    throw refusal("STOP", "CHECKSUM_DRIFT", "Persisted checksum, witness, and archive bytes do not match");
+  }
+  return { witness, archive };
+}
+
+export function readClaimedWitness(value: unknown): ReleaseBackupWitness {
+  if (value === undefined || value === null) {
+    throw refusal("STOP", "BACKUP_EVIDENCE_INVALID", "A missing recovery witness is not release-backup provenance");
+  }
   return parseWitness(value);
+}
+
+function isRefusal(error: unknown): error is RunnerRefusal {
+  return error instanceof RunnerRefusal;
 }
 
 function parseWitness(value: unknown): ReleaseBackupWitness {
@@ -262,8 +306,21 @@ function parseWitness(value: unknown): ReleaseBackupWitness {
 function fsBackupIo(): BackupIo {
   return {
     writeNew(filePath, bytes) {
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      const handle = fs.openSync(filePath, "wx", 0o600);
+      const directory = path.dirname(filePath);
+      if (!fs.existsSync(directory)) fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const directoryStat = fs.lstatSync(directory);
+      if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+        throw refusal("STOP", "BACKUP_EVIDENCE_INVALID", "Release backup directory is not a real directory");
+      }
+      let handle: number;
+      try {
+        handle = fs.openSync(filePath, "wx", 0o600);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+          throw refusal("STOP", "BACKUP_ALREADY_EXISTS", "An existing release backup cannot be replaced");
+        }
+        throw refusal("STOP", "BACKUP_EVIDENCE_INVALID", "Release backup could not be created");
+      }
       try {
         fs.writeFileSync(handle, bytes);
       } finally {
@@ -271,7 +328,30 @@ function fsBackupIo(): BackupIo {
       }
     },
     read(filePath) {
-      return fs.readFileSync(filePath);
+      let stat: fs.Stats;
+      try {
+        stat = fs.lstatSync(filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          throw new Error("missing");
+        }
+        throw refusal("STOP", "BACKUP_EVIDENCE_INVALID", "Release backup path is not a regular file");
+      }
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        throw refusal("STOP", "BACKUP_EVIDENCE_INVALID", "Release backup path is not a regular file");
+      }
+      const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+      let handle: number;
+      try {
+        handle = fs.openSync(filePath, flags);
+      } catch {
+        throw refusal("STOP", "BACKUP_EVIDENCE_INVALID", "Release backup path is not a regular file");
+      }
+      try {
+        return fs.readFileSync(handle);
+      } finally {
+        fs.closeSync(handle);
+      }
     },
   };
 }

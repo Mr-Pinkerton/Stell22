@@ -219,16 +219,38 @@ function assertContainerId(value: string): void {
 
 export function mountsFromInspect(document: unknown): VolumeMount[] {
   const row = Array.isArray(document) ? document[0] : document;
-  if (row === null || typeof row !== "object") return [];
+  if (row === null || typeof row !== "object" || Array.isArray(row)) {
+    throw refusal("STOP", "RESTORE_MOUNTS_UNVERIFIED", "Docker inspect did not return mount metadata");
+  }
+  if (!Object.prototype.hasOwnProperty.call(row, "Mounts")) {
+    throw refusal("STOP", "RESTORE_MOUNTS_UNVERIFIED", "Docker inspect Mounts is missing");
+  }
   const mounts = (row as Record<string, unknown>).Mounts;
-  if (!Array.isArray(mounts)) return [];
+  if (mounts === null) {
+    throw refusal("STOP", "RESTORE_MOUNTS_UNVERIFIED", "Docker inspect Mounts is null");
+  }
+  if (!Array.isArray(mounts)) {
+    throw refusal("STOP", "RESTORE_MOUNTS_UNVERIFIED", "Docker inspect Mounts is not an array");
+  }
   return mounts.map((item) => {
-    const mount = objectOf(item);
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      throw refusal("STOP", "RESTORE_MOUNTS_UNVERIFIED", "Docker inspect mount entry is malformed");
+    }
+    const mount = item as Record<string, unknown>;
+    if (typeof mount.Type !== "string" || mount.Type.length === 0 || typeof mount.Destination !== "string" || mount.Destination.length === 0) {
+      throw refusal("STOP", "RESTORE_MOUNTS_UNVERIFIED", "Docker inspect mount entry is malformed");
+    }
+    if (mount.Name !== undefined && mount.Name !== null && typeof mount.Name !== "string") {
+      throw refusal("STOP", "RESTORE_MOUNTS_UNVERIFIED", "Docker inspect mount entry is malformed");
+    }
+    if (mount.Source !== undefined && mount.Source !== null && typeof mount.Source !== "string") {
+      throw refusal("STOP", "RESTORE_MOUNTS_UNVERIFIED", "Docker inspect mount entry is malformed");
+    }
     return {
-      type: text(mount.Type),
+      type: mount.Type,
       name: typeof mount.Name === "string" ? mount.Name : null,
       source: typeof mount.Source === "string" ? mount.Source : null,
-      destination: text(mount.Destination),
+      destination: mount.Destination,
     };
   });
 }
