@@ -39,7 +39,7 @@ import {
 } from "@/server/internal/p1-production-adapter/identity";
 import { fileIdentity, sameFileIdentity, type FileIdentity } from "@/server/internal/p1-production-adapter/file-identity";
 import { acceptOneShotImage, planProductionOneShot, releaseProductionCredential, type OneShotImageObservation, type ProductionCredentialClaim } from "@/server/internal/p1-production-adapter/oneshot";
-import { IMAGE_ID, SHA256 } from "@/server/internal/p1-production-adapter/contract";
+import { DAEMON_ID, IMAGE_ID, SHA256 } from "@/server/internal/p1-production-adapter/contract";
 import {
   loadPersistedReleaseBackup,
   readClaimedWitness,
@@ -65,6 +65,8 @@ export type AdapterResult = {
   recoverySha256: string | null;
   recoveryEvidence: RecoveryEvidenceState;
   signingInputs: SigningInputsState;
+  /** Docker daemon id from the authenticated session. Null when that session was not established. */
+  daemonId: string | null;
 };
 
 export type AdapterRequest = {
@@ -134,6 +136,9 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
   let lock: { release: () => void } | null = null;
   let credentialOwner: ProductionCredentialClaim | null = null;
   const targetClass = request.scope === "PRODUCTION" ? "PRODUCTION" : "TEST_OWNED_NOT_PRODUCTION";
+  let authenticatedDaemonId: string | null = null;
+  const issued = (...args: Parameters<typeof result>): AdapterResult => ({ ...result(...args), daemonId: authenticatedDaemonId });
+  const stamp = (value: AdapterResult): AdapterResult => ({ ...value, daemonId: authenticatedDaemonId });
   try {
     if (request.databaseUrl !== undefined) {
       throw refusal("STOP", "DATABASE_URL_REJECTED", "A caller connection string is not target authority");
@@ -150,6 +155,7 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     if (observed.daemonId !== session.daemonId) {
       throw refusal("STOP", "DAEMON_IDENTITY_CHANGED", "Observed daemon does not match the resolved Docker endpoint");
     }
+    authenticatedDaemonId = DAEMON_ID.test(session.daemonId) ? session.daemonId : null;
     authenticateTarget({
       scope: request.scope,
       declared: request.declared,
@@ -159,24 +165,24 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     const oneShotImageId = resolveOneShotImage(request.scope, deps, null);
     const dossierSha256 = dossierDigest(observed, oneShotImageId);
     if (pathKind(markerPath(deps.destinationRoot)) !== "absent") {
-      return result("BLOCKED", "AMBIGUOUS_COMPLETION", "POSTCHECK", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
+      return issued("BLOCKED", "AMBIGUOUS_COMPLETION", "POSTCHECK", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
     }
     if (pathKind(productionSpawnIntentPath(deps.destinationRoot)) !== "absent") {
-      return result("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "POSTCHECK", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
+      return issued("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "POSTCHECK", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
     }
     const before = classifyP1State({ history: deps.readHistory(), schema: deps.readSchema() });
     if (before.verdict === "ALREADY_APPLIED") {
       const again = deps.inspect();
       if (!sameAppIdentity(observed.app, again.app) || again.db.id !== observed.db.id) {
-        return result("BLOCKED", "APP_IDENTITY_CHANGED", "POSTCHECK", false, false, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
+        return issued("BLOCKED", "APP_IDENTITY_CHANGED", "POSTCHECK", false, false, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
       }
-      return result("ALREADY_APPLIED", before.code, "READ_ONLY_PREFLIGHT", false, true, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
+      return issued("ALREADY_APPLIED", before.code, "READ_ONLY_PREFLIGHT", false, true, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
     }
     if (before.verdict === "STOP" || before.verdict === "BLOCKED") {
-      return result(before.verdict, before.code, "READ_ONLY_PREFLIGHT", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
+      return issued(before.verdict, before.code, "READ_ONLY_PREFLIGHT", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
     }
     if (request.intent === "PREFLIGHT") {
-      return result("PREFLIGHT_ONLY", "PREFLIGHT_RECORDED", "READ_ONLY_PREFLIGHT", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
+      return issued("PREFLIGHT_ONLY", "PREFLIGHT_RECORDED", "READ_ONLY_PREFLIGHT", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
     }
     if (request.intent === "APPLY" && request.scope === "PRODUCTION" && readInstalledTrustPublicKey() === null) {
       throw refusal(
@@ -211,7 +217,7 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     }
     recheckArchiveSha(deps.readArchive(), evidence.archiveSha256);
     if (request.intent === "RECOVERY") {
-      return result(
+      return issued(
         "RECOVERY_VERIFIED",
         "RECOVERY_VERIFIED",
         "RECOVERY_VERIFICATION",
@@ -242,7 +248,7 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     });
     const again = classifyP1State({ history: deps.readHistory(), schema: deps.readSchema() });
     if (again.verdict === "STOP" || again.verdict === "BLOCKED" || again.verdict === "ALREADY_APPLIED") {
-      return result(
+      return issued(
         again.verdict === "ALREADY_APPLIED" ? "ALREADY_APPLIED" : again.verdict,
         again.code,
         "P1_ONLY_APPLY",
@@ -306,20 +312,20 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
       throw error;
     }
     if (request.scope === "TEST_OWNED" && deps.abortBeforeSpawn === true) {
-      return result("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "POSTCHECK", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
+      return issued("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "POSTCHECK", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
     }
     spawned = true;
     let spawnResult: OneShotResult;
     try {
       spawnResult = deps.spawnOneShot({ argv: plan.argv, env: rebound.env });
     } catch {
-      return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId);
+      return stamp(record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId));
     }
     if (spawnResult.status === null || spawnResult.signal) {
-      return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId);
+      return stamp(record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId));
     }
     if (spawnResult.status !== 0) {
-      return record("STOP", "PRISMA_DEPLOY_FAILED", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId);
+      return stamp(record("STOP", "PRISMA_DEPLOY_FAILED", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId));
     }
     try {
       revalidateMigrationSet(set);
@@ -333,14 +339,14 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
           row.appliedStepsCount === 1,
       );
       if (after.verdict !== "ALREADY_APPLIED" || successful.length !== EXPECTED_MIGRATION_SQL_COUNT) {
-        return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId);
+        return stamp(record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId));
       }
       const finalFacts = deps.inspect();
       if (!sameAppIdentity(observed.app, finalFacts.app) || finalFacts.db.id !== observed.db.id) {
-        return record("BLOCKED", "APP_IDENTITY_CHANGED", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId);
+        return stamp(record("BLOCKED", "APP_IDENTITY_CHANGED", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId));
       }
       removeOwnedSpawnIntent(deps.destinationRoot, request.attemptId);
-      return result(
+      return issued(
         "ALREADY_APPLIED",
         after.code,
         "POSTCHECK",
@@ -354,14 +360,14 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
         "VERIFIED",
       );
     } catch {
-      return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId);
+      return stamp(record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId));
     }
   } catch (error) {
     if (spawned) {
-      return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, null, request.attemptId, null);
+      return stamp(record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, null, request.attemptId, null));
     }
     if (error instanceof RunnerRefusal) {
-      return result(error.verdict, error.code, phaseFor(request.intent), false, null, targetClass, null, null, request.attemptId, null, "NONE");
+      return issued(error.verdict, error.code, phaseFor(request.intent), false, null, targetClass, null, null, request.attemptId, null, "NONE");
     }
     throw error;
   } finally {
@@ -370,7 +376,7 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
       try {
         releaseProductionCredential(credentialOwner);
       } catch (error) {
-        cleanupFailure = result(
+        cleanupFailure = issued(
           "STOP",
           error instanceof RunnerRefusal ? error.code : "SECRET_CLEANUP_FAILED",
           "POSTCHECK",
@@ -506,6 +512,7 @@ function result(
     recoverySha256: publishedRecovery,
     recoveryEvidence,
     signingInputs: signingInputsFor(verdict, dossierSha256, publishedRecovery, recoveryEvidence),
+    daemonId: null,
   };
 }
 

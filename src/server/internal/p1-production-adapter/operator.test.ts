@@ -75,6 +75,7 @@ describe("production operator boundaries", () => {
       process.env.GITHUB_ACTIONS === "true" ? "code=PRODUCTION_SCOPE_FORBIDDEN_IN_CI" : "code=PRODUCTION_DAEMON_UNPINNED",
     );
     expect(lines.at(-1)).toContain("signingInputs=NOT_SIGNABLE");
+    expect(lines.at(-1)).toContain("daemonId=UNAVAILABLE");
     expect(lines.at(-1)).toContain("recoverySha256=UNAVAILABLE");
     expect(lines.join("\n")).not.toContain("DATABASE_URL");
   });

@@ -142,11 +142,13 @@ export function formatOperatorResult(result: AdapterResult): string {
           : "NOT_SIGNABLE";
   const image = result.oneShotImageId !== null && IMAGE_ID.test(result.oneShotImageId) ? result.oneShotImageId : "UNAVAILABLE";
   const attempt = ATTEMPT_ID.test(result.attemptId) ? result.attemptId : "UNAVAILABLE";
+  const daemon = result.daemonId !== null && DAEMON_ID.test(result.daemonId) ? result.daemonId : "UNAVAILABLE";
   return [
     `verdict=${result.verdict}`,
     `code=${result.code}`,
     `phase=${result.phase}`,
     `attempt=${attempt}`,
+    `daemonId=${daemon}`,
     `imageGitSha=${result.imageGitSha}`,
     `oneShotImageId=${image}`,
     `dossierSha256=${dossier}`,
@@ -175,6 +177,7 @@ export function formatUnsignedStop(code: string, attemptId: string | null): stri
     recoverySha256: null,
     recoveryEvidence: "NONE",
     signingInputs: "NOT_SIGNABLE",
+    daemonId: null,
   });
 }
 
@@ -1046,6 +1049,7 @@ function stopped(
     recoverySha256: null,
     recoveryEvidence: "NONE",
     signingInputs: "NOT_SIGNABLE",
+    daemonId: null,
   };
 }
 

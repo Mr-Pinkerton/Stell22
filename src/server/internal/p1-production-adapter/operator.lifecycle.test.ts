@@ -539,6 +539,7 @@ describe("operator credential, ownership, and preflight boundaries", () => {
       recoverySha256: null,
       recoveryEvidence: "NONE",
       signingInputs: "NOT_SIGNABLE",
+      daemonId: null,
     };
     const merged = mergeOperatorCleanup(primary, refusal("STOP", "DISPOSABLE_INSPECT_FAILED", `inspect failed near ${PASSWORD}`));
     expect(merged).toMatchObject({ verdict: "STOP", code: "DISPOSABLE_INSPECT_FAILED", spawned: false });

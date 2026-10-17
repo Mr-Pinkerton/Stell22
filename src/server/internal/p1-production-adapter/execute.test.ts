@@ -649,6 +649,8 @@ describe("production P1 adapter", () => {
     expect(world.argv.join("\n")).not.toContain(world.password);
     expect(world.argv.join("\n")).not.toContain("DATABASE_URL=");
     const line = formatOperatorResult(result);
+    expect(result.daemonId).toBe(world.facts.daemonId);
+    expect(line).toContain(`daemonId=${world.facts.daemonId}`);
     expect(line).toContain(`attempt=${ATTEMPT}`);
     expect(line).toContain(`dossierSha256=${result.dossierSha256}`);
     expect(line).toContain(`recoverySha256=${result.recoverySha256}`);
@@ -737,6 +739,7 @@ describe("production P1 adapter", () => {
         "code=PREFLIGHT_RECORDED",
         "phase=READ_ONLY_PREFLIGHT",
         `attempt=${ATTEMPT}`,
+        `daemonId=${result.daemonId}`,
         "imageGitSha=UNVERIFIED",
         `oneShotImageId=${APPROVED_ONESHOT}`,
         `dossierSha256=${result.dossierSha256}`,
