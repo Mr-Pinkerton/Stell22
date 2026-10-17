@@ -41,7 +41,10 @@ const EVIDENCE_KEYS = [
 
 export type FileProtection = {
   assertKeyLocation: (filePath: string, directoryPath: string) => void;
+  assertOutputParent: (directoryPath: string) => void;
   protectNewFile: (filePath: string) => void;
+  onBeforeProtect?: (filePath: string) => void;
+  onAfterProtect?: (filePath: string) => void;
 };
 
 export type OwnerEvidence = {
@@ -174,7 +177,8 @@ export function signOwnerEvidence(input: {
   const evidence = parseOwnerEvidence(input.evidenceText);
   try {
     if (!sameText(input.confirmation, evidence.attempt)) throw new OwnerSignError("REVIEW_NOT_CONFIRMED");
-    assertOutputAvailable(input.outputPath, input.ownerHome ?? os.homedir());
+    const protection = input.protection ?? defaultProtection();
+    assertOutputAvailable(input.outputPath, input.ownerHome ?? os.homedir(), protection);
     const privateKey = unlockEd25519(input.keyPem, input.passphrase);
     const now = input.now ?? Date.now();
     const payload = buildPayload(evidence, now);
@@ -184,7 +188,7 @@ export function signOwnerEvidence(input: {
       failWrite: input.failWrite === true,
       failClose: input.failClose === true,
       home: input.ownerHome ?? os.homedir(),
-      protection: input.protection ?? defaultProtection(),
+      protection,
     });
     return signed;
   } finally {
@@ -307,12 +311,22 @@ function assertEncryptedPkcs8(pem: string): void {
   }
 }
 
-function assertOutputAvailable(filePath: string, home: string): void {
+function assertOutputAvailable(filePath: string, home: string, protection: FileProtection): void {
   const resolved = path.resolve(filePath);
   refuseOutputPath(resolved, home);
+  requirePrivateParent(path.dirname(resolved), protection);
   if (pathExists(resolved)) throw new OwnerSignError("OUTPUT_EXISTS");
 }
 
+/**
+ * The output parent is verified before the file is created. This process does not
+ * rewrite that directory: a shared parent can hold foreign files. On Windows the
+ * new file is then restricted through Set-Acl, which addresses a pathname.
+ * The creating descriptor stays open and its identity is compared to the path
+ * before and after that call. A mismatch stops the write and leaves the path
+ * in place. The gap between the last matching lstat and Set-Acl is still a
+ * pathname race. This is not an atomic DACL update.
+ */
 function writeExclusive(
   filePath: string,
   body: string,
@@ -320,37 +334,23 @@ function writeExclusive(
 ): void {
   const resolved = path.resolve(filePath);
   refuseOutputPath(resolved, fault.home);
-  const parent = path.dirname(resolved);
-  let parentStat: fs.Stats;
+  requirePrivateParent(path.dirname(resolved), fault.protection);
+  if (pathExists(resolved)) throw new OwnerSignError("OUTPUT_EXISTS");
+  let handle: number;
   try {
-    parentStat = fs.lstatSync(parent);
-  } catch {
+    handle = fs.openSync(resolved, "wx", 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new OwnerSignError("OUTPUT_EXISTS");
     throw new OwnerSignError("OUTPUT_UNAVAILABLE");
   }
-  if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw new OwnerSignError("OUTPUT_UNAVAILABLE");
-  if (pathExists(resolved)) throw new OwnerSignError("OUTPUT_EXISTS");
-  const handle = fs.openSync(resolved, "wx", 0o600);
-  let identity = fileIdentity(fs.fstatSync(handle));
+  const identity = fileIdentity(fs.fstatSync(handle));
   let closed = false;
   const closeOwned = () => {
     if (closed) return;
     closed = true;
     fs.closeSync(handle);
   };
-  try {
-    if (fault.failWrite) {
-      fs.writeFileSync(handle, body.slice(0, 1), "utf8");
-      throw new OwnerSignError("OUTPUT_WRITE_FAILED");
-    }
-    fs.writeFileSync(handle, body, "utf8");
-    fs.fsyncSync(handle);
-    identity = fileIdentity(fs.fstatSync(handle));
-    if (identity === null) throw new OwnerSignError("OUTPUT_WRITE_FAILED");
-    fs.fchmodSync(handle, 0o600);
-    fault.protection.protectNewFile(resolved);
-    if (fault.failClose) throw new OwnerSignError("OUTPUT_CLOSE_FAILED");
-    closeOwned();
-  } catch (error) {
+  const fail = (error: unknown): never => {
     if (identity) unlinkIfSame(resolved, identity);
     try {
       closeOwned();
@@ -359,6 +359,31 @@ function writeExclusive(
     }
     if (error instanceof OwnerSignError) throw error;
     throw new OwnerSignError("OUTPUT_WRITE_FAILED");
+  };
+  try {
+    if (identity === null) throw new OwnerSignError("OUTPUT_UNAVAILABLE");
+    if (process.platform !== "win32") {
+      fs.fchmodSync(handle, 0o600);
+      if ((fs.fstatSync(handle).mode & 0o077) !== 0) throw new OwnerSignError("OUTPUT_PERMISSIONS_REJECTED");
+    }
+    assertPathMatches(resolved, identity);
+    fault.protection.onBeforeProtect?.(resolved);
+    assertPathMatches(resolved, identity);
+    fault.protection.protectNewFile(resolved);
+    fault.protection.onAfterProtect?.(resolved);
+    assertPathMatches(resolved, identity);
+    const settled = fileIdentity(fs.fstatSync(handle));
+    if (settled === null || !sameFileIdentity(settled, identity)) throw new OwnerSignError("OUTPUT_PATH_REJECTED");
+    if (fault.failWrite) {
+      fs.writeFileSync(handle, body.slice(0, 1), "utf8");
+      throw new OwnerSignError("OUTPUT_WRITE_FAILED");
+    }
+    fs.writeFileSync(handle, body, "utf8");
+    fs.fsyncSync(handle);
+    if (fault.failClose) throw new OwnerSignError("OUTPUT_CLOSE_FAILED");
+    closeOwned();
+  } catch (error) {
+    fail(error);
   }
 }
 
@@ -417,6 +442,48 @@ function assertRealDirectory(directory: string): void {
   }
 }
 
+function requirePrivateParent(directory: string, protection: FileProtection): void {
+  const before = assertOutputDirectory(directory);
+  protection.assertOutputParent(directory);
+  const after = assertOutputDirectory(directory);
+  if (before.dev !== after.dev || before.ino !== after.ino) throw new OwnerSignError("OUTPUT_PATH_REJECTED");
+}
+
+function assertOutputDirectory(directory: string): { dev: string; ino: string } {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(directory);
+  } catch {
+    throw new OwnerSignError("OUTPUT_UNAVAILABLE");
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new OwnerSignError("OUTPUT_UNAVAILABLE");
+  let real: string;
+  try {
+    real = fs.realpathSync.native(directory);
+  } catch {
+    throw new OwnerSignError("OUTPUT_UNAVAILABLE");
+  }
+  if (path.resolve(real).toLowerCase() !== path.resolve(directory).toLowerCase()) {
+    throw new OwnerSignError("OUTPUT_PATH_REJECTED");
+  }
+  const dev = String(stat.dev);
+  const ino = String(stat.ino);
+  if (dev.length === 0 || ino.length === 0 || ino === "0") throw new OwnerSignError("OUTPUT_UNAVAILABLE");
+  return { dev, ino };
+}
+
+function assertPathMatches(filePath: string, identity: NonNullable<ReturnType<typeof fileIdentity>>): void {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(filePath);
+  } catch {
+    throw new OwnerSignError("OUTPUT_PATH_REJECTED");
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new OwnerSignError("OUTPUT_PATH_REJECTED");
+  const settled = fileIdentity(stat);
+  if (settled === null || !sameFileIdentity(settled, identity)) throw new OwnerSignError("OUTPUT_PATH_REJECTED");
+}
+
 function defaultProtection(): FileProtection {
   if (process.platform === "win32") {
     const sid = currentUserSid();
@@ -425,8 +492,11 @@ function defaultProtection(): FileProtection {
         assertSingleUserAcl(directoryPath, sid);
         assertSingleUserAcl(filePath, sid);
       },
+      assertOutputParent(directoryPath) {
+        assertSingleUserAcl(directoryPath, sid, "OUTPUT_PERMISSIONS_REJECTED");
+      },
       protectNewFile(filePath) {
-        restrictSingleUser(filePath, "file", sid);
+        restrictSingleUser(filePath, "file", sid, "OUTPUT_PERMISSIONS_REJECTED");
       },
     };
   }
@@ -435,19 +505,21 @@ function defaultProtection(): FileProtection {
       assertUnixPrivate(directoryPath, true);
       assertUnixPrivate(filePath, false);
     },
+    assertOutputParent(directoryPath) {
+      assertUnixPrivate(directoryPath, true, "OUTPUT_PERMISSIONS_REJECTED", "OUTPUT_UNAVAILABLE");
+    },
     protectNewFile(filePath) {
-      fs.chmodSync(filePath, 0o600);
-      assertUnixPrivate(filePath, false);
+      assertUnixPrivate(filePath, false, "OUTPUT_PERMISSIONS_REJECTED", "OUTPUT_PATH_REJECTED");
     },
   };
 }
 
-function assertUnixPrivate(target: string, directory: boolean): void {
+function assertUnixPrivate(target: string, directory: boolean, looseCode = "KEY_PERMISSIONS_REJECTED", typeCode = looseCode): void {
   const stat = fs.lstatSync(target);
   if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile())) {
-    throw new OwnerSignError(directory ? "KEY_UNAVAILABLE" : "KEY_PERMISSIONS_REJECTED");
+    throw new OwnerSignError(directory ? "KEY_UNAVAILABLE" : typeCode);
   }
-  if ((stat.mode & 0o077) !== 0) throw new OwnerSignError("KEY_PERMISSIONS_REJECTED");
+  if ((stat.mode & 0o077) !== 0) throw new OwnerSignError(looseCode);
 }
 
 function sameText(left: string, right: string): boolean {

@@ -3,9 +3,11 @@ import path from "node:path";
 import { OwnerSignError } from "@/server/internal/p1-production-adapter/owner-sign-error";
 
 /**
- * Read-only check, plus a restrict step used only for a file this process created.
+ * Read-only check, plus a restrict step used for a file this process just created
+ * or for a disposable directory a test already owns.
  * The Owner key file is never passed to the restrict step.
- * A failed PowerShell call is ACL_UNVERIFIED. A readable but open ACL is KEY_PERMISSIONS_REJECTED.
+ * Set-Acl names a path. It is not an atomic update of the creating handle.
+ * A failed PowerShell call is ACL_UNVERIFIED. A readable but open ACL is rejected.
  */
 
 const READ_SCRIPT = `
@@ -67,7 +69,7 @@ export function readAclEntries(target: string): AclEntry[] {
   });
 }
 
-export function assertSingleUserAcl(target: string, sid: string): void {
+export function assertSingleUserAcl(target: string, sid: string, rejectionCode = "KEY_PERMISSIONS_REJECTED"): void {
   let entries: AclEntry[];
   try {
     entries = readAclEntries(target);
@@ -77,13 +79,13 @@ export function assertSingleUserAcl(target: string, sid: string): void {
   }
   const entry = entries.length === 1 ? entries[0] : null;
   if (!entry || entry.sid !== sid || entry.rights !== "FullControl" || entry.access !== "Allow" || entry.inherited) {
-    throw new OwnerSignError("KEY_PERMISSIONS_REJECTED");
+    throw new OwnerSignError(rejectionCode);
   }
 }
 
-export function restrictSingleUser(target: string, kind: "file" | "dir", sid: string): void {
+export function restrictSingleUser(target: string, kind: "file" | "dir", sid: string, rejectionCode = "KEY_PERMISSIONS_REJECTED"): void {
   powershell(RESTRICT_SCRIPT, target, sid, kind);
-  assertSingleUserAcl(target, sid);
+  assertSingleUserAcl(target, sid, rejectionCode);
 }
 
 function powershell(script: string, target: string, sid: string | null, kind: "file" | "dir" | null): string {

@@ -28,6 +28,7 @@ const IMAGE = `sha256:${"a".repeat(64)}`;
 describe("offline owner signing", () => {
   it("signs a reviewed production payload that the existing verifier accepts", () => {
     const dir = tempDir();
+    protectDirectory(dir);
     const key = encryptedEd25519(PASSPHRASE);
     const output = path.join(dir, "approval.json");
     const signed = signOwnerEvidence({
@@ -80,7 +81,7 @@ describe("offline owner signing", () => {
     const replay = memoryReplayStore();
     verifySignedAuthorization(signed, key.publicPem, expectedOf(signed.payload), replay);
     expect(codeOf(() => verifySignedAuthorization(signed, key.publicPem, expectedOf(signed.payload), replay))).toBe("AUTHORIZATION_REPLAY");
-  });
+  }, 30_000);
 
   it("rejects incomplete evidence, a copied operator line, and caller-chosen authority", () => {
     expect(codeOf(() => parseOwnerEvidence(evidence({ signingInputs: "INCOMPLETE" })))).toBe("SIGNING_INPUTS_REJECTED");
@@ -120,6 +121,7 @@ describe("offline owner signing", () => {
 
   it("preserves an existing approval and removes a partial write", () => {
     const dir = tempDir();
+    protectDirectory(dir);
     const existing = path.join(dir, "approval.json");
     fs.writeFileSync(existing, "keep-existing\n");
     expect(codeOf(() => signOwnerEvidence(signInput({ outputPath: existing })))).toBe("OUTPUT_EXISTS");
@@ -198,7 +200,7 @@ describe("offline owner signing", () => {
 
     const permissive = keyWorld({ protect: false });
     expect(codeOf(() => readOwnerKey(permissive.keyPath, permissive.home))).toBe("KEY_PERMISSIONS_REJECTED");
-    expect(codeOf(() => readOwnerKey(world.keyPath, world.home, { assertKeyLocation: () => { throw new OwnerSignError("ACL_UNVERIFIED"); }, protectNewFile: () => undefined }))).toBe("ACL_UNVERIFIED");
+    expect(codeOf(() => readOwnerKey(world.keyPath, world.home, { assertKeyLocation: () => { throw new OwnerSignError("ACL_UNVERIFIED"); }, assertOutputParent: () => undefined, protectNewFile: () => undefined }))).toBe("ACL_UNVERIFIED");
 
     const outside = path.join(world.home, "outside.pem");
     fs.writeFileSync(outside, "foreign-key");
@@ -208,7 +210,7 @@ describe("offline owner signing", () => {
     expect(codeOf(() => readOwnerKey(path.join(linkDir, OWNER_KEY_FILE), path.join(world.home, "linked-home")))).toBe("KEY_UNAVAILABLE");
     expect(fs.readFileSync(outside, "utf8")).toBe("foreign-key");
 
-    const closed = path.join(world.home, "closed.json");
+    const closed = path.join(world.home, "approvals", "closed.json");
     expect(codeOf(() => signOwnerEvidence(signInput({ outputPath: closed, failClose: true })))).toBe("OUTPUT_CLOSE_FAILED");
     expect(fs.existsSync(closed)).toBe(false);
     const foreign = path.join(world.home, "foreign.txt");
@@ -231,6 +233,7 @@ describe("offline owner signing", () => {
       fs.chmodSync(path.dirname(rsa.keyPath), 0o700);
       fs.chmodSync(rsa.keyPath, 0o600);
     }
+    protectDirectory(rsa.home);
     const rsaPem = readOwnerKey(rsa.keyPath, rsa.home);
     const rsaOut = path.join(rsa.home, "rsa-out.json");
     expect(codeOf(() => signOwnerEvidence(signInput({ keyPem: rsaPem, outputPath: rsaOut, ownerHome: rsa.home })))).toBe("KEY_TYPE_REJECTED");
@@ -261,22 +264,167 @@ describe("offline owner signing", () => {
       expect(String(error)).not.toContain(PASSPHRASE);
     }
   });
+
+  it("refuses an open output parent and writes the payload only after file protection", () => {
+    const openParent = tempDir();
+    if (process.platform !== "win32") fs.chmodSync(openParent, 0o755);
+    const refused = path.join(openParent, "approval.json");
+    expect(codeOf(() => signOwnerEvidence(signInput({ outputPath: refused })))).toBe("OUTPUT_PERMISSIONS_REJECTED");
+    expect(fs.existsSync(refused)).toBe(false);
+    expect(fs.readdirSync(openParent)).not.toContain("approval.json");
+
+    const events: string[] = [];
+    const watched = privateApprovalPath();
+    const signed = signOwnerEvidence(signInput({
+      outputPath: watched,
+      protection: {
+        assertKeyLocation() {
+          events.push("key");
+        },
+        assertOutputParent() {
+          events.push("parent");
+        },
+        protectNewFile(filePath) {
+          events.push(`protect:${fs.statSync(filePath).size}`);
+        },
+      },
+    }));
+    expect(events).toEqual(["parent", "parent", "protect:0"]);
+    expect(fs.readFileSync(watched, "utf8")).toContain(signed.signature);
+    expect(fs.readFileSync(watched, "utf8")).not.toContain(PASSPHRASE);
+
+    const blocked = privateApprovalPath();
+    expect(codeOf(() => signOwnerEvidence(signInput({
+      outputPath: blocked,
+      protection: {
+        assertKeyLocation() {
+          return undefined;
+        },
+        assertOutputParent() {
+          throw new OwnerSignError("ACL_UNVERIFIED");
+        },
+        protectNewFile() {
+          events.push("protect-after-unverified");
+        },
+      },
+    })))).toBe("ACL_UNVERIFIED");
+    expect(fs.existsSync(blocked)).toBe(false);
+    expect(events).not.toContain("protect-after-unverified");
+
+    const unset = privateApprovalPath();
+    expect(codeOf(() => signOwnerEvidence(signInput({
+      outputPath: unset,
+      protection: {
+        assertKeyLocation() {
+          return undefined;
+        },
+        assertOutputParent() {
+          return undefined;
+        },
+        protectNewFile(filePath) {
+          expect(fs.statSync(filePath).size).toBe(0);
+          throw new OwnerSignError("ACL_UNVERIFIED");
+        },
+      },
+    })))).toBe("ACL_UNVERIFIED");
+    expect(fs.existsSync(unset)).toBe(false);
+
+    expect(codeOf(() => restrictSingleUser(path.join(tempDir(), "missing-output"), "file", process.platform === "win32" ? currentUserSid() : "S-1-5-21-1", "OUTPUT_PERMISSIONS_REJECTED"))).toBe("ACL_UNVERIFIED");
+  });
+
+  it("does not write an approval when the output path is replaced or joined through a link", () => {
+    const before = privateApprovalPath();
+    const moved = `${before}.ours`;
+    expect(codeOf(() => signOwnerEvidence(signInput({
+      outputPath: before,
+      protection: {
+        assertKeyLocation() {
+          return undefined;
+        },
+        assertOutputParent() {
+          return undefined;
+        },
+        onBeforeProtect(filePath) {
+          fs.renameSync(filePath, moved);
+          fs.writeFileSync(filePath, "foreign-before");
+        },
+        protectNewFile() {
+          throw new Error("protection ran after replacement");
+        },
+      },
+    })))).toBe("OUTPUT_PATH_REJECTED");
+    expect(fs.readFileSync(before, "utf8")).toBe("foreign-before");
+    expect(fs.readFileSync(moved, "utf8")).toBe("");
+
+    const after = privateApprovalPath();
+    const movedAfter = `${after}.ours`;
+    expect(codeOf(() => signOwnerEvidence(signInput({
+      outputPath: after,
+      protection: {
+        assertKeyLocation() {
+          return undefined;
+        },
+        assertOutputParent() {
+          return undefined;
+        },
+        protectNewFile(filePath) {
+          expect(fs.statSync(filePath).size).toBe(0);
+        },
+        onAfterProtect(filePath) {
+          fs.renameSync(filePath, movedAfter);
+          fs.writeFileSync(filePath, "foreign-after");
+        },
+      },
+    })))).toBe("OUTPUT_PATH_REJECTED");
+    expect(fs.readFileSync(after, "utf8")).toBe("foreign-after");
+    expect(fs.readFileSync(movedAfter, "utf8")).not.toContain("signature");
+
+    const real = tempDir();
+    protectDirectory(real);
+    const linkHome = tempDir();
+    const link = path.join(linkHome, "joined");
+    fs.symlinkSync(real, link, process.platform === "win32" ? "junction" : "dir");
+    const linkedOutput = path.join(link, "approval.json");
+    expect(codeOf(() => signOwnerEvidence(signInput({ outputPath: linkedOutput })))).toBe("OUTPUT_UNAVAILABLE");
+    expect(fs.readdirSync(real)).not.toContain("approval.json");
+    expect(fs.existsSync(linkedOutput)).toBe(false);
+  });
+
+  it("keeps a native private approval file when the platform can check it", () => {
+    const output = privateApprovalPath();
+    const signed = signOwnerEvidence(signInput({ outputPath: output }));
+    expect(fs.readFileSync(output, "utf8")).toContain(signed.signature);
+    if (process.platform === "win32") assertSingleUserAcl(output, currentUserSid(), "OUTPUT_PERMISSIONS_REJECTED");
+    else expect(fs.statSync(output).mode & 0o077).toBe(0);
+  });
 });
 
 function signAt(now: number, pem: string) {
-  return signOwnerEvidence(signInput({ now, keyPem: pem, outputPath: path.join(tempDir(), "approval.json") }));
+  return signOwnerEvidence(signInput({ now, keyPem: pem, outputPath: privateApprovalPath() }));
 }
 
 function signInput(overrides: Partial<Parameters<typeof signOwnerEvidence>[0]> = {}): Parameters<typeof signOwnerEvidence>[0] {
   const passphrase = overrides.passphrase ?? Buffer.from(PASSPHRASE);
+  const outputPath = overrides.outputPath ?? privateApprovalPath();
   return {
     evidenceText: evidence(),
     keyPem: encryptedEd25519(PASSPHRASE).pem,
-    passphrase,
-    outputPath: path.join(tempDir(), "approval.json"),
-    confirmation: ATTEMPT,
     ...overrides,
+    passphrase,
+    outputPath,
+    confirmation: overrides.confirmation ?? ATTEMPT,
   };
+}
+
+function privateApprovalPath(): string {
+  const directory = tempDir();
+  protectDirectory(directory);
+  return path.join(directory, "approval.json");
+}
+
+function protectDirectory(directory: string): void {
+  if (process.platform === "win32") restrictSingleUser(directory, "dir", currentUserSid());
+  else fs.chmodSync(directory, 0o700);
 }
 
 function wideWindow() {
@@ -390,6 +538,7 @@ function keyWorld(options: { protect?: boolean } = {}): { home: string; keyPath:
   fs.writeFileSync(evidencePath, evidence());
   const output = path.join(home, "approvals", "approval.json");
   fs.mkdirSync(path.dirname(output), { mode: 0o700 });
+  protectDirectory(path.dirname(output));
   return { home, keyPath, evidencePath, output, pem: pair.pem, publicPem: pair.publicPem };
 }
 
