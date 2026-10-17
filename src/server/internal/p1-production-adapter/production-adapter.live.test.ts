@@ -3,11 +3,11 @@ import { generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:cry
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { EXPECTED_HISTORICAL_MIGRATION_COUNT, EXPECTED_MIGRATION_SQL_COUNT, P1_SHA256 } from "@/server/internal/p1-isolated-runner/contract";
 import { materializeHistorical } from "@/server/internal/p1-isolated-runner/disposable-migration-harness";
 import { createRepoGitSource } from "@/server/internal/p1-isolated-runner/git-source";
-import { attachReviewedImageToOperatorTag, buildReviewedOneShotImage } from "@/server/internal/p1-isolated-runner/oneshot-recipe-build";
+import { attachReviewedImageToOperatorTag, buildReviewedOneShotImage, releaseOwnedOperatorTag } from "@/server/internal/p1-isolated-runner/oneshot-recipe-build";
 import { ONE_SHOT_BASE_IMAGE, ONE_SHOT_IMAGE } from "@/server/internal/p1-isolated-runner/p1-release-gate";
 import {
   checkMatchesContract,
@@ -36,6 +36,9 @@ import { assertIndependentRestore, publishReleaseBackup } from "@/server/interna
 const LIVE_FLAG = "P1_DISPOSABLE_LIVE";
 
 describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1 adapter", () => {
+  afterAll(() => {
+    releaseOwnedOperatorTag();
+  });
   it(
     "backs up, restores, and applies pinned P1 without calling the database production",
     () => {

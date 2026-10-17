@@ -3,10 +3,10 @@ import { createHash, generateKeyPairSync, randomBytes, sign, type KeyObject } fr
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { EXPECTED_HISTORICAL_MIGRATION_COUNT, EXPECTED_MIGRATION_SQL_COUNT, P1_SHA256 } from "@/server/internal/p1-isolated-runner/contract";
 import { materializeHistorical } from "@/server/internal/p1-isolated-runner/disposable-migration-harness";
-import { attachReviewedImageToOperatorTag, buildReviewedOneShotImage } from "@/server/internal/p1-isolated-runner/oneshot-recipe-build";
+import { attachReviewedImageToOperatorTag, buildReviewedOneShotImage, releaseOwnedOperatorTag } from "@/server/internal/p1-isolated-runner/oneshot-recipe-build";
 import { ONE_SHOT_BASE_IMAGE, ONE_SHOT_IMAGE } from "@/server/internal/p1-isolated-runner/p1-release-gate";
 import {
   checkMatchesContract,
@@ -24,6 +24,9 @@ import { operatorAttemptRoot, runOperatorCommand, type OperatorDocker, type Oper
 const LIVE_FLAG = "P1_DISPOSABLE_LIVE";
 
 describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owned topology", () => {
+  afterAll(() => {
+    releaseOwnedOperatorTag();
+  });
   it("preflight stays read-only, then recovery and one apply go through the operator", () => {
     const attemptId = randomBytes(8).toString("hex");
     const password = randomBytes(16).toString("hex");

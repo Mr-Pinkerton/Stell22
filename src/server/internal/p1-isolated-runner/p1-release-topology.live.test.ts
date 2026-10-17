@@ -5,7 +5,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { PrismaClient } from "@prisma/client";
 import esbuild from "esbuild";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { HISTORICAL_MIGRATION_NAMES } from "@/server/internal/p1-isolated-runner/classify";
 import {
   createOwnedDisposableContainer,
@@ -46,7 +46,7 @@ import {
   runHistorical,
   tableCounts,
 } from "@/server/internal/p1-isolated-runner/old-app-compatibility.live.test";
-import { attachReviewedImageToOperatorTag, buildReviewedOneShotImage } from "@/server/internal/p1-isolated-runner/oneshot-recipe-build";
+import { attachReviewedImageToOperatorTag, buildReviewedOneShotImage, releaseOwnedOperatorTag } from "@/server/internal/p1-isolated-runner/oneshot-recipe-build";
 import {
   assessWriterDeployPrerequisite,
   ONE_SHOT_BASE_IMAGE,
@@ -69,6 +69,9 @@ const LIVE_FLAG = "P1_DISPOSABLE_LIVE";
 const REQUEST_ID = "p1-release-topology-request-1";
 
 describe.skipIf(process.env[LIVE_FLAG] !== "1")("isolated P1-only release topology", () => {
+  afterAll(() => {
+    releaseOwnedOperatorTag();
+  });
   it(
     "applies pinned P1 beside a historical application container and leaves that container unchanged",
     async () => {
