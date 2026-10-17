@@ -147,7 +147,7 @@ describe("operator host lock", () => {
     const credentialDir = path.join(root, "p1-production-credentials");
     const outside = path.join(root, "outside-secret");
     try {
-      planProductionOneShot({
+      const plan = planProductionOneShot({
         networkName: "p1pa-net",
         dnsAlias: "db",
         databaseName: "stell22",
@@ -159,7 +159,6 @@ describe("operator host lock", () => {
         appContainerName: "app",
         dbContainerName: "db",
         imageId: IMAGE,
-        ownerToken: ATTEMPT,
       });
       const secretPath = path.join(credentialDir, "database.env");
       fs.rmSync(secretPath);
@@ -171,10 +170,91 @@ describe("operator host lock", () => {
         fs.writeFileSync(outside, "keep-secret");
         fs.symlinkSync(outside, secretPath, "file");
       }
-      expect(() => releaseProductionCredential(credentialDir, ATTEMPT)).toThrow(expect.objectContaining({ code: "SECRET_CLEANUP_FAILED" }));
+      expect(() => releaseProductionCredential(plan.credential)).toThrow(expect.objectContaining({ code: "SECRET_CLEANUP_FAILED" }));
       const preserved = process.platform === "win32" ? path.join(outside, "sentinel") : outside;
       expect(fs.readFileSync(preserved, "utf8")).toBe("keep-secret");
       expect(fs.lstatSync(secretPath).isSymbolicLink()).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes credential files only when they are still the files this run created", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "p1-credential-identity-"));
+    const credentialDir = path.join(root, "p1-production-credentials");
+    try {
+      const plan = credentialPlan(root, credentialDir);
+      expect(plan.credential.ownerToken).not.toBe(ATTEMPT);
+      releaseProductionCredential(plan.credential);
+      expect(fs.existsSync(credentialDir)).toBe(false);
+
+      const replacedSecret = credentialPlan(root, credentialDir);
+      const secretPath = path.join(credentialDir, "database.env");
+      const secretBody = fs.readFileSync(secretPath);
+      fs.rmSync(secretPath);
+      fs.writeFileSync(secretPath, secretBody);
+      expect(() => releaseProductionCredential(replacedSecret.credential)).toThrow(expect.objectContaining({ code: "SECRET_CLEANUP_FAILED" }));
+      expect(fs.readFileSync(secretPath).equals(secretBody)).toBe(true);
+
+      const replacedOwner = credentialPlan(root, path.join(root, "owner-credentials"));
+      const ownerPath = path.join(replacedOwner.credential.directory, "owner");
+      const ownerBody = fs.readFileSync(ownerPath);
+      fs.rmSync(ownerPath);
+      fs.writeFileSync(ownerPath, ownerBody);
+      expect(() => releaseProductionCredential(replacedOwner.credential)).toThrow(expect.objectContaining({ code: "SECRET_CLEANUP_FAILED" }));
+      expect(fs.existsSync(path.join(replacedOwner.credential.directory, "database.env"))).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not publish a partial or unclosed credential file as owned", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "p1-credential-partial-"));
+    try {
+      for (const credentialDir of ["owner-write", "secret-write", "owner-close", "secret-close"]) {
+        const directory = path.join(root, credentialDir);
+        const fault = {
+          failOwnerWrite: credentialDir === "owner-write",
+          failSecretWrite: credentialDir === "secret-write",
+          failOwnerClose: credentialDir === "owner-close",
+          failSecretClose: credentialDir === "secret-close",
+        };
+        expect(() => credentialPlan(root, directory, fault)).toThrow(expect.objectContaining({ code: "SECRET_CLEANUP_FAILED" }));
+        expect(fs.existsSync(path.join(directory, "owner"))).toBe(false);
+        expect(fs.existsSync(path.join(directory, "database.env"))).toBe(false);
+      }
+      const foreign = path.join(root, "foreign");
+      fs.mkdirSync(foreign);
+      fs.writeFileSync(path.join(foreign, "owner"), `${"ab".repeat(16)}\n`);
+      fs.writeFileSync(path.join(foreign, "database.env"), "DATABASE_URL=foreign\n");
+      fs.writeFileSync(path.join(foreign, "migrate.cjs"), "foreign\n");
+      expect(() =>
+        releaseProductionCredential({
+          directory: foreign,
+          ownerToken: "ab".repeat(16),
+          files: {
+            owner: { dev: "1", ino: "1" },
+            secret: { dev: "1", ino: "2" },
+            launcher: { dev: "1", ino: "3" },
+          },
+        }),
+      ).toThrow(expect.objectContaining({ code: "SECRET_CLEANUP_FAILED" }));
+      expect(fs.readFileSync(path.join(foreign, "database.env"), "utf8")).toBe("DATABASE_URL=foreign\n");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not remove a host lock that was replaced by another file with the same record", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "p1-host-replaced-"));
+    const lockPath = operatorHostLockPath("TEST_OWNED", root);
+    try {
+      const held = acquireOperatorHostLock(lockPath, { attemptId: ATTEMPT, command: "apply" });
+      const body = fs.readFileSync(lockPath);
+      fs.rmSync(lockPath);
+      fs.writeFileSync(lockPath, body);
+      expect(() => held.release()).toThrow(expect.objectContaining({ code: "HOST_LOCK_OWNER_MISMATCH" }));
+      expect(fs.readFileSync(lockPath).equals(body)).toBe(true);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -194,3 +274,24 @@ describe("host lock refusal type", () => {
     }
   });
 });
+
+function credentialPlan(
+  root: string,
+  credentialDir: string,
+  credentialFault?: { failOwnerWrite?: boolean; failSecretWrite?: boolean; failOwnerClose?: boolean; failSecretClose?: boolean },
+) {
+  return planProductionOneShot({
+    networkName: "p1pa-net",
+    dnsAlias: "db",
+    databaseName: "stell22",
+    roleName: "stell22",
+    password: "super-secret-password-1",
+    sealedRoot: root,
+    credentialDir,
+    appContainerId: "c".repeat(12),
+    appContainerName: "app",
+    dbContainerName: "db",
+    imageId: IMAGE,
+    credentialFault,
+  });
+}

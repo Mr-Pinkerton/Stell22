@@ -89,7 +89,6 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
           password,
           sealedRoot: historicalRoot,
           credentialDir: path.join(runtime, "historical-credentials"),
-          ownerToken: "historical-plan",
           appContainerId: inspectContainer(appName).id,
           appContainerName: appName,
           dbContainerName: dbName,

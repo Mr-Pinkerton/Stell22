@@ -68,7 +68,6 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
         password,
         sealedRoot: historicalRoot,
         credentialDir: path.join(workRoot, "historical-credentials"),
-        ownerToken: "historical-plan",
         appContainerId: inspectContainer(appName).id,
         appContainerName: appName,
         dbContainerName: dbName,

@@ -360,6 +360,28 @@ describe("production P1 adapter", () => {
     expect(fs.existsSync(path.join(directory, "database.env"))).toBe(true);
   }, 30_000);
 
+  it("does not delete a spawn intent that was replaced by another file with the same record", () => {
+    const world = readyApply("TEST_OWNED");
+    let applied = false;
+    world.deps.readHistory = () => (applied ? [...successfulHistoricalRows(), successfulP1Row()] : successfulHistoricalRows());
+    world.deps.readSchema = () => (applied ? appliedSchema() : absentP1Schema());
+    const intent = productionSpawnIntentPath(world.deps.destinationRoot);
+    let replaced = Buffer.alloc(0);
+    world.deps.spawnOneShot = () => {
+      world.spawns += 1;
+      applied = true;
+      replaced = fs.readFileSync(intent);
+      fs.rmSync(intent);
+      fs.writeFileSync(intent, replaced);
+      return { status: 0, signal: null };
+    };
+    const result = executeProductionAdapter(world.request, world.deps);
+    expect(result.verdict).not.toBe("ALREADY_APPLIED");
+    expect(result.spawned).toBe(true);
+    expect(fs.readFileSync(intent).equals(replaced)).toBe(true);
+    expect(world.spawns).toBe(1);
+  }, 30_000);
+
   it("does not apply production from a self-authored authorization object", () => {
     const world = worldFor("PRODUCTION");
     world.request.intent = "APPLY";

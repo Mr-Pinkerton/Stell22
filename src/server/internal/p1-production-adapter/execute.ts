@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { EXPECTED_MIGRATION_SQL_COUNT } from "@/server/internal/p1-isolated-runner/contract";
@@ -36,7 +37,8 @@ import {
   type TargetDeclaration,
   type TargetFacts,
 } from "@/server/internal/p1-production-adapter/identity";
-import { acceptOneShotImage, planProductionOneShot, releaseProductionCredential, type OneShotImageObservation } from "@/server/internal/p1-production-adapter/oneshot";
+import { fileIdentity, sameFileIdentity, type FileIdentity } from "@/server/internal/p1-production-adapter/file-identity";
+import { acceptOneShotImage, planProductionOneShot, releaseProductionCredential, type OneShotImageObservation, type ProductionCredentialClaim } from "@/server/internal/p1-production-adapter/oneshot";
 import { IMAGE_ID, SHA256 } from "@/server/internal/p1-production-adapter/contract";
 import {
   loadPersistedReleaseBackup,
@@ -130,7 +132,7 @@ export type AdapterDependencies = {
 export function executeProductionAdapter(request: AdapterRequest, deps: AdapterDependencies): AdapterResult {
   let spawned = false;
   let lock: { release: () => void } | null = null;
-  let credentialOwner: { directory: string; ownerToken: string } | null = null;
+  let credentialOwner: ProductionCredentialClaim | null = null;
   const targetClass = request.scope === "PRODUCTION" ? "PRODUCTION" : "TEST_OWNED_NOT_PRODUCTION";
   try {
     if (request.databaseUrl !== undefined) {
@@ -285,9 +287,8 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
       appContainerName: immediate.app.name,
       dbContainerName: immediate.db.name,
       imageId: oneShotImageId,
-      ownerToken: request.attemptId,
     });
-    credentialOwner = { directory: credentialDir, ownerToken: request.attemptId };
+    credentialOwner = plan.credential;
     const stillLocked = deps.readLockOwner()?.trim() ?? null;
     if (stillLocked !== request.attemptId) {
       throw refusal("STOP", "LOST_LOCK", "The host lock disappeared before the one-shot");
@@ -367,7 +368,7 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     let cleanupFailure: AdapterResult | null = null;
     if (credentialOwner) {
       try {
-        releaseProductionCredential(credentialOwner.directory, credentialOwner.ownerToken);
+        releaseProductionCredential(credentialOwner);
       } catch (error) {
         cleanupFailure = result(
           "STOP",
@@ -549,16 +550,26 @@ function markerPath(root: string): string {
   return path.join(path.dirname(root), `${path.basename(root)}.production-adapter-ambiguous-stop`);
 }
 
+type SpawnIntentIdentity = { identity: FileIdentity; nonce: string; attemptId: string };
+
+const spawnIntentIdentities = new Map<string, SpawnIntentIdentity>();
+
 function writeSpawnIntent(root: string, attemptId: string): void {
   const target = productionSpawnIntentPath(root);
   if (pathKind(target) !== "absent") {
     throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "A spawn intent marker already exists");
   }
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  const nonce = randomBytes(16).toString("hex");
   const handle = fs.openSync(target, "wx", 0o600);
   try {
-    fs.writeFileSync(handle, `${JSON.stringify({ kind: "P1_SPAWN_INTENT", attemptId, phase: "BEFORE_SPAWN" })}\n`, "utf8");
+    fs.writeFileSync(handle, `${JSON.stringify({ kind: "P1_SPAWN_INTENT", attemptId, nonce, phase: "BEFORE_SPAWN" })}\n`, "utf8");
     fs.fsyncSync(handle);
+    const identity = fileIdentity(fs.fstatSync(handle));
+    if (identity === null) {
+      throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker has no file identity");
+    }
+    spawnIntentIdentities.set(target, { identity, nonce, attemptId });
   } finally {
     fs.closeSync(handle);
   }
@@ -566,22 +577,40 @@ function writeSpawnIntent(root: string, attemptId: string): void {
 
 function removeOwnedSpawnIntent(root: string, attemptId: string): void {
   const target = productionSpawnIntentPath(root);
+  const owned = spawnIntentIdentities.get(target);
+  if (!owned || owned.attemptId !== attemptId) {
+    throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker was not created by this run");
+  }
   const kind = pathKind(target);
   if (kind === "absent") return;
   if (kind !== "file") {
     throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker is not a regular file");
   }
-  let parsed: unknown;
+  const handle = fs.openSync(target, "r");
   try {
-    parsed = JSON.parse(fs.readFileSync(target, "utf8"));
-  } catch {
-    throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker is not readable");
+    const current = fileIdentity(fs.fstatSync(handle));
+    if (current === null || !sameFileIdentity(current, owned.identity)) {
+      throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker is not the file this run created");
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(fs.readFileSync(handle, "utf8"));
+    } catch {
+      throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker is not readable");
+    }
+    const record = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as { attemptId?: unknown; nonce?: unknown }) : null;
+    if (record?.attemptId !== attemptId || record.nonce !== owned.nonce) {
+      throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker belongs to another attempt");
+    }
+  } finally {
+    fs.closeSync(handle);
   }
-  const attempt = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as { attemptId?: unknown }).attemptId : null;
-  if (attempt !== attemptId) {
-    throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker belongs to another attempt");
+  const settled = fileIdentity(fs.lstatSync(target));
+  if (settled === null || !sameFileIdentity(settled, owned.identity)) {
+    throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker changed before removal");
   }
   fs.unlinkSync(target);
+  spawnIntentIdentities.delete(target);
 }
 
 function pathKind(target: string): "absent" | "symlink" | "directory" | "file" | "other" {
