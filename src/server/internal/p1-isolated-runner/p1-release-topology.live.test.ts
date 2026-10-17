@@ -5,7 +5,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 import { PrismaClient } from "@prisma/client";
 import esbuild from "esbuild";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { HISTORICAL_MIGRATION_NAMES } from "@/server/internal/p1-isolated-runner/classify";
 import {
   createOwnedDisposableContainer,
@@ -19,7 +19,6 @@ import {
   HISTORICAL_APPLICATION_COMMIT,
   P1_MIGRATION_NAME,
   P1_SHA256,
-  PRISMA_VERSION,
 } from "@/server/internal/p1-isolated-runner/contract";
 import {
   deployPrisma,
@@ -47,10 +46,10 @@ import {
   runHistorical,
   tableCounts,
 } from "@/server/internal/p1-isolated-runner/old-app-compatibility.live.test";
+import { attachReviewedImageToOperatorTag, buildReviewedOneShotImage, releaseOwnedOperatorTag } from "@/server/internal/p1-isolated-runner/oneshot-recipe-build";
 import {
   assessWriterDeployPrerequisite,
   ONE_SHOT_BASE_IMAGE,
-  ONE_SHOT_IMAGE,
   logicalSchemaFingerprint,
   migrationHistoryFingerprint,
   sha256Bytes,
@@ -70,6 +69,9 @@ const LIVE_FLAG = "P1_DISPOSABLE_LIVE";
 const REQUEST_ID = "p1-release-topology-request-1";
 
 describe.skipIf(process.env[LIVE_FLAG] !== "1")("isolated P1-only release topology", () => {
+  afterAll(() => {
+    releaseOwnedOperatorTag();
+  });
   it(
     "applies pinned P1 beside a historical application container and leaves that container unchanged",
     async () => {
@@ -580,25 +582,11 @@ function ensureNodeImage(): void {
     });
     if (pulled.status !== 0) throw new Error(`${ONE_SHOT_BASE_IMAGE} is unavailable`);
   }
-  const oneshot = spawnSync("docker", ["image", "inspect", ONE_SHOT_IMAGE], { windowsHide: true });
-  if (oneshot.status === 0) return;
-  const context = fs.mkdtempSync(path.join(process.cwd(), ".p1-oneshot-image-"));
+  const built = buildReviewedOneShotImage();
   try {
-    fs.writeFileSync(
-      path.join(context, "Dockerfile"),
-      [
-        `FROM ${ONE_SHOT_BASE_IMAGE}`,
-        "RUN apt-get update \\",
-        "  && apt-get install -y --no-install-recommends openssl ca-certificates \\",
-        "  && rm -rf /var/lib/apt/lists/*",
-        "WORKDIR /opt/migrator",
-        `RUN npm install --omit=dev --no-audit --no-fund prisma@${PRISMA_VERSION}`,
-        "",
-      ].join("\n"),
-    );
-    docker(["build", "-t", ONE_SHOT_IMAGE, context]);
+    attachReviewedImageToOperatorTag(built);
   } finally {
-    fs.rmSync(context, { recursive: true, force: true });
+    built.remove();
   }
 }
 

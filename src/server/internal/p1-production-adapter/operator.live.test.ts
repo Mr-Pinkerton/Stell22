@@ -3,9 +3,10 @@ import { createHash, generateKeyPairSync, randomBytes, sign, type KeyObject } fr
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
-import { describe, expect, it } from "vitest";
-import { EXPECTED_HISTORICAL_MIGRATION_COUNT, EXPECTED_MIGRATION_SQL_COUNT, P1_SHA256, PRISMA_VERSION } from "@/server/internal/p1-isolated-runner/contract";
+import { afterAll, describe, expect, it } from "vitest";
+import { EXPECTED_HISTORICAL_MIGRATION_COUNT, EXPECTED_MIGRATION_SQL_COUNT, P1_SHA256 } from "@/server/internal/p1-isolated-runner/contract";
 import { materializeHistorical } from "@/server/internal/p1-isolated-runner/disposable-migration-harness";
+import { attachReviewedImageToOperatorTag, buildReviewedOneShotImage, releaseOwnedOperatorTag } from "@/server/internal/p1-isolated-runner/oneshot-recipe-build";
 import { ONE_SHOT_BASE_IMAGE, ONE_SHOT_IMAGE } from "@/server/internal/p1-isolated-runner/p1-release-gate";
 import {
   checkMatchesContract,
@@ -23,6 +24,9 @@ import { operatorAttemptRoot, runOperatorCommand, type OperatorDocker, type Oper
 const LIVE_FLAG = "P1_DISPOSABLE_LIVE";
 
 describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owned topology", () => {
+  afterAll(() => {
+    releaseOwnedOperatorTag();
+  });
   it("preflight stays read-only, then recovery and one apply go through the operator", () => {
     const attemptId = randomBytes(8).toString("hex");
     const password = randomBytes(16).toString("hex");
@@ -67,6 +71,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
         appContainerId: inspectContainer(appName).id,
         appContainerName: appName,
         dbContainerName: dbName,
+        imageId: oneShotImageId(),
       });
       const historical = spawnSync("docker", [...historicalPlan.argv], { encoding: "utf8", windowsHide: true, timeout: 180_000, maxBuffer: 8 * 1024 * 1024 });
       expect(historical.status, redact(`${historical.stdout}\n${historical.stderr}`)).toBe(0);
@@ -282,6 +287,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
     let appStarted = false;
     let networkStarted = false;
     try {
+      ensureImages();
       const missing = runOperatorCommand(owned(attemptId, workRoot, "preflight"));
       expect(missing).toMatchObject({ code: "RUNTIME_UNAUTHENTICATED", spawned: false, imageGitSha: "UNVERIFIED" });
 
@@ -387,7 +393,7 @@ function recordingDocker(password: string, argvLog: string[][], onCall: (args: r
 }
 
 function owned(attemptId: string, workRoot: string, command: OperatorRequest["command"]): OperatorRequest {
-  return { command, scope: "TEST_OWNED", attemptId, workRoot };
+  return { command, scope: "TEST_OWNED", attemptId, workRoot, testApprovedOneShotImageId: oneShotImageId() };
 }
 
 function signOwner(
@@ -463,18 +469,18 @@ function ensureImages(): void {
     const pulled = spawnSync("docker", ["pull", ONE_SHOT_BASE_IMAGE], { windowsHide: true, timeout: 180_000 });
     if (pulled.status !== 0) throw new Error(`${ONE_SHOT_BASE_IMAGE} is unavailable`);
   }
-  const oneshot = spawnSync("docker", ["image", "inspect", ONE_SHOT_IMAGE], { windowsHide: true });
-  if (oneshot.status === 0) return;
-  const context = fs.mkdtempSync(path.join(process.cwd(), ".p1-oneshot-image-"));
+  const built = buildReviewedOneShotImage();
   try {
-    fs.writeFileSync(
-      path.join(context, "Dockerfile"),
-      [`FROM ${ONE_SHOT_BASE_IMAGE}`, "RUN apt-get update \\", "  && apt-get install -y --no-install-recommends openssl ca-certificates \\", "  && rm -rf /var/lib/apt/lists/*", "WORKDIR /opt/migrator", `RUN npm install --omit=dev --no-audit --no-fund prisma@${PRISMA_VERSION}`, ""].join("\n"),
-    );
-    docker(["build", "-t", ONE_SHOT_IMAGE, context]);
+    attachReviewedImageToOperatorTag(built);
   } finally {
-    fs.rmSync(context, { recursive: true, force: true });
+    built.remove();
   }
+}
+
+function oneShotImageId(): string {
+  const id = docker(["image", "inspect", "--format", "{{.Id}}", ONE_SHOT_IMAGE]);
+  if (!/^sha256:[0-9a-f]{64}$/.test(id)) throw new Error("one-shot image id is not a Docker digest");
+  return id;
 }
 
 function requirePart<T>(value: T | null): T {

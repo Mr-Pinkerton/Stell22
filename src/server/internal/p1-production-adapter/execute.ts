@@ -36,7 +36,8 @@ import {
   type TargetDeclaration,
   type TargetFacts,
 } from "@/server/internal/p1-production-adapter/identity";
-import { planProductionOneShot } from "@/server/internal/p1-production-adapter/oneshot";
+import { acceptOneShotImage, planProductionOneShot, type OneShotImageObservation } from "@/server/internal/p1-production-adapter/oneshot";
+import { IMAGE_ID, SHA256 } from "@/server/internal/p1-production-adapter/contract";
 import {
   loadPersistedReleaseBackup,
   readClaimedWitness,
@@ -44,17 +45,24 @@ import {
   type RecoverySnapshot,
 } from "@/server/internal/p1-production-adapter/recovery";
 
+export type RecoveryEvidenceState = "NONE" | "VERIFIED";
+export type SigningInputsState = "NOT_SIGNABLE" | "INCOMPLETE" | "COMPLETE";
+
 export type AdapterResult = {
   verdict: "PREFLIGHT_ONLY" | "RECOVERY_VERIFIED" | "ALREADY_APPLIED" | "STOP" | "BLOCKED";
   code: string;
   phase: ExecutionPhase;
+  attemptId: string;
   spawned: boolean;
   retryAttempted: false;
   imageGitSha: typeof IMAGE_GIT_SHA;
+  oneShotImageId: string | null;
   targetClass: "PRODUCTION" | "TEST_OWNED_NOT_PRODUCTION";
   appUnchanged: boolean | null;
   dossierSha256: string | null;
   recoverySha256: string | null;
+  recoveryEvidence: RecoveryEvidenceState;
+  signingInputs: SigningInputsState;
 };
 
 export type AdapterRequest = {
@@ -80,6 +88,12 @@ export type OneShotResult = {
 
 export type AdapterDependencies = {
   productionDaemonPin: string | null;
+  /** Production image id from the installed pin. Null refuses production before spawn. */
+  productionOneShotImagePin: string | null;
+  /** Test-owned approved image id. Production ignores this and uses the pin. */
+  approvedOneShotImageId: string | null;
+  /** Local daemon observation of the mutable tag and of that image id. */
+  inspectOneShotImage: () => OneShotImageObservation;
   git: GitBlobSource;
   destinationRoot: string;
   lockPath: string;
@@ -138,23 +152,24 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
       observed,
       productionDaemonPin: deps.productionDaemonPin,
     });
-    const dossierSha256 = dossierDigest(observed);
+    const oneShotImageId = resolveOneShotImage(request.scope, deps, null);
+    const dossierSha256 = dossierDigest(observed, oneShotImageId);
     if (fs.existsSync(markerPath(deps.destinationRoot))) {
-      return result("BLOCKED", "AMBIGUOUS_COMPLETION", "POSTCHECK", false, null, targetClass, dossierSha256, null);
+      return result("BLOCKED", "AMBIGUOUS_COMPLETION", "POSTCHECK", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
     }
     const before = classifyP1State({ history: deps.readHistory(), schema: deps.readSchema() });
     if (before.verdict === "ALREADY_APPLIED") {
       const again = deps.inspect();
       if (!sameAppIdentity(observed.app, again.app) || again.db.id !== observed.db.id) {
-        return result("BLOCKED", "APP_IDENTITY_CHANGED", "POSTCHECK", false, false, targetClass, dossierSha256, null);
+        return result("BLOCKED", "APP_IDENTITY_CHANGED", "POSTCHECK", false, false, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
       }
-      return result("ALREADY_APPLIED", before.code, "READ_ONLY_PREFLIGHT", false, true, targetClass, dossierSha256, null);
+      return result("ALREADY_APPLIED", before.code, "READ_ONLY_PREFLIGHT", false, true, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
     }
     if (before.verdict === "STOP" || before.verdict === "BLOCKED") {
-      return result(before.verdict, before.code, "READ_ONLY_PREFLIGHT", false, null, targetClass, dossierSha256, null);
+      return result(before.verdict, before.code, "READ_ONLY_PREFLIGHT", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
     }
     if (request.intent === "PREFLIGHT") {
-      return result("PREFLIGHT_ONLY", "PREFLIGHT_RECORDED", "READ_ONLY_PREFLIGHT", false, null, targetClass, dossierSha256, null);
+      return result("PREFLIGHT_ONLY", "PREFLIGHT_RECORDED", "READ_ONLY_PREFLIGHT", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
     }
     if (request.intent === "APPLY" && request.scope === "PRODUCTION" && readInstalledTrustPublicKey() === null) {
       throw refusal(
@@ -198,6 +213,9 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
         targetClass,
         dossierSha256,
         evidence.recoverySha256,
+        request.attemptId,
+        oneShotImageId,
+        "VERIFIED",
       );
     }
     lock = acquireHostLock(deps.lockPath, request.attemptId);
@@ -226,6 +244,9 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
         targetClass,
         dossierSha256,
         evidence.recoverySha256,
+        request.attemptId,
+        oneShotImageId,
+        "VERIFIED",
       );
     }
     const rebound = resolve(deps.env);
@@ -258,11 +279,13 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
       appContainerId: immediate.app.id,
       appContainerName: immediate.app.name,
       dbContainerName: immediate.db.name,
+      imageId: oneShotImageId,
     });
     const stillLocked = deps.readLockOwner()?.trim() ?? null;
     if (stillLocked !== request.attemptId) {
       throw refusal("STOP", "LOST_LOCK", "The host lock disappeared before the one-shot");
     }
+    resolveOneShotImage(request.scope, deps, oneShotImageId);
     authorize(request, deps, {
       dossierSha256,
       recoverySha256: evidence.recoverySha256,
@@ -273,13 +296,13 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     try {
       spawnResult = deps.spawnOneShot({ argv: plan.argv, env: rebound.env });
     } catch {
-      return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256);
+      return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId);
     }
     if (spawnResult.status === null || spawnResult.signal) {
-      return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256);
+      return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId);
     }
     if (spawnResult.status !== 0) {
-      return record("STOP", "PRISMA_DEPLOY_FAILED", deps.destinationRoot, targetClass, dossierSha256);
+      return record("STOP", "PRISMA_DEPLOY_FAILED", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId);
     }
     try {
       revalidateMigrationSet(set);
@@ -293,11 +316,11 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
           row.appliedStepsCount === 1,
       );
       if (after.verdict !== "ALREADY_APPLIED" || successful.length !== EXPECTED_MIGRATION_SQL_COUNT) {
-        return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256);
+        return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId);
       }
       const finalFacts = deps.inspect();
       if (!sameAppIdentity(observed.app, finalFacts.app) || finalFacts.db.id !== observed.db.id) {
-        return record("BLOCKED", "APP_IDENTITY_CHANGED", deps.destinationRoot, targetClass, dossierSha256);
+        return record("BLOCKED", "APP_IDENTITY_CHANGED", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId);
       }
       return result(
         "ALREADY_APPLIED",
@@ -308,16 +331,19 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
         targetClass,
         dossierSha256,
         evidence.recoverySha256,
+        request.attemptId,
+        oneShotImageId,
+        "VERIFIED",
       );
     } catch {
-      return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256);
+      return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId);
     }
   } catch (error) {
     if (spawned) {
-      return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, null);
+      return record("BLOCKED", "AMBIGUOUS_COMPLETION", deps.destinationRoot, targetClass, null, request.attemptId, null);
     }
     if (error instanceof RunnerRefusal) {
-      return result(error.verdict, error.code, phaseFor(request.intent), false, null, targetClass, null, null);
+      return result(error.verdict, error.code, phaseFor(request.intent), false, null, targetClass, null, null, request.attemptId, null, "NONE");
     }
     throw error;
   } finally {
@@ -399,6 +425,20 @@ function failClosed<T>(fn: () => T, code: string, message: string): T {
   }
 }
 
+function resolveOneShotImage(scope: AdapterRequest["scope"], deps: AdapterDependencies, previouslyBound: string | null): string {
+  const expected = scope === "PRODUCTION" ? deps.productionOneShotImagePin : deps.approvedOneShotImageId;
+  if (expected === null || !IMAGE_ID.test(expected)) {
+    throw refusal(
+      "STOP",
+      scope === "PRODUCTION" ? "ONESHOT_IMAGE_UNPINNED" : "ONESHOT_IMAGE_UNAPPROVED",
+      scope === "PRODUCTION"
+        ? "Production one-shot image id is not independently pinned"
+        : "Test-owned one-shot image id is not approved",
+    );
+  }
+  return acceptOneShotImage(deps.inspectOneShotImage(), previouslyBound ?? expected, previouslyBound);
+}
+
 function result(
   verdict: AdapterResult["verdict"],
   code: string,
@@ -408,19 +448,41 @@ function result(
   targetClass: AdapterResult["targetClass"],
   dossierSha256: string | null,
   recoverySha256: string | null,
+  attemptId: string,
+  oneShotImageId: string | null,
+  recoveryEvidence: RecoveryEvidenceState,
 ): AdapterResult {
+  const publishedRecovery = recoveryEvidence === "VERIFIED" ? recoverySha256 : null;
   return {
     verdict,
     code,
     phase,
+    attemptId,
     spawned,
     retryAttempted: false,
     imageGitSha: IMAGE_GIT_SHA,
+    oneShotImageId: oneShotImageId !== null && IMAGE_ID.test(oneShotImageId) ? oneShotImageId : null,
     targetClass,
     appUnchanged,
     dossierSha256,
-    recoverySha256,
+    recoverySha256: publishedRecovery,
+    recoveryEvidence,
+    signingInputs: signingInputsFor(verdict, dossierSha256, publishedRecovery, recoveryEvidence),
   };
+}
+
+function signingInputsFor(
+  verdict: AdapterResult["verdict"],
+  dossierSha256: string | null,
+  recoverySha256: string | null,
+  recoveryEvidence: RecoveryEvidenceState,
+): SigningInputsState {
+  if (verdict === "STOP" || verdict === "BLOCKED") return "NOT_SIGNABLE";
+  const dossierReady = dossierSha256 !== null && SHA256.test(dossierSha256);
+  const recoveryReady = recoveryEvidence === "VERIFIED" && recoverySha256 !== null && SHA256.test(recoverySha256);
+  if (dossierReady && recoveryReady) return "COMPLETE";
+  if (dossierReady) return "INCOMPLETE";
+  return "NOT_SIGNABLE";
 }
 
 function record(
@@ -429,15 +491,17 @@ function record(
   root: string,
   targetClass: AdapterResult["targetClass"],
   dossierSha256: string | null,
+  attemptId: string,
+  oneShotImageId: string | null,
 ): AdapterResult {
   try {
     fs.mkdirSync(root, { recursive: true });
     const target = markerPath(root);
     if (!fs.existsSync(target)) fs.writeFileSync(target, `${code}\n`, { flag: "wx" });
   } catch {
-    return result("BLOCKED", "AMBIGUOUS_COMPLETION_UNRECORDED", "POSTCHECK", true, null, targetClass, dossierSha256, null);
+    return result("BLOCKED", "AMBIGUOUS_COMPLETION_UNRECORDED", "POSTCHECK", true, null, targetClass, dossierSha256, null, attemptId, oneShotImageId, "NONE");
   }
-  return result(verdict, code, "POSTCHECK", true, code === "APP_IDENTITY_CHANGED" ? false : null, targetClass, dossierSha256, null);
+  return result(verdict, code, "POSTCHECK", true, code === "APP_IDENTITY_CHANGED" ? false : null, targetClass, dossierSha256, null, attemptId, oneShotImageId, "NONE");
 }
 
 function markerPath(root: string): string {

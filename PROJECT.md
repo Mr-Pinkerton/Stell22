@@ -1,6 +1,6 @@
 # Stell22 — Project Journal / Source of Truth
 
-Updated: 2026-10-09
+Updated: 2026-10-16
 
 This file answers three questions:
 
@@ -1423,3 +1423,7 @@ R2 (`PSR-P3-P1-PRODUCTION-ADAPTER-R2`) keeps production apply unavailable. Recov
 ## 08.44 checkpoint — production operator wiring (2026-10-16)
 
 `audit/08.44-psr-p3-p1-production-operator-wiring.md` connects the accepted adapter to a local operator runtime. Status: **OPERATOR RUNTIME — WIRED / R2 CLEANUP OWNERSHIP / TEST-OWNED PROOF**. **PRODUCTION MIGRATION — NOT AUTHORIZED**. **PRODUCTION APPLY — NOT EXECUTED**. **PRODUCTION DEPLOY — NOT AUTHORIZED**. Canonical?: **NO** until HEAD accepts and merges this candidate. Base `c424340b10a5de57303f0e955fd8ee49af1f5c58`. Tree `e8fe2412579633fcbbceb00211c1e685a732cab9`. PR #92 is merged and its post-merge CI `38875323679` succeeded. PR #93 remains open. R2 creates the disposable credential directory exclusively and does not treat a failed Docker inspect as resource absence. PR #93 R2 CI `38898857417` on `0e8437ef6136b622d0e1ba2b693cf67e79ece3e5` succeeded. R1 behavior stays: the password is not a Docker argument, cleanup removes only resources this invocation created, and preflight does not create or delete files. `imageGitSha` stays `UNVERIFIED`. The test-owned proof is not a production apply. This journal does not rewrite `audit/08.36`, `audit/08.42`, or `audit/08.43`. `audit/08.36` remains **NOT READY / EVIDENCE INCOMPLETE**. Production was not accessed.
+
+## 08.45 checkpoint — P1 release-gate correction (2026-10-16)
+
+`audit/08.45-psr-p3-p1-release-gate-correction.md` records the P1-1 and P1-2 correction. Status: **NOT READY / EVIDENCE INCOMPLETE**. **OWNER TRUST KEY — NOT INSTALLED**. **OWNER SIGNED APPROVAL — ABSENT**. **PRODUCTION VERIFY-RECOVERY — ABSENT**. **PRODUCTION MIGRATOR IMAGE — NOT PROVISIONED**. **PRODUCTION P1 — NOT AUTHORIZED**. **PRODUCTION DEPLOYMENT — NOT AUTHORIZED**. Canonical?: **NO** until HEAD accepts and merges this candidate. Base `7f9ef79e2134ba157935b0a459b3443bf848f146`. Tree `7b613c8b2090bc869fd921b8b18d96c1b88a83bd`. PR #92 and PR #93 are merged on that base; the sentence above that PR #93 remains open is the `08.44` pre-merge record and is not rewritten. The one-shot container is bound to an approved Docker image digest, and that digest is inside the dossier hash. The CLI prints the attempt id and the dossier and recovery digests, and does not present an unavailable digest as a signing input. P1-3 is not implemented. This journal does not rewrite `audit/08.36` through `audit/08.44`. `audit/08.36` remains **NOT READY / EVIDENCE INCOMPLETE**. Production was not accessed.

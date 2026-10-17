@@ -11,6 +11,10 @@ import { absentP1Schema, P1_FUNCTION_BODY } from "@/server/internal/p1-isolated-
 import type { P1SchemaEvidence } from "@/server/internal/p1-isolated-runner/schema-contract";
 import { fileReplayStore, memoryReplayStore, verifySignedAuthorization } from "@/server/internal/p1-production-adapter/authorization";
 import { runProductionAdapterCli } from "@/server/internal/p1-production-adapter/cli";
+import { ONE_SHOT_IMAGE, ONE_SHOT_BASE_IMAGE } from "@/server/internal/p1-isolated-runner/p1-release-gate";
+import { ONE_SHOT_LAUNCHER } from "@/server/internal/p1-isolated-runner/p1-release-execute";
+import { PRISMA_VERSION } from "@/server/internal/p1-isolated-runner/contract";
+import { refusal } from "@/server/internal/p1-isolated-runner/refusal";
 import {
   PRODUCTION_APP_CONTAINER,
   PRODUCTION_DATABASE_NAME,
@@ -34,9 +38,11 @@ import {
 import {
   canonicalJson,
   declarationFromFacts,
+  dossierDigest,
   type ContainerFact,
   type TargetFacts,
 } from "@/server/internal/p1-production-adapter/identity";
+import { formatOperatorResult } from "@/server/internal/p1-production-adapter/operator";
 import { RunnerRefusal } from "@/server/internal/p1-isolated-runner/refusal";
 import { executeTrustedRestore, isTrustedRestoreEvidence, type RestoreContainerFact } from "@/server/internal/p1-production-adapter/restore-controller";
 import {
@@ -48,6 +54,8 @@ import {
 } from "@/server/internal/p1-production-adapter/recovery";
 
 const ATTEMPT = "0123456789abcdef";
+const APPROVED_ONESHOT = `sha256:${"1".repeat(64)}`;
+const OTHER_ONESHOT = `sha256:${"2".repeat(64)}`;
 const APP_ID = "a".repeat(64);
 const DB_ID = "b".repeat(64);
 const APP_IMAGE = `sha256:${"c".repeat(64)}`;
@@ -394,15 +402,15 @@ describe("production P1 adapter", () => {
     expect(runProductionAdapterCli(["preflight"], log)).toBe(2);
     expect(runProductionAdapterCli(["verify-recovery"], log)).toBe(2);
     expect(runProductionAdapterCli(["apply", "--authorization", "owner.json"], log)).toBe(2);
-    expect(lines).toContain("STOP SHORTCUT_AUTHORIZATION");
-    expect(lines).toContain("STOP ATTEMPT_REQUIRED");
-    expect(lines).toContain("STOP AUTHORIZATION_PATH_REJECTED");
-    expect(lines).not.toContain("STOP PRODUCTION_APPLY_NOT_WIRED_TO_THIS_CLI");
+    expect(lines.some((line) => line.includes("code=SHORTCUT_AUTHORIZATION"))).toBe(true);
+    expect(lines.some((line) => line.includes("code=ATTEMPT_REQUIRED"))).toBe(true);
+    expect(lines.some((line) => line.includes("code=AUTHORIZATION_PATH_REJECTED"))).toBe(true);
+    expect(lines.join("\n")).not.toContain("PRODUCTION_APPLY_NOT_WIRED_TO_THIS_CLI");
+    expect(lines.join("\n")).not.toContain("DATABASE_URL=");
     const blocked: string[] = [];
     expect(runProductionAdapterCli(["apply", "--attempt", ATTEMPT], (line) => blocked.push(line))).toBe(2);
-    expect(blocked).toContain(
-      process.env.GITHUB_ACTIONS === "true" ? "STOP PRODUCTION_SCOPE_FORBIDDEN_IN_CI" : "STOP PRODUCTION_DAEMON_UNPINNED",
-    );
+    expect(blocked.some((line) => line.includes(process.env.GITHUB_ACTIONS === "true" ? "code=PRODUCTION_SCOPE_FORBIDDEN_IN_CI" : "code=PRODUCTION_DAEMON_UNPINNED"))).toBe(true);
+    expect(blocked.some((line) => line.includes("signingInputs=NOT_SIGNABLE") && line.includes("dossierSha256=UNAVAILABLE"))).toBe(true);
   });
 
   it("refuses a missing, null, or fabricated witness and does not mint one", () => {
@@ -507,6 +515,180 @@ describe("production P1 adapter", () => {
     const restarted = fileReplayStore(lost.replayDir);
     expect(() => restarted.consume(fs.readdirSync(lost.replayDir)[0] ?? "")).toThrow(RunnerRefusal);
   }, 30_000);
+
+  it("binds the dossier to the approved one-shot image and spawns that image id", () => {
+    const world = readyApply("TEST_OWNED");
+    expect(world.request.authorization && typeof world.request.authorization === "object" ? (world.request.authorization as { payload: { dossierSha256: string } }).payload.dossierSha256 : "").toBe(
+      dossierDigest(world.facts, APPROVED_ONESHOT),
+    );
+    expect(dossierDigest(world.facts, APPROVED_ONESHOT)).not.toBe(dossierDigest(world.facts, OTHER_ONESHOT));
+    let applied = false;
+    world.deps.readHistory = () => (applied ? [...successfulHistoricalRows(), successfulP1Row()] : successfulHistoricalRows());
+    world.deps.readSchema = () => (applied ? appliedSchema() : absentP1Schema());
+    world.deps.spawnOneShot = (plan) => {
+      world.spawns += 1;
+      world.argv = plan.argv;
+      applied = true;
+      return { status: 0, signal: null };
+    };
+    const result = executeProductionAdapter(world.request, world.deps);
+    expect(result).toMatchObject({
+      verdict: "ALREADY_APPLIED",
+      code: "P1_APPLIED",
+      spawned: true,
+      oneShotImageId: APPROVED_ONESHOT,
+      signingInputs: "COMPLETE",
+      recoveryEvidence: "VERIFIED",
+    });
+    expect(world.argv[world.argv.indexOf(ONE_SHOT_LAUNCHER) - 1]).toBe(APPROVED_ONESHOT);
+    expect(world.argv).not.toContain(ONE_SHOT_IMAGE);
+    expect(world.argv.join("\n")).not.toContain(world.password);
+    expect(world.argv.join("\n")).not.toContain("DATABASE_URL=");
+    const line = formatOperatorResult(result);
+    expect(line).toContain(`attempt=${ATTEMPT}`);
+    expect(line).toContain(`dossierSha256=${result.dossierSha256}`);
+    expect(line).toContain(`recoverySha256=${result.recoverySha256}`);
+    expect(line).toContain(`oneShotImageId=${APPROVED_ONESHOT}`);
+    expect(line).toContain("recoveryEvidence=VERIFIED");
+    expect(line).toContain("signingInputs=COMPLETE");
+    expect(line).not.toContain(world.password);
+    expect(line).not.toContain("DATABASE_URL");
+    expect(line).not.toMatch(/postgres(?:ql)?:\/\//i);
+  }, 30_000);
+
+  it("does not consume approval, write an ambiguous marker, or spawn when the one-shot image is missing or wrong", () => {
+    const missing = readyApply("TEST_OWNED");
+    missing.deps.inspectOneShotImage = () => {
+      throw refusal("STOP", "ONESHOT_IMAGE_MISSING", "One-shot image is not present on the local daemon");
+    };
+    const missingResult = executeProductionAdapter(missing.request, missing.deps);
+    expect(missingResult).toMatchObject({ verdict: "STOP", code: "ONESHOT_IMAGE_MISSING", spawned: false, retryAttempted: false });
+    expect(missing.spawns).toBe(0);
+    expect(fs.existsSync(missing.replayDir) && fs.readdirSync(missing.replayDir).length > 0).toBe(false);
+    expect(fs.existsSync(ambiguousMarker(missing.deps.destinationRoot))).toBe(false);
+
+    const malformed = readyApply("TEST_OWNED");
+    malformed.deps.inspectOneShotImage = () => ({ tagId: "a".repeat(40), idInspect: "a".repeat(40) });
+    expect(executeProductionAdapter(malformed.request, malformed.deps)).toMatchObject({
+      code: "ONESHOT_IMAGE_MALFORMED",
+      spawned: false,
+    });
+    expect(malformed.spawns).toBe(0);
+    expect(fs.existsSync(ambiguousMarker(malformed.deps.destinationRoot))).toBe(false);
+
+    const wrong = readyApply("TEST_OWNED");
+    wrong.deps.inspectOneShotImage = () => ({ tagId: OTHER_ONESHOT, idInspect: OTHER_ONESHOT });
+    expect(executeProductionAdapter(wrong.request, wrong.deps)).toMatchObject({ code: "ONESHOT_IMAGE_UNAPPROVED", spawned: false });
+    expect(wrong.spawns).toBe(0);
+    expect(fs.existsSync(wrong.replayDir) && fs.readdirSync(wrong.replayDir).length > 0).toBe(false);
+
+    const unpinned = worldFor("PRODUCTION");
+    unpinned.deps.productionOneShotImagePin = null;
+    unpinned.request.intent = "APPLY";
+    expect(executeProductionAdapter(unpinned.request, unpinned.deps)).toMatchObject({
+      code: "ONESHOT_IMAGE_UNPINNED",
+      spawned: false,
+    });
+  }, 30_000);
+
+  it("stops before spawn when the one-shot tag changes after the dossier was bound", () => {
+    const changed = readyApply("TEST_OWNED");
+    let reads = 0;
+    changed.deps.inspectOneShotImage = () => {
+      reads += 1;
+      const id = reads === 1 ? APPROVED_ONESHOT : OTHER_ONESHOT;
+      return { tagId: id, idInspect: id };
+    };
+    expect(executeProductionAdapter(changed.request, changed.deps)).toMatchObject({
+      code: "ONESHOT_IMAGE_CHANGED",
+      spawned: false,
+      retryAttempted: false,
+    });
+    expect(changed.spawns).toBe(0);
+    expect(fs.existsSync(changed.replayDir) && fs.readdirSync(changed.replayDir).length > 0).toBe(false);
+    expect(fs.existsSync(ambiguousMarker(changed.deps.destinationRoot))).toBe(false);
+
+    const split = readyApply("TEST_OWNED");
+    split.deps.inspectOneShotImage = () => ({ tagId: APPROVED_ONESHOT, idInspect: OTHER_ONESHOT });
+    expect(executeProductionAdapter(split.request, split.deps)).toMatchObject({ code: "ONESHOT_IMAGE_CHANGED", spawned: false });
+    expect(split.spawns).toBe(0);
+  }, 30_000);
+
+  it("prints unavailable digests as unavailable and keeps a preflight dossier incomplete", () => {
+    const preflight = worldFor("TEST_OWNED");
+    const result = executeProductionAdapter(preflight.request, preflight.deps);
+    expect(result).toMatchObject({
+      verdict: "PREFLIGHT_ONLY",
+      attemptId: ATTEMPT,
+      oneShotImageId: APPROVED_ONESHOT,
+      recoveryEvidence: "NONE",
+      signingInputs: "INCOMPLETE",
+    });
+    expect(result.dossierSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.recoverySha256).toBeNull();
+    const line = formatOperatorResult(result);
+    expect(line).toBe(
+      [
+        "verdict=PREFLIGHT_ONLY",
+        "code=PREFLIGHT_RECORDED",
+        "phase=READ_ONLY_PREFLIGHT",
+        `attempt=${ATTEMPT}`,
+        "imageGitSha=UNVERIFIED",
+        `oneShotImageId=${APPROVED_ONESHOT}`,
+        `dossierSha256=${result.dossierSha256}`,
+        "recoverySha256=UNAVAILABLE",
+        "recoveryEvidence=NONE",
+        "signingInputs=INCOMPLETE",
+        "spawned=false",
+        "retryAttempted=false",
+        "targetClass=TEST_OWNED_NOT_PRODUCTION",
+      ].join(" "),
+    );
+    const hidden = formatOperatorResult({
+      ...result,
+      recoverySha256: "b".repeat(64),
+      signingInputs: "COMPLETE",
+      recoveryEvidence: "NONE",
+    });
+    expect(hidden).toContain("recoverySha256=UNAVAILABLE");
+    expect(hidden).toContain("signingInputs=INCOMPLETE");
+    expect(hidden).not.toContain("b".repeat(64));
+
+    const lines: string[] = [];
+    expect(runProductionAdapterCli(["preflight", "--attempt", ATTEMPT], (line) => lines.push(line))).toBe(2);
+    const stopped = lines[0] ?? "";
+    const earlyCode = process.env.GITHUB_ACTIONS === "true" ? "PRODUCTION_SCOPE_FORBIDDEN_IN_CI" : "PRODUCTION_DAEMON_UNPINNED";
+    expect(stopped).toContain(`code=${earlyCode}`);
+    expect(stopped).toContain("dossierSha256=UNAVAILABLE");
+    expect(stopped).toContain("recoverySha256=UNAVAILABLE");
+    expect(stopped).toContain("oneShotImageId=UNAVAILABLE");
+    expect(stopped).toContain("signingInputs=NOT_SIGNABLE");
+    expect(stopped).toContain("recoveryEvidence=NONE");
+    expect(stopped).not.toMatch(/dossierSha256=[0-9a-f]{64}/);
+    expect(lines.join("\n")).not.toContain("DATABASE_URL");
+    expect(lines.join("\n")).not.toMatch(/postgres(?:ql)?:\/\//i);
+  });
+
+  it("pins the one-shot image recipe to a digest, a lockfile, and prisma 6.19.3", () => {
+    const recipeDir = path.join(process.cwd(), "docker/p1-oneshot");
+    const recipe = fs.readFileSync(path.join(recipeDir, "Dockerfile"), "utf8");
+    const manifest = JSON.parse(fs.readFileSync(path.join(recipeDir, "package.json"), "utf8")) as { dependencies?: { prisma?: string } };
+    const lock = JSON.parse(fs.readFileSync(path.join(recipeDir, "package-lock.json"), "utf8")) as {
+      packages?: Record<string, { version?: string; integrity?: string }>;
+    };
+    expect(recipe).toContain(`FROM ${ONE_SHOT_BASE_IMAGE}@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392`);
+    expect(recipe).toContain("npm ci --omit=dev");
+    expect(recipe).toContain("openssl=3.0.22-1~deb12u1");
+    expect(recipe).toContain("snapshot.debian.org/archive/debian-security/20261005T020725Z");
+    expect(recipe).not.toMatch(/npm install/i);
+    expect(recipe).not.toMatch(/:latest/i);
+    expect(recipe).not.toMatch(/\bpull\b/i);
+    expect(manifest.dependencies?.prisma).toBe(PRISMA_VERSION);
+    const locked = lock.packages?.["node_modules/prisma"];
+    expect(locked?.version).toBe(PRISMA_VERSION);
+    expect(locked?.integrity).toMatch(/^sha512-/);
+    expect(ONE_SHOT_IMAGE).toBe("stell22-p1-oneshot:node22");
+  });
 });
 
 type World = {
@@ -556,6 +738,9 @@ function worldFor(scope: "TEST_OWNED" | "PRODUCTION"): World {
     readLockOwner: () => (fs.existsSync(lockPath) ? fs.readFileSync(lockPath, "utf8") : null),
     resolveDockerSession: scope === "TEST_OWNED" ? () => fakeSession(facts.daemonId) : undefined,
     replay: fileReplayStore(replayDir),
+    productionOneShotImagePin: scope === "PRODUCTION" ? APPROVED_ONESHOT : null,
+    approvedOneShotImageId: scope === "TEST_OWNED" ? APPROVED_ONESHOT : null,
+    inspectOneShotImage: () => ({ tagId: APPROVED_ONESHOT, idInspect: APPROVED_ONESHOT }),
     spawnOneShot: (plan) => {
       spawns.count += 1;
       spawns.argv = [...plan.argv];
@@ -630,6 +815,10 @@ function signPayload(privateKey: KeyObject, payload: ReturnType<typeof signedPay
     payload,
     signature: sign(null, Buffer.from(canonicalJson(payload)), privateKey).toString("base64"),
   };
+}
+
+function ambiguousMarker(destinationRoot: string): string {
+  return path.join(path.dirname(destinationRoot), `${path.basename(destinationRoot)}.production-adapter-ambiguous-stop`);
 }
 
 function fakeSession(daemonId: string): DockerSession {
