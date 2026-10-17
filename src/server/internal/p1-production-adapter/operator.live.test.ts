@@ -206,6 +206,17 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
       });
       expect(retry).toMatchObject({ code: "AMBIGUOUS_COMPLETION", spawned: false });
       fs.rmSync(marker);
+      const intent = path.join(attemptRoot, "sealed.production-adapter-spawn-intent");
+      const stillBlocked = runOperatorCommand({
+        ...owned(attemptId, workRoot, "apply"),
+        testTrustPublicKey: pem,
+        authorization: consumed,
+        testSpawn: () => {
+          throw new Error("spawn intent was ignored");
+        },
+      });
+      expect(stillBlocked).toMatchObject({ code: "SPAWN_INTENT_UNCERTAIN", spawned: false });
+      fs.rmSync(intent);
       const replay = runOperatorCommand({
         ...owned(attemptId, workRoot, "apply"),
         testTrustPublicKey: pem,
