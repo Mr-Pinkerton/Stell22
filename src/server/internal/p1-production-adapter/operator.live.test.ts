@@ -124,7 +124,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
         }),
       });
       expect(recovery).toMatchObject({ verdict: "RECOVERY_VERIFIED", spawned: false, imageGitSha: "UNVERIFIED" });
-      expect(concurrent.result?.code).toBe("CONCURRENT_EXECUTION");
+      expect(concurrent.result?.code).toBe("HOST_LOCK_HELD");
       expect(dockerArgs.some((args) => args.includes(password) || args.includes("POSTGRES_PASSWORD=") || args.join("\n").match(/postgres(?:ql)?:\/\//i))).toBe(false);
       expect(dockerArgs.some((args) => args[0] === "run" && args.includes("--env-file"))).toBe(true);
       expect(fs.existsSync(path.join(attemptRoot, ".restore-secret", "postgres.env"))).toBe(false);
@@ -205,6 +205,17 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
       });
       expect(retry).toMatchObject({ code: "AMBIGUOUS_COMPLETION", spawned: false });
       fs.rmSync(marker);
+      const intent = path.join(attemptRoot, "sealed.production-adapter-spawn-intent");
+      const stillBlocked = runOperatorCommand({
+        ...owned(attemptId, workRoot, "apply"),
+        testTrustPublicKey: pem,
+        authorization: consumed,
+        testSpawn: () => {
+          throw new Error("spawn intent was ignored");
+        },
+      });
+      expect(stillBlocked).toMatchObject({ code: "SPAWN_INTENT_UNCERTAIN", spawned: false });
+      fs.rmSync(intent);
       const replay = runOperatorCommand({
         ...owned(attemptId, workRoot, "apply"),
         testTrustPublicKey: pem,

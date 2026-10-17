@@ -32,6 +32,7 @@ import {
 import { containerFactFromInspect, resolveDockerSession, type DockerSession, type VolumeMount } from "@/server/internal/p1-production-adapter/docker-runtime";
 import {
   executeProductionAdapter,
+  productionSpawnIntentPath,
   type AdapterDependencies,
   type AdapterRequest,
 } from "@/server/internal/p1-production-adapter/execute";
@@ -275,6 +276,109 @@ describe("production P1 adapter", () => {
       world.deps,
     );
     expect(repeat).toMatchObject({ verdict: "ALREADY_APPLIED", spawned: false });
+    expect(world.spawns).toBe(1);
+    expect(fs.existsSync(productionSpawnIntentPath(world.deps.destinationRoot))).toBe(false);
+  }, 30_000);
+
+  it("leaves a spawn intent when the process stops after authorization and before spawn", () => {
+    const world = readyApply("TEST_OWNED");
+    world.deps.abortBeforeSpawn = true;
+    const first = executeProductionAdapter(world.request, world.deps);
+    expect(first).toMatchObject({ verdict: "BLOCKED", code: "SPAWN_INTENT_UNCERTAIN", spawned: false, retryAttempted: false });
+    expect(fs.readdirSync(world.replayDir).length).toBeGreaterThan(0);
+    expect(fs.existsSync(productionSpawnIntentPath(world.deps.destinationRoot))).toBe(true);
+    const second = executeProductionAdapter(world.request, world.deps);
+    expect(second).toMatchObject({ verdict: "BLOCKED", code: "SPAWN_INTENT_UNCERTAIN", spawned: false });
+    expect(world.spawns).toBe(0);
+  }, 30_000);
+
+  it("keeps the spawn intent when spawn throws and refuses a second migration", () => {
+    const world = readyApply("TEST_OWNED");
+    world.deps.spawnOneShot = () => {
+      world.spawns += 1;
+      throw new Error("killed after spawn");
+    };
+    const first = executeProductionAdapter(world.request, world.deps);
+    expect(first).toMatchObject({ verdict: "BLOCKED", code: "AMBIGUOUS_COMPLETION", spawned: true, retryAttempted: false });
+    expect(fs.existsSync(productionSpawnIntentPath(world.deps.destinationRoot))).toBe(true);
+    const second = executeProductionAdapter(world.request, world.deps);
+    expect(second).toMatchObject({ verdict: "BLOCKED", code: "AMBIGUOUS_COMPLETION", spawned: false });
+    expect(world.spawns).toBe(1);
+  }, 30_000);
+
+  it("does not leave an intent marker when authorization is rejected", () => {
+    const world = readyApply("TEST_OWNED");
+    world.request.authorization = { kind: "not-an-owner-signature" };
+    const rejected = executeProductionAdapter(world.request, world.deps);
+    expect(rejected.spawned).toBe(false);
+    expect(rejected.code).not.toBe("SPAWN_INTENT_UNCERTAIN");
+    expect(rejected.code).not.toBe("AMBIGUOUS_COMPLETION");
+    expect(fs.existsSync(productionSpawnIntentPath(world.deps.destinationRoot))).toBe(false);
+    expect(world.spawns).toBe(0);
+  }, 30_000);
+
+  it("does not delete a foreign production credential directory or a symlink to one", () => {
+    const occupied = readyApply("TEST_OWNED");
+    const directory = path.join(path.dirname(occupied.deps.destinationRoot), "p1-production-credentials");
+    fs.mkdirSync(directory);
+    fs.writeFileSync(path.join(directory, "sentinel"), "keep");
+    const blocked = executeProductionAdapter(occupied.request, occupied.deps);
+    expect(blocked.code).toBe("SECRET_DIRECTORY_COLLISION");
+    expect(fs.readFileSync(path.join(directory, "sentinel"), "utf8")).toBe("keep");
+    expect(occupied.spawns).toBe(0);
+
+    const linked = readyApply("TEST_OWNED");
+    const target = path.join(path.dirname(linked.deps.destinationRoot), "foreign-credential-target");
+    const link = path.join(path.dirname(linked.deps.destinationRoot), "p1-production-credentials");
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, "sentinel"), "linked");
+    fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+    const refused = executeProductionAdapter(linked.request, linked.deps);
+    expect(refused.code).toBe("SECRET_DIRECTORY_COLLISION");
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(path.join(target, "sentinel"), "utf8")).toBe("linked");
+    expect(linked.spawns).toBe(0);
+  }, 30_000);
+
+  it("reports credential cleanup failure and leaves a directory it no longer owns", () => {
+    const world = readyApply("TEST_OWNED");
+    let applied = false;
+    world.deps.readHistory = () => (applied ? [...successfulHistoricalRows(), successfulP1Row()] : successfulHistoricalRows());
+    world.deps.readSchema = () => (applied ? appliedSchema() : absentP1Schema());
+    world.deps.spawnOneShot = () => {
+      world.spawns += 1;
+      applied = true;
+      const directory = path.join(path.dirname(world.deps.destinationRoot), "p1-production-credentials");
+      fs.writeFileSync(path.join(directory, "owner"), "other-run\n");
+      fs.writeFileSync(path.join(directory, "sentinel"), "keep");
+      return { status: 0, signal: null };
+    };
+    const result = executeProductionAdapter(world.request, world.deps);
+    expect(result).toMatchObject({ verdict: "STOP", code: "SECRET_CLEANUP_FAILED", spawned: true });
+    const directory = path.join(path.dirname(world.deps.destinationRoot), "p1-production-credentials");
+    expect(fs.readFileSync(path.join(directory, "sentinel"), "utf8")).toBe("keep");
+    expect(fs.existsSync(path.join(directory, "database.env"))).toBe(true);
+  }, 30_000);
+
+  it("does not delete a spawn intent that was replaced by another file with the same record", () => {
+    const world = readyApply("TEST_OWNED");
+    let applied = false;
+    world.deps.readHistory = () => (applied ? [...successfulHistoricalRows(), successfulP1Row()] : successfulHistoricalRows());
+    world.deps.readSchema = () => (applied ? appliedSchema() : absentP1Schema());
+    const intent = productionSpawnIntentPath(world.deps.destinationRoot);
+    let replaced = Buffer.alloc(0);
+    world.deps.spawnOneShot = () => {
+      world.spawns += 1;
+      applied = true;
+      replaced = fs.readFileSync(intent);
+      fs.rmSync(intent);
+      fs.writeFileSync(intent, replaced);
+      return { status: 0, signal: null };
+    };
+    const result = executeProductionAdapter(world.request, world.deps);
+    expect(result.verdict).not.toBe("ALREADY_APPLIED");
+    expect(result.spawned).toBe(true);
+    expect(fs.readFileSync(intent).equals(replaced)).toBe(true);
     expect(world.spawns).toBe(1);
   }, 30_000);
 
