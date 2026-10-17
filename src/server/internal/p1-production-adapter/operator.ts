@@ -35,6 +35,7 @@ import { executeProductionAdapter, type AdapterResult, type OneShotPlan, type On
 import { ONE_SHOT_IMAGE } from "@/server/internal/p1-isolated-runner/p1-release-gate";
 import type { OneShotImageObservation } from "@/server/internal/p1-production-adapter/oneshot";
 import { declarationFromFacts, type TargetFacts } from "@/server/internal/p1-production-adapter/identity";
+import { acquireOperatorHostLock, operatorHostLockPath, type OperatorHostLock } from "@/server/internal/p1-production-adapter/host-lock";
 import { publishReleaseBackup, type ReleaseBackupWitness } from "@/server/internal/p1-production-adapter/recovery";
 import type { RestoreContainerFact } from "@/server/internal/p1-production-adapter/restore-controller";
 
@@ -48,9 +49,10 @@ import type { RestoreContainerFact } from "@/server/internal/p1-production-adapt
  * Boundaries:
  * - preflight reads containers and the catalog. It does not create directories, delete files, or mutate Docker.
  * - verify-recovery is the separate authorization to create this attempt's backup and a disposable restore.
- *   It holds an exclusive attempt lock and removes only the disposable resources that invocation created.
+ *   It holds the host-wide operator lock and an exclusive attempt lock, and removes only the disposable resources that invocation created.
  * - apply uses the persisted backup, the installed production approval, and one pinned P1 migrate.
- *   It does not replace an existing backup and it does not retry an ambiguous migrate.
+ *   It holds the same host-wide lock. It does not replace an existing backup and it does not retry an ambiguous migrate.
+ * - preflight does not acquire either lock.
  * Disposable database credentials travel in a mode 0600 env file. They are not Docker arguments.
  */
 
@@ -225,10 +227,15 @@ function runBound(
     );
   }
   const invocationId = randomBytes(16).toString("hex");
+  let hostLock: OperatorHostLock | null = null;
   let lock: { release: () => void } | null = null;
   let lockReleaseError: unknown = null;
   let result: AdapterResult | null = null;
   try {
+    hostLock = acquireOperatorHostLock(operatorHostLockPath(request.scope, path.dirname(paths.root)), {
+      attemptId: request.attemptId,
+      command: request.command === "verify-recovery" ? "verify-recovery" : "apply",
+    });
     fs.mkdirSync(paths.root, { recursive: true, mode: 0o700 });
     lock = acquireOperatorLock(path.join(paths.root, OPERATOR_LOCK_FILE), `${request.attemptId}:${invocationId}`);
     if (request.command === "verify-recovery") {
@@ -262,6 +269,13 @@ function runBound(
         lock.release();
       } catch (error) {
         lockReleaseError = error;
+      }
+    }
+    if (hostLock) {
+      try {
+        hostLock.release();
+      } catch (error) {
+        lockReleaseError = lockReleaseError ?? error;
       }
     }
   }

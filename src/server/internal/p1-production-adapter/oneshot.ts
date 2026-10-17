@@ -68,6 +68,7 @@ export function planProductionOneShot(input: {
   appContainerName: string;
   dbContainerName: string;
   imageId: string;
+  ownerToken: string;
 }): OneShotPlan {
   if (input.dnsAlias !== PRODUCTION_DNS_ALIAS) {
     throw refusal("STOP", "NETWORK_ALIAS_MISMATCH", "One-shot hostname is not the compose dns alias");
@@ -126,7 +127,7 @@ export function planProductionOneShot(input: {
   if (!argv.includes("--entrypoint") || !argv.includes("node") || !argv.includes(input.networkName)) {
     throw refusal("STOP", "FORBIDDEN_PRISMA_COMMAND", "One-shot command is not migrate deploy");
   }
-  writeCredentialFiles(input.credentialDir, secretPath, launcherPath, url, input.password);
+  claimProductionCredential(input.credentialDir, secretPath, launcherPath, url, input.password, input.ownerToken);
   return { argv };
 }
 
@@ -147,26 +148,116 @@ function connectionUrl(input: {
   return url;
 }
 
-function writeCredentialFiles(
+function claimProductionCredential(
   directory: string,
   secretPath: string,
   launcherPath: string,
   url: URL,
   password: string,
+  ownerToken: string,
 ): void {
-  fs.rmSync(directory, { recursive: true, force: true });
-  fs.mkdirSync(directory, { recursive: false, mode: 0o700 });
-  const handle = fs.openSync(secretPath, "wx", 0o600);
+  if (ownerToken.length === 0 || /[\r\n]/.test(ownerToken)) {
+    throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Production credential owner is not usable");
+  }
+  if (credentialPathKind(directory) !== "absent") {
+    throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Production credential directory already exists");
+  }
+  let created = false;
   try {
-    fs.writeFileSync(handle, `DATABASE_URL=${url.href}\n`);
+    try {
+      fs.mkdirSync(directory, { recursive: false, mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Production credential directory already exists");
+      }
+      throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Production credential directory could not be created");
+    }
+    if (credentialPathKind(directory) !== "directory") {
+      throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Production credential directory is not a real directory");
+    }
+    writeExclusiveCredential(path.join(directory, "owner"), `${ownerToken}\n`);
+    created = true;
+    writeExclusiveCredential(secretPath, `DATABASE_URL=${url.href}\n`);
+    if (LAUNCHER_SOURCE.includes(password) || /postgres(?:ql)?:\/\//i.test(LAUNCHER_SOURCE)) {
+      throw refusal("STOP", "CREDENTIAL_LEAK", "Migration launcher contains a credential");
+    }
+    writeExclusiveCredential(launcherPath, LAUNCHER_SOURCE);
+  } catch (error) {
+    if (created) {
+      try {
+        releaseProductionCredential(directory, ownerToken);
+      } catch {
+        throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential cleanup did not finish");
+      }
+    }
+    throw error;
+  }
+}
+
+export function releaseProductionCredential(directory: string, ownerToken: string): void {
+  const directoryKind = credentialPathKind(directory);
+  if (directoryKind === "absent") return;
+  if (directoryKind !== "directory") {
+    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential directory is no longer a real directory");
+  }
+  const ownerPath = path.join(directory, "owner");
+  const secretPath = path.join(directory, "database.env");
+  const launcherPath = path.join(directory, "migrate.cjs");
+  if (credentialPathKind(ownerPath) !== "file") {
+    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential owner file is not a regular file");
+  }
+  if (fs.readFileSync(ownerPath, "utf8").trim() !== ownerToken) {
+    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential directory is not owned by this run");
+  }
+  removeOwnedCredentialFile(secretPath);
+  removeOwnedCredentialFile(launcherPath);
+  removeOwnedCredentialFile(ownerPath);
+  if (fs.readdirSync(directory).length > 0) {
+    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential directory still holds files");
+  }
+  if (credentialPathKind(directory) !== "directory") {
+    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential directory changed before removal");
+  }
+  fs.rmdirSync(directory);
+}
+
+function removeOwnedCredentialFile(filePath: string): void {
+  const kind = credentialPathKind(filePath);
+  if (kind === "absent") return;
+  if (kind !== "file") {
+    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential file is not a regular file");
+  }
+  fs.rmSync(filePath);
+}
+
+function writeExclusiveCredential(filePath: string, body: string): void {
+  if (credentialPathKind(filePath) !== "absent") {
+    throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Production credential file already exists");
+  }
+  const handle = fs.openSync(filePath, "wx", 0o600);
+  try {
+    fs.writeFileSync(handle, body, { encoding: "utf8" });
+    fs.fsyncSync(handle);
   } finally {
     fs.closeSync(handle);
   }
-  fs.chmodSync(secretPath, 0o600);
-  if (LAUNCHER_SOURCE.includes(password) || /postgres(?:ql)?:\/\//i.test(LAUNCHER_SOURCE)) {
-    throw refusal("STOP", "CREDENTIAL_LEAK", "Migration launcher contains a credential");
+  fs.chmodSync(filePath, 0o600);
+  if (credentialPathKind(filePath) !== "file") {
+    throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Production credential file is not a regular file");
   }
-  fs.writeFileSync(launcherPath, LAUNCHER_SOURCE, { mode: 0o600 });
+}
+
+function credentialPathKind(target: string): "absent" | "symlink" | "directory" | "file" | "other" {
+  try {
+    const stat = fs.lstatSync(target);
+    if (stat.isSymbolicLink()) return "symlink";
+    if (stat.isDirectory()) return "directory";
+    if (stat.isFile()) return "file";
+    return "other";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+    throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Production credential path could not be classified");
+  }
 }
 
 function dockerPath(value: string): string {

@@ -36,7 +36,7 @@ import {
   type TargetDeclaration,
   type TargetFacts,
 } from "@/server/internal/p1-production-adapter/identity";
-import { acceptOneShotImage, planProductionOneShot, type OneShotImageObservation } from "@/server/internal/p1-production-adapter/oneshot";
+import { acceptOneShotImage, planProductionOneShot, releaseProductionCredential, type OneShotImageObservation } from "@/server/internal/p1-production-adapter/oneshot";
 import { IMAGE_ID, SHA256 } from "@/server/internal/p1-production-adapter/contract";
 import {
   loadPersistedReleaseBackup,
@@ -117,6 +117,8 @@ export type AdapterDependencies = {
   testTrustPublicKey?: string;
   replay?: ReplayStore;
   spawnOneShot: (plan: OneShotPlan) => OneShotResult;
+  /** Test-owned crash injection. Production ignores it. */
+  abortBeforeSpawn?: boolean;
 };
 
 /**
@@ -128,7 +130,7 @@ export type AdapterDependencies = {
 export function executeProductionAdapter(request: AdapterRequest, deps: AdapterDependencies): AdapterResult {
   let spawned = false;
   let lock: { release: () => void } | null = null;
-  let credentialDir: string | null = null;
+  let credentialOwner: { directory: string; ownerToken: string } | null = null;
   const targetClass = request.scope === "PRODUCTION" ? "PRODUCTION" : "TEST_OWNED_NOT_PRODUCTION";
   try {
     if (request.databaseUrl !== undefined) {
@@ -154,8 +156,11 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     });
     const oneShotImageId = resolveOneShotImage(request.scope, deps, null);
     const dossierSha256 = dossierDigest(observed, oneShotImageId);
-    if (fs.existsSync(markerPath(deps.destinationRoot))) {
+    if (pathKind(markerPath(deps.destinationRoot)) !== "absent") {
       return result("BLOCKED", "AMBIGUOUS_COMPLETION", "POSTCHECK", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
+    }
+    if (pathKind(productionSpawnIntentPath(deps.destinationRoot)) !== "absent") {
+      return result("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "POSTCHECK", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
     }
     const before = classifyP1State({ history: deps.readHistory(), schema: deps.readSchema() });
     if (before.verdict === "ALREADY_APPLIED") {
@@ -267,7 +272,7 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     if (!request.databasePassword) {
       throw refusal("STOP", "RUNTIME_UNAUTHENTICATED", "Database credential is not usable");
     }
-    credentialDir = path.join(path.dirname(deps.destinationRoot), "p1-production-credentials");
+    const credentialDir = path.join(path.dirname(deps.destinationRoot), "p1-production-credentials");
     const plan = planProductionOneShot({
       networkName: immediate.networkName,
       dnsAlias: immediate.dnsAlias,
@@ -280,17 +285,28 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
       appContainerName: immediate.app.name,
       dbContainerName: immediate.db.name,
       imageId: oneShotImageId,
+      ownerToken: request.attemptId,
     });
+    credentialOwner = { directory: credentialDir, ownerToken: request.attemptId };
     const stillLocked = deps.readLockOwner()?.trim() ?? null;
     if (stillLocked !== request.attemptId) {
       throw refusal("STOP", "LOST_LOCK", "The host lock disappeared before the one-shot");
     }
     resolveOneShotImage(request.scope, deps, oneShotImageId);
-    authorize(request, deps, {
-      dossierSha256,
-      recoverySha256: evidence.recoverySha256,
-      daemonId: observed.daemonId,
-    });
+    writeSpawnIntent(deps.destinationRoot, request.attemptId);
+    try {
+      authorize(request, deps, {
+        dossierSha256,
+        recoverySha256: evidence.recoverySha256,
+        daemonId: observed.daemonId,
+      });
+    } catch (error) {
+      removeOwnedSpawnIntent(deps.destinationRoot, request.attemptId);
+      throw error;
+    }
+    if (request.scope === "TEST_OWNED" && deps.abortBeforeSpawn === true) {
+      return result("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "POSTCHECK", false, null, targetClass, dossierSha256, null, request.attemptId, oneShotImageId, "NONE");
+    }
     spawned = true;
     let spawnResult: OneShotResult;
     try {
@@ -322,6 +338,7 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
       if (!sameAppIdentity(observed.app, finalFacts.app) || finalFacts.db.id !== observed.db.id) {
         return record("BLOCKED", "APP_IDENTITY_CHANGED", deps.destinationRoot, targetClass, dossierSha256, request.attemptId, oneShotImageId);
       }
+      removeOwnedSpawnIntent(deps.destinationRoot, request.attemptId);
       return result(
         "ALREADY_APPLIED",
         after.code,
@@ -347,8 +364,28 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     }
     throw error;
   } finally {
+    let cleanupFailure: AdapterResult | null = null;
+    if (credentialOwner) {
+      try {
+        releaseProductionCredential(credentialOwner.directory, credentialOwner.ownerToken);
+      } catch (error) {
+        cleanupFailure = result(
+          "STOP",
+          error instanceof RunnerRefusal ? error.code : "SECRET_CLEANUP_FAILED",
+          "POSTCHECK",
+          spawned,
+          null,
+          targetClass,
+          null,
+          null,
+          request.attemptId,
+          null,
+          "NONE",
+        );
+      }
+    }
     lock?.release();
-    if (credentialDir) fs.rmSync(credentialDir, { recursive: true, force: true });
+    if (cleanupFailure) return cleanupFailure;
   }
 }
 
@@ -504,6 +541,58 @@ function record(
   return result(verdict, code, "POSTCHECK", true, code === "APP_IDENTITY_CHANGED" ? false : null, targetClass, dossierSha256, null, attemptId, oneShotImageId, "NONE");
 }
 
+export function productionSpawnIntentPath(root: string): string {
+  return path.join(path.dirname(root), `${path.basename(root)}.production-adapter-spawn-intent`);
+}
+
 function markerPath(root: string): string {
   return path.join(path.dirname(root), `${path.basename(root)}.production-adapter-ambiguous-stop`);
+}
+
+function writeSpawnIntent(root: string, attemptId: string): void {
+  const target = productionSpawnIntentPath(root);
+  if (pathKind(target) !== "absent") {
+    throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "A spawn intent marker already exists");
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  const handle = fs.openSync(target, "wx", 0o600);
+  try {
+    fs.writeFileSync(handle, `${JSON.stringify({ kind: "P1_SPAWN_INTENT", attemptId, phase: "BEFORE_SPAWN" })}\n`, "utf8");
+    fs.fsyncSync(handle);
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+function removeOwnedSpawnIntent(root: string, attemptId: string): void {
+  const target = productionSpawnIntentPath(root);
+  const kind = pathKind(target);
+  if (kind === "absent") return;
+  if (kind !== "file") {
+    throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker is not a regular file");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(target, "utf8"));
+  } catch {
+    throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker is not readable");
+  }
+  const attempt = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as { attemptId?: unknown }).attemptId : null;
+  if (attempt !== attemptId) {
+    throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker belongs to another attempt");
+  }
+  fs.unlinkSync(target);
+}
+
+function pathKind(target: string): "absent" | "symlink" | "directory" | "file" | "other" {
+  try {
+    const stat = fs.lstatSync(target);
+    if (stat.isSymbolicLink()) return "symlink";
+    if (stat.isDirectory()) return "directory";
+    if (stat.isFile()) return "file";
+    return "other";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+    throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent path could not be classified");
+  }
 }
