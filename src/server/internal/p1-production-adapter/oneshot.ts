@@ -69,6 +69,16 @@ export type ProductionCredentialClaim = {
     secret: FileIdentity;
     launcher: FileIdentity;
   };
+  /**
+   * Descriptors from the creating `open`. They stay open until release so a
+   * deleted inode cannot be reused by a replacement before the identity check.
+   * A claim without them is not proof of ownership.
+   */
+  handles?: {
+    owner: number;
+    secret: number;
+    launcher: number;
+  };
 };
 
 export type OneShotPlan = {
@@ -180,9 +190,9 @@ function claimProductionCredential(
     throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Production credential directory already exists");
   }
   const ownerToken = randomBytes(16).toString("hex");
-  let owner: FileIdentity | null = null;
-  let secret: FileIdentity | null = null;
-  let launcher: FileIdentity | null = null;
+  let owner: OpenedFile | null = null;
+  let secret: OpenedFile | null = null;
+  let launcher: OpenedFile | null = null;
   try {
     try {
       fs.mkdirSync(directory, { recursive: false, mode: 0o700 });
@@ -207,56 +217,85 @@ function claimProductionCredential(
       throw refusal("STOP", "CREDENTIAL_LEAK", "Migration launcher contains a credential");
     }
     launcher = createOwnedFile(launcherPath, LAUNCHER_SOURCE, {});
-    return { directory, ownerToken, files: { owner, secret, launcher } };
+    return {
+      directory,
+      ownerToken,
+      files: { owner: owner.identity, secret: secret.identity, launcher: launcher.identity },
+      handles: { owner: owner.handle, secret: secret.handle, launcher: launcher.handle },
+    };
   } catch (error) {
+    let cleanupFailed = false;
     for (const created of [
-      launcher === null ? null : { filePath: launcherPath, identity: launcher },
-      secret === null ? null : { filePath: secretPath, identity: secret },
-      owner === null ? null : { filePath: path.join(directory, "owner"), identity: owner },
+      launcher === null ? null : { filePath: launcherPath, opened: launcher },
+      secret === null ? null : { filePath: secretPath, opened: secret },
+      owner === null ? null : { filePath: path.join(directory, "owner"), opened: owner },
     ]) {
       if (!created) continue;
       try {
-        unlinkOwnedFile(created.filePath, created.identity);
+        unlinkOwnedFile(created.filePath, created.opened.identity);
       } catch {
-        throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential cleanup did not finish");
+        cleanupFailed = true;
+      }
+      cleanupFailed = closeHandle(created.opened.handle) || cleanupFailed;
+    }
+    if (!cleanupFailed && credentialPathKind(directory) === "directory") {
+      try {
+        if (fs.readdirSync(directory).length === 0) fs.rmdirSync(directory);
+      } catch {
+        cleanupFailed = true;
       }
     }
-    if (credentialPathKind(directory) === "directory" && fs.readdirSync(directory).length === 0) {
-      fs.rmdirSync(directory);
+    if (cleanupFailed) {
+      throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential cleanup did not finish");
     }
     throw error;
   }
 }
 
 export function releaseProductionCredential(claim: ProductionCredentialClaim): void {
-  const directoryKind = credentialPathKind(claim.directory);
-  if (directoryKind === "absent") return;
-  if (directoryKind !== "directory") {
-    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential directory is no longer a real directory");
+  const handles = claim.handles;
+  try {
+    const directoryKind = credentialPathKind(claim.directory);
+    if (directoryKind === "absent") return;
+    if (!handles) {
+      throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential cleanup has no creating descriptor");
+    }
+    assertPinned(handles.owner, claim.files.owner);
+    assertPinned(handles.secret, claim.files.secret);
+    assertPinned(handles.launcher, claim.files.launcher);
+    if (directoryKind !== "directory") {
+      throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential directory is no longer a real directory");
+    }
+    const ownerPath = path.join(claim.directory, "owner");
+    const secretPath = path.join(claim.directory, "database.env");
+    const launcherPath = path.join(claim.directory, "migrate.cjs");
+    const names = fs.readdirSync(claim.directory).slice().sort();
+    if (names.join("\n") !== ["database.env", "migrate.cjs", "owner"].join("\n")) {
+      throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential directory holds an unexpected entry");
+    }
+    const ownerBody = readOwnedFile(ownerPath, claim.files.owner);
+    if (ownerBody.toString("utf8") !== `${claim.ownerToken}\n`) {
+      throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential owner record is not the record this run created");
+    }
+    readOwnedFile(secretPath, claim.files.secret);
+    readOwnedFile(launcherPath, claim.files.launcher);
+    unlinkOwnedFile(secretPath, claim.files.secret);
+    unlinkOwnedFile(launcherPath, claim.files.launcher);
+    unlinkOwnedFile(ownerPath, claim.files.owner);
+    if (fs.readdirSync(claim.directory).length > 0) {
+      throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential directory still holds files");
+    }
+    if (credentialPathKind(claim.directory) !== "directory") {
+      throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential directory changed before removal");
+    }
+    fs.rmdirSync(claim.directory);
+  } finally {
+    if (handles) {
+      closeHandle(handles.secret);
+      closeHandle(handles.launcher);
+      closeHandle(handles.owner);
+    }
   }
-  const ownerPath = path.join(claim.directory, "owner");
-  const secretPath = path.join(claim.directory, "database.env");
-  const launcherPath = path.join(claim.directory, "migrate.cjs");
-  const names = fs.readdirSync(claim.directory).slice().sort();
-  if (names.join("\n") !== ["database.env", "migrate.cjs", "owner"].join("\n")) {
-    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential directory holds an unexpected entry");
-  }
-  const ownerBody = readOwnedFile(ownerPath, claim.files.owner);
-  if (ownerBody.toString("utf8") !== `${claim.ownerToken}\n`) {
-    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential owner record is not the record this run created");
-  }
-  readOwnedFile(secretPath, claim.files.secret);
-  readOwnedFile(launcherPath, claim.files.launcher);
-  unlinkOwnedFile(secretPath, claim.files.secret);
-  unlinkOwnedFile(launcherPath, claim.files.launcher);
-  unlinkOwnedFile(ownerPath, claim.files.owner);
-  if (fs.readdirSync(claim.directory).length > 0) {
-    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential directory still holds files");
-  }
-  if (credentialPathKind(claim.directory) !== "directory") {
-    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential directory changed before removal");
-  }
-  fs.rmdirSync(claim.directory);
 }
 
 function readOwnedFile(filePath: string, expected: FileIdentity): Buffer {
@@ -284,7 +323,30 @@ function unlinkOwnedFile(filePath: string, expected: FileIdentity): void {
   fs.unlinkSync(filePath);
 }
 
-function createOwnedFile(filePath: string, body: string, fault: { failWrite?: boolean; failClose?: boolean }): FileIdentity {
+type OpenedFile = { identity: FileIdentity; handle: number };
+
+function assertPinned(handle: number, expected: FileIdentity): void {
+  let pinned: FileIdentity | null;
+  try {
+    pinned = fileIdentity(fs.fstatSync(handle));
+  } catch {
+    pinned = null;
+  }
+  if (pinned === null || !sameFileIdentity(pinned, expected)) {
+    throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential descriptor is not the file this run created");
+  }
+}
+
+function closeHandle(handle: number): boolean {
+  try {
+    fs.closeSync(handle);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function createOwnedFile(filePath: string, body: string, fault: { failWrite?: boolean; failClose?: boolean }): OpenedFile {
   if (credentialPathKind(filePath) !== "absent") {
     throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Production credential file already exists");
   }
@@ -309,12 +371,11 @@ function createOwnedFile(filePath: string, body: string, fault: { failWrite?: bo
     }
     if (fault.failClose) throw new Error("injected credential close failure");
     fs.fchmodSync(handle, 0o600);
-    closeOnce();
     const settled = fileIdentity(fs.lstatSync(filePath));
     if (settled === null || !sameFileIdentity(settled, identity)) {
       throw refusal("STOP", "SECRET_DIRECTORY_COLLISION", "Production credential file changed before it was recorded");
     }
-    return identity;
+    return { identity, handle };
   } catch (error) {
     if (identity === null) {
       try {
@@ -323,17 +384,17 @@ function createOwnedFile(filePath: string, body: string, fault: { failWrite?: bo
         identity = null;
       }
     }
-    try {
-      closeOnce();
-    } catch {
-      // The partial file stays evidence when it cannot be closed or removed.
-    }
     if (identity) {
       try {
         unlinkOwnedFile(filePath, identity);
       } catch {
         // A partial file that cannot be matched is left in place and is not returned as owned.
       }
+    }
+    try {
+      closeOnce();
+    } catch {
+      // The partial file stays evidence when it cannot be closed.
     }
     if (error instanceof RunnerRefusal) throw error;
     throw refusal("STOP", "SECRET_CLEANUP_FAILED", "Production credential file was not finished");

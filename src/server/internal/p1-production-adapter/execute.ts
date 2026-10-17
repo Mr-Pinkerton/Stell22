@@ -550,7 +550,7 @@ function markerPath(root: string): string {
   return path.join(path.dirname(root), `${path.basename(root)}.production-adapter-ambiguous-stop`);
 }
 
-type SpawnIntentIdentity = { identity: FileIdentity; nonce: string; attemptId: string };
+type SpawnIntentIdentity = { identity: FileIdentity; nonce: string; attemptId: string; handle: number };
 
 const spawnIntentIdentities = new Map<string, SpawnIntentIdentity>();
 
@@ -562,6 +562,7 @@ function writeSpawnIntent(root: string, attemptId: string): void {
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   const nonce = randomBytes(16).toString("hex");
   const handle = fs.openSync(target, "wx", 0o600);
+  let committed = false;
   try {
     fs.writeFileSync(handle, `${JSON.stringify({ kind: "P1_SPAWN_INTENT", attemptId, nonce, phase: "BEFORE_SPAWN" })}\n`, "utf8");
     fs.fsyncSync(handle);
@@ -569,9 +570,33 @@ function writeSpawnIntent(root: string, attemptId: string): void {
     if (identity === null) {
       throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker has no file identity");
     }
-    spawnIntentIdentities.set(target, { identity, nonce, attemptId });
+    const settled = fileIdentity(fs.lstatSync(target));
+    if (settled === null || !sameFileIdentity(settled, identity)) {
+      throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker changed before it was recorded");
+    }
+    spawnIntentIdentities.set(target, { identity, nonce, attemptId, handle });
+    committed = true;
+  } catch (error) {
+    try {
+      const pinned = fileIdentity(fs.fstatSync(handle));
+      const current = fs.lstatSync(target);
+      const identity = fileIdentity(current);
+      if (pinned && identity && !current.isSymbolicLink() && sameFileIdentity(identity, pinned)) {
+        fs.unlinkSync(target);
+      }
+    } catch {
+      // An unfinished marker stays evidence and is not recorded as owned.
+    }
+    if (error instanceof RunnerRefusal) throw error;
+    throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker could not be written");
   } finally {
-    fs.closeSync(handle);
+    if (!committed) {
+      try {
+        fs.closeSync(handle);
+      } catch {
+        // The unfinished marker stays evidence.
+      }
+    }
   }
 }
 
@@ -581,36 +606,49 @@ function removeOwnedSpawnIntent(root: string, attemptId: string): void {
   if (!owned || owned.attemptId !== attemptId) {
     throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker was not created by this run");
   }
-  const kind = pathKind(target);
-  if (kind === "absent") return;
-  if (kind !== "file") {
-    throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker is not a regular file");
-  }
-  const handle = fs.openSync(target, "r");
   try {
-    const current = fileIdentity(fs.fstatSync(handle));
-    if (current === null || !sameFileIdentity(current, owned.identity)) {
-      throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker is not the file this run created");
+    const pinned = fileIdentity(fs.fstatSync(owned.handle));
+    if (pinned === null || !sameFileIdentity(pinned, owned.identity)) {
+      throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent descriptor is not the file this run created");
     }
-    let parsed: unknown;
+    const kind = pathKind(target);
+    if (kind === "absent") return;
+    if (kind !== "file") {
+      throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker is not a regular file");
+    }
+    const handle = fs.openSync(target, "r");
     try {
-      parsed = JSON.parse(fs.readFileSync(handle, "utf8"));
-    } catch {
-      throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker is not readable");
+      const current = fileIdentity(fs.fstatSync(handle));
+      if (current === null || !sameFileIdentity(current, owned.identity)) {
+        throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker is not the file this run created");
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(fs.readFileSync(handle, "utf8"));
+      } catch {
+        throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker is not readable");
+      }
+      const record = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as { attemptId?: unknown; nonce?: unknown }) : null;
+      if (record?.attemptId !== attemptId || record.nonce !== owned.nonce) {
+        throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker belongs to another attempt");
+      }
+    } finally {
+      fs.closeSync(handle);
     }
-    const record = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as { attemptId?: unknown; nonce?: unknown }) : null;
-    if (record?.attemptId !== attemptId || record.nonce !== owned.nonce) {
-      throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker belongs to another attempt");
+    const settledStat = fs.lstatSync(target);
+    const settled = fileIdentity(settledStat);
+    if (settledStat.isSymbolicLink() || settled === null || !sameFileIdentity(settled, owned.identity)) {
+      throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker changed before removal");
     }
+    fs.unlinkSync(target);
   } finally {
-    fs.closeSync(handle);
+    try {
+      fs.closeSync(owned.handle);
+    } catch {
+      // The ownership decision was already made while this descriptor was open.
+    }
+    spawnIntentIdentities.delete(target);
   }
-  const settled = fileIdentity(fs.lstatSync(target));
-  if (settled === null || !sameFileIdentity(settled, owned.identity)) {
-    throw refusal("BLOCKED", "SPAWN_INTENT_UNCERTAIN", "Spawn intent marker changed before removal");
-  }
-  fs.unlinkSync(target);
-  spawnIntentIdentities.delete(target);
 }
 
 function pathKind(target: string): "absent" | "symlink" | "directory" | "file" | "other" {

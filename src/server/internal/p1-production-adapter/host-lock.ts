@@ -83,13 +83,17 @@ export function acquireOperatorHostLock(
         partial = null;
       }
     }
-    fs.closeSync(handle);
     if (partial) {
       try {
         unlinkIdentified(lockPath, partial);
       } catch {
         // The partial record stays evidence and is not treated as an owned lock.
       }
+    }
+    try {
+      fs.closeSync(handle);
+    } catch {
+      // A descriptor that cannot be closed leaves the partial record as evidence.
     }
     throw refusal("STOP", "HOST_LOCK_UNAVAILABLE", "Host lock record could not be written");
   }
@@ -100,25 +104,37 @@ export function acquireOperatorHostLock(
     release() {
       if (released) return;
       released = true;
-      fs.closeSync(handle);
-      const kind = pathKind(lockPath);
-      if (kind !== "file") {
-        throw refusal("BLOCKED", "HOST_LOCK_UNCERTAIN", "Host lock disappeared before release");
-      }
-      const opened = fs.openSync(lockPath, "r");
       try {
-        const currentIdentity = fileIdentity(fs.fstatSync(opened));
-        if (currentIdentity === null || !sameFileIdentity(currentIdentity, identity)) {
-          throw refusal("STOP", "HOST_LOCK_OWNER_MISMATCH", "Host lock is not the file this run created");
+        const pinned = fileIdentity(fs.fstatSync(handle));
+        const kind = pathKind(lockPath);
+        if (pinned === null || !sameFileIdentity(pinned, identity) || kind !== "file") {
+          throw refusal(
+            "BLOCKED",
+            kind === "file" ? "HOST_LOCK_OWNER_MISMATCH" : "HOST_LOCK_UNCERTAIN",
+            "Host lock is not the file this run created",
+          );
         }
-        const current = parseRecord(fs.readFileSync(opened, "utf8"));
-        if (current === null || current.owner !== owner) {
-          throw refusal("STOP", "HOST_LOCK_OWNER_MISMATCH", "Host lock is not owned by this run");
+        const opened = fs.openSync(lockPath, "r");
+        try {
+          const currentIdentity = fileIdentity(fs.fstatSync(opened));
+          if (currentIdentity === null || !sameFileIdentity(currentIdentity, identity)) {
+            throw refusal("STOP", "HOST_LOCK_OWNER_MISMATCH", "Host lock is not the file this run created");
+          }
+          const current = parseRecord(fs.readFileSync(opened, "utf8"));
+          if (current === null || current.owner !== owner) {
+            throw refusal("STOP", "HOST_LOCK_OWNER_MISMATCH", "Host lock is not owned by this run");
+          }
+        } finally {
+          fs.closeSync(opened);
         }
+        unlinkIdentified(lockPath, identity);
       } finally {
-        fs.closeSync(opened);
+        try {
+          fs.closeSync(handle);
+        } catch {
+          // The ownership decision was already made while this descriptor was open.
+        }
       }
-      unlinkIdentified(lockPath, identity);
     },
   };
 }
