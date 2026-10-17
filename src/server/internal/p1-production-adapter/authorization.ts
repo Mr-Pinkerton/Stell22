@@ -19,7 +19,8 @@ import { refusal, RunnerRefusal } from "@/server/internal/p1-isolated-runner/ref
  * The production trust key is read from a fixed path and is a public key.
  */
 
-const MAX_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Verifier window. A longer approval is rejected. The signer must stay inside it. */
+export const AUTHORIZATION_MAX_WINDOW_MS = 24 * 60 * 60 * 1000;
 const PAYLOAD_KEYS = [
   "attemptId",
   "daemonId",
@@ -95,7 +96,7 @@ export function verifySignedAuthorization(
   }
   const start = Date.parse(payload.notBefore);
   const end = Date.parse(payload.notAfter);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || end - start > MAX_WINDOW_MS) {
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || end - start > AUTHORIZATION_MAX_WINDOW_MS) {
     throw refusal("STOP", "AUTHORIZATION_REPLAY", "Signed authorization window is not bounded");
   }
   if (now < start || now > end) {
