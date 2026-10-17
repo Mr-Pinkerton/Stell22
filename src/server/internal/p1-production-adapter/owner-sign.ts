@@ -6,6 +6,10 @@ import { AUTHORIZATION_MAX_WINDOW_MS, type SignedAuthorization } from "@/server/
 import { ATTEMPT_ID, DAEMON_ID, IMAGE_ID, SHA256 } from "@/server/internal/p1-production-adapter/contract";
 import { fileIdentity, sameFileIdentity } from "@/server/internal/p1-production-adapter/file-identity";
 import { canonicalJson } from "@/server/internal/p1-production-adapter/identity";
+import { OwnerSignError } from "@/server/internal/p1-production-adapter/owner-sign-error";
+import { assertSingleUserAcl, currentUserSid, restrictSingleUser } from "@/server/internal/p1-production-adapter/windows-acl";
+
+export { OwnerSignError };
 
 /**
  * Offline Owner signing.
@@ -15,7 +19,8 @@ import { canonicalJson } from "@/server/internal/p1-production-adapter/identity"
  */
 
 export const SIGNING_WINDOW_MS = 15 * 60 * 1000;
-const OWNER_KEY_DIR = ".stell22-owner-keys";
+export const OWNER_KEY_DIR = ".stell22-owner-keys";
+export const OWNER_KEY_FILE = "owner-ed25519.pkcs8.pem";
 const PRODUCTION_PREFIX = `${path.sep}var${path.sep}lib${path.sep}stell22`;
 const PASSPHRASE_ENV_NAMES = ["PASSPHRASE", "OWNER_PASSPHRASE", "STELL22_PASSPHRASE", "STELL22_OWNER_PASSPHRASE"] as const;
 const FORBIDDEN_FLAGS = new Set(["--yes", "--force", "--passphrase", "--authorize", "--authorized", "--production", "--apply-now"]);
@@ -34,15 +39,10 @@ const EVIDENCE_KEYS = [
   "verdict",
 ] as const;
 
-export class OwnerSignError extends Error {
-  readonly code: string;
-
-  constructor(code: string) {
-    super(code);
-    this.name = "OwnerSignError";
-    this.code = code;
-  }
-}
+export type FileProtection = {
+  assertKeyLocation: (filePath: string, directoryPath: string) => void;
+  protectNewFile: (filePath: string) => void;
+};
 
 export type OwnerEvidence = {
   kind: "UNTRUSTED_OPERATOR_EVIDENCE";
@@ -67,7 +67,10 @@ export type OwnerSignIo = {
   readPassphrase: () => Promise<Buffer>;
   log: (line: string) => void;
   now: () => number;
+  ownerHome?: string;
+  protection?: FileProtection;
   failWrite?: boolean;
+  failClose?: boolean;
 };
 
 export function parseOwnerEvidence(text: string): OwnerEvidence {
@@ -152,6 +155,10 @@ export function reviewOwnerEvidence(evidence: OwnerEvidence): string {
   ].join("\n");
 }
 
+export function ownerPrivateKeyPath(home: string = os.homedir()): string {
+  return path.join(path.resolve(home), OWNER_KEY_DIR, OWNER_KEY_FILE);
+}
+
 export function signOwnerEvidence(input: {
   evidenceText: string;
   keyPem: string;
@@ -159,62 +166,94 @@ export function signOwnerEvidence(input: {
   outputPath: string;
   confirmation: string;
   now?: number;
+  ownerHome?: string;
+  protection?: FileProtection;
   failWrite?: boolean;
+  failClose?: boolean;
 }): SignedAuthorization {
   const evidence = parseOwnerEvidence(input.evidenceText);
-  const secret = Buffer.from(input.passphrase);
   try {
     if (!sameText(input.confirmation, evidence.attempt)) throw new OwnerSignError("REVIEW_NOT_CONFIRMED");
-    assertOutputAvailable(input.outputPath);
-    const privateKey = unlockEd25519(input.keyPem, secret);
+    assertOutputAvailable(input.outputPath, input.ownerHome ?? os.homedir());
+    const privateKey = unlockEd25519(input.keyPem, input.passphrase);
     const now = input.now ?? Date.now();
     const payload = buildPayload(evidence, now);
     const signature = sign(null, Buffer.from(canonicalJson(payload)), privateKey).toString("base64");
     const signed: SignedAuthorization = { payload, signature };
-    writeExclusive(input.outputPath, `${JSON.stringify(signed, null, 2)}\n`, input.failWrite === true);
+    writeExclusive(input.outputPath, `${JSON.stringify(signed, null, 2)}\n`, {
+      failWrite: input.failWrite === true,
+      failClose: input.failClose === true,
+      home: input.ownerHome ?? os.homedir(),
+      protection: input.protection ?? defaultProtection(),
+    });
     return signed;
   } finally {
-    secret.fill(0);
     input.passphrase.fill(0);
   }
 }
 
-export function readOwnerKey(keyPath: string): string {
+export function readOwnerKey(keyPath: string, home: string = os.homedir(), protection: FileProtection = defaultProtection()): string {
   const resolved = path.resolve(keyPath);
-  refuseProtectedPath(resolved, "OWNER_PROFILE_REFUSED");
-  let stat: fs.Stats;
+  refuseProduction(resolved, "KEY_PATH_REJECTED");
+  if (streamSuffix(resolved)) throw new OwnerSignError("KEY_PATH_REJECTED");
+  const expected = path.resolve(ownerPrivateKeyPath(home));
+  if (resolved.toLowerCase() !== expected.toLowerCase()) throw new OwnerSignError("KEY_PATH_REJECTED");
+  const directory = path.dirname(resolved);
+  assertRealDirectory(directory);
+  let listed: fs.Stats;
   try {
-    stat = fs.lstatSync(resolved);
+    listed = fs.lstatSync(resolved);
   } catch {
     throw new OwnerSignError("KEY_UNAVAILABLE");
   }
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new OwnerSignError("KEY_UNAVAILABLE");
-  if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) throw new OwnerSignError("KEY_PERMISSIONS_REJECTED");
-  if (stat.size <= 0 || stat.size > 16_384) throw new OwnerSignError("KEY_FORMAT_REJECTED");
-  const pem = fs.readFileSync(resolved, "utf8");
-  assertEncryptedPkcs8(pem);
-  return pem;
+  if (listed.isSymbolicLink() || !listed.isFile()) throw new OwnerSignError("KEY_UNAVAILABLE");
+  const handle = fs.openSync(resolved, "r");
+  try {
+    const opened = fs.fstatSync(handle);
+    const openedIdentity = fileIdentity(opened);
+    const listedIdentity = fileIdentity(listed);
+    if (openedIdentity === null || listedIdentity === null || !sameFileIdentity(openedIdentity, listedIdentity)) {
+      throw new OwnerSignError("KEY_PATH_REJECTED");
+    }
+    if (opened.size <= 0 || opened.size > 16_384) throw new OwnerSignError("KEY_FORMAT_REJECTED");
+    protection.assertKeyLocation(resolved, directory);
+    const settled = fileIdentity(fs.lstatSync(resolved));
+    if (settled === null || !sameFileIdentity(settled, openedIdentity)) throw new OwnerSignError("KEY_PATH_REJECTED");
+    const pem = fs.readFileSync(handle, "utf8");
+    assertEncryptedPkcs8(pem);
+    return pem;
+  } finally {
+    fs.closeSync(handle);
+  }
 }
 
 export async function runOwnerSignCli(argv: readonly string[], io: OwnerSignIo = defaultIo()): Promise<number> {
   try {
     rejectBoundary(argv, io);
     const paths = parseSignArgs(argv);
-    refuseProtectedPath(path.resolve(paths.output), "OUTPUT_PATH_REJECTED");
+    const home = io.ownerHome ?? os.homedir();
+    refuseOutputPath(path.resolve(paths.output), home);
     const evidenceText = io.readText(paths.evidence);
     const evidence = parseOwnerEvidence(evidenceText);
     const confirmation = await io.confirm(reviewOwnerEvidence(evidence));
-    const keyPem = readOwnerKey(paths.key);
-    const passphrase = Buffer.from(await io.readPassphrase());
-    signOwnerEvidence({
-      evidenceText,
-      keyPem,
-      passphrase,
-      outputPath: paths.output,
-      confirmation,
-      now: io.now(),
-      failWrite: io.failWrite,
-    });
+    const keyPem = readOwnerKey(paths.key, home, io.protection ?? defaultProtection());
+    const passphrase = await io.readPassphrase();
+    try {
+      signOwnerEvidence({
+        evidenceText,
+        keyPem,
+        passphrase,
+        outputPath: paths.output,
+        confirmation,
+        now: io.now(),
+        ownerHome: home,
+        protection: io.protection,
+        failWrite: io.failWrite,
+        failClose: io.failClose,
+      });
+    } finally {
+      passphrase.fill(0);
+    }
     io.log("status=WROTE independentlyVerified=false");
     return 0;
   } catch (error) {
@@ -268,21 +307,19 @@ function assertEncryptedPkcs8(pem: string): void {
   }
 }
 
-function assertOutputAvailable(filePath: string): void {
+function assertOutputAvailable(filePath: string, home: string): void {
   const resolved = path.resolve(filePath);
-  refuseProtectedPath(resolved, "OUTPUT_PATH_REJECTED");
-  try {
-    fs.lstatSync(resolved);
-    throw new OwnerSignError("OUTPUT_EXISTS");
-  } catch (error) {
-    if (error instanceof OwnerSignError) throw error;
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new OwnerSignError("OUTPUT_UNAVAILABLE");
-  }
+  refuseOutputPath(resolved, home);
+  if (pathExists(resolved)) throw new OwnerSignError("OUTPUT_EXISTS");
 }
 
-function writeExclusive(filePath: string, body: string, failWrite: boolean): void {
+function writeExclusive(
+  filePath: string,
+  body: string,
+  fault: { failWrite: boolean; failClose: boolean; home: string; protection: FileProtection },
+): void {
   const resolved = path.resolve(filePath);
-  refuseProtectedPath(resolved, "OUTPUT_PATH_REJECTED");
+  refuseOutputPath(resolved, fault.home);
   const parent = path.dirname(resolved);
   let parentStat: fs.Stats;
   try {
@@ -291,17 +328,17 @@ function writeExclusive(filePath: string, body: string, failWrite: boolean): voi
     throw new OwnerSignError("OUTPUT_UNAVAILABLE");
   }
   if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) throw new OwnerSignError("OUTPUT_UNAVAILABLE");
-  try {
-    fs.lstatSync(resolved);
-    throw new OwnerSignError("OUTPUT_EXISTS");
-  } catch (error) {
-    if (error instanceof OwnerSignError) throw error;
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new OwnerSignError("OUTPUT_UNAVAILABLE");
-  }
+  if (pathExists(resolved)) throw new OwnerSignError("OUTPUT_EXISTS");
   const handle = fs.openSync(resolved, "wx", 0o600);
   let identity = fileIdentity(fs.fstatSync(handle));
+  let closed = false;
+  const closeOwned = () => {
+    if (closed) return;
+    closed = true;
+    fs.closeSync(handle);
+  };
   try {
-    if (failWrite) {
+    if (fault.failWrite) {
       fs.writeFileSync(handle, body.slice(0, 1), "utf8");
       throw new OwnerSignError("OUTPUT_WRITE_FAILED");
     }
@@ -310,38 +347,107 @@ function writeExclusive(filePath: string, body: string, failWrite: boolean): voi
     identity = fileIdentity(fs.fstatSync(handle));
     if (identity === null) throw new OwnerSignError("OUTPUT_WRITE_FAILED");
     fs.fchmodSync(handle, 0o600);
+    fault.protection.protectNewFile(resolved);
+    if (fault.failClose) throw new OwnerSignError("OUTPUT_CLOSE_FAILED");
+    closeOwned();
   } catch (error) {
-    if (identity) {
-      try {
-        const current = fs.lstatSync(resolved);
-        const settled = fileIdentity(current);
-        if (!current.isSymbolicLink() && settled && sameFileIdentity(settled, identity)) fs.unlinkSync(resolved);
-      } catch {
-        // The partial file stays only when its identity can no longer be removed.
-      }
-    }
+    if (identity) unlinkIfSame(resolved, identity);
     try {
-      fs.closeSync(handle);
+      closeOwned();
     } catch {
-      // The ownership decision was already made while this descriptor was open.
+      throw new OwnerSignError("OUTPUT_CLOSE_FAILED");
     }
     if (error instanceof OwnerSignError) throw error;
     throw new OwnerSignError("OUTPUT_WRITE_FAILED");
   }
-  fs.closeSync(handle);
 }
 
-function refuseProtectedPath(resolved: string, code: string): void {
-  const ownerDir = path.resolve(path.join(os.homedir(), OWNER_KEY_DIR));
-  const normalized = resolved.toLowerCase();
-  const protectedOwner = ownerDir.toLowerCase();
-  if (normalized === protectedOwner || normalized.startsWith(`${protectedOwner}${path.sep}`)) {
-    throw new OwnerSignError(code === "OUTPUT_PATH_REJECTED" ? code : "OWNER_PROFILE_REFUSED");
+function pathExists(filePath: string): boolean {
+  try {
+    fs.lstatSync(filePath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw new OwnerSignError("OUTPUT_UNAVAILABLE");
   }
+}
+
+function unlinkIfSame(filePath: string, identity: NonNullable<ReturnType<typeof fileIdentity>>): void {
+  try {
+    const current = fs.lstatSync(filePath);
+    const settled = fileIdentity(current);
+    if (!current.isSymbolicLink() && settled && sameFileIdentity(settled, identity)) fs.unlinkSync(filePath);
+  } catch {
+    // The partial file stays only when its identity can no longer be removed.
+  }
+}
+
+function refuseOutputPath(resolved: string, home: string): void {
+  refuseProduction(resolved, "OUTPUT_PATH_REJECTED");
+  const ownerDir = path.resolve(home, OWNER_KEY_DIR).toLowerCase();
+  const normalized = resolved.toLowerCase();
+  if (normalized === ownerDir || normalized.startsWith(`${ownerDir}${path.sep}`)) {
+    throw new OwnerSignError("OUTPUT_PATH_REJECTED");
+  }
+}
+
+function refuseProduction(resolved: string, code: string): void {
   const production = path.resolve(PRODUCTION_PREFIX).toLowerCase();
+  const normalized = resolved.toLowerCase();
   if (normalized === production || normalized.startsWith(`${production}${path.sep}`)) {
     throw new OwnerSignError(code);
   }
+}
+
+function streamSuffix(resolved: string): boolean {
+  return resolved.slice(path.parse(resolved).root.length).includes(":");
+}
+
+function assertRealDirectory(directory: string): void {
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(directory);
+  } catch {
+    throw new OwnerSignError("KEY_UNAVAILABLE");
+  }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new OwnerSignError("KEY_UNAVAILABLE");
+  const real = fs.realpathSync.native(directory);
+  if (path.resolve(real).toLowerCase() !== path.resolve(directory).toLowerCase()) {
+    throw new OwnerSignError("KEY_PATH_REJECTED");
+  }
+}
+
+function defaultProtection(): FileProtection {
+  if (process.platform === "win32") {
+    const sid = currentUserSid();
+    return {
+      assertKeyLocation(filePath, directoryPath) {
+        assertSingleUserAcl(directoryPath, sid);
+        assertSingleUserAcl(filePath, sid);
+      },
+      protectNewFile(filePath) {
+        restrictSingleUser(filePath, "file", sid);
+      },
+    };
+  }
+  return {
+    assertKeyLocation(filePath, directoryPath) {
+      assertUnixPrivate(directoryPath, true);
+      assertUnixPrivate(filePath, false);
+    },
+    protectNewFile(filePath) {
+      fs.chmodSync(filePath, 0o600);
+      assertUnixPrivate(filePath, false);
+    },
+  };
+}
+
+function assertUnixPrivate(target: string, directory: boolean): void {
+  const stat = fs.lstatSync(target);
+  if (stat.isSymbolicLink() || (directory ? !stat.isDirectory() : !stat.isFile())) {
+    throw new OwnerSignError(directory ? "KEY_UNAVAILABLE" : "KEY_PERMISSIONS_REJECTED");
+  }
+  if ((stat.mode & 0o077) !== 0) throw new OwnerSignError("KEY_PERMISSIONS_REJECTED");
 }
 
 function sameText(left: string, right: string): boolean {
@@ -387,39 +493,132 @@ function defaultIo(): OwnerSignIo {
     readText: (filePath) => fs.readFileSync(filePath, "utf8"),
     confirm: async (review) => {
       process.stdout.write(`${review}\n`);
-      const typed = await readHidden("Reviewed attempt id: ");
-      return typed.toString("utf8");
+      return readConfirmLine("Reviewed attempt id: ");
     },
-    readPassphrase: () => readHidden("Owner private-key passphrase: "),
+    readPassphrase: () => readHiddenPassphrase(process.stdin, "Owner private-key passphrase: "),
     log: (line) => console.log(line),
     now: () => Date.now(),
   };
 }
 
-function readHidden(prompt: string): Promise<Buffer> {
+type HiddenInput = {
+  setRawMode: (mode: boolean) => void;
+  resume: () => void;
+  pause: () => void;
+  on: (event: "data", listener: (chunk: Buffer) => void) => void;
+  off: (event: "data", listener: (chunk: Buffer) => void) => void;
+};
+
+export function readHiddenPassphrase(stdin: HiddenInput, prompt: string, write: (text: string) => void = (text) => process.stdout.write(text)): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    process.stdout.write(prompt);
-    const stdin = process.stdin;
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.setEncoding("utf8");
-    let value = "";
-    const finish = (error: OwnerSignError | null) => {
-      stdin.setRawMode(false);
-      stdin.pause();
-      stdin.off("data", onData);
-      process.stdout.write("\n");
-      if (error) reject(error);
-      else resolve(Buffer.from(value));
+    let raw = false;
+    let secret = Buffer.alloc(0);
+    const wipe = () => {
+      secret.fill(0);
+      secret = Buffer.alloc(0);
     };
-    const onData = (chunk: string) => {
-      for (const character of chunk) {
+    const restore = () => {
+      try {
+        if (raw) stdin.setRawMode(false);
+      } catch {
+        // Node cannot guarantee the terminal mode if this call fails. The secret buffer is still wiped.
+      }
+      raw = false;
+      try {
+        stdin.off("data", onData);
+      } catch {
+        // The listener is already gone.
+      }
+      try {
+        stdin.pause();
+      } catch {
+        // The stream is already paused.
+      }
+      try {
+        write("\n");
+      } catch {
+        // The newline is not the passphrase.
+      }
+    };
+    const onData = (chunk: Buffer) => {
+      if (!Buffer.isBuffer(chunk)) {
+        restore();
+        wipe();
+        reject(new OwnerSignError("NOT_INTERACTIVE"));
+        return;
+      }
+      for (const byte of chunk) {
+        if (byte === 0x03) {
+          restore();
+          wipe();
+          reject(new OwnerSignError("ABORTED"));
+          return;
+        }
+        if (byte === 0x0d || byte === 0x0a) {
+          const returned = Buffer.from(secret);
+          restore();
+          wipe();
+          resolve(returned);
+          return;
+        }
+        if (byte === 0x7f || byte === 0x08) {
+          if (secret.length === 0) continue;
+          const next = Buffer.alloc(secret.length - 1);
+          secret.copy(next, 0, 0, next.length);
+          secret.fill(0);
+          secret = next;
+          continue;
+        }
+        if (byte >= 0x20) {
+          const next = Buffer.alloc(secret.length + 1);
+          secret.copy(next);
+          next[secret.length] = byte;
+          secret.fill(0);
+          secret = next;
+        }
+      }
+    };
+    try {
+      write(prompt);
+      stdin.setRawMode(true);
+      raw = true;
+      stdin.resume();
+      stdin.on("data", onData);
+    } catch {
+      restore();
+      wipe();
+      reject(new OwnerSignError("NOT_INTERACTIVE"));
+    }
+  });
+}
+
+function readConfirmLine(prompt: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const stdin = process.stdin;
+    let raw = false;
+    let value = "";
+    const restore = () => {
+      try {
+        if (raw) stdin.setRawMode(false);
+      } catch {
+        // The attempt id is not a passphrase. The mode is still restored when the process exits.
+      }
+      raw = false;
+      stdin.off("data", onData);
+      stdin.pause();
+      process.stdout.write("\n");
+    };
+    const onData = (chunk: Buffer | string) => {
+      const text = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk;
+      for (const character of text) {
         if (character === "\u0003") {
-          finish(new OwnerSignError("ABORTED"));
+          restore();
+          reject(new OwnerSignError("ABORTED"));
           return;
         }
         if (character === "\r" || character === "\n") {
-          finish(null);
+          restore();
+          resolve(value);
           return;
         }
         if (character === "\u007f" || character === "\b") {
@@ -429,6 +628,15 @@ function readHidden(prompt: string): Promise<Buffer> {
         if (character >= " ") value += character;
       }
     };
-    stdin.on("data", onData);
+    try {
+      process.stdout.write(prompt);
+      stdin.setRawMode(true);
+      raw = true;
+      stdin.resume();
+      stdin.on("data", onData);
+    } catch {
+      restore();
+      reject(new OwnerSignError("NOT_INTERACTIVE"));
+    }
   });
 }
