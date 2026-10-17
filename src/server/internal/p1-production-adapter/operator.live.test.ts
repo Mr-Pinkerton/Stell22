@@ -125,7 +125,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
         }),
       });
       expect(recovery).toMatchObject({ verdict: "RECOVERY_VERIFIED", spawned: false, imageGitSha: "UNVERIFIED" });
-      expect(concurrent.result?.code).toBe("CONCURRENT_EXECUTION");
+      expect(concurrent.result?.code).toBe("HOST_LOCK_HELD");
       expect(dockerArgs.some((args) => args.includes(password) || args.includes("POSTGRES_PASSWORD=") || args.join("\n").match(/postgres(?:ql)?:\/\//i))).toBe(false);
       expect(dockerArgs.some((args) => args[0] === "run" && args.includes("--env-file"))).toBe(true);
       expect(fs.existsSync(path.join(attemptRoot, ".restore-secret", "postgres.env"))).toBe(false);
