@@ -25,6 +25,7 @@ import { resolveDockerSession, type DockerSession, type VolumeMount } from "@/se
 import { executeTrustedRestore, isTrustedRestoreEvidence, type RestoreContainerFact } from "@/server/internal/p1-production-adapter/restore-controller";
 import {
   IMAGE_GIT_SHA,
+  PROPOSED_MIGRATOR_ROLE,
   type AdapterIntent,
   type AdapterScope,
   type ExecutionPhase,
@@ -38,6 +39,8 @@ import {
   type TargetFacts,
 } from "@/server/internal/p1-production-adapter/identity";
 import { fileIdentity, sameFileIdentity, type FileIdentity } from "@/server/internal/p1-production-adapter/file-identity";
+import { evaluateMigratorPrivileges, type MigratorPrivilegeReport } from "@/server/internal/p1-production-adapter/migrator-privilege";
+import type { MigratorCredential } from "@/server/internal/p1-production-adapter/migrator-credential";
 import { acceptOneShotImage, planProductionOneShot, releaseProductionCredential, type OneShotImageObservation, type ProductionCredentialClaim } from "@/server/internal/p1-production-adapter/oneshot";
 import { DAEMON_ID, IMAGE_ID, SHA256 } from "@/server/internal/p1-production-adapter/contract";
 import {
@@ -123,6 +126,12 @@ export type AdapterDependencies = {
   spawnOneShot: (plan: OneShotPlan) => OneShotResult;
   /** Test-owned crash injection. Production ignores it. */
   abortBeforeSpawn?: boolean;
+  /**
+   * P1 apply only. Production reads the fixed migrator file.
+   * A missing reader is not permission to use the bootstrap password.
+   */
+  readMigratorCredential?: (databaseName: string) => MigratorCredential;
+  readMigratorPrivileges?: (credential: MigratorCredential) => MigratorPrivilegeReport;
 };
 
 /**
@@ -277,16 +286,14 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
       throw refusal("STOP", "PREFLIGHT_DRIFT", "Materialized migration digest drifted");
     }
     revalidateMigrationSet(set);
-    if (!request.databasePassword) {
-      throw refusal("STOP", "RUNTIME_UNAUTHENTICATED", "Database credential is not usable");
-    }
+    const migrator = confirmedMigrator(request, deps, immediate.databaseName, immediate.roleName);
     const credentialDir = path.join(path.dirname(deps.destinationRoot), "p1-production-credentials");
     const plan = planProductionOneShot({
       networkName: immediate.networkName,
       dnsAlias: immediate.dnsAlias,
       databaseName: immediate.databaseName,
-      roleName: immediate.roleName,
-      password: request.databasePassword,
+      roleName: migrator.role,
+      password: migrator.password,
       sealedRoot: set.root,
       credentialDir,
       appContainerId: immediate.app.id,
@@ -394,6 +401,35 @@ export function executeProductionAdapter(request: AdapterRequest, deps: AdapterD
     lock?.release();
     if (cleanupFailure) return cleanupFailure;
   }
+}
+
+function confirmedMigrator(
+  request: AdapterRequest,
+  deps: AdapterDependencies,
+  databaseName: string,
+  bootstrapRole: string,
+): MigratorCredential {
+  if (!deps.readMigratorCredential || !deps.readMigratorPrivileges) {
+    throw refusal("STOP", "MIGRATOR_CREDENTIAL_MISSING", "P1 migrator credential is not independently provisioned");
+  }
+  const credential = deps.readMigratorCredential(databaseName);
+  if (credential.role !== PROPOSED_MIGRATOR_ROLE || credential.database !== databaseName || credential.role === bootstrapRole) {
+    throw refusal("STOP", "MIGRATOR_CREDENTIAL_MISMATCH", "P1 migrator credential is not bound to the migrator");
+  }
+  if (request.databasePassword !== undefined && request.databasePassword === credential.password) {
+    throw refusal("STOP", "MIGRATOR_CREDENTIAL_MISMATCH", "P1 migrator credential is the target database credential");
+  }
+  const expected = { migratorRole: PROPOSED_MIGRATOR_ROLE, bootstrapRole };
+  const first = deps.readMigratorPrivileges(credential);
+  const verdict = evaluateMigratorPrivileges(first, expected);
+  if (!verdict.ok) throw refusal("STOP", verdict.code, "P1 migrator privileges are not acceptable");
+  const second = deps.readMigratorPrivileges(credential);
+  if (canonicalJson(first) !== canonicalJson(second)) {
+    throw refusal("STOP", "MIGRATOR_PRIVILEGE_DRIFT", "P1 migrator privileges changed before authorization");
+  }
+  const again = evaluateMigratorPrivileges(second, expected);
+  if (!again.ok) throw refusal("STOP", again.code, "P1 migrator privileges are not acceptable");
+  return credential;
 }
 
 function authorize(

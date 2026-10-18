@@ -14,7 +14,7 @@ import {
   functionMatchesContract,
   triggerMatchesContract,
 } from "@/server/internal/p1-isolated-runner/schema-contract";
-import { PRODUCTION_POSTGRES_IMAGE, testAppName, testDatabaseName, testDbName, testNetworkName, testRestoreName } from "@/server/internal/p1-production-adapter/contract";
+import { PRODUCTION_POSTGRES_IMAGE, PROPOSED_MIGRATOR_ROLE, testAppName, testDatabaseName, testDbName, testNetworkName, testRestoreName } from "@/server/internal/p1-production-adapter/contract";
 import { inspectContainer, readCatalog, readDaemonId } from "@/server/internal/p1-production-adapter/docker-runtime";
 import type { AdapterResult } from "@/server/internal/p1-production-adapter/execute";
 import { canonicalJson } from "@/server/internal/p1-production-adapter/identity";
@@ -162,6 +162,33 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
       fs.writeFileSync(checksumPath, `${recorded}\n`);
       fs.writeFileSync(witnessPath, savedWitness);
 
+      const migratorPassword = randomBytes(16).toString("hex");
+      const appPassword = randomBytes(16).toString("hex");
+      execSql(
+        dbName,
+        databaseName,
+        [
+          `CREATE ROLE stell22_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION NOINHERIT PASSWORD '${migratorPassword}'`,
+          `CREATE ROLE p1pa_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION NOINHERIT PASSWORD '${appPassword}'`,
+          "REVOKE CREATE ON SCHEMA public FROM PUBLIC",
+          "GRANT USAGE, CREATE ON SCHEMA public TO stell22_migrator",
+          "GRANT USAGE ON SCHEMA public TO p1pa_app",
+          'ALTER TABLE "BatchCreationCommand" OWNER TO stell22_migrator',
+          'ALTER TABLE "_prisma_migrations" OWNER TO stell22_migrator',
+          "GRANT SELECT ON ALL TABLES IN SCHEMA public TO p1pa_app",
+        ].join(";\n"),
+      );
+      const credentialPath = path.join(attemptRoot, "migrator-credential.json");
+      fs.writeFileSync(
+        credentialPath,
+        JSON.stringify({ kind: "P1_MIGRATOR_CREDENTIAL", role: PROPOSED_MIGRATOR_ROLE, database: databaseName, password: migratorPassword }),
+        { mode: 0o600 },
+      );
+      if (process.platform !== "win32") {
+        fs.chmodSync(attemptRoot, 0o700);
+        fs.chmodSync(credentialPath, 0o600);
+      }
+
       const daemonId = readDaemonId();
       const { publicKey, privateKey } = generateKeyPairSync("ed25519");
       const pem = publicKey.export({ type: "spki", format: "pem" }).toString();
@@ -284,7 +311,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
       fs.rmSync(workRoot, { recursive: true, force: true });
     }
     if (failure) throw failure;
-  }, 600_000);
+  }, 900_000);
 
   it("stops wrong containers, the wrong network, and an incomplete migration history", () => {
     const attemptId = randomBytes(8).toString("hex");
@@ -379,7 +406,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
       }
       fs.rmSync(workRoot, { recursive: true, force: true });
     }
-  }, 180_000);
+  }, 300_000);
 });
 
 function recordingDocker(password: string, argvLog: string[][], onCall: (args: readonly string[]) => void): OperatorDocker {

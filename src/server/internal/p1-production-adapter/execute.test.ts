@@ -23,6 +23,7 @@ import {
   PRODUCTION_NETWORK_NAME,
   PRODUCTION_POSTGRES_IMAGE,
   PRODUCTION_ROLE_NAME,
+  PROPOSED_MIGRATOR_ROLE,
   testAppName,
   testDatabaseName,
   testDbName,
@@ -36,6 +37,7 @@ import {
   type AdapterDependencies,
   type AdapterRequest,
 } from "@/server/internal/p1-production-adapter/execute";
+import type { MigratorPrivilegeReport } from "@/server/internal/p1-production-adapter/migrator-privilege";
 import {
   canonicalJson,
   declarationFromFacts,
@@ -155,6 +157,69 @@ describe("production P1 adapter", () => {
       phase: "READ_ONLY_PREFLIGHT",
     });
     expect(world.spawns).toBe(0);
+  });
+
+  it("does not spawn when the migrator credential or privileges are refused", () => {
+    const world = readyApply("TEST_OWNED");
+    const privileges = world.deps.readMigratorPrivileges;
+    const credential = world.deps.readMigratorCredential;
+    world.deps.readMigratorCredential = undefined;
+    world.deps.readMigratorPrivileges = undefined;
+    expect(executeProductionAdapter(world.request, world.deps)).toMatchObject({ code: "MIGRATOR_CREDENTIAL_MISSING", spawned: false });
+    expect(world.spawns).toBe(0);
+    fs.rmSync(world.deps.destinationRoot, { recursive: true, force: true });
+    world.deps.readMigratorCredential = credential;
+    world.deps.readMigratorPrivileges = privileges;
+
+    const savedPassword = world.request.databasePassword;
+    world.request = { ...world.request, databasePassword: "migrator-secret-value" };
+    expect(executeProductionAdapter(world.request, world.deps)).toMatchObject({ code: "MIGRATOR_CREDENTIAL_MISMATCH", spawned: false });
+    fs.rmSync(world.deps.destinationRoot, { recursive: true, force: true });
+    world.request = { ...world.request, databasePassword: savedPassword };
+
+    world.deps.readMigratorPrivileges = () => ({ ...acceptedPrivileges(), rolsuper: true });
+    expect(executeProductionAdapter(world.request, world.deps)).toMatchObject({ code: "MIGRATOR_ROLE_REFUSED", spawned: false });
+    fs.rmSync(world.deps.destinationRoot, { recursive: true, force: true });
+
+    world.deps.readMigratorPrivileges = () => ({ ...acceptedPrivileges(), memberships: ["p1pa"] });
+    expect(executeProductionAdapter(world.request, world.deps)).toMatchObject({ code: "MIGRATOR_MEMBERSHIP_REFUSED", spawned: false });
+    fs.rmSync(world.deps.destinationRoot, { recursive: true, force: true });
+
+    world.deps.readMigratorPrivileges = () => ({ ...acceptedPrivileges(), batchOwner: "p1pa" });
+    expect(executeProductionAdapter(world.request, world.deps)).toMatchObject({ code: "MIGRATOR_OWNERSHIP_REFUSED", spawned: false });
+    fs.rmSync(world.deps.destinationRoot, { recursive: true, force: true });
+
+    world.deps.readMigratorPrivileges = () => ({
+      ...acceptedPrivileges(),
+      otherLogin: [{ name: "p1pa_app", schemaCreate: true, memberOfMigrator: false, superuser: false }],
+    });
+    expect(executeProductionAdapter(world.request, world.deps)).toMatchObject({ code: "MIGRATOR_PRIVILEGE_REFUSED", spawned: false });
+    fs.rmSync(world.deps.destinationRoot, { recursive: true, force: true });
+
+    let reads = 0;
+    world.deps.readMigratorPrivileges = () => {
+      reads += 1;
+      return reads === 1 ? acceptedPrivileges() : { ...acceptedPrivileges(), schemaCreate: false };
+    };
+    expect(executeProductionAdapter(world.request, world.deps)).toMatchObject({ code: "MIGRATOR_PRIVILEGE_DRIFT", spawned: false });
+    expect(world.spawns).toBe(0);
+    expect(fs.existsSync(world.replayDir) && fs.readdirSync(world.replayDir).length > 0).toBe(false);
+  }, 90_000);
+
+  it("puts only the migrator role in the one-shot secret", () => {
+    const world = readyApply("TEST_OWNED");
+    let secret = "";
+    world.deps.spawnOneShot = (plan) => {
+      world.spawns += 1;
+      world.argv = [...plan.argv];
+      secret = fs.readFileSync(path.join(path.dirname(world.deps.destinationRoot), "p1-production-credentials", "database.env"), "utf8");
+      return { status: 0, signal: null };
+    };
+    expect(executeProductionAdapter(world.request, world.deps).spawned).toBe(true);
+    expect(secret).toContain("stell22_migrator");
+    expect(secret).not.toContain(world.password);
+    expect(world.argv.join("\n")).not.toContain("migrator-secret-value");
+    expect(world.argv.join("\n")).not.toContain(world.password);
   });
 
   it("rejects a recovery word, an old backup, an incomplete archive, and a restore mismatch", () => {
@@ -853,6 +918,12 @@ function worldFor(scope: "TEST_OWNED" | "PRODUCTION"): World {
       spawns.argv = [...plan.argv];
       return { status: 0, signal: null };
     },
+    readMigratorCredential: (databaseName) => ({
+      role: PROPOSED_MIGRATOR_ROLE,
+      database: databaseName,
+      password: "migrator-secret-value",
+    }),
+    readMigratorPrivileges: () => acceptedPrivileges(),
   };
   return {
     facts,
@@ -926,6 +997,27 @@ function signPayload(privateKey: KeyObject, payload: ReturnType<typeof signedPay
 
 function ambiguousMarker(destinationRoot: string): string {
   return path.join(path.dirname(destinationRoot), `${path.basename(destinationRoot)}.production-adapter-ambiguous-stop`);
+}
+
+function acceptedPrivileges(): MigratorPrivilegeReport {
+  return {
+    currentUser: PROPOSED_MIGRATOR_ROLE,
+    sessionUser: PROPOSED_MIGRATOR_ROLE,
+    rolsuper: false,
+    rolcreatedb: false,
+    rolcreaterole: false,
+    rolreplication: false,
+    rolbypassrls: false,
+    rolcanlogin: true,
+    rolinherit: false,
+    memberships: [],
+    batchOwner: PROPOSED_MIGRATOR_ROLE,
+    migrationInsert: true,
+    migrationUpdate: true,
+    schemaCreate: true,
+    publicCreate: false,
+    otherLogin: [{ name: "p1pa_app", schemaCreate: false, memberOfMigrator: false, superuser: false }],
+  };
 }
 
 function fakeSession(daemonId: string): DockerSession {

@@ -20,7 +20,9 @@ import {
   PRODUCTION_DNS_ALIAS,
   PRODUCTION_NETWORK_NAME,
   PRODUCTION_POSTGRES_IMAGE,
+  PRODUCTION_MIGRATOR_CREDENTIAL_PATH,
   PRODUCTION_ROLE_NAME,
+  PROPOSED_MIGRATOR_ROLE,
   TEST_ROLE_NAME,
   testDatabaseName,
   testDbName,
@@ -31,6 +33,8 @@ import {
   type ExecutionPhase,
 } from "@/server/internal/p1-production-adapter/contract";
 import { readCatalog, dumpDatabase, inspectContainer, inspectMounts, resolveDockerSession, restoreArchive, type DockerSession } from "@/server/internal/p1-production-adapter/docker-runtime";
+import { readMigratorCredentialFile } from "@/server/internal/p1-production-adapter/migrator-credential";
+import { probeMigratorPrivileges } from "@/server/internal/p1-production-adapter/migrator-privilege";
 import { executeProductionAdapter, type AdapterResult, type OneShotPlan, type OneShotResult, type RecoveryEvidenceState, type SigningInputsState } from "@/server/internal/p1-production-adapter/execute";
 import { ONE_SHOT_IMAGE } from "@/server/internal/p1-isolated-runner/p1-release-gate";
 import type { OneShotImageObservation } from "@/server/internal/p1-production-adapter/oneshot";
@@ -454,6 +458,24 @@ function dependencies(
     spawnOneShot: (plan: OneShotPlan): OneShotResult => {
       if (request.scope === "TEST_OWNED" && request.testSpawn) return request.testSpawn(plan);
       return spawnOperatorOneShot(plan);
+    },
+    readMigratorCredential: (databaseName: string) => {
+      const allowed = request.scope === "PRODUCTION" ? PRODUCTION_MIGRATOR_CREDENTIAL_PATH : path.join(paths.root, "migrator-credential.json");
+      return readMigratorCredentialFile({ requestedPath: allowed, allowedPath: allowed, expectedDatabase: databaseName });
+    },
+    readMigratorPrivileges: (credential: { role: typeof PROPOSED_MIGRATOR_ROLE; database: string; password: string }) => {
+      const live = inspectLive(request, session);
+      const current = resolveDockerSession(session.env);
+      return probeMigratorPrivileges({
+        session: current,
+        expectedEndpoint: session.endpoint,
+        expectedDaemonId: session.daemonId,
+        expectedImageId: live.db.imageId,
+        networkName: live.networkName,
+        database: credential.database,
+        credential,
+        env: session.env,
+      });
     },
   };
 }
