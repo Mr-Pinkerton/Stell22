@@ -95,7 +95,11 @@ export function evaluateInspect(
   }
   const state = asRecord(row.State);
   if (purpose === "mutate" && state?.Running !== true) return { ok: false, code: "NOT_RUNNING" };
-  if (config?.Image !== IMAGE_REF && row.Image !== expected.imageId) {
+  if (
+    config?.Image !== IMAGE_REF ||
+    row.Image !== expected.imageId ||
+    !/^sha256:[0-9a-f]{64}$/.test(expected.imageId)
+  ) {
     return { ok: false, code: "IMAGE_MISMATCH" };
   }
   if (!envHas(config?.Env, "POSTGRES_USER=stell22") || !envHas(config?.Env, "POSTGRES_DB=stell22")) {
@@ -119,6 +123,9 @@ export function volumeCleanupAllowed(
   if (isForbidden(row.Name)) return { ok: false, code: "FORBIDDEN_NAME" };
   const labels = asRecord(row.Labels);
   if (labels?.[PROOF_LABEL] !== expected.runId) return { ok: false, code: "LABEL_MISMATCH" };
+  if (labels?.["com.docker.compose.project"] !== undefined) {
+    return { ok: false, code: "COMPOSE_PROJECT" };
+  }
   return { ok: true };
 }
 
@@ -134,6 +141,9 @@ export function networkCleanupAllowed(
   if (isForbidden(row.Name)) return { ok: false, code: "FORBIDDEN_NAME" };
   const labels = asRecord(row.Labels);
   if (labels?.[PROOF_LABEL] !== expected.runId) return { ok: false, code: "LABEL_MISMATCH" };
+  if (labels?.["com.docker.compose.project"] !== undefined) {
+    return { ok: false, code: "COMPOSE_PROJECT" };
+  }
   const containers = asRecord(row.Containers) ?? {};
   const attached = Object.keys(containers);
   if (attached.some((id) => id !== expected.containerId)) {

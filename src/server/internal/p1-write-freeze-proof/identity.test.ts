@@ -53,6 +53,16 @@ describe("write-freeze proof identity", () => {
     });
   });
 
+  it("refuses either image field on its own", () => {
+    expect(evaluateInspect(inspect({ Image: "sha256:" + "c".repeat(64) }), expected(), "cleanup")).toEqual({
+      ok: false,
+      code: "IMAGE_MISMATCH",
+    });
+    const renamed = inspect();
+    (renamed.Config as { Image: string }).Image = "postgres:17";
+    expect(evaluateInspect(renamed, expected(), "mutate")).toEqual({ ok: false, code: "IMAGE_MISMATCH" });
+  });
+
   it("refuses a published port and a compose project", () => {
     expect(
       evaluateInspect(
@@ -86,5 +96,24 @@ describe("write-freeze proof identity", () => {
         expected(),
       ),
     ).toEqual({ ok: false, code: "ID_MISMATCH" });
+    expect(
+      volumeCleanupAllowed(
+        {
+          Name: names.volumeName,
+          Labels: { "stell22.p1.write-freeze-proof": RUN, "com.docker.compose.project": "stell22" },
+        },
+        expected(),
+      ),
+    ).toEqual({ ok: false, code: "COMPOSE_PROJECT" });
+    expect(
+      networkCleanupAllowed(
+        {
+          Name: names.networkName,
+          Labels: { "stell22.p1.write-freeze-proof": RUN, "com.docker.compose.project": "stell22" },
+          Containers: {},
+        },
+        expected(),
+      ),
+    ).toEqual({ ok: false, code: "COMPOSE_PROJECT" });
   });
 });

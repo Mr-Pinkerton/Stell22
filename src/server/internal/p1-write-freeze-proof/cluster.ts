@@ -11,10 +11,15 @@ import {
   assertResourceName,
   evaluateInspect,
   namesForRun,
-  networkCleanupAllowed,
-  volumeCleanupAllowed,
   type OwnedExpectation,
 } from "@/server/internal/p1-write-freeze-proof/identity";
+import {
+  formatCleanupReport,
+  releaseInvocation,
+  type DockerWorld,
+  type ExecResult,
+  type Invocation,
+} from "@/server/internal/p1-write-freeze-proof/lifecycle";
 
 export type SqlRole = "bootstrap" | "breakglass" | "app" | "migrator";
 
@@ -49,11 +54,14 @@ export type SqlOutcome = {
 };
 
 export function createCluster(): Cluster {
-  const endpoint = resolveLocalDockerEndpoint(defaultOriginRuntime());
-  const imageId = docker(["image", "inspect", "--format", "{{.Id}}", IMAGE_REF]).stdout.trim();
-  if (!imageId.startsWith("sha256:")) throw new Error("postgres:17-alpine is not available locally");
-  const daemonId = docker(["info", "--format", "{{.ID}}"]).stdout.trim();
-  if (daemonId.length < 8) throw new Error("docker daemon id is missing");
+  const world = realWorld();
+  const endpoint = world.endpoint();
+  const image = world.exec(["image", "inspect", "--format", "{{.Id}}", IMAGE_REF]);
+  const imageId = image.stdout.trim();
+  if (image.status !== 0 || !/^sha256:[0-9a-f]{64}$/.test(imageId)) {
+    throw new Error("postgres:17-alpine is not available locally");
+  }
+  const daemonId = world.daemonId();
   const names = namesForRun(randomUUID());
   assertResourceName(names.containerName);
   assertResourceName(names.networkName);
@@ -64,18 +72,31 @@ export function createCluster(): Cluster {
     app: secret(),
     migrator: secret(),
   };
+  const invocation: Invocation = {
+    endpoint,
+    daemonId,
+    imageId,
+    names,
+    networkCreated: false,
+    volumeCreated: false,
+    containerId: null,
+    containerPhase: "not-started",
+  };
   const label = `${PROOF_LABEL}=${names.runId}`;
-  let network = false;
-  let volume = false;
-  let containerId = "";
   try {
-    docker(["network", "create", "--label", label, names.networkName]);
-    network = true;
-    docker(["volume", "create", "--label", label, names.volumeName]);
-    volume = true;
+    assertSameBinding(invocation, world);
+    const network = world.exec(["network", "create", "--label", label, names.networkName]);
+    if (network.status !== 0) throw new Error("docker network failed");
+    invocation.networkCreated = true;
+    assertSameBinding(invocation, world);
+    const volume = world.exec(["volume", "create", "--label", label, names.volumeName]);
+    if (volume.status !== 0) throw new Error("docker volume failed");
+    invocation.volumeCreated = true;
+    assertSameBinding(invocation, world);
     const envFile = writeEnvFile(passwords.bootstrap);
+    let created: ExecResult;
     try {
-      const created = docker([
+      created = world.exec([
         "run",
         "-d",
         "--pull",
@@ -94,11 +115,38 @@ export function createCluster(): Cluster {
         envFile,
         IMAGE_REF,
       ]);
-      containerId = created.stdout.trim();
+    } catch (error) {
+      invocation.containerPhase = "ambiguous";
+      throw error;
     } finally {
       fs.rmSync(envFile, { force: true });
     }
-    if (!/^[0-9a-f]{64}$/.test(containerId)) throw new Error("docker did not return a container id");
+    if (created.status !== 0) {
+      invocation.containerPhase = "ambiguous";
+      throw new Error("docker run failed");
+    }
+    const containerId = created.stdout.trim();
+    if (!/^[0-9a-f]{64}$/.test(containerId)) {
+      invocation.containerPhase = "ambiguous";
+      throw new Error("docker did not return a container id");
+    }
+    invocation.containerId = containerId;
+    invocation.containerPhase = "ambiguous";
+    assertSameBinding(invocation, world);
+    const inspected = world.exec(["inspect", containerId]);
+    if (inspected.status !== 0) throw new Error("docker inspect failed");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(inspected.stdout);
+    } catch {
+      throw new Error("inspect did not return one container");
+    }
+    if (!Array.isArray(parsed) || parsed.length !== 1) throw new Error("inspect did not return one container");
+    const owned = evaluateInspect(parsed[0], expectationFrom(invocation, containerId), "cleanup");
+    if (!owned.ok) throw new Error(`refusing container: ${owned.code}`);
+    invocation.containerPhase = "confirmed";
+    const running = evaluateInspect(parsed[0], expectationFrom(invocation, containerId), "mutate");
+    if (!running.ok) throw new Error(`refusing container: ${running.code}`);
     const cluster: Cluster = {
       ...names,
       containerId,
@@ -117,36 +165,43 @@ export function createCluster(): Cluster {
       { probe: false },
     );
     if (marked.status !== 0) {
-      throw new Error(`disposable identity comment failed status=${marked.status ?? "null"} sqlstate=${marked.sqlstate ?? "none"} ${marked.stderr.slice(0, 400)}`);
+      throw new Error(
+        `disposable identity comment failed status=${marked.status ?? "null"} sqlstate=${marked.sqlstate ?? "none"} ${marked.stderr.slice(0, 400)}`,
+      );
     }
     reconfirm(cluster);
     return cluster;
   } catch (error) {
-    const listed = spawnSync(
-      "docker",
-      ["ps", "-aq", "--no-trunc", "--filter", `label=${label}`],
-      { windowsHide: true, encoding: "utf8" },
+    const report = releaseInvocation(invocation, world);
+    const message = error instanceof Error ? error.message : "cluster creation failed";
+    throw redactError(
+      new Error(`phase=${invocation.containerPhase} ${message}; ${formatCleanupReport(report)}`),
+      Object.values(passwords),
     );
-    for (const id of (listed.stdout ?? "").split(/\s+/).filter((item) => /^[0-9a-f]{64}$/.test(item))) {
-      spawnSync("docker", ["rm", "-f", id], { windowsHide: true, encoding: "utf8" });
-    }
-    if (volume) spawnSync("docker", ["volume", "rm", names.volumeName], { windowsHide: true });
-    if (network) spawnSync("docker", ["network", "rm", names.networkName], { windowsHide: true });
-    throw redactError(error, Object.values(passwords));
   }
 }
 
 export function destroyCluster(cluster: Cluster): void {
   stopHeldSessions();
-  const problems: string[] = [];
-  for (const step of [removeContainer, removeVolume, removeNetwork]) {
-    try {
-      step(cluster);
-    } catch (error) {
-      problems.push(redact(error instanceof Error ? error.message : "cleanup failed", secrets(cluster)));
-    }
+  const invocation: Invocation = {
+    endpoint: cluster.endpoint,
+    daemonId: cluster.daemonId,
+    imageId: cluster.imageId,
+    names: {
+      runId: cluster.runId,
+      containerName: cluster.containerName,
+      networkName: cluster.networkName,
+      volumeName: cluster.volumeName,
+    },
+    networkCreated: true,
+    volumeCreated: true,
+    containerId: cluster.containerId,
+    containerPhase: "confirmed",
+  };
+  const report = releaseInvocation(invocation, realWorld());
+  if (report.preserved.length > 0 || report.failures.length > 0) {
+    throw new Error(redactProofText(formatCleanupReport(report), secrets(cluster)));
   }
-  if (problems.length > 0) throw new Error(problems.join("; "));
 }
 
 export function reconfirm(cluster: Cluster): void {
@@ -222,64 +277,67 @@ export function sqlWithPassword(
     throw new Error("refusing authentication host");
   }
   reconfirm(cluster);
-  const child = spawnSync(
-    "docker",
-    [
-      "exec",
-      "-i",
-      "-e",
-      `PGPASSWORD=${password}`,
-      cluster.containerId,
-      "psql",
-      "-X",
-      "-h",
-      host,
-      "-U",
-      ROLE_NAME[role],
-      "-d",
-      "stell22",
-      "-v",
-      "ON_ERROR_STOP=1",
-      "-v",
-      "VERBOSITY=verbose",
-      "-f",
-      "-",
-    ],
-    {
-      windowsHide: true,
-      encoding: "utf8",
-      input: statement,
-      timeout: 15_000,
-      maxBuffer: 1_000_000,
-    },
-  );
-  return outcome(child, [...secrets(cluster), password]);
+  return withPasswordFile(password, (envFile) => {
+    const child = spawnSync(
+      "docker",
+      proofExecArgs(envFile, cluster.containerId, [
+        "psql",
+        "-X",
+        "-h",
+        host,
+        "-U",
+        ROLE_NAME[role],
+        "-d",
+        "stell22",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-v",
+        "VERBOSITY=verbose",
+        "-f",
+        "-",
+      ], true),
+      {
+        windowsHide: true,
+        encoding: "utf8",
+        input: statement,
+        timeout: 15_000,
+        maxBuffer: 1_000_000,
+      },
+    );
+    return outcome(child, [...secrets(cluster), password]);
+  });
 }
 
 export function startBackgroundSql(cluster: Cluster, role: SqlRole, statement: string): void {
   reconfirm(cluster);
-  const child = spawn(
-    "docker",
-    [
-      "exec",
-      "-e",
-      `PGPASSWORD=${cluster.passwords[role]}`,
-      cluster.containerId,
-      "psql",
-      "-X",
-      "-h",
-      "127.0.0.1",
-      "-U",
-      ROLE_NAME[role],
-      "-d",
-      "stell22",
-      "-v",
-      "ON_ERROR_STOP=1",
-      "-c",
-      statement,
-    ],
-    { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
-  );
+  const envFile = writePasswordFile(cluster.passwords[role]);
+  let child: ChildProcess;
+  try {
+    child = spawn(
+      "docker",
+      proofExecArgs(envFile, cluster.containerId, [
+        "psql",
+        "-X",
+        "-h",
+        "127.0.0.1",
+        "-U",
+        ROLE_NAME[role],
+        "-d",
+        "stell22",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-c",
+        statement,
+      ], false),
+      { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
+    );
+  } catch (error) {
+    fs.rmSync(envFile, { force: true });
+    throw error;
+  }
+  child.on("exit", () => {
+    fs.rmSync(envFile, { force: true });
+  });
   heldSessions.push(child);
   const record = (chunk: string) => {
     heldErrors = redact(`${heldErrors}${chunk}`, secrets(cluster)).slice(-2000);
@@ -312,25 +370,23 @@ function stopHeldSessions(): void {
 
 export function pgDump(cluster: Cluster, role: SqlRole, args: readonly string[]): SqlOutcome {
   reconfirm(cluster);
-  const child = spawnSync(
-    "docker",
-    [
-      "exec",
-      "-e",
-      `PGPASSWORD=${cluster.passwords[role]}`,
-      cluster.containerId,
-      "pg_dump",
-      "-h",
-      "127.0.0.1",
-      "-U",
-      ROLE_NAME[role],
-      "-d",
-      "stell22",
-      ...args,
-    ],
-    { windowsHide: true, encoding: "utf8", timeout: 30_000, maxBuffer: 8 * 1024 * 1024 },
-  );
-  return outcome(child, secrets(cluster));
+  return withPasswordFile(cluster.passwords[role], (envFile) => {
+    const child = spawnSync(
+      "docker",
+      proofExecArgs(envFile, cluster.containerId, [
+        "pg_dump",
+        "-h",
+        "127.0.0.1",
+        "-U",
+        ROLE_NAME[role],
+        "-d",
+        "stell22",
+        ...args,
+      ], false),
+      { windowsHide: true, encoding: "utf8", timeout: 30_000, maxBuffer: 8 * 1024 * 1024 },
+    );
+    return outcome(child, secrets(cluster));
+  });
 }
 
 export function roleName(role: SqlRole): string {
@@ -347,36 +403,33 @@ function runSql(
   const script = options.probe
     ? statement
     : `SET statement_timeout = '8s';\nSET lock_timeout = '3s';\n${statement}`;
-  const child = spawnSync(
-    "docker",
-    [
-      "exec",
-      "-i",
-      "-e",
-      `PGPASSWORD=${cluster.passwords[role]}`,
-      cluster.containerId,
-      "psql",
-      "-X",
-      "-h",
-      "127.0.0.1",
-      "-U",
-      ROLE_NAME[role],
-      "-d",
-      database,
-      "-v",
-      "ON_ERROR_STOP=1",
-      "-v",
-      "VERBOSITY=verbose",
-      "-A",
-      "-t",
-      "-F",
-      "|",
-      "-f",
-      "-",
-    ],
-    { windowsHide: true, encoding: "utf8", input: script, timeout: 20_000, maxBuffer: 4 * 1024 * 1024 },
-  );
-  return outcome(child, secrets(cluster));
+  return withPasswordFile(cluster.passwords[role], (envFile) => {
+    const child = spawnSync(
+      "docker",
+      proofExecArgs(envFile, cluster.containerId, [
+        "psql",
+        "-X",
+        "-h",
+        "127.0.0.1",
+        "-U",
+        ROLE_NAME[role],
+        "-d",
+        database,
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-v",
+        "VERBOSITY=verbose",
+        "-A",
+        "-t",
+        "-F",
+        "|",
+        "-f",
+        "-",
+      ], true),
+      { windowsHide: true, encoding: "utf8", input: script, timeout: 20_000, maxBuffer: 4 * 1024 * 1024 },
+    );
+    return outcome(child, secrets(cluster));
+  });
 }
 
 function waitReady(cluster: Cluster): void {
@@ -399,63 +452,14 @@ function waitReady(cluster: Cluster): void {
 
 function inspectContainer(cluster: Cluster): unknown {
   const result = docker(["inspect", cluster.containerId]);
-  const parsed: unknown = JSON.parse(result.stdout);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    throw new Error("inspect did not return one container");
+  }
   if (!Array.isArray(parsed) || parsed.length !== 1) throw new Error("inspect did not return one container");
   return parsed[0];
-}
-
-function removeContainer(cluster: Cluster): void {
-  const result = spawnSync("docker", ["inspect", cluster.containerId], {
-    windowsHide: true,
-    encoding: "utf8",
-  });
-  if (result.status !== 0) return;
-  const parsed: unknown = JSON.parse(result.stdout);
-  if (!Array.isArray(parsed) || parsed.length !== 1) throw new Error("cleanup inspect malformed");
-  const verdict = evaluateInspect(parsed[0], expectation(cluster), "cleanup");
-  if (!verdict.ok) throw new Error(`cleanup refused: ${verdict.code}`);
-  const removed = spawnSync("docker", ["rm", "-f", cluster.containerId], {
-    windowsHide: true,
-    encoding: "utf8",
-    timeout: 30_000,
-  });
-  if (removed.status !== 0) throw new Error("owned container removal failed");
-}
-
-function removeVolume(cluster: Cluster): void {
-  const result = spawnSync("docker", ["volume", "inspect", cluster.volumeName], {
-    windowsHide: true,
-    encoding: "utf8",
-  });
-  if (result.status !== 0) return;
-  const parsed: unknown = JSON.parse(result.stdout);
-  if (!Array.isArray(parsed) || parsed.length !== 1) throw new Error("volume inspect malformed");
-  const verdict = volumeCleanupAllowed(parsed[0], expectation(cluster));
-  if (!verdict.ok) throw new Error(`volume cleanup refused: ${verdict.code}`);
-  const removed = spawnSync("docker", ["volume", "rm", cluster.volumeName], {
-    windowsHide: true,
-    encoding: "utf8",
-    timeout: 30_000,
-  });
-  if (removed.status !== 0) throw new Error("owned volume removal failed");
-}
-
-function removeNetwork(cluster: Cluster): void {
-  const result = spawnSync("docker", ["network", "inspect", cluster.networkName], {
-    windowsHide: true,
-    encoding: "utf8",
-  });
-  if (result.status !== 0) return;
-  const parsed: unknown = JSON.parse(result.stdout);
-  if (!Array.isArray(parsed) || parsed.length !== 1) throw new Error("network inspect malformed");
-  const verdict = networkCleanupAllowed(parsed[0], expectation(cluster));
-  if (!verdict.ok) throw new Error(`network cleanup refused: ${verdict.code}`);
-  const removed = spawnSync("docker", ["network", "rm", cluster.networkName], {
-    windowsHide: true,
-    encoding: "utf8",
-    timeout: 30_000,
-  });
-  if (removed.status !== 0) throw new Error("owned network removal failed");
 }
 
 function expectation(cluster: Cluster): OwnedExpectation {
@@ -469,17 +473,54 @@ function expectation(cluster: Cluster): OwnedExpectation {
   };
 }
 
-function docker(args: readonly string[]): { stdout: string } {
+export function proofExecArgs(
+  envFile: string,
+  containerId: string,
+  command: readonly string[],
+  stdin: boolean,
+): string[] {
+  const args = ["exec"];
+  if (stdin) args.push("-i");
+  args.push("--env-file", envFile, containerId, ...command);
+  return args;
+}
+
+function realWorld(): DockerWorld {
+  return {
+    endpoint: () => resolveLocalDockerEndpoint(defaultOriginRuntime()),
+    daemonId: () => {
+      const result = execRaw(["info", "--format", "{{.ID}}"]);
+      const daemonId = result.stdout.trim();
+      if (result.status !== 0 || daemonId.length < 8) throw new Error("docker daemon id is missing");
+      return daemonId;
+    },
+    exec: (args) => execRaw(args),
+  };
+}
+
+function execRaw(args: readonly string[]): ExecResult {
   const child = spawnSync("docker", [...args], {
     windowsHide: true,
     encoding: "utf8",
     timeout: 60_000,
     maxBuffer: 8 * 1024 * 1024,
   });
-  if (child.status !== 0) {
-    throw new Error(`docker ${args[0]} failed`);
-  }
-  return { stdout: child.stdout ?? "" };
+  return { status: child.status, stdout: child.stdout ?? "", stderr: "" };
+}
+
+function assertSameBinding(invocation: Invocation, world: DockerWorld): void {
+  if (world.endpoint() !== invocation.endpoint) throw new Error("docker endpoint changed");
+  if (world.daemonId() !== invocation.daemonId) throw new Error("docker daemon changed");
+}
+
+function expectationFrom(invocation: Invocation, containerId: string): OwnedExpectation {
+  return { ...invocation.names, containerId, imageId: invocation.imageId };
+}
+
+function docker(args: readonly string[]): { stdout: string } {
+  const result = execRaw(args);
+  if (result.status !== 0) throw new Error(`docker ${args[0]} failed`);
+  return { stdout: result.stdout };
 }
 
 function writeEnvFile(password: string): string {
@@ -490,6 +531,21 @@ function writeEnvFile(password: string): string {
     { mode: 0o600 },
   );
   return file;
+}
+
+function writePasswordFile(password: string): string {
+  const file = path.join(os.tmpdir(), `p1wf-pg-${randomUUID()}`);
+  fs.writeFileSync(file, `PGPASSWORD=${password}\n`, { mode: 0o600 });
+  return file;
+}
+
+function withPasswordFile<T>(password: string, fn: (envFile: string) => T): T {
+  const file = writePasswordFile(password);
+  try {
+    return fn(file);
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
 }
 
 function secret(): string {
@@ -519,12 +575,16 @@ function parseSqlState(stderr: string): string | null {
   return match?.[1] ?? null;
 }
 
-function redact(text: string, secretValues: string[]): string {
+export function redactProofText(text: string, secretValues: readonly string[]): string {
   let out = text;
   for (const secretValue of secretValues) {
     if (secretValue.length > 0) out = out.split(secretValue).join("[redacted]");
   }
   return out;
+}
+
+function redact(text: string, secretValues: readonly string[]): string {
+  return redactProofText(text, secretValues);
 }
 
 function redactError(error: unknown, secretValues: string[]): Error {
