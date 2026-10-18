@@ -26,9 +26,23 @@ export function classifyPool(input: {
   return "DATABASE_CONNECTION_FAILURE";
 }
 
-export type EntrypointClass = "PASS" | "FAIL";
+export type MigrateEvidence = number | "NOT_MEASURED";
 
-export function classifyEntrypoint(input: { migrateExit: number | null; serverRunning: boolean }): EntrypointClass {
-  if (input.migrateExit === 0 && input.serverRunning) return "PASS";
+export type EntrypointClass = "STARTUP_PROVEN" | "MIGRATE_MEASURED" | "FAIL";
+
+/**
+ * A running container is not a migrate exit code. STARTUP_PROVEN requires
+ * the Prisma no-pending log, a running server, and health 200 while the
+ * entrypoint command status stays NOT_MEASURED.
+ */
+export function classifyEntrypoint(input: {
+  migrateExit: MigrateEvidence | null;
+  serverRunning: boolean;
+  healthStatus: number | null;
+  noPendingLog: boolean;
+}): EntrypointClass {
+  if (!input.serverRunning || input.healthStatus !== 200 || !input.noPendingLog) return "FAIL";
+  if (input.migrateExit === "NOT_MEASURED") return "STARTUP_PROVEN";
+  if (input.migrateExit === 0) return "MIGRATE_MEASURED";
   return "FAIL";
 }

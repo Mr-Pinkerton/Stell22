@@ -21,9 +21,41 @@ describe("historical application outcomes", () => {
     );
   });
 
-  it("accepts an entrypoint only when migrate exited 0 and the server is running", () => {
-    expect(classifyEntrypoint({ migrateExit: 0, serverRunning: true })).toBe("PASS");
-    expect(classifyEntrypoint({ migrateExit: 1, serverRunning: false })).toBe("FAIL");
-    expect(classifyEntrypoint({ migrateExit: 0, serverRunning: false })).toBe("FAIL");
+  it("proves startup from the Prisma log and health without inventing a migrate exit", () => {
+    expect(
+      classifyEntrypoint({
+        migrateExit: "NOT_MEASURED",
+        serverRunning: true,
+        healthStatus: 200,
+        noPendingLog: true,
+      }),
+    ).toBe("STARTUP_PROVEN");
+    expect(
+      classifyEntrypoint({
+        migrateExit: 0,
+        serverRunning: true,
+        healthStatus: 200,
+        noPendingLog: true,
+      }),
+    ).toBe("MIGRATE_MEASURED");
+    expect(
+      classifyEntrypoint({
+        migrateExit: "NOT_MEASURED",
+        serverRunning: true,
+        healthStatus: 200,
+        noPendingLog: false,
+      }),
+    ).toBe("FAIL");
+    expect(
+      classifyEntrypoint({
+        migrateExit: 0,
+        serverRunning: true,
+        healthStatus: null,
+        noPendingLog: true,
+      }),
+    ).toBe("FAIL");
+    expect(classifyEntrypoint({ migrateExit: 1, serverRunning: true, healthStatus: 200, noPendingLog: true })).toBe(
+      "FAIL",
+    );
   });
 });

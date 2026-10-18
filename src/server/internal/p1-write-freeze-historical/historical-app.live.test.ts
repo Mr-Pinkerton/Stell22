@@ -1,10 +1,13 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { P1_GIT_BLOB, P1_MIGRATION_PATH, P1_SHA256 } from "@/server/internal/p1-isolated-runner/contract";
 import { classifyEntrypoint, classifyPool } from "@/server/internal/p1-write-freeze-historical/classify";
 import type { AppExpectation } from "@/server/internal/p1-write-freeze-historical/identity";
+import { bindingDrift, type InvocationBinding } from "@/server/internal/p1-write-freeze-historical/lifecycle";
 import {
   appLabel,
   buildHistoricalImage,
@@ -18,7 +21,10 @@ import {
   inspectDocument,
   redactedLogs,
   redact,
+  realWorld,
   removeOwnedApp,
+  removeOwnedImage,
+  restartOwned,
   runDetached,
   runProbe,
   startProbe,
@@ -30,6 +36,7 @@ import {
   createCluster,
   destroyCluster,
   pgDump,
+  proofExecArgs,
   sql,
   sqlBare,
   type Cluster,
@@ -84,33 +91,39 @@ main().then(() => prisma.$disconnect()).catch(async (error) => {
 describe.skipIf(!LIVE)("historical application write-freeze proof", () => {
   let cluster: Cluster | undefined;
   let appExpected: AppExpectation | undefined;
+  let binding: InvocationBinding | undefined;
   let builtImage = "";
 
   afterAll(() => {
-    if (cluster && appExpected) removeOwnedApp(appExpected, cluster.endpoint, cluster.daemonId, Object.values(cluster.passwords));
+    const secrets = cluster ? Object.values(cluster.passwords) : [];
+    if (cluster && appExpected && binding) removeOwnedApp(appExpected, binding, secrets);
     if (cluster) destroyCluster(cluster);
-    if (/^sha256:[0-9a-f]{64}$/.test(builtImage)) {
-      spawnSync("docker", ["rmi", builtImage], { windowsHide: true, encoding: "utf8" });
+    if (binding && /^sha256:[0-9a-f]{64}$/.test(builtImage)) {
+      removeOwnedImage(binding, `stell22-p1wf-hist-${binding.runId}`, builtImage, secrets);
     }
   }, 180_000);
 
   it("measures the historical image on a non-superuser role", async () => {
     const source = verifyHistoricalSource();
-    ensureNodeBase();
     cluster = createCluster();
     const owned = cluster;
+    binding = { endpoint: owned.endpoint, daemonId: owned.daemonId, runId: owned.runId };
+    const bound = binding;
+    ensureNodeBase(bound);
     const secrets = Object.values(owned.passwords);
     const tag = `stell22-p1wf-hist-${owned.runId}`;
-    builtImage = await buildHistoricalImage(tag);
-    expect(imageId(tag)).toBe(builtImage);
+    builtImage = await buildHistoricalImage(tag, bound);
+    expect(imageId(tag, bound)).toBe(builtImage);
 
-    const fileId = createStopped([
-      "--name", `${owned.containerName}-file`,
-      "--network", owned.networkName,
-      "--label", appLabel(owned.runId),
-      tag,
-    ]);
-    const copied = copyFromContainer(fileId, "/app/docker-entrypoint.sh");
+    const fileId = createStopped(
+      [
+        "--name", `${owned.containerName}-file`,
+        "--network", owned.networkName,
+        "--label", appLabel(owned.runId),
+        tag,
+      ],
+      bound,
+    );
     const fileExpected: AppExpectation = {
       containerId: fileId,
       containerName: `${owned.containerName}-file`,
@@ -120,7 +133,8 @@ describe.skipIf(!LIVE)("historical application write-freeze proof", () => {
       runId: owned.runId,
       purpose: "created",
     };
-    expect(removeOwnedApp(fileExpected, owned.endpoint, owned.daemonId, secrets)).toBe("removed:REMOVED");
+    const copied = copyFromContainer(fileExpected, bound, "/app/docker-entrypoint.sh");
+    expect(removeOwnedApp(fileExpected, bound, secrets)).toBe("removed:REMOVED");
     expect(copied.replace(/\r\n/g, "\n")).toBe(historicalFile(source.commit, "docker-entrypoint.sh").replace(/\r\n/g, "\n"));
 
     const roles = sql(
@@ -144,7 +158,7 @@ describe.skipIf(!LIVE)("historical application write-freeze proof", () => {
     );
     expect(query(owned, "bootstrap", "SELECT member::regrole::text || '|' || roleid::regrole::text FROM pg_auth_members WHERE member::regrole::text = 'p1wf_app';")).toBe("");
 
-    const migrated = runOneShot(owned, tag, builtImage, "p1wf_migrator", `${owned.containerName}-migrate`);
+    const migrated = runOneShot(owned, bound, tag, builtImage, `${owned.containerName}-migrate`);
     expect(migrated.exit).toBe(0);
     const grants = sql(
       owned,
@@ -172,15 +186,18 @@ describe.skipIf(!LIVE)("historical application write-freeze proof", () => {
     const appEnv = writeUrlFile("p1wf_app", owned.passwords.app, owned.containerName);
     let appId = "";
     try {
-      appId = runDetached([
-        "--name", appName,
-        "--network", owned.networkName,
-        "--restart", "no",
-        "--label", appLabel(owned.runId),
-        "--env-file", appEnv,
-        "-p", "127.0.0.1::3000",
-        tag,
-      ]);
+      appId = runDetached(
+        [
+          "--name", appName,
+          "--network", owned.networkName,
+          "--restart", "no",
+          "--label", appLabel(owned.runId),
+          "--env-file", appEnv,
+          "-p", "127.0.0.1::3000",
+          tag,
+        ],
+        bound,
+      );
     } finally {
       fs.rmSync(appEnv, { force: true });
     }
@@ -193,21 +210,26 @@ describe.skipIf(!LIVE)("historical application write-freeze proof", () => {
       runId: owned.runId,
       purpose: "application",
     };
-    const started = await waitUntil(appId, 90_000);
-    const entryLogs = redactedLogs(appId, secrets);
-    const entrypoint = classifyEntrypoint({ migrateExit: started.running ? 0 : started.exitCode, serverRunning: started.running });
-    if (entrypoint !== "PASS") {
-      throw new Error(`ENTRYPOINT_FAIL exit=${started.exitCode} running=${started.running} logs=${entryLogs.slice(-1800)}`);
-    }
+    const started = await waitUntil(appExpected, bound, 90_000);
+    const entryLogs = redactedLogs(appExpected, bound, secrets);
     expect(entryLogs).toContain("No pending migrations to apply.");
     expect(entryLogs).toContain("Запускаю приложение");
     expect(entryLogs).not.toContain(owned.passwords.app);
-    const port = loopbackPort(inspectDocument(appId));
-    expect(await waitHealth(port)).toBe(200);
-    copyProbe(appId, PROBE);
-    const read = probeJson(appId, "read", secrets);
+    const port = loopbackPort(inspectDocument(appExpected, bound));
+    const entryHealth = await waitHealth(port);
+    const entrypoint = classifyEntrypoint({
+      migrateExit: "NOT_MEASURED",
+      serverRunning: started.running,
+      healthStatus: entryHealth,
+      noPendingLog: entryLogs.includes("No pending migrations to apply."),
+    });
+    if (entrypoint !== "STARTUP_PROVEN") {
+      throw new Error(`ENTRYPOINT_FAIL exit=${started.exitCode} running=${started.running} health=${entryHealth} logs=${entryLogs.slice(-1800)}`);
+    }
+    copyProbe(appExpected, bound, PROBE);
+    const read = probeJson(appExpected, bound, "read", secrets);
     expect(read).toMatchObject({ ok: true, marker: "baseline" });
-    const wrote = probeJson(appId, "write", secrets);
+    const wrote = probeJson(appExpected, bound, "write", secrets);
     expect(wrote.ok).toBe(true);
     expect(seen(sql(owned, "app", "SET ROLE p1wf_migrator;"))).toMatchObject({ status: 3, sqlstate: "42501" });
     expect(seen(sql(owned, "app", "SET ROLE p1wf_breakglass;"))).toMatchObject({ status: 3, sqlstate: "42501" });
@@ -217,9 +239,9 @@ describe.skipIf(!LIVE)("historical application write-freeze proof", () => {
     }
     expect(await cron(port)).toBe(503);
 
-    const holder = startProbe(appId, "hold");
+    const holder = startProbe(appExpected, bound, "hold");
     const heldPid = waitForQuery(owned, "p1wf_hold");
-    const beforeFreeze = containerFacts(appId);
+    const beforeFreeze = containerFacts(appExpected, bound);
     const revoked = sql(
       owned,
       "breakglass",
@@ -241,13 +263,13 @@ describe.skipIf(!LIVE)("historical application write-freeze proof", () => {
     for (const pid of activityPids(owned)) {
       sqlBare(owned, "breakglass", `SELECT pg_terminate_backend(${pid});`);
     }
-    const afterDrain = containerFacts(appId);
+    const afterDrain = containerFacts(appExpected, bound);
     expect(afterDrain.startedAt).toBe(beforeFreeze.startedAt);
     expect(afterDrain.pid).toBe(beforeFreeze.pid);
     expect(await waitHealth(port)).toBe(200);
-    const frozenRead = probeJson(appId, "read", secrets);
+    const frozenRead = probeJson(appExpected, bound, "read", secrets);
     expect(frozenRead.ok).toBe(true);
-    const frozenWrite = probeJson(appId, "frozen-write", secrets);
+    const frozenWrite = probeJson(appExpected, bound, "frozen-write", secrets);
     expect(frozenWrite.ok).toBe(false);
     expect(seen(sql(owned, "app", `INSERT INTO "Setting" ("key", "value") VALUES ('p1wf_direct', '{"marker":"no"}'::json);`))).toMatchObject({
       status: 3,
@@ -256,7 +278,7 @@ describe.skipIf(!LIVE)("historical application write-freeze proof", () => {
     const during = query(owned, "app", `SELECT "key" FROM "Setting" WHERE "key" LIKE 'p1wf%' ORDER BY "key";`);
     expect(during).toBe(before.split("\n").map((line) => line.split("|")[0]).join("\n") + "\np1wf_write");
 
-    const afterPool = containerFacts(appId);
+    const afterPool = containerFacts(appExpected, bound);
     const pool = classifyPool({
       beforeId: appId,
       afterId: appId,
@@ -283,7 +305,7 @@ describe.skipIf(!LIVE)("historical application write-freeze proof", () => {
     expect(seen(restored)).toMatchObject({ status: 0, sqlstate: null });
     expect(query(owned, "bootstrap", "SELECT rolsuper::text FROM pg_roles WHERE rolname = 'p1wf_app';")).toBe("false");
     expect(query(owned, "bootstrap", "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE relname = 'Setting';")).toBe("p1wf_migrator");
-    const unfrozen = probeJson(appId, "rewrite", secrets);
+    const unfrozen = probeJson(appExpected, bound, "rewrite", secrets);
     expect(unfrozen.ok).toBe(true);
     const unfrozenKey = sql(
       owned,
@@ -291,19 +313,30 @@ describe.skipIf(!LIVE)("historical application write-freeze proof", () => {
       `INSERT INTO "Notification" ("id", "key", "title", "message", "tone", "isSystem") VALUES ('p1wf_unfreeze', 'p1wf-hist-unfreeze', 'fixture', 'fixture', 'INFO', false);`,
     );
     expect(seen(unfrozenKey)).toMatchObject({ status: 0, sqlstate: null });
-    expect(containerFacts(appId).startedAt).toBe(beforeFreeze.startedAt);
+    expect(containerFacts(appExpected, bound).startedAt).toBe(beforeFreeze.startedAt);
 
     const pinned = gitShow(P1_MIGRATION_PATH);
     expect(sha256(pinned)).toBe(P1_SHA256);
     const applied = sql(owned, "migrator", pinned);
     expect(seen(applied)).toMatchObject({ status: 0, sqlstate: null });
-    const restartBefore = containerFacts(appId);
-    expect(spawnSync("docker", ["restart", appId], { windowsHide: true, encoding: "utf8", timeout: 120_000 }).status).toBe(0);
-    const restarted = await waitRestarted(appId, restartBefore.startedAt, 120_000);
-    const restartLogs = redactedLogs(appId, secrets);
-    const afterP1 = classifyEntrypoint({ migrateExit: restarted.running ? 0 : restarted.exitCode, serverRunning: restarted.running });
-    expect(containerFacts(appId).startedAt).not.toBe(restartBefore.startedAt);
-    expect(afterP1).toBe("PASS");
+    const restartBefore = containerFacts(appExpected, bound);
+    restartOwned(appExpected, bound);
+    const restarted = await waitRestarted(appExpected, bound, restartBefore.startedAt, 120_000);
+    const restartLogs = redactedLogs(appExpected, bound, secrets);
+    const restartPort = loopbackPort(inspectDocument(appExpected, bound));
+    const restartHealth = await waitHealth(restartPort, 90);
+    const afterP1 = classifyEntrypoint({
+      migrateExit: "NOT_MEASURED",
+      serverRunning: restarted.running,
+      healthStatus: restartHealth,
+      noPendingLog: restartLogs.includes("No pending migrations to apply."),
+    });
+    expect(containerFacts(appExpected, bound).startedAt).not.toBe(restartBefore.startedAt);
+    if (afterP1 !== "STARTUP_PROVEN") {
+      throw new Error(
+        `RESTART_FAIL running=${restarted.running} health=${restartHealth} pending=${restartLogs.includes("No pending migrations to apply.")} logs=${restartLogs.slice(-1800)}`,
+      );
+    }
     expect(restartLogs).not.toContain(owned.passwords.app);
 
     const appDump = pgDump(owned, "app", ["--no-owner", "--no-acl"]);
@@ -311,8 +344,8 @@ describe.skipIf(!LIVE)("historical application write-freeze proof", () => {
     expect(fullDump.status).toBe(0);
     expect(fullDump.stdout).toContain("p1wf_baseline");
     expect(sqlBare(owned, "bootstrap", "CREATE DATABASE p1wf_restore OWNER p1wf_migrator;").status).toBe(0);
-    const restoredDump = sql(owned, "migrator", fullDump.stdout, "p1wf_restore");
-    expect(seen(restoredDump).status).toBe(0);
+    const restoredDump = restoreDump(owned, bound, fullDump.stdout);
+    expect(restoredDump.status).toBe(0);
     expect(query(owned, "migrator", `SELECT "value"->>'marker' FROM "Setting" WHERE "key" = 'p1wf_baseline';`, "p1wf_restore")).toBe("baseline");
 
     expect(redact(JSON.stringify({ source, builtImage, appId, entrypoint, afterP1, appDump: appDump.status, pool }), secrets)).not.toContain(owned.passwords.app);
@@ -321,43 +354,73 @@ describe.skipIf(!LIVE)("historical application write-freeze proof", () => {
   }, 1_200_000);
 });
 
-function runOneShot(cluster: Cluster, tag: string, builtImage: string, user: "p1wf_migrator", name: string): { exit: number; logs: string } {
-  const envFile = writeUrlFile(user, cluster.passwords.migrator, cluster.containerName);
+function runOneShot(
+  cluster: Cluster,
+  binding: InvocationBinding,
+  tag: string,
+  builtImage: string,
+  name: string,
+): { exit: number; logs: string } {
+  const envFile = writeUrlFile("p1wf_migrator", cluster.passwords.migrator, cluster.containerName);
   let id = "";
   try {
-    id = runDetached([
-      "--name", name,
-      "--network", cluster.networkName,
-      "--restart", "no",
-      "--label", appLabel(cluster.runId),
-      "--env-file", envFile,
-      "--entrypoint", "npx",
-      tag,
-      "prisma",
-      "migrate",
-      "deploy",
-    ]);
+    id = runDetached(
+      [
+        "--name", name,
+        "--network", cluster.networkName,
+        "--restart", "no",
+        "--label", appLabel(cluster.runId),
+        "--env-file", envFile,
+        "--entrypoint", "npx",
+        tag,
+        "prisma",
+        "migrate",
+        "deploy",
+      ],
+      binding,
+    );
   } finally {
     fs.rmSync(envFile, { force: true });
   }
-  const exit = waitContainer(id, 180_000);
-  const logs = redactedLogs(id, Object.values(cluster.passwords));
-  const removed = removeOwnedApp(
-    {
-      containerId: id,
-      containerName: name,
-      imageId: builtImage,
-      imageRef: tag,
-      networkName: cluster.networkName,
-      runId: cluster.runId,
-      purpose: "oneshot",
-    },
-    cluster.endpoint,
-    cluster.daemonId,
-    Object.values(cluster.passwords),
-  );
+  const expected: AppExpectation = {
+    containerId: id,
+    containerName: name,
+    imageId: builtImage,
+    imageRef: tag,
+    networkName: cluster.networkName,
+    runId: cluster.runId,
+    purpose: "oneshot",
+  };
+  const exit = waitContainer(expected, binding, 180_000);
+  const logs = redactedLogs(expected, binding, Object.values(cluster.passwords));
+  const removed = removeOwnedApp(expected, binding, Object.values(cluster.passwords));
   if (removed !== "removed:REMOVED") throw new Error(removed);
   return { exit, logs };
+}
+
+function restoreDump(cluster: Cluster, binding: InvocationBinding, script: string): { status: number | null } {
+  const drift = bindingDrift(binding, realWorld());
+  if (drift !== null) throw new Error(drift);
+  const file = path.join(os.tmpdir(), `p1wf-pg-${randomUUID()}`);
+  fs.writeFileSync(file, `PGPASSWORD=${cluster.passwords.migrator}\n`, { mode: 0o600 });
+  try {
+    const child = spawnSync(
+      "docker",
+      proofExecArgs(
+        file,
+        cluster.containerId,
+        ["psql", "-X", "-h", "127.0.0.1", "-U", "p1wf_migrator", "-d", "p1wf_restore", "-v", "ON_ERROR_STOP=1", "-f", "-"],
+        true,
+      ),
+      { windowsHide: true, encoding: "utf8", input: script, timeout: 120_000, maxBuffer: 16 * 1024 * 1024 },
+    );
+    if (child.status !== 0) {
+      throw new Error(`restore status=${child.status ?? "null"} ${redact(child.stderr ?? "", Object.values(cluster.passwords)).slice(0, 400)}`);
+    }
+    return { status: child.status };
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
 }
 
 function query(cluster: Cluster, role: SqlRole, statement: string, database = "stell22"): string {
@@ -390,27 +453,32 @@ function waitForQuery(cluster: Cluster, token: string): string {
 }
 
 async function waitRestarted(
-  id: string,
+  expected: AppExpectation,
+  binding: InvocationBinding,
   previousStartedAt: string,
   timeoutMs: number,
 ): Promise<{ running: boolean; exitCode: number; startedAt: string }> {
   const started = Date.now();
-  let latest = containerFacts(id);
+  let latest = containerFacts(expected, binding);
   while (Date.now() - started < timeoutMs) {
-    latest = containerFacts(id);
+    latest = containerFacts(expected, binding);
     if (latest.startedAt !== previousStartedAt && (!latest.running || latest.pid > 0)) return latest;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   return latest;
 }
 
-async function waitUntil(id: string, timeoutMs: number): Promise<{ running: boolean; exitCode: number; startedAt: string }> {
+async function waitUntil(
+  expected: AppExpectation,
+  binding: InvocationBinding,
+  timeoutMs: number,
+): Promise<{ running: boolean; exitCode: number; startedAt: string }> {
   const started = Date.now();
-  let latest = containerFacts(id);
+  let latest = containerFacts(expected, binding);
   while (Date.now() - started < timeoutMs) {
-    latest = containerFacts(id);
+    latest = containerFacts(expected, binding);
     if (!latest.running) return latest;
-    if (latest.startedAt.length > 0 && redactedLogs(id, []).includes("Запускаю приложение")) return latest;
+    if (latest.startedAt.length > 0 && redactedLogs(expected, binding, []).includes("Запускаю приложение")) return latest;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   return latest;
@@ -425,9 +493,9 @@ async function health(port: string): Promise<number> {
   }
 }
 
-async function waitHealth(port: string): Promise<number> {
+async function waitHealth(port: string, attempts = 30): Promise<number> {
   let status = 0;
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     status = await health(port);
     if (status === 200) return status;
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -435,8 +503,13 @@ async function waitHealth(port: string): Promise<number> {
   return status;
 }
 
-function probeJson(containerId: string, mode: string, secrets: readonly string[]): { ok: boolean; marker?: string | null; code?: string } {
-  const result = runProbe(containerId, mode, secrets);
+function probeJson(
+  expected: AppExpectation,
+  binding: InvocationBinding,
+  mode: string,
+  secrets: readonly string[],
+): { ok: boolean; marker?: string | null; code?: string } {
+  const result = runProbe(expected, binding, mode, secrets);
   const line = result.text.split(/\r?\n/).find((item) => item.startsWith("{"));
   if (line === undefined) throw new Error(result.text.slice(0, 400));
   return JSON.parse(line) as { ok: boolean; marker?: string | null; code?: string };
