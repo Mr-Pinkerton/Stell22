@@ -1,0 +1,2 @@
+docker-entrypoint-app-only.sh text eol=lf
+docker/app-only-startup/Dockerfile text eol=lf
