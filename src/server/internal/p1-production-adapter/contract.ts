@@ -42,6 +42,14 @@ export const PRODUCTION_SIGNED_AUTHORIZATION_PATH = "/var/lib/stell22/p1-owner-a
 /** Directory of exclusive-create replay markers. Not a rewriteable log. */
 export const PRODUCTION_AUTHORIZATION_REPLAY_DIR = "/var/lib/stell22/p1-owner-authorization-replay" as const;
 
+/**
+ * Fixed path. The repository does not contain the file and the operator does not create it.
+ * Production apply reads this path only. A caller path is not accepted.
+ * The role inside the file must be the proposed migrator, never the bootstrap role.
+ */
+export const PRODUCTION_MIGRATOR_CREDENTIAL_PATH = "/var/lib/stell22/p1-migrator-credential.json" as const;
+export const PROPOSED_MIGRATOR_ROLE = "stell22_migrator" as const;
+
 export const TEST_ROLE_NAME = "p1pa" as const;
 
 export const EXECUTION_PHASES = [

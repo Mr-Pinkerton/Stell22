@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { generateKeyPairSync, randomBytes, sign, type KeyObject } from "node:crypto";
+import { generateKeyPairSync, randomBytes, randomUUID, sign, type KeyObject } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
@@ -24,6 +25,7 @@ import {
   testDbName,
   testNetworkName,
   testRestoreName,
+  PROPOSED_MIGRATOR_ROLE,
 } from "@/server/internal/p1-production-adapter/contract";
 import { dumpDatabase, inspectContainer, inspectMounts, readCatalog, readDaemonId, restoreArchive } from "@/server/internal/p1-production-adapter/docker-runtime";
 import { fileReplayStore } from "@/server/internal/p1-production-adapter/authorization";
@@ -32,13 +34,15 @@ import { canonicalJson, declarationFromFacts, type TargetFacts } from "@/server/
 import type { RestoreContainerFact } from "@/server/internal/p1-production-adapter/restore-controller";
 import { planProductionOneShot } from "@/server/internal/p1-production-adapter/oneshot";
 import { assertIndependentRestore, publishReleaseBackup } from "@/server/internal/p1-production-adapter/recovery";
+import { readMigratorCredentialFile } from "@/server/internal/p1-production-adapter/migrator-credential";
+import { evaluateMigratorPrivileges, probeMigratorPrivileges } from "@/server/internal/p1-production-adapter/migrator-privilege";
 
 const LIVE_FLAG = "P1_DISPOSABLE_LIVE";
 
 describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1 adapter", () => {
   afterAll(() => {
     releaseOwnedOperatorTag();
-  });
+  }, 60_000);
   it(
     "backs up, restores, and applies pinned P1 without calling the database production",
     () => {
@@ -181,7 +185,77 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
         expect(recovery.verdict).toBe("RECOVERY_VERIFIED");
         spawnSync("docker", ["rm", "-f", restoreName], { windowsHide: true });
         startRestore(restoreName, `${networkName}-restore`, databaseName, password);
+        const migratorPassword = randomBytes(16).toString("hex");
+        const appPassword = randomBytes(16).toString("hex");
+        const credentialPath = path.join(runtime, "migrator-credential.json");
+        installDisposableMigrator(dbName, databaseName, migratorPassword, appPassword);
+        writeMigratorCredential(credentialPath, databaseName, migratorPassword);
+        const migratorReaders = {
+          readMigratorCredential: (name: string) =>
+            readMigratorCredentialFile({ requestedPath: credentialPath, allowedPath: credentialPath, expectedDatabase: name }),
+          readMigratorPrivileges: (credential: { role: typeof PROPOSED_MIGRATOR_ROLE; database: string; password: string }) =>
+            probeMigratorPrivileges({ networkName, database: credential.database, credential, env: process.env }),
+        };
+        expect(migratorReaders.readMigratorPrivileges(migratorReaders.readMigratorCredential(databaseName)).currentUser).toBe(PROPOSED_MIGRATOR_ROLE);
+        execSql(dbName, databaseName, "ALTER ROLE stell22_migrator SUPERUSER");
         const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+        const refused = executeProductionAdapter(
+          {
+            intent: "APPLY",
+            scope: "TEST_OWNED",
+            attemptId,
+            declared: declarationFromFacts(live),
+            databasePassword: password,
+            recoveryWitness: witness,
+            authorization: signLive(privateKey, {
+              dossierSha256: recovery.dossierSha256 ?? "",
+              recoverySha256: recovery.recoverySha256 ?? "",
+              attemptId,
+              daemonId,
+            }),
+          },
+          {
+            ...dependencies(path.join(runtime, "refused"), live, () => fs.readFileSync(path.join(backupDirectory, "backup.sql.gz")), restoreName, backupDirectory),
+            ...migratorReaders,
+            testTrustPublicKey: publicKey.export({ type: "spki", format: "pem" }).toString(),
+            spawnOneShot: () => {
+              spawns += 1;
+              return { status: 0, signal: null };
+            },
+          },
+        );
+        expect(refused).toMatchObject({ code: "MIGRATOR_ROLE_REFUSED", spawned: false });
+        expect(spawns).toBe(0);
+        execSql(dbName, databaseName, "ALTER ROLE stell22_migrator NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION NOINHERIT");
+        execSql(dbName, databaseName, "GRANT p1pa TO stell22_migrator");
+        expect(evaluateMigratorPrivileges(probeMigratorPrivileges({
+          networkName,
+          database: databaseName,
+          credential: { role: PROPOSED_MIGRATOR_ROLE, database: databaseName, password: migratorPassword },
+          env: process.env,
+        }), { migratorRole: PROPOSED_MIGRATOR_ROLE, bootstrapRole: "p1pa" })).toMatchObject({ code: "MIGRATOR_MEMBERSHIP_REFUSED" });
+        execSql(dbName, databaseName, "REVOKE p1pa FROM stell22_migrator");
+        execSql(dbName, databaseName, 'ALTER TABLE "BatchCreationCommand" OWNER TO p1pa');
+        expect(evaluateMigratorPrivileges(probeMigratorPrivileges({
+          networkName,
+          database: databaseName,
+          credential: { role: PROPOSED_MIGRATOR_ROLE, database: databaseName, password: migratorPassword },
+          env: process.env,
+        }), { migratorRole: PROPOSED_MIGRATOR_ROLE, bootstrapRole: "p1pa" })).toMatchObject({ code: "MIGRATOR_OWNERSHIP_REFUSED" });
+        execSql(dbName, databaseName, 'ALTER TABLE "BatchCreationCommand" OWNER TO stell22_migrator');
+        expect(() =>
+          probeMigratorPrivileges({
+            networkName,
+            database: databaseName,
+            credential: { role: PROPOSED_MIGRATOR_ROLE, database: databaseName, password: `${migratorPassword}wrong` },
+            env: process.env,
+          }),
+        ).toThrow(expect.objectContaining({ code: "MIGRATOR_CREDENTIAL_MISMATCH" }));
+        const denied = networkPsql(networkName, databaseName, "p1pa_app", appPassword, 'ALTER TABLE "BatchCreationCommand" ADD COLUMN p1pa_should_fail integer');
+        expect(denied.status).not.toBe(0);
+        expect(denied.stderr).toMatch(/permission denied|must be owner|42501/);
+        spawnSync("docker", ["rm", "-f", restoreName], { windowsHide: true });
+        startRestore(restoreName, `${networkName}-restore`, databaseName, password);
         const applied = executeProductionAdapter(
           {
             intent: "APPLY",
@@ -199,6 +273,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
           },
           {
             ...dependencies(path.join(runtime, "apply"), live, () => fs.readFileSync(path.join(backupDirectory, "backup.sql.gz")), restoreName, backupDirectory),
+            ...migratorReaders,
             testTrustPublicKey: publicKey.export({ type: "spki", format: "pem" }).toString(),
             spawnOneShot: (plan) => {
               spawns += 1;
@@ -257,7 +332,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
       }
       if (failure) throw failure;
     },
-    600_000,
+    900_000,
   );
 });
 
@@ -384,6 +459,49 @@ function waitReady(containerName: string, databaseName: string): void {
     spawnSync(process.execPath, ["-e", "Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);"], { windowsHide: true });
   }
   throw new Error(`database ${containerName} did not become ready: ${last}`);
+}
+
+function installDisposableMigrator(containerName: string, databaseName: string, migratorPassword: string, appPassword: string): void {
+  execSql(
+    containerName,
+    databaseName,
+    [
+      `CREATE ROLE stell22_migrator LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION NOINHERIT PASSWORD '${migratorPassword}'`,
+      `CREATE ROLE p1pa_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION NOINHERIT PASSWORD '${appPassword}'`,
+      "REVOKE CREATE ON SCHEMA public FROM PUBLIC",
+      "GRANT USAGE, CREATE ON SCHEMA public TO stell22_migrator",
+      "GRANT USAGE ON SCHEMA public TO p1pa_app",
+      'ALTER TABLE "BatchCreationCommand" OWNER TO stell22_migrator',
+      'ALTER TABLE "_prisma_migrations" OWNER TO stell22_migrator',
+      "GRANT SELECT ON ALL TABLES IN SCHEMA public TO p1pa_app",
+    ].join(";\n"),
+  );
+}
+
+function writeMigratorCredential(filePath: string, databaseName: string, password: string): void {
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({ kind: "P1_MIGRATOR_CREDENTIAL", role: PROPOSED_MIGRATOR_ROLE, database: databaseName, password }),
+    { mode: 0o600 },
+  );
+  if (process.platform !== "win32") fs.chmodSync(filePath, 0o600);
+}
+
+function networkPsql(networkName: string, databaseName: string, user: string, password: string, sql: string): { status: number | null; stderr: string } {
+  const envFile = path.join(os.tmpdir(), `p1-app-${randomUUID()}`);
+  fs.writeFileSync(envFile, `PGPASSWORD=${password}\n`, { mode: 0o600 });
+  try {
+    const child = spawnSync(
+      "docker",
+      ["run", "--rm", "--pull", "never", "--network", networkName, "--env-file", envFile, "postgres:17-alpine", "psql", "-h", "db", "-U", user, "-d", databaseName, "-X", "-v", "ON_ERROR_STOP=1", "-c", sql],
+      { encoding: "utf8", windowsHide: true, timeout: 30_000 },
+    );
+    const stderr = (child.stderr ?? "").replaceAll(password, "[redacted]");
+    if (stderr.includes(password) || (child.stdout ?? "").includes(password)) throw new Error("disposable password leaked");
+    return { status: child.status, stderr };
+  } finally {
+    fs.rmSync(envFile, { force: true });
+  }
 }
 
 function execSql(containerName: string, databaseName: string, sql: string): void {

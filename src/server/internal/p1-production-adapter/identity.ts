@@ -13,6 +13,7 @@ import {
   PRODUCTION_POSTGRES_IMAGE,
   PRODUCTION_POSTGRES_MAJOR,
   PRODUCTION_ROLE_NAME,
+  PROPOSED_MIGRATOR_ROLE,
   TEST_ROLE_NAME,
   testAppName,
   testDatabaseName,
@@ -29,6 +30,9 @@ import { refusal } from "@/server/internal/p1-isolated-runner/refusal";
 /**
  * Runtime identity of one container.
  * `imageId` is the Docker image id. `imageGitSha` stays UNVERIFIED.
+ * `roleName` is the authenticated database target, not the P1 migrator.
+ * The dossier names `stell22_migrator` separately so an older signature
+ * cannot authorize a different SQL role without a new digest.
  */
 export type ContainerFact = {
   id: string;
@@ -140,6 +144,7 @@ export function dossierDigest(facts: TargetFacts, oneShotImageId: string): strin
     p1Present: false,
     incompleteMigrationCount: 0,
     publishedDbPort: false,
+    migratorRole: PROPOSED_MIGRATOR_ROLE,
   });
   return sha256Text(body);
 }
