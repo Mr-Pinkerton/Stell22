@@ -184,7 +184,10 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("operator runtime on a test-owne
         JSON.stringify({ kind: "P1_MIGRATOR_CREDENTIAL", role: PROPOSED_MIGRATOR_ROLE, database: databaseName, password: migratorPassword }),
         { mode: 0o600 },
       );
-      if (process.platform !== "win32") fs.chmodSync(credentialPath, 0o600);
+      if (process.platform !== "win32") {
+        fs.chmodSync(attemptRoot, 0o700);
+        fs.chmodSync(credentialPath, 0o600);
+      }
 
       const daemonId = readDaemonId();
       const { publicKey, privateKey } = generateKeyPairSync("ed25519");

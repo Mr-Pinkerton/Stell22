@@ -27,7 +27,7 @@ import {
   testRestoreName,
   PROPOSED_MIGRATOR_ROLE,
 } from "@/server/internal/p1-production-adapter/contract";
-import { dumpDatabase, inspectContainer, inspectMounts, readCatalog, readDaemonId, restoreArchive } from "@/server/internal/p1-production-adapter/docker-runtime";
+import { dumpDatabase, inspectContainer, inspectMounts, readCatalog, readDaemonId, resolveDockerSession, restoreArchive } from "@/server/internal/p1-production-adapter/docker-runtime";
 import { fileReplayStore } from "@/server/internal/p1-production-adapter/authorization";
 import { executeProductionAdapter, type AdapterDependencies } from "@/server/internal/p1-production-adapter/execute";
 import { canonicalJson, declarationFromFacts, type TargetFacts } from "@/server/internal/p1-production-adapter/identity";
@@ -190,11 +190,25 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
         const credentialPath = path.join(runtime, "migrator-credential.json");
         installDisposableMigrator(dbName, databaseName, migratorPassword, appPassword);
         writeMigratorCredential(credentialPath, databaseName, migratorPassword);
+        const inMemory = { role: PROPOSED_MIGRATOR_ROLE, database: databaseName, password: migratorPassword };
+        expect(boundProbe(dbName, networkName, inMemory).currentUser).toBe(PROPOSED_MIGRATOR_ROLE);
+        execSql(dbName, databaseName, "GRANT p1pa TO stell22_migrator");
+        expect(evaluateMigratorPrivileges(boundProbe(dbName, networkName, inMemory), { migratorRole: PROPOSED_MIGRATOR_ROLE, bootstrapRole: "p1pa" })).toMatchObject({ code: "MIGRATOR_MEMBERSHIP_REFUSED" });
+        execSql(dbName, databaseName, "REVOKE p1pa FROM stell22_migrator");
+        execSql(dbName, databaseName, 'ALTER TABLE "BatchCreationCommand" OWNER TO p1pa');
+        expect(evaluateMigratorPrivileges(boundProbe(dbName, networkName, inMemory), { migratorRole: PROPOSED_MIGRATOR_ROLE, bootstrapRole: "p1pa" })).toMatchObject({ code: "MIGRATOR_OWNERSHIP_REFUSED" });
+        execSql(dbName, databaseName, 'ALTER TABLE "BatchCreationCommand" OWNER TO stell22_migrator');
+        expect(() =>
+          boundProbe(dbName, networkName, { role: PROPOSED_MIGRATOR_ROLE, database: databaseName, password: `${migratorPassword}wrong` }),
+        ).toThrow(expect.objectContaining({ code: "MIGRATOR_CREDENTIAL_MISMATCH" }));
+        const denied = networkPsql(networkName, databaseName, "p1pa_app", appPassword, 'ALTER TABLE "BatchCreationCommand" ADD COLUMN p1pa_should_fail integer');
+        expect(denied.status).not.toBe(0);
+        expect(denied.stderr).toMatch(/permission denied|must be owner|42501/);
         const migratorReaders = {
           readMigratorCredential: (name: string) =>
             readMigratorCredentialFile({ requestedPath: credentialPath, allowedPath: credentialPath, expectedDatabase: name }),
           readMigratorPrivileges: (credential: { role: typeof PROPOSED_MIGRATOR_ROLE; database: string; password: string }) =>
-            probeMigratorPrivileges({ networkName, database: credential.database, credential, env: process.env }),
+            boundProbe(dbName, networkName, credential),
         };
         expect(migratorReaders.readMigratorPrivileges(migratorReaders.readMigratorCredential(databaseName)).currentUser).toBe(PROPOSED_MIGRATOR_ROLE);
         execSql(dbName, databaseName, "ALTER ROLE stell22_migrator SUPERUSER");
@@ -227,33 +241,6 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("test-owned production-shaped P1
         expect(refused).toMatchObject({ code: "MIGRATOR_ROLE_REFUSED", spawned: false });
         expect(spawns).toBe(0);
         execSql(dbName, databaseName, "ALTER ROLE stell22_migrator NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION NOINHERIT");
-        execSql(dbName, databaseName, "GRANT p1pa TO stell22_migrator");
-        expect(evaluateMigratorPrivileges(probeMigratorPrivileges({
-          networkName,
-          database: databaseName,
-          credential: { role: PROPOSED_MIGRATOR_ROLE, database: databaseName, password: migratorPassword },
-          env: process.env,
-        }), { migratorRole: PROPOSED_MIGRATOR_ROLE, bootstrapRole: "p1pa" })).toMatchObject({ code: "MIGRATOR_MEMBERSHIP_REFUSED" });
-        execSql(dbName, databaseName, "REVOKE p1pa FROM stell22_migrator");
-        execSql(dbName, databaseName, 'ALTER TABLE "BatchCreationCommand" OWNER TO p1pa');
-        expect(evaluateMigratorPrivileges(probeMigratorPrivileges({
-          networkName,
-          database: databaseName,
-          credential: { role: PROPOSED_MIGRATOR_ROLE, database: databaseName, password: migratorPassword },
-          env: process.env,
-        }), { migratorRole: PROPOSED_MIGRATOR_ROLE, bootstrapRole: "p1pa" })).toMatchObject({ code: "MIGRATOR_OWNERSHIP_REFUSED" });
-        execSql(dbName, databaseName, 'ALTER TABLE "BatchCreationCommand" OWNER TO stell22_migrator');
-        expect(() =>
-          probeMigratorPrivileges({
-            networkName,
-            database: databaseName,
-            credential: { role: PROPOSED_MIGRATOR_ROLE, database: databaseName, password: `${migratorPassword}wrong` },
-            env: process.env,
-          }),
-        ).toThrow(expect.objectContaining({ code: "MIGRATOR_CREDENTIAL_MISMATCH" }));
-        const denied = networkPsql(networkName, databaseName, "p1pa_app", appPassword, 'ALTER TABLE "BatchCreationCommand" ADD COLUMN p1pa_should_fail integer');
-        expect(denied.status).not.toBe(0);
-        expect(denied.stderr).toMatch(/permission denied|must be owner|42501/);
         spawnSync("docker", ["rm", "-f", restoreName], { windowsHide: true });
         startRestore(restoreName, `${networkName}-restore`, databaseName, password);
         const applied = executeProductionAdapter(
@@ -461,6 +448,24 @@ function waitReady(containerName: string, databaseName: string): void {
   throw new Error(`database ${containerName} did not become ready: ${last}`);
 }
 
+function boundProbe(
+  dbName: string,
+  networkName: string,
+  credential: { role: typeof PROPOSED_MIGRATOR_ROLE; database: string; password: string },
+) {
+  const session = resolveDockerSession(process.env);
+  return probeMigratorPrivileges({
+    session,
+    expectedEndpoint: session.endpoint,
+    expectedDaemonId: session.daemonId,
+    expectedImageId: inspectContainer(dbName).imageId,
+    networkName,
+    database: credential.database,
+    credential,
+    env: session.env,
+  });
+}
+
 function installDisposableMigrator(containerName: string, databaseName: string, migratorPassword: string, appPassword: string): void {
   execSql(
     containerName,
@@ -484,7 +489,10 @@ function writeMigratorCredential(filePath: string, databaseName: string, passwor
     JSON.stringify({ kind: "P1_MIGRATOR_CREDENTIAL", role: PROPOSED_MIGRATOR_ROLE, database: databaseName, password }),
     { mode: 0o600 },
   );
-  if (process.platform !== "win32") fs.chmodSync(filePath, 0o600);
+  if (process.platform !== "win32") {
+    fs.chmodSync(path.dirname(filePath), 0o700);
+    fs.chmodSync(filePath, 0o600);
+  }
 }
 
 function networkPsql(networkName: string, databaseName: string, user: string, password: string, sql: string): { status: number | null; stderr: string } {

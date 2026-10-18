@@ -463,13 +463,20 @@ function dependencies(
       const allowed = request.scope === "PRODUCTION" ? PRODUCTION_MIGRATOR_CREDENTIAL_PATH : path.join(paths.root, "migrator-credential.json");
       return readMigratorCredentialFile({ requestedPath: allowed, allowedPath: allowed, expectedDatabase: databaseName });
     },
-    readMigratorPrivileges: (credential: { role: typeof PROPOSED_MIGRATOR_ROLE; database: string; password: string }) =>
-      probeMigratorPrivileges({
-        networkName: inspectLive(request, session).networkName,
+    readMigratorPrivileges: (credential: { role: typeof PROPOSED_MIGRATOR_ROLE; database: string; password: string }) => {
+      const live = inspectLive(request, session);
+      const current = resolveDockerSession(session.env);
+      return probeMigratorPrivileges({
+        session: current,
+        expectedEndpoint: session.endpoint,
+        expectedDaemonId: session.daemonId,
+        expectedImageId: live.db.imageId,
+        networkName: live.networkName,
         database: credential.database,
         credential,
         env: session.env,
-      }),
+      });
+    },
   };
 }
 
