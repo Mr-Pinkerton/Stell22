@@ -1,0 +1,566 @@
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { P1_MIGRATION_PATH } from "@/server/internal/p1-isolated-runner/contract";
+import { createCoordinator } from "@/server/internal/p1-write-freeze-coordinator/coordinator";
+import {
+  COORDINATOR_ROLES,
+  CoordinatorFault,
+  type ActivityRow,
+  type BackupPort,
+  type Binding,
+  type CatalogPort,
+  type Probe,
+  type RestrictionReport,
+  type TestOwnedApproval,
+  type UnfreezeFacts,
+  type WriterRow,
+} from "@/server/internal/p1-write-freeze-coordinator/contract";
+
+const denied: Probe = { ok: false, sqlstate: "42501" };
+const selected: Probe = { ok: true, sqlstate: null };
+
+function binding(patch: Partial<Binding> = {}): Binding {
+  return {
+    scope: "TEST_OWNED",
+    invocationId: "12345678-1234-4234-8234-123456789abc",
+    endpoint: "npipe:////./pipe/docker_engine",
+    daemonId: "daemon-a",
+    containerId: "a".repeat(64),
+    imageId: `sha256:${"b".repeat(64)}`,
+    startedAt: "2026-10-19T00:00:00.000000000Z",
+    databaseName: "p1wc_abcdef12",
+    databaseOid: "16384",
+    systemIdentifier: "7400000000000000000",
+    serverVersionNum: "170005",
+    applicationPid: 4242,
+    ...patch,
+  };
+}
+
+function writer(name: string, patch: Partial<WriterRow> = {}): WriterRow {
+  return {
+    name,
+    superuser: name === "stell22" || name === "p1wc_breakglass",
+    createdb: false,
+    createrole: false,
+    replication: false,
+    bypassrls: false,
+    canlogin: name !== "PUBLIC",
+    inherit: true,
+    memberships: [],
+    setRoles: [],
+    databaseCreate: false,
+    schemaCreate: false,
+    databaseOwner: name === "p1wc_migrator",
+    tableWrite: false,
+    columnWrite: false,
+    sequenceMutation: false,
+    securityDefinerExecute: false,
+    sessions: 0,
+    transactions: 0,
+    ...patch,
+  };
+}
+
+function baseRows(writing: boolean): WriterRow[] {
+  return [
+    writer("p1wc_app", { tableWrite: writing, sequenceMutation: writing, columnWrite: writing, schemaCreate: writing }),
+    writer("p1wc_migrator"),
+    writer("p1wc_breakglass"),
+    writer("stell22"),
+    writer("PUBLIC", { tableWrite: writing, columnWrite: writing }),
+  ];
+}
+
+function probes(frozen: boolean): RestrictionReport {
+  const write = frozen ? denied : { ok: true, sqlstate: null };
+  return {
+    setRoleInsert: write,
+    loginSelect: selected,
+    loginInsert: write,
+    loginUpdate: write,
+    loginDelete: write,
+    loginTruncate: write,
+    loginNextval: write,
+    loginSetval: write,
+    loginCreate: denied,
+    loginSetRole: denied,
+    securityDefiner: denied,
+  };
+}
+
+class FakePort implements CatalogPort {
+  phase: "normal" | "frozen" = "normal";
+  live = binding();
+  alive = true;
+  sameContainer = true;
+  adminOk = true;
+  activityRows: ActivityRow[] = [];
+  remaining: number[] = [];
+  grants: boolean | "unknown" = true;
+  digest = "digest-1";
+  p1: "committed" | "failed" | "ambiguous" = "committed";
+  p1Shown = false;
+  p1Calls = 0;
+  unfreezeOk = true;
+  unfreezeFacts: UnfreezeFacts | "unknown" = {
+    databaseOwner: "p1wc_migrator",
+    applicationRole: "p1wc_app",
+    applicationSuperuser: false,
+    applicationCreate: false,
+    migratorSuperuser: false,
+    migratorCreate: true,
+    containerId: "a".repeat(64),
+    startedAt: "2026-10-19T00:00:00.000000000Z",
+  };
+  writes = 0;
+  restores = 0;
+  dumps = 0;
+  unfreezeCommits = 0;
+  fault: CoordinatorFault["point"] | null = null;
+  rows: WriterRow[] | null = null;
+
+  readIdentity(): Binding {
+    return this.live;
+  }
+  administrator() {
+    return this.adminOk
+      ? { ok: true as const, user: "p1wc_breakglass" }
+      : { ok: false as const, sqlstate: "28P01" };
+  }
+  inventory(): WriterRow[] {
+    return this.rows ?? baseRows(this.phase === "normal");
+  }
+  commitFreeze() {
+    if (this.fault === "before-commit") throw new CoordinatorFault("before-commit");
+    this.phase = "frozen";
+    if (this.fault === "after-commit") throw new CoordinatorFault("after-commit");
+    return { ok: true as const };
+  }
+  activity(): ActivityRow[] {
+    return this.activityRows;
+  }
+  terminate(pids: readonly number[]) {
+    if (this.fault === "during-drain") throw new CoordinatorFault("during-drain");
+    return { terminated: pids.filter((pid) => !this.remaining.includes(pid)), remaining: [...this.remaining] };
+  }
+  restrictions(): RestrictionReport {
+    return probes(this.phase === "frozen");
+  }
+  logicalDigest(): string {
+    return this.digest;
+  }
+  grantsAreFreeze(): boolean | "unknown" {
+    return this.phase === "frozen" ? this.grants : false;
+  }
+  unfreezePreconditions() {
+    return this.unfreezeFacts;
+  }
+  commitUnfreeze() {
+    this.unfreezeCommits += 1;
+    if (!this.unfreezeOk) return { ok: false as const, sqlstate: "42501" };
+    this.phase = "normal";
+    return { ok: true as const };
+  }
+  ordinaryWrite(): Probe {
+    this.writes += 1;
+    return this.phase === "normal" ? { ok: true, sqlstate: null } : denied;
+  }
+  applyP1() {
+    this.p1Calls += 1;
+    if (this.p1 === "failed") return { outcome: "failed" as const, sqlstate: "42P01" };
+    this.p1Shown = true;
+    if (this.fault === "after-p1-commit") throw new CoordinatorFault("after-p1-commit");
+    return { outcome: this.p1, sqlstate: null };
+  }
+  p1Visible(): boolean | "unknown" {
+    return this.p1Shown;
+  }
+  applicationAlive(): boolean {
+    return this.alive;
+  }
+  containerUnchanged(): boolean {
+    return this.sameContainer;
+  }
+  checkpoint(point: CoordinatorFault["point"]): void {
+    if (this.fault === point) throw new CoordinatorFault(point);
+  }
+}
+
+function backup(port: FakePort, fail: "dump" | "restore" | null = null): BackupPort & { restoreCalls: number } {
+  return {
+    restoreCalls: 0,
+    dump() {
+      port.dumps += 1;
+      if (fail === "dump") return { ok: false as const, reason: "dump failed" };
+      return { ok: true as const, digest: port.digest };
+    },
+    restore() {
+      port.restores += 1;
+      if (fail === "restore") return { ok: false as const, reason: "restore failed" };
+      return { ok: true as const, digest: port.digest };
+    },
+  };
+}
+
+function approval(kind: TestOwnedApproval["kind"], digest: string, nonce: string, patch: Partial<TestOwnedApproval> = {}): TestOwnedApproval {
+  return {
+    scope: "TEST_OWNED",
+    kind,
+    invocationId: binding().invocationId,
+    nonce,
+    notBefore: "2026-10-19T00:00:00.000Z",
+    notAfter: "2026-10-19T00:15:00.000Z",
+    databaseName: "p1wc_abcdef12",
+    containerId: "a".repeat(64),
+    daemonId: "daemon-a",
+    digest,
+    ...patch,
+  };
+}
+
+function world(port = new FakePort(), fail: "dump" | "restore" | null = null) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "stell22-p1wc-"));
+  const coordinator = createCoordinator({
+    directory,
+    binding: binding(),
+    roles: COORDINATOR_ROLES,
+    port,
+    backup: backup(port, fail),
+    clock: () => new Date("2026-10-19T00:01:00.000Z"),
+  });
+  return { directory, coordinator, port };
+}
+
+const pinned = pinnedMigration();
+
+describe("disposable write-freeze coordinator", () => {
+  it("freezes, preserves the logical digest, and unfreezes only after a separate approval", () => {
+    const { coordinator } = world();
+    expect(coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32))).state).toBe(
+      "FREEZE_REQUESTED",
+    );
+    const frozen = coordinator.freeze();
+    expect(frozen.state).toBe("FROZEN_VERIFIED");
+    expect(frozen.code).toContain("does not stop a superuser");
+    expect(coordinator.head().logicalDigest).toBe("digest-1");
+    expect(coordinator.head().privilegePhase).toBe("committed");
+    expect(coordinator.backupAndRestore().state).toBe("AWAITING_OWNER_AUTHORIZATION");
+    expect(coordinator.acceptP1(approval("P1_APPLY", "digest-1", "2".repeat(32))).state).toBe("P1_APPLY");
+    expect(coordinator.applyPinnedP1(pinned).state).toBe("P1_POSTCHECK");
+    expect(coordinator.postcheck()).toMatchObject({ state: "P1_POSTCHECK", ok: true });
+    expect(coordinator.unfreeze(approval("FREEZE_REQUEST", "digest-1", "3".repeat(32))).code).toBe("KIND");
+    expect(coordinator.unfreeze(approval("UNFREEZE", "digest-1", "3".repeat(32))).state).toBe("NORMAL");
+    expect(coordinator.head().note).toContain("DDL remains revoked");
+  });
+
+  it("keeps the freeze when backup, restore, approval, P1, or postcheck fails", () => {
+    const dumped = world(new FakePort(), "dump");
+    dumped.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    dumped.coordinator.freeze();
+    expect(dumped.coordinator.backupAndRestore().state).toBe("BLOCKED");
+    expect(dumped.port.restores).toBe(0);
+    expect(dumped.port.unfreezeCommits).toBe(0);
+
+    const restored = world(new FakePort(), "restore");
+    restored.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    restored.coordinator.freeze();
+    expect(restored.coordinator.backupAndRestore().state).toBe("BLOCKED");
+    expect(restored.coordinator.unfreeze(approval("UNFREEZE", "digest-1", "3".repeat(32))).code).toBe(
+      "UNFREEZE_PRECONDITION",
+    );
+
+    const waiting = reachAwaiting();
+    const expired = waiting.coordinator.acceptP1(
+      approval("P1_APPLY", "digest-1", "2".repeat(32), { notAfter: "2026-10-19T00:00:30.000Z" }),
+    );
+    expect(expired).toMatchObject({ state: "AWAITING_OWNER_AUTHORIZATION", code: "EXPIRED" });
+    expect(waiting.coordinator.head().consumedNonces).not.toContain("2".repeat(32));
+
+    const failed = reachApply(new FakePort());
+    failed.port.p1 = "failed";
+    expect(failed.coordinator.applyPinnedP1(pinned)).toMatchObject({ state: "BLOCKED", sqlstate: "42P01" });
+    expect(failed.coordinator.rejectDestructiveRestore().code).toBe("DESTRUCTIVE_RESTORE_FORBIDDEN");
+    expect(failed.port.restores).toBe(1);
+
+    const ambiguous = reachApply(new FakePort());
+    ambiguous.port.fault = "after-p1-commit";
+    expect(ambiguous.coordinator.applyPinnedP1(pinned).state).toBe("MANUAL_RECOVERY_REQUIRED");
+    expect(ambiguous.coordinator.rejectDestructiveRestore().state).toBe("MANUAL_RECOVERY_REQUIRED");
+    expect(ambiguous.coordinator.reread().code).toBe("INVALID_TRANSITION");
+
+    const post = reachApply(new FakePort());
+    post.coordinator.applyPinnedP1(pinned);
+    post.port.p1Shown = false;
+    expect(post.coordinator.postcheck().state).toBe("BLOCKED");
+    expect(post.coordinator.unfreeze(approval("UNFREEZE", "digest-1", "9".repeat(32))).code).toBe("UNFREEZE_PRECONDITION");
+  });
+
+  it("fails closed across crash windows and does not verify a privileged session", () => {
+    const before = world();
+    before.port.fault = "before-commit";
+    before.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    expect(before.coordinator.freeze().state).toBe("FREEZE_REQUESTED");
+    expect(before.coordinator.head().privilegePhase).toBe("rolled-back");
+    expect(before.port.phase).toBe("normal");
+
+    const after = world();
+    after.port.fault = "after-commit";
+    after.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    expect(after.coordinator.freeze().state).toBe("UNCERTAIN");
+    expect(after.coordinator.head().privilegePhase).toBe("committed");
+    expect(after.coordinator.head().state).not.toBe("FROZEN_VERIFIED");
+
+    const draining = world();
+    draining.port.fault = "during-drain";
+    draining.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    expect(draining.coordinator.freeze().state).toBe("UNCERTAIN");
+
+    const verified = world();
+    verified.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    verified.port.fault = "after-verified";
+    expect(verified.coordinator.freeze().state).toBe("FROZEN_VERIFIED");
+
+    const privileged = world();
+    privileged.port.activityRows = [{ pid: 7, user: "stell22", inTransaction: true }];
+    privileged.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    expect(privileged.coordinator.freeze().state).toBe("UNCERTAIN");
+    expect(privileged.coordinator.freeze().code).not.toBe("FROZEN_VERIFIED");
+  });
+
+  it("rejects repeated requests, a wrong daemon, a torn journal, and a second actor", () => {
+    const { coordinator, directory, port } = world();
+    coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    coordinator.freeze();
+    expect(coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "4".repeat(32))).code).toBe(
+      "INVALID_TRANSITION",
+    );
+    expect(coordinator.unfreeze(approval("UNFREEZE", "digest-1", "5".repeat(32))).code).toBe("UNFREEZE_PRECONDITION");
+    port.live = binding({ daemonId: "other-daemon" });
+    expect(coordinator.backupAndRestore()).toMatchObject({ state: "UNCERTAIN", code: "IDENTITY_UNREADABLE" });
+
+    const torn = world();
+    torn.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    fs.appendFileSync(path.join(torn.directory, "journal.ndjson"), "{\"torn\":");
+    expect(torn.coordinator.freeze().state).toBe("UNCERTAIN");
+
+    const held = world();
+    fs.writeFileSync(path.join(held.directory, "journal.lock"), "held");
+    expect(held.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32))).code).toBe(
+      "LOCK_AMBIGUOUS",
+    );
+    expect(fs.existsSync(path.join(held.directory, "journal.lock"))).toBe(true);
+    expect(directory.length).toBeGreaterThan(0);
+  });
+
+  it("does not declare a freeze for a missing administrator, an unknown writer, or a pin mismatch", () => {
+    const missing = world();
+    missing.port.adminOk = false;
+    missing.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    expect(missing.coordinator.freeze()).toMatchObject({ state: "BLOCKED", sqlstate: "28P01" });
+    expect(missing.port.phase).toBe("normal");
+
+    const unknown = world();
+    unknown.port.rows = [...baseRows(true), writer("intruder", { superuser: false, tableWrite: true })];
+    unknown.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    expect(unknown.coordinator.freeze().state).toBe("BLOCKED");
+    expect(unknown.port.phase).toBe("normal");
+
+    const pinnedWorld = reachApply(new FakePort());
+    expect(pinnedWorld.coordinator.applyPinnedP1("not the pinned file").code).toBe("P1_PIN_MISMATCH");
+    expect(pinnedWorld.coordinator.head().state).toBe("P1_APPLY");
+    expect(pinnedWorld.coordinator.acceptP1(approval("P1_APPLY", "digest-1", "2".repeat(32))).code).toBe("REPLAY");
+  });
+
+  it("stops the critical interval when privileged authority appears after the freeze", () => {
+    const bootstrap = world();
+    bootstrap.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    bootstrap.coordinator.freeze();
+    bootstrap.port.rows = baseRows(false).map((row) => (row.name === "stell22" ? { ...row, sessions: 1 } : row));
+    expect(bootstrap.coordinator.backupAndRestore()).toMatchObject({ state: "UNCERTAIN" });
+    expect(bootstrap.port.dumps).toBe(0);
+    expect(bootstrap.coordinator.unfreeze(approval("UNFREEZE", "digest-1", "3".repeat(32))).code).toBe("UNFREEZE_PRECONDITION");
+    expect(bootstrap.coordinator.rejectDestructiveRestore().code).toBe("DESTRUCTIVE_RESTORE_FORBIDDEN");
+
+    const duringRestore = world();
+    duringRestore.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    duringRestore.coordinator.freeze();
+    duringRestore.port.rows = baseRows(false);
+    const dumping = backup(duringRestore.port);
+    dumping.dump = () => {
+      duringRestore.port.rows = baseRows(false).map((row) => (row.name === "p1wc_breakglass" ? { ...row, sessions: 1 } : row));
+      return { ok: true, digest: duringRestore.port.digest };
+    };
+    const restored = createCoordinator({
+      directory: duringRestore.directory,
+      binding: binding(),
+      roles: COORDINATOR_ROLES,
+      port: duringRestore.port,
+      backup: dumping,
+      clock: () => new Date("2026-10-19T00:01:00.000Z"),
+    });
+    expect(restored.backupAndRestore().state).toBe("UNCERTAIN");
+    expect(duringRestore.port.restores).toBe(0);
+
+    const approvalGate = reachAwaiting();
+    approvalGate.port.rows = baseRows(false).map((row) => (row.name === "p1wc_migrator" ? { ...row, sessions: 1 } : row));
+    expect(approvalGate.coordinator.acceptP1(approval("P1_APPLY", "digest-1", "8".repeat(32))).state).toBe("BLOCKED");
+    expect(approvalGate.coordinator.head().state).not.toBe("P1_APPLY");
+
+    const beforeApply = reachApply(new FakePort());
+    beforeApply.port.rows = baseRows(false).map((row) => (row.name === "p1wc_migrator" ? { ...row, sessions: 1 } : row));
+    expect(beforeApply.coordinator.applyPinnedP1(pinnedMigration()).state).toBe("BLOCKED");
+    expect(beforeApply.port.p1Shown).toBe(false);
+    expect(beforeApply.coordinator.applyPinnedP1(pinnedMigration()).code).toBe("INVALID_TRANSITION");
+
+    const beforePostcheck = reachApply(new FakePort());
+    beforePostcheck.coordinator.applyPinnedP1(pinnedMigration());
+    beforePostcheck.port.rows = baseRows(false).map((row) => (row.name === "stell22" ? { ...row, sessions: 1 } : row));
+    expect(beforePostcheck.coordinator.postcheck().state).toBe("UNCERTAIN");
+    expect(beforePostcheck.coordinator.head().postcheckPassed).toBe(false);
+    expect(beforePostcheck.coordinator.unfreeze(approval("UNFREEZE", "digest-1", "3".repeat(32))).code).toBe(
+      "UNFREEZE_PRECONDITION",
+    );
+
+    const beforeUnfreeze = reachApply(new FakePort());
+    beforeUnfreeze.coordinator.applyPinnedP1(pinnedMigration());
+    expect(beforeUnfreeze.coordinator.postcheck().ok).toBe(true);
+    beforeUnfreeze.port.rows = baseRows(false).map((row) => (row.name === "stell22" ? { ...row, sessions: 1 } : row));
+    expect(beforeUnfreeze.coordinator.unfreeze(approval("UNFREEZE", "digest-1", "3".repeat(32))).state).toBe("UNCERTAIN");
+    expect(beforeUnfreeze.port.unfreezeCommits).toBe(0);
+
+    const granted = world();
+    granted.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    granted.coordinator.freeze();
+    granted.port.grants = false;
+    expect(granted.coordinator.backupAndRestore()).toMatchObject({ state: "BLOCKED", code: "GRANTS" });
+
+    const publicWrite = world();
+    publicWrite.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    publicWrite.coordinator.freeze();
+    publicWrite.port.rows = baseRows(false).map((row) => (row.name === "PUBLIC" ? { ...row, columnWrite: true } : row));
+    expect(publicWrite.coordinator.backupAndRestore()).toMatchObject({ state: "BLOCKED", code: "PUBLIC_WRITE" });
+
+    const drifted = world();
+    drifted.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    drifted.coordinator.freeze();
+    drifted.port.live = binding({ containerId: "c".repeat(64) });
+    expect(drifted.coordinator.backupAndRestore()).toMatchObject({ state: "UNCERTAIN", code: "IDENTITY_UNREADABLE" });
+
+    const modified = world();
+    modified.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    modified.coordinator.freeze();
+    modified.port.digest = "digest-changed";
+    expect(modified.coordinator.backupAndRestore()).toMatchObject({ state: "BLOCKED", code: "DIGEST" });
+    expect(modified.coordinator.head().state).toBe("BLOCKED");
+
+    const transient = world();
+    transient.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    expect(transient.coordinator.freeze().code).toContain("equal digests do not prove");
+    transient.port.digest = "digest-changed";
+    transient.port.digest = "digest-1";
+    expect(transient.coordinator.backupAndRestore().state).toBe("AWAITING_OWNER_AUTHORIZATION");
+  });
+
+  it("does not resume P1 or unfreeze from later uncertainty, and rereads only a pre-P1 drain", () => {
+    const draining = world();
+    draining.port.fault = "during-drain";
+    draining.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    expect(draining.coordinator.freeze().state).toBe("UNCERTAIN");
+    expect(draining.coordinator.head().executionRisk).toBe(false);
+    expect(draining.coordinator.reread().state).toBe("FROZEN_VERIFIED");
+
+    const beforeApply = reachApply(new FakePort());
+    beforeApply.port.rows = baseRows(false).map((row) => (row.name === "stell22" ? { ...row, sessions: 1 } : row));
+    expect(beforeApply.coordinator.applyPinnedP1(pinned).state).toBe("UNCERTAIN");
+    expect(beforeApply.port.p1Calls).toBe(0);
+    expect(beforeApply.coordinator.reread().code).toBe("REREAD_REFUSED");
+    expect(beforeApply.coordinator.applyPinnedP1(pinned).code).toBe("INVALID_TRANSITION");
+    expect(beforeApply.coordinator.unfreeze(approval("UNFREEZE", "digest-1", "3".repeat(32))).code).toBe("UNFREEZE_PRECONDITION");
+    expect(beforeApply.coordinator.rejectDestructiveRestore().code).toBe("DESTRUCTIVE_RESTORE_FORBIDDEN");
+
+    const posted = reachApply(new FakePort());
+    expect(posted.coordinator.applyPinnedP1(pinned).state).toBe("P1_POSTCHECK");
+    posted.port.rows = baseRows(false).map((row) => (row.name === "stell22" ? { ...row, sessions: 1 } : row));
+    expect(posted.coordinator.postcheck().state).toBe("UNCERTAIN");
+    expect(posted.coordinator.reread().code).toBe("REREAD_REFUSED");
+    expect(posted.coordinator.applyPinnedP1(pinned).code).toBe("INVALID_TRANSITION");
+    expect(posted.port.p1Calls).toBe(1);
+    expect(posted.coordinator.rejectDestructiveRestore().code).toBe("DESTRUCTIVE_RESTORE_FORBIDDEN");
+
+    const granting = reachApply(new FakePort());
+    granting.coordinator.applyPinnedP1(pinned);
+    expect(granting.coordinator.postcheck().ok).toBe(true);
+    granting.port.unfreezeOk = false;
+    expect(granting.coordinator.unfreeze(approval("UNFREEZE", "digest-1", "3".repeat(32))).state).toBe("UNCERTAIN");
+    expect(granting.coordinator.head().unfreezeRisk).toBe(true);
+    expect(granting.coordinator.reread().code).toBe("REREAD_REFUSED");
+    expect(granting.coordinator.unfreeze(approval("UNFREEZE", "digest-1", "4".repeat(32))).code).toBe("UNFREEZE_PRECONDITION");
+    expect(granting.port.unfreezeCommits).toBe(1);
+    expect(granting.coordinator.rejectDestructiveRestore().code).toBe("DESTRUCTIVE_RESTORE_FORBIDDEN");
+
+    const fresh = reachApply(new FakePort());
+    fresh.coordinator.applyPinnedP1(pinned);
+    fresh.coordinator.postcheck();
+    const stoppedGrant = createCoordinator({
+      directory: fresh.directory,
+      binding: binding(),
+      roles: COORDINATOR_ROLES,
+      port: fresh.port,
+      backup: backup(fresh.port),
+      clock: () => new Date("2026-10-19T00:01:00.000Z"),
+      probes: {
+        afterUnfreezeAuthorized() {
+          throw new Error("stopped before the unfreeze grant");
+        },
+      },
+    });
+    expect(stoppedGrant.unfreeze(approval("UNFREEZE", "digest-1", "5".repeat(32))).code).toBe("PORT_FAILED");
+    expect(fresh.port.unfreezeCommits).toBe(0);
+    expect(stoppedGrant.head().state).toBe("MANUAL_RECOVERY_REQUIRED");
+    expect(stoppedGrant.unfreeze(approval("UNFREEZE", "digest-1", "6".repeat(32))).code).toBe("UNFREEZE_PRECONDITION");
+
+    const replay = reachApply(new FakePort());
+    expect(replay.coordinator.acceptP1(approval("P1_APPLY", "digest-1", "2".repeat(32))).code).toBe("REPLAY");
+    replay.coordinator.applyPinnedP1(pinned);
+    expect(replay.coordinator.applyPinnedP1(pinned).code).toBe("INVALID_TRANSITION");
+    expect(replay.port.p1Calls).toBe(1);
+
+    const foreign = createCoordinator({
+      directory: replay.directory,
+      binding: binding({ databaseName: "p1wc_ffffffff", daemonId: "daemon-b" }),
+      roles: COORDINATOR_ROLES,
+      port: new FakePort(),
+      backup: backup(new FakePort()),
+      clock: () => new Date("2026-10-19T00:01:00.000Z"),
+    });
+    expect(foreign.applyPinnedP1(pinned).code).toBe("IDENTITY_MISMATCH");
+    expect(foreign.rejectDestructiveRestore().code).toBe("IDENTITY_MISMATCH");
+  });
+});
+
+function pinnedMigration(): string {
+  const shown = spawnSync("git", ["show", `HEAD:${P1_MIGRATION_PATH}`], { encoding: "utf8" });
+  if (shown.status !== 0) throw new Error("pinned P1 file is unreadable");
+  return shown.stdout ?? "";
+}
+
+function reachAwaiting() {
+  const item = world();
+  item.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+  item.coordinator.freeze();
+  item.coordinator.backupAndRestore();
+  return item;
+}
+
+function reachApply(port: FakePort) {
+  const item = world(port);
+  item.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+  item.coordinator.freeze();
+  item.coordinator.backupAndRestore();
+  item.coordinator.acceptP1(approval("P1_APPLY", "digest-1", "2".repeat(32)));
+  return item;
+}
