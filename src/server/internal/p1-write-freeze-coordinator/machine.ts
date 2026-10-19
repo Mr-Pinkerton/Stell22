@@ -44,6 +44,7 @@ const EDGES: Record<CoordinatorState, Partial<Record<CoordinatorEvent, Coordinat
     BACKUP_FAILED: "BLOCKED",
     CRASH: "UNCERTAIN",
     IDENTITY_UNREADABLE: "UNCERTAIN",
+    UNEXPECTED_SUPERUSER: "UNCERTAIN",
     BLOCK: "BLOCKED",
   },
   RESTORE_VERIFICATION: {
@@ -51,6 +52,7 @@ const EDGES: Record<CoordinatorState, Partial<Record<CoordinatorEvent, Coordinat
     RESTORE_FAILED: "BLOCKED",
     CRASH: "UNCERTAIN",
     IDENTITY_UNREADABLE: "UNCERTAIN",
+    UNEXPECTED_SUPERUSER: "UNCERTAIN",
     BLOCK: "BLOCKED",
   },
   AWAITING_OWNER_AUTHORIZATION: {
@@ -58,6 +60,7 @@ const EDGES: Record<CoordinatorState, Partial<Record<CoordinatorEvent, Coordinat
     APPROVAL_EXPIRED: "AWAITING_OWNER_AUTHORIZATION",
     APPROVAL_MISSING: "AWAITING_OWNER_AUTHORIZATION",
     IDENTITY_UNREADABLE: "UNCERTAIN",
+    UNEXPECTED_SUPERUSER: "UNCERTAIN",
     BLOCK: "BLOCKED",
   },
   P1_APPLY: {
@@ -66,6 +69,7 @@ const EDGES: Record<CoordinatorState, Partial<Record<CoordinatorEvent, Coordinat
     P1_AMBIGUOUS: "MANUAL_RECOVERY_REQUIRED",
     CRASH: "UNCERTAIN",
     IDENTITY_UNREADABLE: "UNCERTAIN",
+    UNEXPECTED_SUPERUSER: "UNCERTAIN",
     BLOCK: "BLOCKED",
   },
   P1_POSTCHECK: {
@@ -73,6 +77,7 @@ const EDGES: Record<CoordinatorState, Partial<Record<CoordinatorEvent, Coordinat
     POSTCHECK_FAILED: "BLOCKED",
     UNFREEZE_AUTHORIZED: "UNFREEZE_AUTHORIZED",
     IDENTITY_UNREADABLE: "UNCERTAIN",
+    UNEXPECTED_SUPERUSER: "UNCERTAIN",
     BLOCK: "BLOCKED",
   },
   UNFREEZE_AUTHORIZED: {

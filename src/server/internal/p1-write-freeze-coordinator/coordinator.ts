@@ -58,7 +58,7 @@ export function createCoordinator(options: {
   function run(fn: (journal: Journal) => StepResult): StepResult {
     try {
       return withJournalLock(directory, () => {
-        const journal = openJournal(directory, binding);
+        const journal = openJournal(directory, binding, { recover: true });
         try {
           assertLive(journal);
           return fn(journal);
@@ -81,7 +81,7 @@ export function createCoordinator(options: {
 
   function peekState() {
     try {
-      return openJournal(directory, binding).head().state;
+      return openJournal(directory, binding, { recover: false }).head().state;
     } catch {
       return "UNCERTAIN" as const;
     }
@@ -189,7 +189,7 @@ export function createCoordinator(options: {
           "VERIFY_OK",
           {
             logicalDigest: digest,
-            note: "APPLICATION_ROLE_ONLY; revoking application DML does not stop a superuser or the owning migrator",
+            note: "APPLICATION_ROLE_ONLY; revoking application DML does not stop a superuser or the owning migrator; a point-in-time check is not continuous privileged exclusion; equal digests do not prove that no transient write occurred",
           },
           null,
         );
@@ -201,11 +201,14 @@ export function createCoordinator(options: {
       return run((journal) => {
         const head = journal.head();
         if (head.state !== "FROZEN_VERIFIED" || head.logicalDigest === null) return stopped(journal, "INVALID_TRANSITION", null);
-        if (port.logicalDigest() !== head.logicalDigest) return moved(journal, "BLOCK", { note: "DIGEST" }, null);
+        const beforeBackup = continuityFailure(journal);
+        if (beforeBackup) return beforeBackup;
         journal.append("BEGIN_BACKUP");
         const dumped = backup.dump(binding.databaseName);
         if (!dumped.ok) return moved(journal, "BACKUP_FAILED", { note: dumped.reason }, null);
         journal.append("BACKUP_OK", { backupDigest: dumped.digest });
+        const beforeRestore = continuityFailure(journal);
+        if (beforeRestore) return beforeRestore;
         const restored = backup.restore(binding.databaseName, dumped.digest);
         if (!restored.ok || restored.digest !== head.logicalDigest || port.logicalDigest() !== head.logicalDigest) {
           return moved(journal, "RESTORE_FAILED", { note: restored.ok ? "DIGEST" : restored.reason }, null);
@@ -220,6 +223,8 @@ export function createCoordinator(options: {
       return run((journal) => {
         if (journal.head().state !== "P1_APPLY") return stopped(journal, "INVALID_TRANSITION", null);
         if (createHash("sha256").update(sql).digest("hex") !== P1_SHA256) return stopped(journal, "P1_PIN_MISMATCH", null);
+        const beforeP1 = continuityFailure(journal);
+        if (beforeP1) return beforeP1;
         const result = port.applyP1(sql);
         if (result.outcome === "committed") {
           port.checkpoint("after-p1-commit");
@@ -235,6 +240,8 @@ export function createCoordinator(options: {
       return run((journal) => {
         const head = journal.head();
         if (head.state !== "P1_POSTCHECK") return stopped(journal, "INVALID_TRANSITION", null);
+        const beforePostcheck = continuityFailure(journal);
+        if (beforePostcheck) return beforePostcheck;
         const visible = port.p1Visible();
         const stillFrozen = frozenProbes(port.restrictions());
         if (head.p1Status !== "committed" || visible !== true || !stillFrozen || port.logicalDigest() !== head.logicalDigest) {
@@ -249,6 +256,8 @@ export function createCoordinator(options: {
         if (head.state !== "P1_POSTCHECK" || !head.postcheckPassed || head.p1Status === "ambiguous") {
           return stopped(journal, "UNFREEZE_PRECONDITION", null);
         }
+        const beforeUnfreeze = continuityFailure(journal);
+        if (beforeUnfreeze) return beforeUnfreeze;
         const decision = evaluateApproval(
           approval,
           expectation("UNFREEZE", head.logicalDigest ?? ""),
@@ -308,6 +317,47 @@ export function createCoordinator(options: {
     },
   };
 
+  function continuityFailure(journal: Journal): StepResult | null {
+    const head = journal.head();
+    let live: Binding;
+    try {
+      live = port.readIdentity();
+    } catch {
+      return moved(journal, "IDENTITY_UNREADABLE", { note: "identity drifted" }, null);
+    }
+    if (!sameBinding(live, binding) || !port.applicationAlive() || !port.containerUnchanged()) {
+      return moved(journal, "IDENTITY_UNREADABLE", { note: "identity drifted" }, null);
+    }
+    let inventory;
+    try {
+      inventory = classifyInventory(port.inventory(), roles, "after");
+    } catch {
+      return moved(journal, "IDENTITY_UNREADABLE", { note: "inventory unreadable" }, null);
+    }
+    if (inventory.problems.includes("PRIVILEGED_SESSION")) {
+      return moved(journal, "UNEXPECTED_SUPERUSER", { note: "privileged session observed after the freeze" }, null);
+    }
+    if (!inventory.ok) return moved(journal, "BLOCK", { note: inventory.problems.join(",") }, null);
+    const grants = port.grantsAreFreeze();
+    if (grants === "unknown") return moved(journal, "IDENTITY_UNREADABLE", { note: "grants unreadable" }, null);
+    if (!grants) return moved(journal, "BLOCK", { note: "GRANTS" }, null);
+    let restrictions: RestrictionReport;
+    try {
+      restrictions = port.restrictions();
+    } catch {
+      return moved(journal, "IDENTITY_UNREADABLE", { note: "canaries unreadable" }, null);
+    }
+    if (!frozenProbes(restrictions)) return moved(journal, "BLOCK", { note: "CANARY" }, firstSqlState(restrictions));
+    let digest: string;
+    try {
+      digest = port.logicalDigest();
+    } catch {
+      return moved(journal, "IDENTITY_UNREADABLE", { note: "digest unreadable" }, null);
+    }
+    if (head.logicalDigest === null || digest !== head.logicalDigest) return moved(journal, "BLOCK", { note: "DIGEST" }, null);
+    return null;
+  }
+
   function authorize(
     journal: Journal,
     approval: TestOwnedApproval,
@@ -316,6 +366,10 @@ export function createCoordinator(options: {
     event: CoordinatorEvent,
   ): StepResult {
     const head = journal.head();
+    if (head.state === "AWAITING_OWNER_AUTHORIZATION") {
+      const beforeApproval = continuityFailure(journal);
+      if (beforeApproval) return beforeApproval;
+    }
     if (head.consumedNonces.includes(approval.nonce)) return stopped(journal, "REPLAY", null);
     if (kind === "P1_APPLY" && head.state !== "AWAITING_OWNER_AUTHORIZATION") return stopped(journal, "INVALID_TRANSITION", null);
     const decision = evaluateApproval(approval, expectation(kind, digest ?? ""), head.consumedNonces);

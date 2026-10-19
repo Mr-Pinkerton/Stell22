@@ -114,8 +114,9 @@ function removeContainer(invocation: Invocation, world: DockerWorld, report: Cle
 
 function removeVolume(invocation: Invocation, world: DockerWorld, report: CleanupReport): void {
   if (report.preserved.some((item) => item.resource === "volume")) return;
-  if (readBinding(invocation, world) !== null) {
-    preserve(report, invocation, "volume", "DAEMON_CHANGED", true);
+  const drift = readBinding(invocation, world);
+  if (drift !== null) {
+    preserve(report, invocation, "volume", drift, true);
     return;
   }
   const inspected = world.exec(["volume", "inspect", invocation.names.volumeName]);
@@ -129,6 +130,11 @@ function removeVolume(invocation: Invocation, world: DockerWorld, report: Cleanu
     preserve(report, invocation, "volume", verdict.code, false);
     return;
   }
+  const afterInspect = readBinding(invocation, world);
+  if (afterInspect !== null) {
+    preserve(report, invocation, "volume", afterInspect, false);
+    return;
+  }
   const removed = world.exec(["volume", "rm", invocation.names.volumeName]);
   if (removed.status !== 0) {
     report.failures.push({ resource: "volume", reason: "REMOVAL_FAILED" });
@@ -138,8 +144,9 @@ function removeVolume(invocation: Invocation, world: DockerWorld, report: Cleanu
 }
 
 function removeNetwork(invocation: Invocation, world: DockerWorld, report: CleanupReport): void {
-  if (readBinding(invocation, world) !== null) {
-    preserve(report, invocation, "network", "DAEMON_CHANGED", false);
+  const drift = readBinding(invocation, world);
+  if (drift !== null) {
+    preserve(report, invocation, "network", drift, false);
     return;
   }
   const inspected = world.exec(["network", "inspect", invocation.names.networkName]);
@@ -151,6 +158,11 @@ function removeNetwork(invocation: Invocation, world: DockerWorld, report: Clean
   const verdict = networkCleanupAllowed(document, expectation(invocation, invocation.containerId ?? ""));
   if (!verdict.ok) {
     preserve(report, invocation, "network", verdict.code, false);
+    return;
+  }
+  const afterInspect = readBinding(invocation, world);
+  if (afterInspect !== null) {
+    preserve(report, invocation, "network", afterInspect, false);
     return;
   }
   const removed = world.exec(["network", "rm", invocation.names.networkName]);

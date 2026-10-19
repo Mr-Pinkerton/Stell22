@@ -69,6 +69,11 @@ describe("write-freeze coordinator state machine", () => {
     expect(transition("DRAINING", "PRIVILEGED_WRITER")).toEqual({ ok: true, state: "BLOCKED" });
     expect(transition("DRAINING", "UNEXPECTED_SUPERUSER")).toEqual({ ok: true, state: "UNCERTAIN" });
     expect(transition("FROZEN_VERIFIED", "UNEXPECTED_SUPERUSER")).toEqual({ ok: true, state: "UNCERTAIN" });
+    expect(transition("RESTORE_VERIFICATION", "UNEXPECTED_SUPERUSER")).toEqual({ ok: true, state: "UNCERTAIN" });
+    expect(transition("AWAITING_OWNER_AUTHORIZATION", "UNEXPECTED_SUPERUSER")).toEqual({ ok: true, state: "UNCERTAIN" });
+    expect(transition("P1_APPLY", "UNEXPECTED_SUPERUSER")).toEqual({ ok: true, state: "UNCERTAIN" });
+    expect(transition("P1_POSTCHECK", "UNEXPECTED_SUPERUSER")).toEqual({ ok: true, state: "UNCERTAIN" });
+    expect(transition("P1_APPLY", "UNFREEZE_GRANTS_COMMITTED").ok).toBe(false);
     expect(transition("UNCERTAIN", "REREAD_FROZEN")).toEqual({ ok: true, state: "FROZEN_VERIFIED" });
     expect(transition("UNCERTAIN", "UNFREEZE_AUTHORIZED").ok).toBe(false);
     expect(transition("MANUAL_RECOVERY_REQUIRED", "REREAD_FROZEN").ok).toBe(false);

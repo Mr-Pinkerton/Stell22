@@ -346,8 +346,9 @@ describe("disposable write-freeze coordinator", () => {
     const held = world();
     fs.writeFileSync(path.join(held.directory, "journal.lock"), "held");
     expect(held.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32))).code).toBe(
-      "LOCK_HELD",
+      "LOCK_AMBIGUOUS",
     );
+    expect(fs.existsSync(path.join(held.directory, "journal.lock"))).toBe(true);
     expect(directory.length).toBeGreaterThan(0);
   });
 
@@ -368,6 +369,96 @@ describe("disposable write-freeze coordinator", () => {
     expect(pinnedWorld.coordinator.applyPinnedP1("not the pinned file").code).toBe("P1_PIN_MISMATCH");
     expect(pinnedWorld.coordinator.head().state).toBe("P1_APPLY");
     expect(pinnedWorld.coordinator.acceptP1(approval("P1_APPLY", "digest-1", "2".repeat(32))).code).toBe("REPLAY");
+  });
+
+  it("stops the critical interval when privileged authority appears after the freeze", () => {
+    const bootstrap = world();
+    bootstrap.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    bootstrap.coordinator.freeze();
+    bootstrap.port.rows = baseRows(false).map((row) => (row.name === "stell22" ? { ...row, sessions: 1 } : row));
+    expect(bootstrap.coordinator.backupAndRestore()).toMatchObject({ state: "UNCERTAIN" });
+    expect(bootstrap.port.dumps).toBe(0);
+    expect(bootstrap.coordinator.unfreeze(approval("UNFREEZE", "digest-1", "3".repeat(32))).code).toBe("UNFREEZE_PRECONDITION");
+    expect(bootstrap.coordinator.rejectDestructiveRestore().code).toBe("DESTRUCTIVE_RESTORE_FORBIDDEN");
+
+    const duringRestore = world();
+    duringRestore.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    duringRestore.coordinator.freeze();
+    duringRestore.port.rows = baseRows(false);
+    const dumping = backup(duringRestore.port);
+    dumping.dump = () => {
+      duringRestore.port.rows = baseRows(false).map((row) => (row.name === "p1wc_breakglass" ? { ...row, sessions: 1 } : row));
+      return { ok: true, digest: duringRestore.port.digest };
+    };
+    const restored = createCoordinator({
+      directory: duringRestore.directory,
+      binding: binding(),
+      roles: COORDINATOR_ROLES,
+      port: duringRestore.port,
+      backup: dumping,
+      clock: () => new Date("2026-10-19T00:01:00.000Z"),
+    });
+    expect(restored.backupAndRestore().state).toBe("UNCERTAIN");
+    expect(duringRestore.port.restores).toBe(0);
+
+    const approvalGate = reachAwaiting();
+    approvalGate.port.rows = baseRows(false).map((row) => (row.name === "p1wc_migrator" ? { ...row, sessions: 1 } : row));
+    expect(approvalGate.coordinator.acceptP1(approval("P1_APPLY", "digest-1", "8".repeat(32))).state).toBe("BLOCKED");
+    expect(approvalGate.coordinator.head().state).not.toBe("P1_APPLY");
+
+    const beforeApply = reachApply(new FakePort());
+    beforeApply.port.rows = baseRows(false).map((row) => (row.name === "p1wc_migrator" ? { ...row, sessions: 1 } : row));
+    expect(beforeApply.coordinator.applyPinnedP1(pinnedMigration()).state).toBe("BLOCKED");
+    expect(beforeApply.port.p1Shown).toBe(false);
+    expect(beforeApply.coordinator.applyPinnedP1(pinnedMigration()).code).toBe("INVALID_TRANSITION");
+
+    const beforePostcheck = reachApply(new FakePort());
+    beforePostcheck.coordinator.applyPinnedP1(pinnedMigration());
+    beforePostcheck.port.rows = baseRows(false).map((row) => (row.name === "stell22" ? { ...row, sessions: 1 } : row));
+    expect(beforePostcheck.coordinator.postcheck().state).toBe("UNCERTAIN");
+    expect(beforePostcheck.coordinator.head().postcheckPassed).toBe(false);
+    expect(beforePostcheck.coordinator.unfreeze(approval("UNFREEZE", "digest-1", "3".repeat(32))).code).toBe(
+      "UNFREEZE_PRECONDITION",
+    );
+
+    const beforeUnfreeze = reachApply(new FakePort());
+    beforeUnfreeze.coordinator.applyPinnedP1(pinnedMigration());
+    expect(beforeUnfreeze.coordinator.postcheck().ok).toBe(true);
+    beforeUnfreeze.port.rows = baseRows(false).map((row) => (row.name === "stell22" ? { ...row, sessions: 1 } : row));
+    expect(beforeUnfreeze.coordinator.unfreeze(approval("UNFREEZE", "digest-1", "3".repeat(32))).state).toBe("UNCERTAIN");
+    expect(beforeUnfreeze.port.unfreezeCommits).toBe(0);
+
+    const granted = world();
+    granted.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    granted.coordinator.freeze();
+    granted.port.grants = false;
+    expect(granted.coordinator.backupAndRestore()).toMatchObject({ state: "BLOCKED", code: "GRANTS" });
+
+    const publicWrite = world();
+    publicWrite.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    publicWrite.coordinator.freeze();
+    publicWrite.port.rows = baseRows(false).map((row) => (row.name === "PUBLIC" ? { ...row, columnWrite: true } : row));
+    expect(publicWrite.coordinator.backupAndRestore()).toMatchObject({ state: "BLOCKED", code: "PUBLIC_WRITE" });
+
+    const drifted = world();
+    drifted.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    drifted.coordinator.freeze();
+    drifted.port.live = binding({ containerId: "c".repeat(64) });
+    expect(drifted.coordinator.backupAndRestore()).toMatchObject({ state: "UNCERTAIN", code: "IDENTITY_UNREADABLE" });
+
+    const modified = world();
+    modified.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    modified.coordinator.freeze();
+    modified.port.digest = "digest-changed";
+    expect(modified.coordinator.backupAndRestore()).toMatchObject({ state: "BLOCKED", code: "DIGEST" });
+    expect(modified.coordinator.head().state).toBe("BLOCKED");
+
+    const transient = world();
+    transient.coordinator.requestFreeze(approval("FREEZE_REQUEST", "freeze-request", "1".repeat(32)));
+    expect(transient.coordinator.freeze().code).toContain("equal digests do not prove");
+    transient.port.digest = "digest-changed";
+    transient.port.digest = "digest-1";
+    expect(transient.coordinator.backupAndRestore().state).toBe("AWAITING_OWNER_AUTHORIZATION");
   });
 });
 

@@ -164,6 +164,113 @@ describe.skipIf(!LIVE)("disposable PostgreSQL 17 write-freeze coordinator", () =
     const inspect = spawnSync("docker", ["inspect", cluster!.containerId], { encoding: "utf8", windowsHide: true });
     expect(inspect.status).toBe(0);
   }, 180_000);
+
+  it("stops backup, approval, apply, postcheck, and unfreeze when privileged authority appears after the freeze", () => {
+    const beforeBackup = openFixture();
+    beforeBackup.coordinator.requestFreeze(approval(beforeBackup.binding, "FREEZE_REQUEST", "freeze-request", nonce()));
+    expect(beforeBackup.coordinator.freeze().state).toBe("FROZEN_VERIFIED");
+    startBackgroundSql(cluster!, "bootstrap", beforeBackup.database, "SELECT pg_sleep(30);");
+    waitForUser(beforeBackup, "stell22");
+    expect(beforeBackup.coordinator.backupAndRestore().state).toBe("UNCERTAIN");
+    expect(beforeBackup.coordinator.head().state).not.toBe("AWAITING_OWNER_AUTHORIZATION");
+    expect(beforeBackup.coordinator.unfreeze(approval(beforeBackup.binding, "UNFREEZE", "digest", nonce())).code).toBe(
+      "UNFREEZE_PRECONDITION",
+    );
+    expect(beforeBackup.coordinator.rejectDestructiveRestore().code).toBe("DESTRUCTIVE_RESTORE_FORBIDDEN");
+    stopBackgroundSql();
+
+    const beforeApproval = openFixture();
+    beforeApproval.coordinator.requestFreeze(approval(beforeApproval.binding, "FREEZE_REQUEST", "freeze-request", nonce()));
+    expect(beforeApproval.coordinator.freeze().state).toBe("FROZEN_VERIFIED");
+    expect(beforeApproval.coordinator.backupAndRestore().state).toBe("AWAITING_OWNER_AUTHORIZATION");
+    startBackgroundSql(cluster!, "migrator", beforeApproval.database, "SELECT pg_sleep(30);");
+    waitForUser(beforeApproval, "p1wc_migrator");
+    expect(beforeApproval.coordinator.acceptP1(approval(beforeApproval.binding, "P1_APPLY", beforeApproval.coordinator.head().backupDigest ?? "", nonce())).state).toBe(
+      "BLOCKED",
+    );
+    expect(beforeApproval.coordinator.head().state).not.toBe("P1_APPLY");
+    expect(beforeApproval.coordinator.applyPinnedP1(pinnedSql()).code).toBe("INVALID_TRANSITION");
+    stopBackgroundSql();
+
+    const beforeApply = openFixture();
+    prepare(beforeApply);
+    startBackgroundSql(cluster!, "migrator", beforeApply.database, "SELECT pg_sleep(30);");
+    waitForUser(beforeApply, "p1wc_migrator");
+    expect(beforeApply.coordinator.applyPinnedP1(pinnedSql()).state).toBe("BLOCKED");
+    expect(
+      one(
+        sql(
+          cluster!,
+          "breakglass",
+          "SELECT count(*)::text FROM information_schema.columns WHERE column_name = 'receiptProvenanceSnapshot';",
+          beforeApply.database,
+        ),
+      ),
+    ).toBe("0");
+    stopBackgroundSql();
+
+    const beforePostcheck = openFixture();
+    prepare(beforePostcheck);
+    expect(beforePostcheck.coordinator.applyPinnedP1(pinnedSql()).state).toBe("P1_POSTCHECK");
+    startBackgroundSql(cluster!, "bootstrap", beforePostcheck.database, "SELECT pg_sleep(30);");
+    waitForUser(beforePostcheck, "stell22");
+    expect(beforePostcheck.coordinator.postcheck().state).toBe("UNCERTAIN");
+    expect(beforePostcheck.coordinator.unfreeze(approval(beforePostcheck.binding, "UNFREEZE", "digest", nonce())).code).toBe(
+      "UNFREEZE_PRECONDITION",
+    );
+    stopBackgroundSql();
+
+    const beforeUnfreeze = openFixture();
+    prepare(beforeUnfreeze);
+    expect(beforeUnfreeze.coordinator.applyPinnedP1(pinnedSql()).state).toBe("P1_POSTCHECK");
+    expect(beforeUnfreeze.coordinator.postcheck().ok).toBe(true);
+    startBackgroundSql(cluster!, "breakglass", beforeUnfreeze.database, "SELECT pg_sleep(30);");
+    waitForUser(beforeUnfreeze, "p1wc_breakglass");
+    expect(beforeUnfreeze.coordinator.unfreeze(approval(beforeUnfreeze.binding, "UNFREEZE", beforeUnfreeze.coordinator.head().logicalDigest ?? "", nonce())).state).toBe(
+      "UNCERTAIN",
+    );
+    expect(sql(cluster!, "app", "INSERT INTO p1wc_inventory (id, sku, qty) VALUES (31, 'still-frozen', 1);", beforeUnfreeze.database).sqlstate).toBe(
+      "42501",
+    );
+    stopBackgroundSql();
+
+    const granted = openFixture();
+    granted.coordinator.requestFreeze(approval(granted.binding, "FREEZE_REQUEST", "freeze-request", nonce()));
+    expect(granted.coordinator.freeze().state).toBe("FROZEN_VERIFIED");
+    expect(sql(cluster!, "breakglass", "GRANT INSERT ON p1wc_inventory TO p1wc_app;", granted.database).status).toBe(0);
+    expect(granted.coordinator.backupAndRestore().state).toBe("BLOCKED");
+
+    const publicGrant = openFixture();
+    publicGrant.coordinator.requestFreeze(approval(publicGrant.binding, "FREEZE_REQUEST", "freeze-request", nonce()));
+    expect(publicGrant.coordinator.freeze().state).toBe("FROZEN_VERIFIED");
+    expect(sql(cluster!, "breakglass", "GRANT UPDATE (qty) ON p1wc_inventory TO PUBLIC;", publicGrant.database).status).toBe(0);
+    expect(publicGrant.coordinator.backupAndRestore().state).toBe("BLOCKED");
+
+    const changed = openFixture();
+    changed.coordinator.requestFreeze(approval(changed.binding, "FREEZE_REQUEST", "freeze-request", nonce()));
+    expect(changed.coordinator.freeze().state).toBe("FROZEN_VERIFIED");
+    expect(sql(cluster!, "breakglass", "UPDATE p1wc_inventory SET qty = qty + 1 WHERE id = 1;", changed.database).status).toBe(0);
+    const stopped = changed.coordinator.backupAndRestore();
+    expect(stopped.state).toBe("BLOCKED");
+    expect(stopped.code).toBe("DIGEST");
+    expect(changed.coordinator.rejectDestructiveRestore().state).toBe("BLOCKED");
+
+    const restored = openFixture();
+    restored.coordinator.requestFreeze(approval(restored.binding, "FREEZE_REQUEST", "freeze-request", nonce()));
+    const frozen = restored.coordinator.freeze();
+    expect(frozen.state).toBe("FROZEN_VERIFIED");
+    expect(frozen.code).toContain("equal digests do not prove");
+    expect(one(sql(cluster!, "breakglass", "SELECT qty::text FROM p1wc_inventory WHERE id = 1;", restored.database))).toBe("4");
+    const changedRow = sql(cluster!, "breakglass", "UPDATE p1wc_inventory SET qty = qty + 1 WHERE id = 1;", restored.database);
+    expect(changedRow.status, changedRow.stderr).toBe(0);
+    const cleared = sql(cluster!, "breakglass", "DELETE FROM p1wc_finance WHERE id = 1001;", restored.database);
+    expect(cleared.status, cleared.stderr).toBe(0);
+    const reverted = sql(cluster!, "breakglass", "UPDATE p1wc_inventory SET qty = 4 WHERE id = 1;", restored.database);
+    expect(reverted.status, reverted.stderr).toBe(0);
+    const clearedAgain = sql(cluster!, "breakglass", "DELETE FROM p1wc_finance WHERE id = 1001;", restored.database);
+    expect(clearedAgain.status, clearedAgain.stderr).toBe(0);
+    expect(restored.coordinator.backupAndRestore().state).toBe("AWAITING_OWNER_AUTHORIZATION");
+  }, 900_000);
 });
 
 function openFixture() {
