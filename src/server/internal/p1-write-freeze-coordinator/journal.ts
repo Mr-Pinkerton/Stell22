@@ -143,20 +143,21 @@ function recoverJournal(directory: string, file: string, binding: Binding): Jour
     if (markerPresent(directory)) throw new CoordinatorRefusal("JOURNAL_TORN");
     return [];
   }
-  let raw = fs.readFileSync(file, "utf8");
-  if (raw.length === 0) {
+  const bytes = fs.readFileSync(file);
+  if (bytes.length === 0) {
     if (markerPresent(directory)) throw new CoordinatorRefusal("JOURNAL_TORN");
     return [];
   }
-  if (!raw.endsWith("\n")) {
-    const splitAt = raw.lastIndexOf("\n") + 1;
-    preserveTorn(directory, raw.slice(splitAt));
+  let complete = bytes;
+  if (bytes[bytes.length - 1] !== 0x0a) {
+    const splitAt = bytes.lastIndexOf(0x0a) + 1;
+    preserveTorn(directory, bytes.subarray(splitAt));
     writeMarker(directory);
     if (splitAt === 0) throw new CoordinatorRefusal("JOURNAL_TORN");
     truncateFile(file, splitAt);
-    raw = raw.slice(0, splitAt);
+    complete = bytes.subarray(0, splitAt);
   }
-  const entries = parseComplete(raw, binding);
+  const entries = parseComplete(complete.toString("utf8"), binding);
   closeUnresolved(directory, file, entries);
   return entries;
 }
@@ -346,12 +347,12 @@ function truncateFile(file: string, length: number): void {
   }
 }
 
-function preserveTorn(directory: string, torn: string): void {
+function preserveTorn(directory: string, torn: Buffer): void {
   const file = path.join(directory, "journal.torn");
   const fd = fs.openSync(file, "a");
   try {
     const digest = createHash("sha256").update(torn).digest("hex");
-    const body = `${digest} ${Buffer.byteLength(torn)}\n${Buffer.from(torn).toString("base64")}\n`;
+    const body = `${digest} ${torn.length}\n${torn.toString("base64")}\n`;
     fs.writeSync(fd, body);
     fs.fsyncSync(fd);
   } finally {

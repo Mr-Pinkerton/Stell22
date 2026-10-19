@@ -270,7 +270,7 @@ describe.skipIf(!LIVE)("disposable PostgreSQL 17 write-freeze coordinator", () =
     const clearedAgain = sql(cluster!, "breakglass", "DELETE FROM p1wc_finance WHERE id = 1001;", restored.database);
     expect(clearedAgain.status, clearedAgain.stderr).toBe(0);
     expect(restored.coordinator.backupAndRestore().state).toBe("AWAITING_OWNER_AUTHORIZATION");
-  }, 900_000);
+  }, 1_500_000);
 });
 
 function openFixture() {

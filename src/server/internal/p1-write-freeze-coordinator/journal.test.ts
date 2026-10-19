@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -259,5 +260,215 @@ describe("write-freeze journal recovery", () => {
     const reused = directory();
     fs.writeFileSync(path.join(reused, "journal.lock"), JSON.stringify({ pid: process.pid }));
     expect(classifyJournalLock(reused)).toEqual({ kind: "AMBIGUOUS", reason: "PID_REUSE" });
+  });
+});
+
+describe("utf-8 journal byte recovery", () => {
+  function freeze(note: string): { dir: string; original: Buffer } {
+    const dir = directory();
+    openJournal(dir, binding()).append("REQUEST_FREEZE", { consumedNonces: ["1".repeat(32)], note });
+    const original = fs.readFileSync(path.join(dir, "journal.ndjson"));
+    expect(original.subarray(original.length - 1, original.length).equals(Buffer.from("\n"))).toBe(true);
+    expect(original.toString("utf8")).toContain(note);
+    return { dir, original };
+  }
+
+  function tear(dir: string, extra: Buffer): void {
+    fs.appendFileSync(path.join(dir, "journal.ndjson"), extra);
+  }
+
+  function kept(dir: string, original: Buffer): void {
+    const bytes = fs.readFileSync(path.join(dir, "journal.ndjson"));
+    expect(bytes.subarray(0, original.length).equals(original)).toBe(true);
+  }
+
+  function sidecar(dir: string): Buffer {
+    const [header, encoded] = fs.readFileSync(path.join(dir, "journal.torn"), "utf8").split("\n");
+    const [digest, lengthText] = header.split(" ");
+    const bytes = Buffer.from(encoded, "base64");
+    expect(bytes.length).toBe(Number(lengthText));
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(digest);
+    return bytes;
+  }
+
+  it("keeps an ascii record byte-for-byte when the tail is torn", () => {
+    const { dir, original } = freeze("plain");
+    const torn = Buffer.from("{\"torn\":");
+    tear(dir, torn);
+    expect(openJournal(dir, binding()).head().state).toBe("UNCERTAIN");
+    kept(dir, original);
+    expect(sidecar(dir).equals(torn)).toBe(true);
+  });
+
+  it("keeps a Cyrillic note byte-for-byte when the tail is torn", () => {
+    const { dir, original } = freeze("заготовка");
+    const torn = Buffer.from("{\"обрыв\":");
+    tear(dir, torn);
+    const first = openJournal(dir, binding()).head();
+    const second = openJournal(dir, binding()).head();
+    const third = openJournal(dir, binding()).head();
+    expect(first).toEqual(second);
+    expect(second).toEqual(third);
+    expect(third.state).toBe("UNCERTAIN");
+    expect(third.note).toBe("torn journal tail; missing bytes are not a completed transition");
+    kept(dir, original);
+    expect(sidecar(dir).equals(torn)).toBe(true);
+    expect(original.toString("utf8")).toContain("заготовка");
+  });
+
+  it("keeps a multibyte Unicode note byte-for-byte when the tail is torn", () => {
+    const { dir, original } = freeze("рейка🪵");
+    const torn = Buffer.from("{\"tail\":");
+    tear(dir, torn);
+    expect(openJournal(dir, binding()).head().state).toBe("UNCERTAIN");
+    kept(dir, original);
+    expect(sidecar(dir).equals(torn)).toBe(true);
+  });
+
+  it("preserves a torn final UTF-8 byte without shortening the complete record", () => {
+    const { dir, original } = freeze("заготовка");
+    const torn = Buffer.from([0xd0]);
+    tear(dir, torn);
+    expect(openJournal(dir, binding()).head().state).toBe("UNCERTAIN");
+    kept(dir, original);
+    expect(sidecar(dir).equals(torn)).toBe(true);
+  });
+
+  it("reopens an interrupted Unicode recovery three times without changing the complete bytes", () => {
+    const { dir, original } = freeze("заготовка");
+    fs.writeFileSync(path.join(dir, "journal.recovering"), "{\"required\":true}\n");
+    const torn = Buffer.from([0xd0, 0x97]);
+    tear(dir, torn);
+    const first = openJournal(dir, binding()).head();
+    const second = openJournal(dir, binding()).head();
+    const third = openJournal(dir, binding()).head();
+    expect(first).toEqual(second);
+    expect(second).toEqual(third);
+    expect(third.state).toBe("UNCERTAIN");
+    expect(fs.existsSync(path.join(dir, "journal.recovering"))).toBe(false);
+    kept(dir, original);
+    expect(sidecar(dir).equals(torn)).toBe(true);
+  });
+
+  it("does not retry P1 after a torn intent that contains Unicode", () => {
+    const dir = directory();
+    const journal = openJournal(dir, binding());
+    journal.append("REQUEST_FREEZE", { consumedNonces: ["1".repeat(32)] });
+    journal.append("PRIVILEGE_COMMIT", { privilegePhase: "committed" });
+    journal.append("BEGIN_DRAIN");
+    journal.append("VERIFY_OK", { logicalDigest: "digest-1" });
+    journal.append("BEGIN_BACKUP");
+    journal.append("BACKUP_OK", { backupDigest: "digest-1" });
+    journal.append("RESTORE_OK", { restoreDigest: "digest-1" });
+    journal.append("P1_AUTHORIZED", { consumedNonces: ["1".repeat(32), "2".repeat(32)] });
+    journal.append("P1_SPAWN_INTENT", {
+      p1Status: "intent",
+      p1AttemptId: "attempt-1",
+      p1Sha: "a".repeat(64),
+      p1ApprovalNonce: "2".repeat(32),
+      note: "намерение",
+    });
+    const original = fs.readFileSync(path.join(dir, "journal.ndjson"));
+    tear(dir, Buffer.from("{\"обрыв\":"));
+    expect(openJournal(dir, binding()).head()).toMatchObject({
+      state: "MANUAL_RECOVERY_REQUIRED",
+      p1Status: "ambiguous",
+      executionRisk: true,
+    });
+    kept(dir, original);
+    const calls = { count: 0 };
+    const coordinator = createCoordinator({
+      directory: dir,
+      binding: binding(),
+      roles: COORDINATOR_ROLES,
+      port: {
+        readIdentity: () => binding(),
+        administrator: () => ({ ok: true, user: "p1wc_breakglass" }),
+        inventory: () => [],
+        commitFreeze: () => ({ ok: true }),
+        activity: () => [],
+        terminate: () => ({ terminated: [], remaining: [] }),
+        restrictions: () => { throw new Error("unused"); },
+        logicalDigest: () => "digest-1",
+        grantsAreFreeze: () => true,
+        unfreezePreconditions: () => "unknown",
+        commitUnfreeze: () => ({ ok: true }),
+        ordinaryWrite: () => ({ ok: true, sqlstate: null }),
+        applyP1: () => { calls.count += 1; return { outcome: "committed", sqlstate: null }; },
+        p1Visible: () => false,
+        applicationAlive: () => true,
+        containerUnchanged: () => true,
+        checkpoint: () => undefined,
+      },
+      backup: { dump: () => ({ ok: false, reason: "no" }), restore: () => ({ ok: false, reason: "no" }) },
+      clock: () => new Date("2026-10-19T00:01:00.000Z"),
+    });
+    expect(coordinator.applyPinnedP1("select 1").code).toBe("INVALID_TRANSITION");
+    expect(calls.count).toBe(0);
+    expect(coordinator.head().state).toBe("MANUAL_RECOVERY_REQUIRED");
+  });
+
+  it("keeps unfreeze risk closed after a torn Unicode authorization", () => {
+    const dir = directory();
+    const journal = openJournal(dir, binding());
+    journal.append("REQUEST_FREEZE", { consumedNonces: ["1".repeat(32)] });
+    journal.append("PRIVILEGE_COMMIT", { privilegePhase: "committed" });
+    journal.append("BEGIN_DRAIN");
+    journal.append("VERIFY_OK", { logicalDigest: "digest-1" });
+    journal.append("BEGIN_BACKUP");
+    journal.append("BACKUP_OK", { backupDigest: "digest-1" });
+    journal.append("RESTORE_OK", { restoreDigest: "digest-1" });
+    journal.append("P1_AUTHORIZED", { consumedNonces: ["1".repeat(32), "2".repeat(32)] });
+    journal.append("P1_SPAWN_INTENT", { p1Status: "intent", p1AttemptId: "attempt-1", p1Sha: "a".repeat(64), p1ApprovalNonce: "2".repeat(32) });
+    journal.append("P1_COMMITTED", { p1Status: "committed" });
+    journal.append("POSTCHECK_OK", { postcheckPassed: true });
+    journal.append("UNFREEZE_AUTHORIZED", { consumedNonces: ["1".repeat(32), "2".repeat(32), "3".repeat(32)], note: "разморозка" });
+    const original = fs.readFileSync(path.join(dir, "journal.ndjson"));
+    tear(dir, Buffer.from([0xd0]));
+    const head = openJournal(dir, binding()).head();
+    expect(head.state).toBe("MANUAL_RECOVERY_REQUIRED");
+    expect(head.unfreezeRisk).toBe(true);
+    kept(dir, original);
+    expect(sidecar(dir).equals(Buffer.from([0xd0]))).toBe(true);
+    const calls = { count: 0 };
+    const coordinator = createCoordinator({
+      directory: dir,
+      binding: binding(),
+      roles: COORDINATOR_ROLES,
+      port: {
+        readIdentity: () => binding(),
+        administrator: () => ({ ok: true, user: "p1wc_breakglass" }),
+        inventory: () => [],
+        commitFreeze: () => ({ ok: true }),
+        activity: () => [],
+        terminate: () => ({ terminated: [], remaining: [] }),
+        restrictions: () => { throw new Error("unused"); },
+        logicalDigest: () => "digest-1",
+        grantsAreFreeze: () => true,
+        unfreezePreconditions: () => "unknown",
+        commitUnfreeze: () => { calls.count += 1; return { ok: true }; },
+        ordinaryWrite: () => ({ ok: true, sqlstate: null }),
+        applyP1: () => ({ outcome: "committed", sqlstate: null }),
+        p1Visible: () => true,
+        applicationAlive: () => true,
+        containerUnchanged: () => true,
+        checkpoint: () => undefined,
+      },
+      backup: { dump: () => ({ ok: false, reason: "no" }), restore: () => ({ ok: false, reason: "no" }) },
+      clock: () => new Date("2026-10-19T00:01:00.000Z"),
+    });
+    expect(coordinator.unfreeze({
+      scope: "TEST_OWNED",
+      kind: "UNFREEZE",
+      invocationId: binding().invocationId,
+      nonce: "4".repeat(32),
+      notBefore: "2026-10-19T00:00:00.000Z",
+      notAfter: "2026-10-19T00:15:00.000Z",
+      databaseName: "p1wc_abcdef12",
+      containerId: "a".repeat(64),
+      daemonId: "daemon-a",
+      digest: "digest-1",
+    }).code).toBe("UNFREEZE_PRECONDITION");
+    expect(calls.count).toBe(0);
   });
 });
