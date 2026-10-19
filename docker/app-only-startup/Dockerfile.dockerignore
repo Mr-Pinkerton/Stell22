@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+.env
+.env.*
+!.env.example
+npm-debug.log*
+*.log
+graphify-out
+.p1-*
+audit
+backups
+.cursor
+terminals
+agent-transcripts
