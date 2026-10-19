@@ -12,7 +12,8 @@ describe("write-freeze coordinator state machine", () => {
       ["BACKUP_IN_PROGRESS", "BACKUP_OK", "RESTORE_VERIFICATION"],
       ["RESTORE_VERIFICATION", "RESTORE_OK", "AWAITING_OWNER_AUTHORIZATION"],
       ["AWAITING_OWNER_AUTHORIZATION", "P1_AUTHORIZED", "P1_APPLY"],
-      ["P1_APPLY", "P1_COMMITTED", "P1_POSTCHECK"],
+      ["P1_APPLY", "P1_SPAWN_INTENT", "P1_INTENT_RECORDED"],
+      ["P1_INTENT_RECORDED", "P1_COMMITTED", "P1_POSTCHECK"],
       ["P1_POSTCHECK", "POSTCHECK_OK", "P1_POSTCHECK"],
       ["P1_POSTCHECK", "UNFREEZE_AUTHORIZED", "UNFREEZE_AUTHORIZED"],
       ["UNFREEZE_AUTHORIZED", "UNFREEZE_GRANTS_COMMITTED", "NORMAL"],
@@ -33,6 +34,7 @@ describe("write-freeze coordinator state machine", () => {
       "RESTORE_VERIFICATION",
       "AWAITING_OWNER_AUTHORIZATION",
       "P1_APPLY",
+      "P1_INTENT_RECORDED",
       "P1_POSTCHECK",
       "BLOCKED",
       "UNCERTAIN",
@@ -55,8 +57,14 @@ describe("write-freeze coordinator state machine", () => {
       ok: true,
       state: "AWAITING_OWNER_AUTHORIZATION",
     });
-    expect(transition("P1_APPLY", "P1_FAILED")).toEqual({ ok: true, state: "BLOCKED" });
-    expect(transition("P1_APPLY", "P1_AMBIGUOUS")).toEqual({ ok: true, state: "MANUAL_RECOVERY_REQUIRED" });
+    expect(transition("P1_APPLY", "P1_COMMITTED").ok).toBe(false);
+    expect(transition("P1_INTENT_RECORDED", "P1_FAILED")).toEqual({ ok: true, state: "BLOCKED" });
+    expect(transition("P1_INTENT_RECORDED", "P1_AMBIGUOUS")).toEqual({ ok: true, state: "MANUAL_RECOVERY_REQUIRED" });
+    expect(transition("P1_INTENT_RECORDED", "DURABLE_INTENT_INTERRUPTED")).toEqual({
+      ok: true,
+      state: "MANUAL_RECOVERY_REQUIRED",
+    });
+    expect(transition("MANUAL_RECOVERY_REQUIRED", "P1_SPAWN_INTENT").ok).toBe(false);
     expect(transition("P1_POSTCHECK", "POSTCHECK_FAILED")).toEqual({ ok: true, state: "BLOCKED" });
   });
 

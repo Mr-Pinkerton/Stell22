@@ -26,6 +26,7 @@ export const COORDINATOR_STATES = [
   "RESTORE_VERIFICATION",
   "AWAITING_OWNER_AUTHORIZATION",
   "P1_APPLY",
+  "P1_INTENT_RECORDED",
   "P1_POSTCHECK",
   "UNFREEZE_AUTHORIZED",
   "BLOCKED",
@@ -54,6 +55,8 @@ export const COORDINATOR_EVENTS = [
   "P1_AUTHORIZED",
   "APPROVAL_EXPIRED",
   "APPROVAL_MISSING",
+  "P1_SPAWN_INTENT",
+  "DURABLE_INTENT_INTERRUPTED",
   "P1_COMMITTED",
   "P1_FAILED",
   "P1_AMBIGUOUS",
@@ -72,7 +75,7 @@ export const COORDINATOR_EVENTS = [
 export type CoordinatorEvent = (typeof COORDINATOR_EVENTS)[number];
 
 export type PrivilegePhase = "not-started" | "rolled-back" | "committed";
-export type P1Status = "not-started" | "failed" | "ambiguous" | "committed";
+export type P1Status = "not-started" | "intent" | "failed" | "ambiguous" | "committed";
 export type ApprovalKind = "FREEZE_REQUEST" | "P1_APPLY" | "UNFREEZE";
 
 export type Binding = {

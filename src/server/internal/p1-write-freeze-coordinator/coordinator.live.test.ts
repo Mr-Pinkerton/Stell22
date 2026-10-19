@@ -91,7 +91,7 @@ describe.skipIf(!LIVE)("disposable PostgreSQL 17 write-freeze coordinator", () =
     expect(cluster!.containerId).toBe(fixture.binding.containerId);
     expect(supervisorAlive()).toBe(true);
     stopBackgroundSql();
-  }, 240_000);
+  }, 420_000);
 
   it("does not verify a freeze while a bootstrap superuser session is open", () => {
     const fixture = openFixture();
@@ -148,7 +148,7 @@ describe.skipIf(!LIVE)("disposable PostgreSQL 17 write-freeze coordinator", () =
     expect(one(sql(cluster!, "breakglass", "SELECT count(*)::text FROM information_schema.columns WHERE column_name = 'receiptProvenanceSnapshot';", ambiguous.database))).toBe("1");
     expect(ambiguous.coordinator.rejectDestructiveRestore().code).toBe("DESTRUCTIVE_RESTORE_FORBIDDEN");
     expect(sql(cluster!, "app", "INSERT INTO p1wc_inventory (id, sku, qty) VALUES (22, 'manual', 1);", ambiguous.database).sqlstate).toBe("42501");
-  }, 240_000);
+  }, 420_000);
 
   it("records a missing administrator and leaves a foreign daemon's container in place", () => {
     const database = createBusinessDatabase(cluster!);

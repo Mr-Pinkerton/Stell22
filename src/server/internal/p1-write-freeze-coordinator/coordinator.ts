@@ -1,4 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { P1_SHA256 } from "@/server/internal/p1-isolated-runner/contract";
 import { evaluateApproval } from "@/server/internal/p1-write-freeze-coordinator/authorization";
 import {
@@ -51,9 +53,14 @@ export function createCoordinator(options: {
   port: CatalogPort;
   backup: BackupPort;
   clock: () => Date;
+  probes?: {
+    beforeIntentFsync?: () => void;
+    afterIntentFsync?: () => void;
+    afterUnfreezeAuthorized?: () => void;
+  };
 }): Coordinator {
   assertBinding(options.binding);
-  const { directory, binding, roles, port, backup, clock } = options;
+  const { directory, binding, roles, port, backup, clock, probes } = options;
 
   function run(fn: (journal: Journal) => StepResult): StepResult {
     try {
@@ -125,8 +132,8 @@ export function createCoordinator(options: {
     if (fault.point === "after-verified" && journal.head().state === "FROZEN_VERIFIED") {
       return moved(journal, "CRASH", { note: fault.point }, null);
     }
-    if (fault.point === "after-p1-commit" && journal.head().state === "P1_APPLY") {
-      return moved(journal, "P1_AMBIGUOUS", { p1Status: "ambiguous", note: "committed work remains; do not restore" }, null);
+    if (fault.point === "after-p1-commit" && journal.head().state === "P1_INTENT_RECORDED") {
+      return moved(journal, "P1_AMBIGUOUS", { p1Status: "ambiguous", note: "committed work remains; do not restore or retry" }, null);
     }
     return onUnknown(journal);
   }
@@ -225,6 +232,22 @@ export function createCoordinator(options: {
         if (createHash("sha256").update(sql).digest("hex") !== P1_SHA256) return stopped(journal, "P1_PIN_MISMATCH", null);
         const beforeP1 = continuityFailure(journal);
         if (beforeP1) return beforeP1;
+        probes?.beforeIntentFsync?.();
+        const attemptId = randomBytes(16).toString("hex");
+        journal.append("P1_SPAWN_INTENT", {
+          p1Status: "intent",
+          p1AttemptId: attemptId,
+          p1Sha: P1_SHA256,
+          p1ApprovalNonce: journal.head().consumedNonces.at(-1) ?? null,
+          note: "durable P1 spawn intent; a missing P1_COMMITTED record is not proof that the migration did not run",
+        });
+        if (!intentDurable(directory, attemptId)) {
+          return moved(journal, "DURABLE_INTENT_INTERRUPTED", {
+            p1Status: "ambiguous",
+            note: "P1 spawn intent was not durably readable",
+          }, null);
+        }
+        probes?.afterIntentFsync?.();
         const result = port.applyP1(sql);
         if (result.outcome === "committed") {
           port.checkpoint("after-p1-commit");
@@ -279,6 +302,7 @@ export function createCoordinator(options: {
           return stopped(journal, "UNFREEZE_PRECONDITION", null);
         }
         journal.append("UNFREEZE_AUTHORIZED", { consumedNonces: [...head.consumedNonces, approval.nonce] });
+        probes?.afterUnfreezeAuthorized?.();
         const granted = port.commitUnfreeze();
         if (!granted.ok) return moved(journal, "UNFREEZE_UNCERTAIN", { note: "grant uncertain" }, granted.sqlstate);
         const write = port.ordinaryWrite();
@@ -292,6 +316,9 @@ export function createCoordinator(options: {
     reread() {
       return run((journal) => {
         if (journal.head().state !== "UNCERTAIN") return stopped(journal, "INVALID_TRANSITION", null);
+        if (journal.head().executionRisk || journal.head().unfreezeRisk || journal.head().p1Status !== "not-started") {
+          return stopped(journal, "REREAD_REFUSED", null);
+        }
         const grants = port.grantsAreFreeze();
         const after = classifyInventory(port.inventory(), roles, "after");
         if (grants !== true || !after.ok || !frozenProbes(port.restrictions())) {
@@ -392,6 +419,20 @@ export function createCoordinator(options: {
       digest,
       now: clock(),
     };
+  }
+}
+
+function intentDurable(directory: string, attemptId: string): boolean {
+  const file = path.join(directory, "journal.ndjson");
+  const raw = fs.readFileSync(file, "utf8");
+  if (!raw.endsWith("\n")) return false;
+  const line = raw.split("\n").filter((item) => item.length > 0).at(-1);
+  if (line === undefined) return false;
+  try {
+    const parsed = JSON.parse(line) as { event?: string; p1AttemptId?: string; p1Sha?: string; state?: string };
+    return parsed.event === "P1_SPAWN_INTENT" && parsed.state === "P1_INTENT_RECORDED" && parsed.p1AttemptId === attemptId && parsed.p1Sha === P1_SHA256;
+  } catch {
+    return false;
   }
 }
 

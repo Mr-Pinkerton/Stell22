@@ -21,6 +21,11 @@ export type JournalEntry = {
   backupDigest: string | null;
   restoreDigest: string | null;
   p1Status: P1Status;
+  p1AttemptId: string | null;
+  p1Sha: string | null;
+  p1ApprovalNonce: string | null;
+  executionRisk: boolean;
+  unfreezeRisk: boolean;
   postcheckPassed: boolean;
   consumedNonces: string[];
   binding: Binding;
@@ -29,7 +34,7 @@ export type JournalEntry = {
 
 const FAIL_CLOSED = new Set<CoordinatorState>(["BLOCKED", "UNCERTAIN", "MANUAL_RECOVERY_REQUIRED"]);
 const PRIVILEGE_PHASES = new Set<PrivilegePhase>(["not-started", "rolled-back", "committed"]);
-const P1_STATUSES = new Set<P1Status>(["not-started", "failed", "ambiguous", "committed"]);
+const P1_STATUSES = new Set<P1Status>(["not-started", "intent", "failed", "ambiguous", "committed"]);
 
 export type Journal = {
   head(): JournalEntry;
@@ -94,6 +99,11 @@ export function openJournal(directory: string, binding: Binding, options: { reco
         event,
         binding,
         consumedNonces: patch.consumedNonces ?? current.consumedNonces,
+        executionRisk: current.executionRisk || event === "P1_AUTHORIZED" || event === "P1_SPAWN_INTENT",
+        unfreezeRisk: current.unfreezeRisk || event === "UNFREEZE_AUTHORIZED",
+        p1AttemptId: patch.p1AttemptId === undefined ? current.p1AttemptId : patch.p1AttemptId,
+        p1Sha: patch.p1Sha === undefined ? current.p1Sha : patch.p1Sha,
+        p1ApprovalNonce: patch.p1ApprovalNonce === undefined ? current.p1ApprovalNonce : patch.p1ApprovalNonce,
       };
       writeLine(file, next);
       entries = [...entries, next];
@@ -147,17 +157,27 @@ function recoverJournal(directory: string, file: string, binding: Binding): Jour
     raw = raw.slice(0, splitAt);
   }
   const entries = parseComplete(raw, binding);
-  const head = entries[entries.length - 1];
-  if (head === undefined) return entries;
-  if (markerPresent(directory) && !FAIL_CLOSED.has(head.state)) {
-    const recovered = failClosed(head);
+  closeUnresolved(directory, file, entries);
+  return entries;
+}
+
+function closeUnresolved(directory: string, file: string, entries: JournalEntry[]): void {
+  let head = entries[entries.length - 1];
+  if (head !== undefined && markerPresent(directory) && !FAIL_CLOSED.has(head.state)) {
+    const recovered = recoveryRecord(head);
     writeLine(file, recovered);
     entries.push(recovered);
+    head = recovered;
   }
-  if (markerPresent(directory) && entries[entries.length - 1] !== undefined && FAIL_CLOSED.has(entries[entries.length - 1].state)) {
+  if (head !== undefined && unresolvedExecution(head)) {
+    const recovered = interruptedRecord(head);
+    writeLine(file, recovered);
+    entries.push(recovered);
+    head = recovered;
+  }
+  if (markerPresent(directory) && head !== undefined && FAIL_CLOSED.has(head.state)) {
     fs.rmSync(markerPath(directory), { force: true });
   }
-  return entries;
 }
 
 function readOnlyEntries(file: string, binding: Binding): JournalEntry[] {
@@ -168,8 +188,9 @@ function readOnlyEntries(file: string, binding: Binding): JournalEntry[] {
   if (complete.length === 0) return [];
   const entries = parseComplete(complete, binding);
   const head = entries[entries.length - 1];
+  if (head !== undefined && unresolvedExecution(head)) return [...entries, interruptedRecord(head)];
   if ((!raw.endsWith("\n") || markerPresent(path.dirname(file))) && head !== undefined && !FAIL_CLOSED.has(head.state)) {
-    return [...entries, failClosed(head)];
+    return [...entries, recoveryRecord(head)];
   }
   return entries;
 }
@@ -201,6 +222,11 @@ function follows(previous: JournalEntry, entry: JournalEntry): boolean {
       previous.state !== "NORMAL" &&
       !FAIL_CLOSED.has(previous.state) &&
       entry.p1Status === previous.p1Status &&
+      entry.executionRisk === previous.executionRisk &&
+      entry.unfreezeRisk === previous.unfreezeRisk &&
+      entry.p1AttemptId === previous.p1AttemptId &&
+      entry.p1Sha === previous.p1Sha &&
+      entry.p1ApprovalNonce === previous.p1ApprovalNonce &&
       entry.postcheckPassed === previous.postcheckPassed &&
       entry.privilegePhase === previous.privilegePhase &&
       entry.logicalDigest === previous.logicalDigest &&
@@ -224,6 +250,10 @@ function asEntry(value: unknown, binding: Binding): JournalEntry {
   }
   if (row.privilegePhase === undefined || !PRIVILEGE_PHASES.has(row.privilegePhase)) throw new CoordinatorRefusal("JOURNAL_MALFORMED");
   if (row.p1Status === undefined || !P1_STATUSES.has(row.p1Status)) throw new CoordinatorRefusal("JOURNAL_MALFORMED");
+  if (typeof row.executionRisk !== "boolean" || typeof row.unfreezeRisk !== "boolean") throw new CoordinatorRefusal("JOURNAL_MALFORMED");
+  if (!nullableString(row.p1AttemptId) || !nullableString(row.p1Sha) || !nullableString(row.p1ApprovalNonce)) {
+    throw new CoordinatorRefusal("JOURNAL_MALFORMED");
+  }
   if (typeof row.postcheckPassed !== "boolean") throw new CoordinatorRefusal("JOURNAL_MALFORMED");
   if (typeof row.note !== "string") throw new CoordinatorRefusal("JOURNAL_MALFORMED");
   if (!nullableString(row.logicalDigest) || !nullableString(row.backupDigest) || !nullableString(row.restoreDigest)) {
@@ -246,6 +276,11 @@ function initial(binding: Binding): JournalEntry {
     backupDigest: null,
     restoreDigest: null,
     p1Status: "not-started",
+    p1AttemptId: null,
+    p1Sha: null,
+    p1ApprovalNonce: null,
+    executionRisk: false,
+    unfreezeRisk: false,
     postcheckPassed: false,
     consumedNonces: [],
     binding,
@@ -253,13 +288,41 @@ function initial(binding: Binding): JournalEntry {
   };
 }
 
-function failClosed(current: JournalEntry): JournalEntry {
+function unresolvedExecution(entry: JournalEntry): boolean {
+  return entry.state === "P1_INTENT_RECORDED" || entry.state === "UNFREEZE_AUTHORIZED";
+}
+
+function executionMayHaveStarted(entry: JournalEntry): boolean {
+  return (
+    entry.executionRisk ||
+    entry.unfreezeRisk ||
+    entry.p1Status !== "not-started" ||
+    entry.state === "P1_APPLY" ||
+    entry.state === "P1_INTENT_RECORDED" ||
+    entry.state === "P1_POSTCHECK" ||
+    entry.state === "UNFREEZE_AUTHORIZED"
+  );
+}
+
+function recoveryRecord(current: JournalEntry): JournalEntry {
+  if (executionMayHaveStarted(current)) return interruptedRecord(current);
   return {
     ...current,
     generation: current.generation + 1,
     state: "UNCERTAIN",
     event: "TORN_TAIL",
     note: "torn journal tail; missing bytes are not a completed transition",
+  };
+}
+
+function interruptedRecord(current: JournalEntry): JournalEntry {
+  return {
+    ...current,
+    generation: current.generation + 1,
+    state: "MANUAL_RECOVERY_REQUIRED",
+    event: "DURABLE_INTENT_INTERRUPTED",
+    p1Status: current.p1Status === "committed" ? "committed" : "ambiguous",
+    note: "missing completion is not proof the migration or unfreeze grant did not run",
   };
 }
 

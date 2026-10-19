@@ -82,10 +82,11 @@ describe("write-freeze journal recovery", () => {
     expect(applyingJournal.head().state).toBe("P1_APPLY");
     tear(applying);
     const recovered = openJournal(applying, binding());
-    expect(recovered.head().state).toBe("UNCERTAIN");
-    expect(recovered.head().p1Status).toBe("not-started");
+    expect(recovered.head().state).toBe("MANUAL_RECOVERY_REQUIRED");
+    expect(recovered.head().p1Status).toBe("ambiguous");
+    expect(recovered.head().executionRisk).toBe(true);
     expect(refusal(() => recovered.append("P1_COMMITTED", { p1Status: "committed" }))).toBe("INVALID_TRANSITION");
-    expect(recovered.head().state).toBe("UNCERTAIN");
+    expect(recovered.head().state).toBe("MANUAL_RECOVERY_REQUIRED");
   });
 
   it("keeps an existing BLOCKED or UNCERTAIN record when the tail is torn", () => {
@@ -201,6 +202,39 @@ describe("write-freeze journal recovery", () => {
     }).code).toBe("UNFREEZE_PRECONDITION");
     expect(coordinator.applyPinnedP1("select 1").code).toBe("INVALID_TRANSITION");
     expect(coordinator.head().state).toBe("UNCERTAIN");
+  });
+
+  it("reopens an interrupted P1 intent as manual recovery and does not treat it as not started", () => {
+    const dir = directory();
+    const journal = openJournal(dir, binding());
+    journal.append("REQUEST_FREEZE", { consumedNonces: ["1".repeat(32)] });
+    journal.append("PRIVILEGE_COMMIT", { privilegePhase: "committed" });
+    journal.append("BEGIN_DRAIN");
+    journal.append("VERIFY_OK", { logicalDigest: "digest-1" });
+    journal.append("BEGIN_BACKUP");
+    journal.append("BACKUP_OK", { backupDigest: "digest-1" });
+    journal.append("RESTORE_OK", { restoreDigest: "digest-1" });
+    journal.append("P1_AUTHORIZED", { consumedNonces: ["1".repeat(32), "2".repeat(32)] });
+    journal.append("P1_SPAWN_INTENT", {
+      p1Status: "intent",
+      p1AttemptId: "attempt-1",
+      p1Sha: "a".repeat(64),
+      p1ApprovalNonce: "2".repeat(32),
+    });
+    tear(dir);
+    const first = openJournal(dir, binding()).head();
+    const second = openJournal(dir, binding()).head();
+    const third = openJournal(dir, binding()).head();
+    expect(first).toEqual(second);
+    expect(second).toEqual(third);
+    expect(third).toMatchObject({
+      state: "MANUAL_RECOVERY_REQUIRED",
+      p1Status: "ambiguous",
+      p1AttemptId: "attempt-1",
+      executionRisk: true,
+    });
+    expect(third.p1Status).not.toBe("not-started");
+    expect(fs.readFileSync(path.join(dir, "journal.torn"), "utf8").length).toBeGreaterThan(0);
   });
 
   it("classifies a live, stale, and ambiguous lock without deleting it", () => {
