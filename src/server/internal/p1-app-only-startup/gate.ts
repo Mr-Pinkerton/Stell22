@@ -1,6 +1,16 @@
-import { FORBIDDEN_DATABASE_NAMES, P1_MIGRATION_NAME, P1_SHA256 } from "@/server/internal/p1-isolated-runner/contract";
+import { P1_MIGRATION_NAME, P1_SHA256 } from "@/server/internal/p1-isolated-runner/contract";
 import type { SchemaShape } from "@/server/internal/p1-isolated-runner/schema-contract";
 import type { ImageMigration } from "@/server/internal/p1-app-only-startup/inventory";
+
+/** Production database. Disposable tests use p1as_ plus 8 hex digits. */
+export const PRODUCTION_DATABASE_NAME = "stell22";
+const DISPOSABLE_DATABASE_NAME = /^p1as_[0-9a-f]{8}$/;
+const SYSTEM_DATABASE_NAMES = new Set(["postgres", "template0", "template1"]);
+
+export function appDatabaseAllowed(name: string): boolean {
+  if (SYSTEM_DATABASE_NAMES.has(name)) return false;
+  return name === PRODUCTION_DATABASE_NAME || DISPOSABLE_DATABASE_NAME.test(name);
+}
 
 export type StartupHistoryRow = {
   migrationName: string;
@@ -24,12 +34,17 @@ export type StartupRole = {
   memberships: readonly string[];
   schemaUsage: boolean;
   schemaCreate: boolean;
+  databaseCreate: boolean;
+  databaseOwner: boolean;
+  schemaOwner: boolean;
   ownedTableCount: number;
+  ownedSequenceCount: number;
+  ownedViewCount: number;
+  ownedOtherRelationCount: number;
+  ownedRoutineCount: number;
 };
 
 export type StartupDecision = { ok: true } | { ok: false; code: string };
-
-const FORBIDDEN = new Set<string>(FORBIDDEN_DATABASE_NAMES);
 
 export function evaluateAppOnlyStartup(input: {
   imageMigrations: readonly ImageMigration[];
@@ -41,7 +56,7 @@ export function evaluateAppOnlyStartup(input: {
 }): StartupDecision {
   if (input.imageMigrations.length === 0) return refuse("MIGRATION_HISTORY_UNVERIFIABLE");
   if (!explicitRole(input.role)) return refuse("MIGRATION_HISTORY_UNVERIFIABLE");
-  if (input.role.databaseName !== input.urlDatabase || FORBIDDEN.has(input.role.databaseName)) {
+  if (input.role.databaseName !== input.urlDatabase || !appDatabaseAllowed(input.role.databaseName)) {
     return refuse("WRONG_DATABASE");
   }
   if (input.role.currentUser !== input.urlUser || input.role.sessionUser !== input.role.currentUser) {
@@ -56,7 +71,14 @@ export function evaluateAppOnlyStartup(input: {
     input.role.rolbypassrls ||
     input.role.memberships.length > 0 ||
     input.role.schemaCreate ||
+    input.role.databaseCreate ||
+    input.role.databaseOwner ||
+    input.role.schemaOwner ||
     input.role.ownedTableCount !== 0 ||
+    input.role.ownedSequenceCount !== 0 ||
+    input.role.ownedViewCount !== 0 ||
+    input.role.ownedOtherRelationCount !== 0 ||
+    input.role.ownedRoutineCount !== 0 ||
     !input.role.schemaUsage
   ) {
     return refuse("APP_ROLE_REFUSED");
@@ -107,8 +129,23 @@ function explicitRole(role: StartupRole): boolean {
     role.rolcanlogin,
     role.schemaUsage,
     role.schemaCreate,
+    role.databaseCreate,
+    role.databaseOwner,
+    role.schemaOwner,
   ];
-  return flags.every((flag) => typeof flag === "boolean") && Array.isArray(role.memberships) && role.memberships.every((name) => typeof name === "string");
+  const counts = [
+    role.ownedTableCount,
+    role.ownedSequenceCount,
+    role.ownedViewCount,
+    role.ownedOtherRelationCount,
+    role.ownedRoutineCount,
+  ];
+  return (
+    flags.every((flag) => typeof flag === "boolean") &&
+    counts.every((count) => typeof count === "number" && Number.isInteger(count) && count >= 0) &&
+    Array.isArray(role.memberships) &&
+    role.memberships.every((name) => typeof name === "string")
+  );
 }
 
 function refuse(code: string): StartupDecision {

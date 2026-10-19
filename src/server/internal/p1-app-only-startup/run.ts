@@ -10,10 +10,8 @@ import {
   type P1SchemaEvidence,
 } from "@/server/internal/p1-isolated-runner/schema-contract";
 import { evaluateAppOnlyStartup, type StartupHistoryRow, type StartupRole } from "@/server/internal/p1-app-only-startup/gate";
-import { readImageMigrations } from "@/server/internal/p1-app-only-startup/inventory";
+import { readImageMigrations, resolveInventoryRoot } from "@/server/internal/p1-app-only-startup/inventory";
 import { STARTUP_HISTORY_SQL, STARTUP_ROLE_SQL, STARTUP_SCHEMA_SQL } from "@/server/internal/p1-app-only-startup/probe";
-
-const REPOSITORY_ROOT = process.env.APP_ONLY_REPOSITORY_ROOT ?? process.cwd();
 
 class StartupRefusal extends Error {
   code: string;
@@ -89,7 +87,14 @@ function parseRole(value: unknown): StartupRole & { historyTable: boolean } {
     memberships,
     schemaUsage: asBoolean(row.schemaUsage),
     schemaCreate: asBoolean(row.schemaCreate),
+    databaseCreate: asBoolean(row.databaseCreate),
+    databaseOwner: asBoolean(row.databaseOwner),
+    schemaOwner: asBoolean(row.schemaOwner),
     ownedTableCount: asCount(row.ownedTableCount),
+    ownedSequenceCount: asCount(row.ownedSequenceCount),
+    ownedViewCount: asCount(row.ownedViewCount),
+    ownedOtherRelationCount: asCount(row.ownedOtherRelationCount),
+    ownedRoutineCount: asCount(row.ownedRoutineCount),
     historyTable: asBoolean(row.historyTable),
   };
 }
@@ -192,8 +197,10 @@ async function main(): Promise<void> {
   const rawUrl = process.env.DATABASE_URL ?? "";
   if (rawUrl.length === 0) fail("CONFIGURATION_INCOMPLETE");
   const target = databaseTarget(rawUrl);
-  if (!fs.existsSync(path.join(REPOSITORY_ROOT, "prisma", "schema.prisma"))) fail("CONFIGURATION_INCOMPLETE");
-  const imageMigrations = readImageMigrations(REPOSITORY_ROOT);
+  const inventory = resolveInventoryRoot(process.env);
+  if (!inventory.ok) fail(inventory.code);
+  if (!fs.existsSync(path.join(inventory.root, "prisma", "schema.prisma"))) fail("CONFIGURATION_INCOMPLETE");
+  const imageMigrations = readImageMigrations(inventory.root);
   const prisma = new PrismaClient({ log: [] });
   try {
     const roleRows = await prisma.$queryRawUnsafe<Array<{ report: unknown }>>(STARTUP_ROLE_SQL);

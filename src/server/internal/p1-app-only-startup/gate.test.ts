@@ -3,15 +3,15 @@ import { describe, expect, it } from "vitest";
 import { P1_MIGRATION_NAME, P1_SHA256 } from "@/server/internal/p1-isolated-runner/contract";
 import { absentP1Schema, classifySchemaShape } from "@/server/internal/p1-isolated-runner/schema-contract";
 import { appOnlyCleanupAllowed } from "@/server/internal/p1-app-only-startup/cleanup";
-import { evaluateAppOnlyStartup, type StartupRole } from "@/server/internal/p1-app-only-startup/gate";
-import { migrationSha256, readImageMigrations } from "@/server/internal/p1-app-only-startup/inventory";
+import { appDatabaseAllowed, evaluateAppOnlyStartup, type StartupRole } from "@/server/internal/p1-app-only-startup/gate";
+import { migrationSha256, readImageMigrations, resolveInventoryRoot } from "@/server/internal/p1-app-only-startup/inventory";
 import { STARTUP_HISTORY_SQL, STARTUP_ROLE_SQL, STARTUP_SCHEMA_SQL } from "@/server/internal/p1-app-only-startup/probe";
 
 function role(overrides: Partial<StartupRole> = {}): StartupRole {
   return {
     currentUser: "p1as_app",
     sessionUser: "p1as_app",
-    databaseName: "p1as_db",
+    databaseName: "p1as_ab12cd34",
     rolsuper: false,
     rolcreatedb: false,
     rolcreaterole: false,
@@ -21,7 +21,14 @@ function role(overrides: Partial<StartupRole> = {}): StartupRole {
     memberships: [],
     schemaUsage: true,
     schemaCreate: false,
+    databaseCreate: false,
+    databaseOwner: false,
+    schemaOwner: false,
     ownedTableCount: 0,
+    ownedSequenceCount: 0,
+    ownedViewCount: 0,
+    ownedOtherRelationCount: 0,
+    ownedRoutineCount: 0,
     ...overrides,
   };
 }
@@ -59,6 +66,9 @@ describe("app-only startup gate", () => {
     expect(candidate).not.toContain("prisma migrate");
     expect(candidate).not.toContain("migrate deploy");
     expect(candidate).not.toContain("SKIP");
+    expect(candidate).not.toContain("APP_ONLY_REPOSITORY_ROOT");
+    expect(candidate).not.toContain("APP_ONLY_STARTUP_FIXTURE");
+    expect(fs.readFileSync("docker/app-only-startup/Dockerfile", "utf8")).toContain("ENV NODE_ENV=production");
   });
 
   it("accepts a prepared image inventory and the pinned P1 row when that directory is absent", () => {
@@ -70,7 +80,7 @@ describe("app-only startup gate", () => {
         history: prepared,
         schemaShape: "absent",
         role: role(),
-        urlDatabase: "p1as_db",
+        urlDatabase: "p1as_ab12cd34",
         urlUser: "p1as_app",
       }),
     ).toEqual({ ok: true });
@@ -80,7 +90,7 @@ describe("app-only startup gate", () => {
         history: [...prepared, row(P1_MIGRATION_NAME, P1_SHA256)],
         schemaShape: "match",
         role: role(),
-        urlDatabase: "p1as_db",
+        urlDatabase: "p1as_ab12cd34",
         urlUser: "p1as_app",
       }),
     ).toEqual({ ok: true });
@@ -90,7 +100,7 @@ describe("app-only startup gate", () => {
         history: image.map((migration) => row(migration.name, migration.sha256)),
         schemaShape: "match",
         role: role(),
-        urlDatabase: "p1as_db",
+        urlDatabase: "p1as_ab12cd34",
         urlUser: "p1as_app",
       }),
     ).toEqual({ ok: true });
@@ -102,7 +112,7 @@ describe("app-only startup gate", () => {
       history: image.map((migration) => row(migration.name, migration.sha256)),
       schemaShape: "match" as const,
       role: role(),
-      urlDatabase: "p1as_db",
+      urlDatabase: "p1as_ab12cd34",
       urlUser: "p1as_app",
     };
     expect(evaluateAppOnlyStartup({ ...base, history: null })).toMatchObject({ code: "MIGRATION_HISTORY_MISSING" });
@@ -134,25 +144,57 @@ describe("app-only startup gate", () => {
       history: image.map((migration) => row(migration.name, migration.sha256)),
       schemaShape: "match" as const,
       role: role(),
-      urlDatabase: "p1as_db",
+      urlDatabase: "p1as_ab12cd34",
       urlUser: "p1as_app",
     };
-    expect(evaluateAppOnlyStartup({ ...ready, role: role({ databaseName: "stell22" }), urlDatabase: "stell22" })).toMatchObject({ code: "WRONG_DATABASE" });
-    expect(evaluateAppOnlyStartup({ ...ready, role: role({ databaseName: "postgres" }), urlDatabase: "postgres" })).toMatchObject({ code: "WRONG_DATABASE" });
+    expect(evaluateAppOnlyStartup({ ...ready, role: role({ databaseName: "stell22" }), urlDatabase: "stell22" })).toEqual({ ok: true });
+    expect(appDatabaseAllowed("stell22")).toBe(true);
+    expect(appDatabaseAllowed("p1as_ab12cd34")).toBe(true);
+    for (const name of ["postgres", "template0", "template1", "stell22_integrity", "stell22_dev", "p1as_empty_abcd", "other"]) {
+      expect(evaluateAppOnlyStartup({ ...ready, role: role({ databaseName: name }), urlDatabase: name })).toMatchObject({ code: "WRONG_DATABASE" });
+    }
+    expect(evaluateAppOnlyStartup({ ...ready, role: role({ databaseName: "stell22" }), urlDatabase: "p1as_ab12cd34" })).toMatchObject({ code: "WRONG_DATABASE" });
     expect(evaluateAppOnlyStartup({ ...ready, role: role({ rolsuper: true }) })).toMatchObject({ code: "BOOTSTRAP_SUPERUSER" });
+    expect(evaluateAppOnlyStartup({ ...ready, role: role({ sessionUser: "p1as_other" }) })).toMatchObject({ code: "ROLE_MISMATCH" });
     expect(evaluateAppOnlyStartup({ ...ready, urlUser: "p1as_other" })).toMatchObject({ code: "ROLE_MISMATCH" });
     expect(evaluateAppOnlyStartup({ ...ready, role: role({ schemaCreate: true }) })).toMatchObject({ code: "APP_ROLE_REFUSED" });
+    expect(evaluateAppOnlyStartup({ ...ready, role: role({ databaseCreate: true }) })).toMatchObject({ code: "APP_ROLE_REFUSED" });
+    expect(evaluateAppOnlyStartup({ ...ready, role: role({ databaseOwner: true }) })).toMatchObject({ code: "APP_ROLE_REFUSED" });
+    expect(evaluateAppOnlyStartup({ ...ready, role: role({ schemaOwner: true }) })).toMatchObject({ code: "APP_ROLE_REFUSED" });
     expect(evaluateAppOnlyStartup({ ...ready, role: role({ schemaUsage: false }) })).toMatchObject({ code: "APP_ROLE_REFUSED" });
     expect(evaluateAppOnlyStartup({ ...ready, role: role({ ownedTableCount: 2 }) })).toMatchObject({ code: "APP_ROLE_REFUSED" });
+    expect(evaluateAppOnlyStartup({ ...ready, role: role({ ownedSequenceCount: 1 }) })).toMatchObject({ code: "APP_ROLE_REFUSED" });
+    expect(evaluateAppOnlyStartup({ ...ready, role: role({ ownedViewCount: 1 }) })).toMatchObject({ code: "APP_ROLE_REFUSED" });
+    expect(evaluateAppOnlyStartup({ ...ready, role: role({ ownedRoutineCount: 1 }) })).toMatchObject({ code: "APP_ROLE_REFUSED" });
+    expect(evaluateAppOnlyStartup({ ...ready, role: role({ ownedOtherRelationCount: 1 }) })).toMatchObject({ code: "APP_ROLE_REFUSED" });
     expect(evaluateAppOnlyStartup({ ...ready, role: role({ memberships: ["p1as_boot"] }) })).toMatchObject({ code: "APP_ROLE_REFUSED" });
+    const missing = role();
+    delete (missing as { ownedSequenceCount?: number }).ownedSequenceCount;
+    expect(evaluateAppOnlyStartup({ ...ready, role: missing })).toMatchObject({ code: "MIGRATION_HISTORY_UNVERIFIABLE" });
   });
 
-  it("hashes the repository migration text without carriage returns and does not write SQL", () => {
+  it("normalizes CRLF pairs, rejects a standalone CR, and reads production migrations from /app", () => {
     const migrations = readImageMigrations(process.cwd());
     expect(migrations.map((migration) => migration.name)).toContain(P1_MIGRATION_NAME);
     expect(migrations.find((migration) => migration.name === P1_MIGRATION_NAME)?.sha256).toBe(P1_SHA256);
+    const lf = Buffer.from("select 1;\n", "utf8");
     const crlf = Buffer.from("select 1;\r\n", "utf8");
-    expect(migrationSha256(crlf)).toBe(migrationSha256(Buffer.from("select 1;\n", "utf8")));
+    expect(migrationSha256(crlf)).toBe(migrationSha256(lf));
+    expect(migrationSha256(Buffer.from("select 2;\n", "utf8"))).not.toBe(migrationSha256(lf));
+    expect(() => migrationSha256(Buffer.from("select\r1;\n", "utf8"))).toThrow("STANDALONE_CR");
+    expect(resolveInventoryRoot({ NODE_ENV: "production", APP_ONLY_REPOSITORY_ROOT: process.cwd() })).toEqual({
+      ok: false,
+      code: "MIGRATION_HISTORY_UNVERIFIABLE",
+    });
+    expect(resolveInventoryRoot({ NODE_ENV: "production" })).toEqual({ ok: true, root: "/app" });
+    expect(resolveInventoryRoot({ NODE_ENV: "test", APP_ONLY_STARTUP_FIXTURE: "test", APP_ONLY_STARTUP_FIXTURE_ROOT: "/fixture" })).toEqual({
+      ok: true,
+      root: "/fixture",
+    });
+    expect(resolveInventoryRoot({ NODE_ENV: "test", APP_ONLY_REPOSITORY_ROOT: "/fixture" })).toEqual({
+      ok: false,
+      code: "MIGRATION_HISTORY_UNVERIFIABLE",
+    });
     for (const sql of [STARTUP_ROLE_SQL, STARTUP_HISTORY_SQL, STARTUP_SCHEMA_SQL]) {
       expect(sql.toLowerCase()).not.toMatch(/^\s*(insert|update|delete|create|alter|drop|truncate|grant|revoke)\b/m);
     }

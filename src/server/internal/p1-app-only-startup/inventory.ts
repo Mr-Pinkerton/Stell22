@@ -7,13 +7,47 @@ export type ImageMigration = {
   sha256: string;
 };
 
+const IMAGE_ROOT = "/app";
+
+/**
+ * CRLF becomes LF. A carriage return that is not part of CRLF is rejected.
+ * Other bytes are hashed unchanged.
+ */
 export function migrationSha256(bytes: Buffer): string {
-  const stripped = Buffer.alloc(bytes.length);
+  const normalized = Buffer.alloc(bytes.length);
   let length = 0;
-  for (const byte of bytes) {
-    if (byte !== 13) stripped[length++] = byte;
+  for (let index = 0; index < bytes.length; index += 1) {
+    const byte = bytes[index] ?? 0;
+    if (byte === 13) {
+      if (bytes[index + 1] !== 10) throw new Error("STANDALONE_CR");
+      continue;
+    }
+    normalized[length] = byte;
+    length += 1;
   }
-  return createHash("sha256").update(stripped.subarray(0, length)).digest("hex");
+  return createHash("sha256").update(normalized.subarray(0, length)).digest("hex");
+}
+
+export function resolveInventoryRoot(env: Readonly<Record<string, string | undefined>>): { ok: true; root: string } | { ok: false; code: string } {
+  const override = present(env.APP_ONLY_REPOSITORY_ROOT) ?? present(env.APP_ONLY_STARTUP_FIXTURE_ROOT);
+  const fixture = env.APP_ONLY_STARTUP_FIXTURE;
+  if (env.NODE_ENV === "production") {
+    if (override !== undefined || fixture !== undefined) return { ok: false, code: "MIGRATION_HISTORY_UNVERIFIABLE" };
+    return { ok: true, root: IMAGE_ROOT };
+  }
+  if (present(env.APP_ONLY_REPOSITORY_ROOT) !== undefined) return { ok: false, code: "MIGRATION_HISTORY_UNVERIFIABLE" };
+  if (fixture !== undefined || present(env.APP_ONLY_STARTUP_FIXTURE_ROOT) !== undefined) {
+    if (fixture !== "test" || present(env.APP_ONLY_STARTUP_FIXTURE_ROOT) === undefined) {
+      return { ok: false, code: "MIGRATION_HISTORY_UNVERIFIABLE" };
+    }
+    return { ok: true, root: env.APP_ONLY_STARTUP_FIXTURE_ROOT ?? "" };
+  }
+  return { ok: true, root: process.cwd() };
+}
+
+function present(value: string | undefined): string | undefined {
+  if (value === undefined || value.length === 0) return undefined;
+  return value;
 }
 
 export function readImageMigrations(repositoryRoot: string): ImageMigration[] {

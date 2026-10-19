@@ -22,15 +22,44 @@ SELECT json_build_object(
   ), '[]'::json),
   'schemaUsage', has_schema_privilege(current_user, 'public', 'USAGE'),
   'schemaCreate', has_schema_privilege(current_user, 'public', 'CREATE'),
+  'databaseCreate', has_database_privilege(current_user, current_database(), 'CREATE'),
+  'databaseOwner', d.datdba = r.oid,
+  'schemaOwner', ns.nspowner = r.oid,
   'ownedTableCount', (
     SELECT count(*)::int
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relowner = r.oid
+    WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p') AND c.relowner = r.oid
+  ),
+  'ownedSequenceCount', (
+    SELECT count(*)::int
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind = 'S' AND c.relowner = r.oid
+  ),
+  'ownedViewCount', (
+    SELECT count(*)::int
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm') AND c.relowner = r.oid
+  ),
+  'ownedOtherRelationCount', (
+    SELECT count(*)::int
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('i', 'I', 'f', 'c', 't') AND c.relowner = r.oid
+  ),
+  'ownedRoutineCount', (
+    SELECT count(*)::int
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proowner = r.oid
   ),
   'historyTable', to_regclass('public._prisma_migrations') IS NOT NULL
 ) AS report
 FROM pg_roles r
+JOIN pg_database d ON d.datname = current_database()
+JOIN pg_namespace ns ON ns.nspname = 'public'
 WHERE r.rolname = current_user
 `.trim();
 
