@@ -234,9 +234,15 @@ export function removeOwned(cluster: Cluster, owned: OwnedApp): { container: "re
   }
   const removed = docker(["rm", "-f", owned.containerId], []);
   container = containerRemovalResult(removed.status);
-  if (container === "removed" && volumeMatches(owned.volumeName, owned.proofId)) {
-    const removed = docker(["volume", "rm", owned.volumeName], []);
-    volume = removed.status === 0 ? "removed" : "preserved";
+  if (container !== "removed") return { container, volume };
+  try {
+    reconfirm(cluster);
+  } catch {
+    return { container, volume };
+  }
+  if (volumeMatches(owned.volumeName, owned.proofId)) {
+    const removedVolume = docker(["volume", "rm", owned.volumeName], []);
+    volume = removedVolume.status === 0 ? "removed" : "preserved";
   }
   return { container, volume };
 }
@@ -247,9 +253,31 @@ export function writerLogs(owned: OwnedApp, secrets: readonly string[]): string 
   return `${result.stdout}\n${result.stderr}`.slice(-900);
 }
 
-export function containerGone(containerId: string): boolean {
+export type ClusterBinding = { ok: true } | { ok: false; reason: "endpoint" | "daemon" | "reconfirm" };
+
+export function readReconfirmFailure(error: unknown): ClusterBinding {
+  const message = error instanceof Error ? error.message : "";
+  if (message === "docker endpoint changed") return { ok: false, reason: "endpoint" };
+  if (message === "docker daemon changed") return { ok: false, reason: "daemon" };
+  return { ok: false, reason: "reconfirm" };
+}
+
+export function boundContainerAbsence(binding: ClusterBinding, containerId: string, inspect: DockerExec | null): ContainerInspectVerdict {
   assertId(containerId);
-  return classifyContainerInspect(containerId, docker(["inspect", containerId], [])).gone;
+  if (!binding.ok || inspect === null) return { gone: false, reason: "unknown" };
+  return classifyContainerInspect(containerId, inspect);
+}
+
+export function containerGone(cluster: Cluster, containerId: string): boolean {
+  assertId(containerId);
+  let binding: ClusterBinding = { ok: true };
+  try {
+    reconfirm(cluster);
+  } catch (error) {
+    binding = readReconfirmFailure(error);
+  }
+  if (!binding.ok) return false;
+  return boundContainerAbsence(binding, containerId, docker(["inspect", containerId], [])).gone;
 }
 
 export function classifyContainerInspect(containerId: string, result: DockerExec): ContainerInspectVerdict {

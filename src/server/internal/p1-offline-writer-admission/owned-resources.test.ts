@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  boundContainerAbsence,
   classifyContainerInspect,
   containerRemovalResult,
+  readReconfirmFailure,
   removalGate,
   volumeIdentityAccepted,
   writerIdentityAccepted,
@@ -145,6 +147,54 @@ describe("containerGone inspect classification", () => {
       exec({ status: null }),
     ]) {
       expect(classifyContainerInspect(containerId, sample).gone).toBe(false);
+    }
+  });
+});
+
+describe("container absence stays bound to the captured daemon", () => {
+  const missing = () => exec({ stderr: `Error: No such object: ${containerId}` });
+  const missingOnCi = () => exec({ stdout: "[]\n", stderr: `Error: No such object: ${containerId}` });
+
+  it("confirms absence when the binding holds and the exact id is missing", () => {
+    expect(boundContainerAbsence({ ok: true }, containerId, missing())).toEqual({ gone: true, reason: "absent" });
+  });
+
+  it("treats a changed endpoint as unknown", () => {
+    expect(readReconfirmFailure(new Error("docker endpoint changed"))).toEqual({ ok: false, reason: "endpoint" });
+    expect(boundContainerAbsence({ ok: false, reason: "endpoint" }, containerId, missing()).gone).toBe(false);
+  });
+
+  it("treats a changed daemon as unknown", () => {
+    expect(readReconfirmFailure(new Error("docker daemon changed"))).toEqual({ ok: false, reason: "daemon" });
+    expect(boundContainerAbsence({ ok: false, reason: "daemon" }, containerId, missing()).gone).toBe(false);
+  });
+
+  it("treats a failed reconfirm as unknown", () => {
+    expect(readReconfirmFailure(new Error("refusing container: IMAGE"))).toEqual({ ok: false, reason: "reconfirm" });
+    expect(readReconfirmFailure("not an error")).toEqual({ ok: false, reason: "reconfirm" });
+    expect(boundContainerAbsence({ ok: false, reason: "reconfirm" }, containerId, missing()).gone).toBe(false);
+  });
+
+  it("does not confirm a foreign id", () => {
+    expect(boundContainerAbsence({ ok: true }, containerId, exec({ stderr: `Error: No such object: ${foreignId}` })).gone).toBe(false);
+  });
+
+  it("does not confirm CLI or daemon failure", () => {
+    expect(boundContainerAbsence({ ok: true }, containerId, exec({ status: null, errorCode: "ENOENT" })).gone).toBe(false);
+    expect(boundContainerAbsence({ ok: true }, containerId, exec({ stderr: "Cannot connect to the Docker daemon" })).gone).toBe(false);
+  });
+
+  it("confirms CI stdout [] when the binding holds and the message names the id", () => {
+    expect(boundContainerAbsence({ ok: true }, containerId, missingOnCi())).toEqual({ gone: true, reason: "absent" });
+  });
+
+  it("cannot return gone from a wrong binding", () => {
+    for (const binding of [
+      { ok: false as const, reason: "endpoint" as const },
+      { ok: false as const, reason: "daemon" as const },
+      { ok: false as const, reason: "reconfirm" as const },
+    ]) {
+      expect(boundContainerAbsence(binding, containerId, missingOnCi()).gone).toBe(false);
     }
   });
 });

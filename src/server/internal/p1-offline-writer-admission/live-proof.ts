@@ -121,7 +121,7 @@ export async function runOfflineAdmissionProof(cluster: Cluster, database: strin
       const removed = removeOwned(cluster, owned);
       cleanupState.container = removed.container;
       cleanupState.volume = removed.volume;
-      cleanupState.containerGone = containerGone(owned.containerId);
+      cleanupState.containerGone = containerGone(cluster, owned.containerId);
     } else if (volumeName) {
       cleanupState.volume = removeVolumeIfMatches(cluster, volumeName, proofId);
     }
