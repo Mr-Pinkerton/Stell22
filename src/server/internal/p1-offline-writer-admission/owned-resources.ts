@@ -25,7 +25,33 @@ export type OwnedApp = {
   imageId: string;
 };
 
-type Exec = { status: number | null; stdout: string; stderr: string };
+export type DockerExec = {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  signal?: NodeJS.Signals | null;
+  errorCode?: string | null;
+};
+
+type Exec = DockerExec;
+
+export type WriterInspectFields = {
+  id: string;
+  name: string;
+  image: string;
+  imageId: string;
+  label: string;
+  project: string;
+  policy: string;
+  running: string;
+  ports: string;
+  networks: string;
+};
+
+export type ContainerInspectVerdict = {
+  gone: boolean;
+  reason: "absent" | "present" | "daemon" | "endpoint" | "cli" | "timeout" | "unknown";
+};
 
 export function createAdmissionVolume(cluster: Cluster, proofId: string): string {
   assertProofId(proofId);
@@ -193,12 +219,21 @@ export function removeOwned(cluster: Cluster, owned: OwnedApp): { container: "re
   } catch {
     return { container, volume };
   }
-  if (docker(["info", "--format", "{{.ID}}"], []).stdout.trim() !== daemonId) return { container, volume };
-  if (cluster.endpoint !== endpoint) return { container, volume };
-  if (containerMatches(cluster, owned, false)) {
-    const removed = docker(["rm", "-f", owned.containerId], []);
-    container = removed.status === 0 ? "removed" : "preserved";
+  const info = docker(["info", "--format", "{{.ID}}"], []);
+  const observedDaemonId = info.status === 0 ? info.stdout.trim() : "";
+  const boundary = {
+    reconfirmOk: true,
+    observedDaemonId,
+    expectedDaemonId: daemonId,
+    observedEndpoint: cluster.endpoint,
+    expectedEndpoint: endpoint,
+  };
+  if (removalGate({ ...boundary, containerAccepted: true }) !== "remove") return { container, volume };
+  if (removalGate({ ...boundary, containerAccepted: containerMatches(cluster, owned, false) }) !== "remove") {
+    return { container, volume };
   }
+  const removed = docker(["rm", "-f", owned.containerId], []);
+  container = containerRemovalResult(removed.status);
   if (container === "removed" && volumeMatches(owned.volumeName, owned.proofId)) {
     const removed = docker(["volume", "rm", owned.volumeName], []);
     volume = removed.status === 0 ? "removed" : "preserved";
@@ -214,7 +249,84 @@ export function writerLogs(owned: OwnedApp, secrets: readonly string[]): string 
 
 export function containerGone(containerId: string): boolean {
   assertId(containerId);
-  return docker(["inspect", containerId], []).status !== 0;
+  return classifyContainerInspect(containerId, docker(["inspect", containerId], [])).gone;
+}
+
+export function classifyContainerInspect(containerId: string, result: DockerExec): ContainerInspectVerdict {
+  assertId(containerId);
+  if (result.errorCode === "ETIMEDOUT" || (result.status === null && result.signal)) return { gone: false, reason: "timeout" };
+  if (result.errorCode === "ENOENT") return { gone: false, reason: "cli" };
+  if (result.status === null) return { gone: false, reason: "unknown" };
+  if (result.status === 0) return { gone: false, reason: "present" };
+  const text = `${result.stderr}\n${result.stdout}`;
+  if (/cannot connect to the docker daemon|error during connect|is the docker daemon running/i.test(text)) {
+    return { gone: false, reason: "daemon" };
+  }
+  if (/context ["'].+["'] (?:does not exist|not found)|unable to resolve docker endpoint|invalid endpoint|current context/i.test(text)) {
+    return { gone: false, reason: "endpoint" };
+  }
+  if (/command not found|executable file not found|not recognized as an internal or external command/i.test(text)) {
+    return { gone: false, reason: "cli" };
+  }
+  const stdout = result.stdout.trim();
+  const absent =
+    result.status === 1 &&
+    !result.signal &&
+    stdout === "" &&
+    !/no such file/i.test(result.stderr) &&
+    new RegExp(`no such (?:object|container):\\s*${containerId}\\b`, "i").test(result.stderr);
+  if (absent) return { gone: true, reason: "absent" };
+  return { gone: false, reason: "unknown" };
+}
+
+export function writerIdentityAccepted(
+  networkName: string,
+  owned: OwnedApp,
+  fields: WriterInspectFields,
+  requireRunning = true,
+): boolean {
+  const networkOk = fields.networks.split(/\s+/).includes(networkName);
+  return (
+    fields.id === owned.containerId &&
+    fields.name === `/${owned.containerName}` &&
+    (fields.image === APP_IMAGE_REF || fields.image === `docker.io/library/${APP_IMAGE_REF}`) &&
+    fields.imageId === owned.imageId &&
+    fields.label === owned.proofId &&
+    (fields.project === "" || fields.project === "<no value>") &&
+    fields.policy === "unless-stopped" &&
+    (!requireRunning || fields.running === "true") &&
+    (fields.ports === "null" || fields.ports === "{}" || fields.ports === "") &&
+    networkOk &&
+    owned.containerName.startsWith(NAME_PREFIX)
+  );
+}
+
+export function volumeIdentityAccepted(volumeName: string, proofId: string, name: string, label: string, project: string): boolean {
+  try {
+    assertOwnedName(volumeName);
+  } catch {
+    return false;
+  }
+  return name === volumeName && label === proofId && (project === "" || project === "<no value>");
+}
+
+export function removalGate(input: {
+  reconfirmOk: boolean;
+  observedDaemonId: string;
+  expectedDaemonId: string;
+  observedEndpoint: string;
+  expectedEndpoint: string;
+  containerAccepted: boolean;
+}): "remove" | "preserve" {
+  if (!input.reconfirmOk) return "preserve";
+  if (input.observedDaemonId !== input.expectedDaemonId) return "preserve";
+  if (input.observedEndpoint !== input.expectedEndpoint) return "preserve";
+  if (!input.containerAccepted) return "preserve";
+  return "remove";
+}
+
+export function containerRemovalResult(status: number | null): "removed" | "preserved" {
+  return status === 0 ? "removed" : "preserved";
 }
 
 export function removeVolumeIfMatches(cluster: Cluster, volumeName: string, proofId: string): "removed" | "preserved" {
@@ -265,22 +377,9 @@ function containerMatches(cluster: Cluster, owned: OwnedApp, requireRunning = tr
     [],
   );
   if (result.status !== 0) return false;
-  const lines = result.stdout.replace(/\r/g, "").trim().split("|");
-  const [id, name, image, imageId, label, project, policy, running, ports, networks] = lines;
-  const networkOk = (networks ?? "").split(/\s+/).includes(cluster.networkName);
-  return (
-    id === owned.containerId &&
-    name === `/${owned.containerName}` &&
-    (image === APP_IMAGE_REF || image === `docker.io/library/${APP_IMAGE_REF}`) &&
-    imageId === owned.imageId &&
-    label === owned.proofId &&
-    (project === "" || project === "<no value>") &&
-    policy === "unless-stopped" &&
-    (!requireRunning || running === "true") &&
-    (ports === "null" || ports === "{}" || ports === "") &&
-    networkOk &&
-    owned.containerName.startsWith(NAME_PREFIX)
-  );
+  const fields = parseWriterInspect(result.stdout);
+  if (!fields) return false;
+  return writerIdentityAccepted(cluster.networkName, owned, fields, requireRunning);
 }
 
 function volumeMatches(volumeName: string, proofId: string): boolean {
@@ -291,7 +390,7 @@ function volumeMatches(volumeName: string, proofId: string): boolean {
   );
   if (result.status !== 0) return false;
   const [name, label, project] = result.stdout.trim().split("|");
-  return name === volumeName && label === proofId && (project === "" || project === "<no value>");
+  return volumeIdentityAccepted(volumeName, proofId, name ?? "", label ?? "", project ?? "");
 }
 
 function removeContainerIfMatches(cluster: Cluster, owned: OwnedApp): void {
@@ -328,10 +427,31 @@ function docker(args: readonly string[], secrets: readonly string[]): Exec {
     timeout: 40_000,
     maxBuffer: 4 * 1024 * 1024,
   });
+  const errorCode = child.error && "code" in child.error ? String(child.error.code ?? "") : null;
   return {
     status: child.status,
     stdout: redact(child.stdout ?? "", secrets),
     stderr: redact(child.stderr ?? "", secrets),
+    signal: child.signal,
+    errorCode: errorCode === "" ? null : errorCode,
+  };
+}
+
+function parseWriterInspect(stdout: string): WriterInspectFields | null {
+  const lines = stdout.replace(/\r/g, "").trim().split("|");
+  if (lines.length < 10) return null;
+  const [id, name, image, imageId, label, project, policy, running, ports, networks] = lines;
+  return {
+    id: id ?? "",
+    name: name ?? "",
+    image: image ?? "",
+    imageId: imageId ?? "",
+    label: label ?? "",
+    project: project ?? "",
+    policy: policy ?? "",
+    running: running ?? "",
+    ports: ports ?? "",
+    networks: networks ?? "",
   };
 }
 

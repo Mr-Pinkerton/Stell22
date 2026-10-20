@@ -143,6 +143,8 @@ Owner decision on 2026-10-20: during critical work the physical access terminal 
 
 Later navigation, 2026-10-20: PR #104 merged as `b9aff3e9bdb92ce5e2af4ccb5101e484ec6b0af5`. Post-merge CI `39446970971` SUCCESS. `audit/08.55` is not rewritten and still says that PR is open. `audit/08.56` records one disposable offline-admission run. Gate **FREEZE_PASS_FORBIDDEN**. A transaction opened before the declaration committed afterwards. Synthetic HTTP rejection is not Server Action coverage and is not production writer exclusion. Physical disconnection remains **NOT VERIFIED**. Design D remains **NOT ACCEPTED**. Role split remains **NOT AUTHORIZED**. P1-3 remains **NOT IMPLEMENTED**. P1 APPLY remains **NOT AUTHORIZED**. Production release remains **NO-GO**. This paragraph does not change the production application SHA, the NEXT line, or any earlier closeout.
 
+R1 on PR #105, still 2026-10-20: the pull_request-only disposable live step now includes `admission.live.test.ts`. The FREEZE verdict stays **FREEZE_PASS_FORBIDDEN**. `containerGone` is no longer every non-zero inspect. This paragraph does not change the production application SHA, the NEXT line, or any earlier closeout.
+
 `audit/08.25` remains the control-plane closeout and still records **SHADOW INACTIVE** and dual-write **NOT STARTED** at that date. `audit/08.26` remains the Environment ref-policy closeout and still records **SHADOW INACTIVE** at that date. Neither file is rewritten. Current runtime status is only `audit/08.27`.
 
 
