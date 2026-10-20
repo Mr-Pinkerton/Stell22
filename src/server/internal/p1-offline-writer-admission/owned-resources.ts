@@ -269,12 +269,15 @@ export function classifyContainerInspect(containerId: string, result: DockerExec
     return { gone: false, reason: "cli" };
   }
   const stdout = result.stdout.trim();
+  const absentText = new RegExp(`no such (?:object|container):\\s*${containerId}\\b`, "i");
+  const stdoutIsMarker = stdout === "" || stdout === "[]";
+  const stdoutIsOnlyTheError = absentText.test(stdout) && !stdout.includes("{");
   const absent =
     result.status === 1 &&
     !result.signal &&
-    stdout === "" &&
-    !/no such file/i.test(result.stderr) &&
-    new RegExp(`no such (?:object|container):\\s*${containerId}\\b`, "i").test(result.stderr);
+    !/no such file/i.test(text) &&
+    absentText.test(text) &&
+    (stdoutIsMarker || stdoutIsOnlyTheError);
   if (absent) return { gone: true, reason: "absent" };
   return { gone: false, reason: "unknown" };
 }

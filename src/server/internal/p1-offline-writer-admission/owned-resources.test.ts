@@ -117,6 +117,9 @@ describe("containerGone inspect classification", () => {
       reason: "absent",
     });
     expect(classifyContainerInspect(containerId, exec({ stderr: `Error response from daemon: No such container: ${containerId}` })).gone).toBe(true);
+    expect(
+      classifyContainerInspect(containerId, exec({ stdout: "[]\n", stderr: `Error: No such object: ${containerId}` })),
+    ).toEqual({ gone: true, reason: "absent" });
   });
 
   it("does not call a still-present container gone", () => {
@@ -132,7 +135,7 @@ describe("containerGone inspect classification", () => {
     expect(classifyContainerInspect(containerId, exec({ stderr: "docker: command not found" })).reason).toBe("cli");
     expect(classifyContainerInspect(containerId, exec({ status: null, signal: "SIGTERM", errorCode: "ETIMEDOUT" })).reason).toBe("timeout");
     expect(classifyContainerInspect(containerId, exec({ status: null })).reason).toBe("unknown");
-    expect(classifyContainerInspect(containerId, exec({ stderr: "permission denied" })).reason).toBe("unknown");
+    expect(classifyContainerInspect(containerId, exec({ status: 1, stdout: "{\"Id\":\"still-here\"}", stderr: `Error: No such object: ${containerId}` })).reason).toBe("unknown");
     for (const sample of [
       exec({ stderr: `Error: No such object: ${foreignId}` }),
       exec({ stderr: "Cannot connect to the Docker daemon" }),
