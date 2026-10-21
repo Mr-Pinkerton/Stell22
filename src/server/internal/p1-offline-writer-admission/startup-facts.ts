@@ -51,6 +51,9 @@ export function readStartupFacts(root: string): StartupFacts {
 
 export function startupBlocker(facts: StartupFacts): string {
   if (facts.appOnlyIsProductionPath) return "app-only entrypoint is selected by the production image";
+  if (!facts.dockerfileSelectsProductionEntrypoint) {
+    return "Main Dockerfile ENTRYPOINT is docker-entrypoint-app-only.sh. docker-entrypoint.sh still contains npx prisma migrate deploy and is not the image entrypoint. docker-compose.prod.yml restarts the application with unless-stopped and does not select docker-entrypoint-app-only.sh. scripts/deploy.sh still assumes prisma migrate deploy during application start. HARD RELEASE BLOCKER: the production login is incompatible with this candidate. This is not an accepted production path.";
+  }
   return "Production Dockerfile ENTRYPOINT is docker-entrypoint.sh, which runs npx prisma migrate deploy. docker-compose.prod.yml restarts that image with unless-stopped and does not select docker-entrypoint-app-only.sh. audit/08.52 remains a separate candidate image.";
 }
 

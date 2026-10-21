@@ -6,7 +6,7 @@ describe("app-only startup is not the production path", () => {
   it("reads the production entrypoint and compose files", () => {
     const facts = readStartupFacts(path.resolve(process.cwd()));
     expect(facts.productionEntrypointRunsMigrate).toBe(true);
-    expect(facts.dockerfileSelectsProductionEntrypoint).toBe(true);
+    expect(facts.dockerfileSelectsProductionEntrypoint).toBe(false);
     expect(facts.composeRestartUnlessStopped).toBe(true);
     expect(facts.composeNamesProductionApp).toBe(true);
     expect(facts.composeSelectsAppOnlyEntrypoint).toBe(false);
@@ -16,5 +16,6 @@ describe("app-only startup is not the production path", () => {
     expect(facts.appOnlyIsProductionPath).toBe(false);
     expect(startupBlocker(facts)).toContain("npx prisma migrate deploy");
     expect(startupBlocker(facts)).toContain("unless-stopped");
+    expect(startupBlocker(facts)).toContain("HARD RELEASE BLOCKER");
   });
 });
