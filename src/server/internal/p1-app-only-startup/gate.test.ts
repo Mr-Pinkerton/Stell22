@@ -51,13 +51,14 @@ const image = [
 ];
 
 describe("app-only startup gate", () => {
-  it("keeps the production entrypoint, Dockerfile, and deploy script on migrate deploy", () => {
+  it("keeps the legacy entrypoint, compose file, and deploy script on migrate deploy", () => {
     const entry = fs.readFileSync("docker-entrypoint.sh", "utf8");
     expect(entry).toContain("npx prisma migrate deploy");
     expect(entry).not.toContain("app-only");
     const dockerfile = fs.readFileSync("Dockerfile", "utf8");
-    expect(dockerfile).toContain('ENTRYPOINT ["./docker-entrypoint.sh"]');
-    expect(dockerfile).not.toContain("docker-entrypoint-app-only.sh");
+    expect(dockerfile).toContain('ENTRYPOINT ["./docker-entrypoint-app-only.sh"]');
+    expect(dockerfile).not.toContain('ENTRYPOINT ["./docker-entrypoint.sh"]');
+    expect(dockerfile).not.toContain("prisma migrate deploy");
     expect(fs.readFileSync("docker-compose.prod.yml", "utf8")).not.toContain("app-only");
     expect(fs.readFileSync("scripts/deploy.sh", "utf8")).toContain("migrate deploy выполнит entrypoint");
     const candidate = fs.readFileSync("docker-entrypoint-app-only.sh", "utf8");
