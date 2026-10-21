@@ -1,9 +1,10 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { readStartupFacts, startupBlocker } from "@/server/internal/p1-offline-writer-admission/startup-facts";
+import { judgeOfflineAdmission, type OfflineFacts } from "@/server/internal/p1-offline-writer-admission/verdict";
+import { evaluateStartupFiles, readStartupFacts, startupBlocker, type StartupSources } from "@/server/internal/p1-offline-writer-admission/startup-facts";
 
-describe("app-only startup is not the production path", () => {
-  it("reads the production entrypoint and compose files", () => {
+describe("configured startup is not a verified production runtime", () => {
+  it("reads a build context that inherits the image entrypoint", () => {
     const facts = readStartupFacts(path.resolve(process.cwd()));
     expect(facts.productionEntrypointRunsMigrate).toBe(true);
     expect(facts.dockerfileSelectsProductionEntrypoint).toBe(false);
@@ -14,8 +15,109 @@ describe("app-only startup is not the production path", () => {
     expect(facts.candidateDockerfileSelectsAppOnly).toBe(true);
     expect(facts.productionDockerfileSelectsCandidate).toBe(false);
     expect(facts.appOnlyIsProductionPath).toBe(false);
+    expect(facts.configuredBuildInheritsImageEntrypoint).toBe(true);
+    expect(facts.configuredNextBuildSelectsAppOnly).toBe(true);
+    expect(facts.deployedRuntimeVerified).toBe(false);
+    expect(startupBlocker(facts)).toContain("inherits docker-entrypoint-app-only.sh");
     expect(startupBlocker(facts)).toContain("npx prisma migrate deploy");
     expect(startupBlocker(facts)).toContain("unless-stopped");
+    expect(startupBlocker(facts)).toContain("NOT VERIFIED");
     expect(startupBlocker(facts)).toContain("HARD RELEASE BLOCKER");
   });
+
+  it("identifies build: . with no entrypoint override, and an explicit override", () => {
+    const inherited = evaluateStartupFiles(sources(compose("    build: .\n    restart: unless-stopped\n"), appOnlyDockerfile()));
+    expect(inherited.configuredBuildInheritsImageEntrypoint).toBe(true);
+    expect(inherited.configuredNextBuildSelectsAppOnly).toBe(true);
+    expect(inherited.composeSelectsAppOnlyEntrypoint).toBe(false);
+    expect(inherited.deployedRuntimeVerified).toBe(false);
+    expect(inherited.appOnlyIsProductionPath).toBe(false);
+
+    const overridden = evaluateStartupFiles(
+      sources(compose('    build: .\n    entrypoint: ["./docker-entrypoint.sh"]\n'), appOnlyDockerfile()),
+    );
+    expect(overridden.configuredBuildInheritsImageEntrypoint).toBe(false);
+    expect(overridden.configuredNextBuildSelectsAppOnly).toBe(false);
+    expect(overridden.deployedRuntimeVerified).toBe(false);
+
+    const commanded = evaluateStartupFiles(sources(compose('    build: .\n    command: ["node", "server.js"]\n'), appOnlyDockerfile()));
+    expect(commanded.configuredBuildInheritsImageEntrypoint).toBe(false);
+    expect(commanded.configuredNextBuildSelectsAppOnly).toBe(false);
+  });
+
+  it("keeps a legacy image entrypoint distinct from the unverified deployed runtime", () => {
+    const legacy = evaluateStartupFiles(
+      sources(compose("    build: .\n"), 'FROM scratch\nENTRYPOINT ["./docker-entrypoint.sh"]\n'),
+    );
+    expect(legacy.configuredBuildInheritsImageEntrypoint).toBe(true);
+    expect(legacy.dockerfileSelectsProductionEntrypoint).toBe(true);
+    expect(legacy.configuredNextBuildSelectsAppOnly).toBe(false);
+    expect(legacy.deployedRuntimeVerified).toBe(false);
+    expect(legacy.appOnlyIsProductionPath).toBe(false);
+    expect(startupBlocker(legacy)).toContain("npx prisma migrate deploy");
+  });
+
+  it("leaves the admission gate forbidden", () => {
+    const verdict = judgeOfflineAdmission(admissionFacts());
+    expect(verdict.gate).toBe("FREEZE_PASS_FORBIDDEN");
+    expect(verdict.freezePassAllowed).toBe(false);
+    expect(verdict.productionRelease).toBe("NO-GO");
+    expect(verdict.p1Applied).toBe(false);
+  });
 });
+
+function sources(compose: string, dockerfile: string): StartupSources {
+  return {
+    legacyEntrypoint: "#!/bin/sh\nset -e\nnpx prisma migrate deploy\nexec npm run start\n",
+    dockerfile,
+    compose,
+    appOnlyEntrypoint: "#!/bin/sh\nset -eu\nexec npm run start\n",
+    candidateDockerfile: 'ENTRYPOINT ["./docker-entrypoint-app-only.sh"]\n',
+  };
+}
+
+function compose(appBody: string): string {
+  return `services:\n  db:\n    image: postgres:17-alpine\n  app:\n${appBody}    container_name: stell22-app\n  caddy:\n    image: caddy\n`;
+}
+
+function appOnlyDockerfile(): string {
+  return 'FROM scratch\nENTRYPOINT ["./docker-entrypoint-app-only.sh"]\n';
+}
+
+function admissionFacts(): OfflineFacts {
+  return {
+    httpDirectBefore: "committed",
+    httpProxyBefore: "committed",
+    httpDirectDuring: "rejected-all",
+    httpProxyDuring: "rejected-all",
+    directAcceptedWhileProxyClosed: true,
+    continuitySamples: 8,
+    continuityBreaks: 0,
+    blindCommitAfterDeclaration: "committed",
+    cooperativeRecheck: "absent",
+    terminatedBeforeCommit: "absent",
+    pastCheckCommitted: true,
+    backgroundTicksAfterClose: 0,
+    scheduledRecheckCommitted: false,
+    maxAppSessionsDuringLatch: 0,
+    newAppSqlAfterHttpFreeze: "committed",
+    postHocActivitySawThatSession: false,
+    raceCommits: 0,
+    raceTrials: 4,
+    restartLoopWritesWhileOpen: true,
+    restartLoopWritesWhileClosed: false,
+    explicitStopStayedDown: true,
+    crashRestartedByPolicy: true,
+    crashWithOpenFileWroteAgain: true,
+    crashWithClosedFileWrote: false,
+    engineKillRestarted: false,
+    operatorStartAfterStopWrote: true,
+    daemonRestart: "not-tested",
+    operatorBootstrapInsert: "committed",
+    appCannotUpdateAdmission: true,
+    prismaMigrationsRelation: "absent",
+    appOnlyIsProductionPath: false,
+    serverActionsCovered: false,
+    physicalDisconnectTested: false,
+  };
+}
