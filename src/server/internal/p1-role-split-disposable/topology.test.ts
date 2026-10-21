@@ -38,7 +38,9 @@ describe("disposable role topology", () => {
     expect(sql.match(/NOSUPERUSER/g)).toHaveLength(2);
     expect(sql).toContain("ALTER DEFAULT PRIVILEGES FOR ROLE stell22_migrator IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO stell22_app");
     expect(sql).toContain("GRANT USAGE, SELECT ON SEQUENCES TO stell22_app");
-    expect(sql).toContain("REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC");
+    expect(sql).toContain("ALTER DEFAULT PRIVILEGES FOR ROLE stell22_migrator REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC");
+    expect(sql).not.toContain("IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC");
+    expect(sql).toContain("ALTER DEFAULT PRIVILEGES FOR ROLE stell22_migrator IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO stell22_app");
     expect(sql).not.toContain("stell22;");
     expect(sql).not.toContain("DATABASE stell22");
   });

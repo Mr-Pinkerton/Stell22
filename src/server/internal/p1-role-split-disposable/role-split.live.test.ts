@@ -95,6 +95,12 @@ describe.skipIf(!LIVE)("disposable application and migrator role split", () => {
         expect(version.startsWith("17")).toBe(true);
         expect(psql(names.db, databaseName, DISPOSABLE_ADMIN_ROLE, `SELECT current_user || '|' || rolsuper::text FROM pg_roles WHERE rolname = current_user`, secrets)).toBe(`${DISPOSABLE_ADMIN_ROLE}|true`);
         psql(names.db, databaseName, DISPOSABLE_ADMIN_ROLE, roleTopologySql({ databaseName, appPassword, migratorPassword }), secrets);
+        psql(names.db, databaseName, DISPOSABLE_ADMIN_ROLE, "CREATE ROLE p1rs_other NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT NOLOGIN; GRANT USAGE ON SCHEMA public TO p1rs_other", secrets);
+        psql(names.db, databaseName, MIGRATOR_ROLE, "CREATE FUNCTION public.p1rs_probe_fn() RETURNS integer LANGUAGE sql AS 'SELECT 1'", secrets);
+        const probeGrants = expectFunctionGrants(names.db, databaseName, "p1rs_probe_fn", secrets);
+        expect(psql(names.db, databaseName, DISPOSABLE_APP_ROLE, "SELECT public.p1rs_probe_fn()::text", secrets)).toBe("1");
+        expect(psql(names.db, databaseName, DISPOSABLE_ADMIN_ROLE, "SELECT public.p1rs_probe_fn()::text", secrets)).toBe("1");
+        expectDenied(names.db, databaseName, DISPOSABLE_ADMIN_ROLE, "SET ROLE p1rs_other; SELECT public.p1rs_probe_fn()", secrets);
         migrationRoot = fs.mkdtempSync(path.join(process.cwd(), ".p1rs-migrate-"));
         materialize(migrationRoot);
         const p1Directory = path.join(migrationRoot, "prisma", "migrations", P1_MIGRATION_NAME);
@@ -146,6 +152,8 @@ describe.skipIf(!LIVE)("disposable application and migrator role split", () => {
         const p1After = p1Marker(names.db, databaseName, secrets);
         expect(p1After.startsWith(`${P1_MIGRATION_NAME}|${P1_SHA256}|`)).toBe(true);
         expect(p1After.endsWith("|1")).toBe(true);
+        const p1FunctionGrants = expectFunctionGrants(names.db, databaseName, "batch_creation_command_provenance_guard", secrets);
+        expect(expectFunctionGrants(names.db, databaseName, "p1rs_probe_fn", secrets)).toBe(probeGrants);
         psql(names.db, databaseName, MIGRATOR_ROLE, [
           "CREATE FUNCTION public.p1rs_extra() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$",
           'CREATE TRIGGER p1rs_extra BEFORE UPDATE ON public."BatchCreationCommand" FOR EACH ROW EXECUTE FUNCTION public.p1rs_extra()',
@@ -155,7 +163,7 @@ describe.skipIf(!LIVE)("disposable application and migrator role split", () => {
         psql(names.db, databaseName, MIGRATOR_ROLE, 'DROP TRIGGER p1rs_extra ON public."BatchCreationCommand"; DROP FUNCTION public.p1rs_extra()', secrets);
         expect(historyMarker(names.db, databaseName, secrets)).toBe(appliedHistory);
         const businessSequences = psql(names.db, databaseName, DISPOSABLE_ADMIN_ROLE, "SELECT count(*)::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'S'", secrets);
-        process.stderr.write(`EVIDENCE pg=${version} dbId=${dbId} image=${appImage} entrypoint=${imageEntrypoint} publishedPorts=none admin=${DISPOSABLE_ADMIN_ROLE} app=${DISPOSABLE_APP_ROLE} migrator=${MIGRATOR_ROLE} businessSequences=${businessSequences} p1Before=ABSENT p1After=${p1After}\n`);
+        process.stderr.write(`EVIDENCE pg=${version} dbId=${dbId} image=${appImage} entrypoint=${imageEntrypoint} publishedPorts=none admin=${DISPOSABLE_ADMIN_ROLE} app=${DISPOSABLE_APP_ROLE} migrator=${MIGRATOR_ROLE} businessSequences=${businessSequences} p1Before=ABSENT p1After=${p1After} probe=${probeGrants} p1Function=${p1FunctionGrants}\n`);
         appId = startApp(names.network, names.image, names.app, runId, appUrl(appPassword, databaseName), sessionSecret, secrets);
         expect(docker(["inspect", "--format", "{{json .Config.Entrypoint}}", appId], secrets)).toBe('["./docker-entrypoint-app-only.sh"]');
         const appLogin = docker(["exec", appId, "node", "-e", "const u=new URL(process.env.DATABASE_URL||''); if(!u.username) process.exit(2); process.stdout.write(u.username)"], secrets);
@@ -309,6 +317,25 @@ function historyMarker(container: string, databaseName: string, secrets: readonl
 function p1Marker(container: string, databaseName: string, secrets: readonly string[]): string {
   const row = psql(container, databaseName, DISPOSABLE_ADMIN_ROLE, `SELECT migration_name || '|' || checksum || '|' || COALESCE(finished_at::text,'') || '|' || applied_steps_count::text FROM public."_prisma_migrations" WHERE migration_name = '${P1_MIGRATION_NAME}'`, secrets);
   return row.length === 0 ? "ABSENT" : row;
+}
+
+function expectFunctionGrants(container: string, databaseName: string, functionName: string, secrets: readonly string[]): string {
+  const where = `n.nspname = 'public' AND p.proname = '${functionName}' AND pg_get_function_identity_arguments(p.oid) = ''`;
+  const aclNull = psql(container, databaseName, DISPOSABLE_ADMIN_ROLE, `SELECT (p.proacl IS NULL)::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE ${where}`, secrets);
+  const publicGrant = psql(container, databaseName, DISPOSABLE_ADMIN_ROLE, `SELECT count(*)::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace CROSS JOIN LATERAL aclexplode(p.proacl) AS a WHERE ${where} AND a.grantee = 0 AND a.privilege_type = 'EXECUTE'`, secrets);
+  const appGrant = psql(container, databaseName, DISPOSABLE_ADMIN_ROLE, `SELECT count(*)::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace CROSS JOIN LATERAL aclexplode(p.proacl) AS a WHERE ${where} AND a.grantee = (SELECT oid FROM pg_roles WHERE rolname = '${DISPOSABLE_APP_ROLE}') AND a.privilege_type = 'EXECUTE'`, secrets);
+  const publicExecute = psql(container, databaseName, DISPOSABLE_ADMIN_ROLE, `SELECT has_function_privilege('public', 'public.${functionName}()', 'EXECUTE')::text`, secrets);
+  const appExecute = psql(container, databaseName, DISPOSABLE_ADMIN_ROLE, `SELECT has_function_privilege('${DISPOSABLE_APP_ROLE}', 'public.${functionName}()', 'EXECUTE')::text`, secrets);
+  const otherExecute = psql(container, databaseName, DISPOSABLE_ADMIN_ROLE, `SELECT has_function_privilege('p1rs_other', 'public.${functionName}()', 'EXECUTE')::text`, secrets);
+  const owner = psql(container, databaseName, DISPOSABLE_ADMIN_ROLE, `SELECT pg_get_userbyid(p.proowner) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE ${where}`, secrets);
+  expect(aclNull).toBe("false");
+  expect(publicGrant).toBe("0");
+  expect(appGrant).toBe("1");
+  expect(publicExecute).toBe("false");
+  expect(appExecute).toBe("true");
+  expect(otherExecute).toBe("false");
+  expect(owner).toBe(MIGRATOR_ROLE);
+  return `aclNull=${aclNull} publicGrant=${publicGrant} appGrant=${appGrant} publicExecute=${publicExecute} appExecute=${appExecute} otherExecute=${otherExecute} owner=${owner}`;
 }
 
 function expectDenied(container: string, databaseName: string, user: string, sql: string, secrets: readonly string[]): void {
