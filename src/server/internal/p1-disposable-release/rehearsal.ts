@@ -40,6 +40,7 @@ import {
 } from "@/server/internal/p1-role-split-disposable/topology";
 import { realWorld, redact } from "@/server/internal/p1-write-freeze-historical/runtime";
 import type { InvocationBinding } from "@/server/internal/p1-write-freeze-historical/lifecycle";
+import type { DockerWorld } from "@/server/internal/p1-write-freeze-proof/lifecycle";
 import {
   assertRehearsalTarget,
   rehearsalIdentity,
@@ -47,11 +48,15 @@ import {
 } from "@/server/internal/p1-disposable-release/identity";
 import {
   rehearsalReport,
+  type RehearsalCleanup,
   type RehearsalReport,
   type StageId,
 } from "@/server/internal/p1-disposable-release/report";
 
+export type { RehearsalCleanup };
+
 const LABEL = "stell22.p1.disposable-release";
+export const BACKUP_PROBE_VALUE = '"p1rr-backup-probe-v1"';
 const INIT_MIGRATION = "20260629154204_init";
 const DATABASE_NAME = /^p1as_[0-9a-f]{8}$/;
 const IMAGE_TAG = /^p1as-app:[0-9a-f]{8}$/;
@@ -67,6 +72,8 @@ export type RehearsalFault =
   | "failed-history"
   | "pending-history"
   | "corrupt-backup"
+  | "missing-restore-business"
+  | "changed-restore-business"
   | "ambiguous-p1";
 
 export type RehearsalOptions = {
@@ -113,9 +120,12 @@ type Evidence = {
   secrets: string[];
   serverVersion: string | null;
   sourceHistoryMarker: string | null;
+  backupProbeKey: string | null;
+  backupProbeValue: string | null;
   p1Marker: string | null;
   archiveSha256: string | null;
   restoreMatched: boolean | null;
+  restoreProbeMatched: boolean | null;
   health: string | null;
   appLogin: string | null;
   markerPath: string | null;
@@ -220,6 +230,7 @@ export function runDisposableReleaseRehearsal(options: RehearsalOptions = {}): R
     evidence.passed.push("C");
 
     evidence.stage = "D";
+    seedBackupProbe(resources, databaseName, evidence);
     const archive = createBackup(
       resources,
       databaseName,
@@ -229,7 +240,14 @@ export function runDisposableReleaseRehearsal(options: RehearsalOptions = {}): R
     evidence.passed.push("D");
 
     evidence.stage = "E";
-    verifyRestore(resources, databaseName, target.restoreDatabaseName ?? "", archive, evidence);
+    verifyRestore(
+      resources,
+      databaseName,
+      target.restoreDatabaseName ?? "",
+      archive,
+      evidence,
+      options.testFault,
+    );
     evidence.passed.push("E");
 
     evidence.stage = "F";
@@ -289,27 +307,85 @@ export function runDisposableReleaseRehearsal(options: RehearsalOptions = {}): R
   }
 }
 
-export function finishRehearsal(resources: RehearsalResources): void {
-  for (const container of resources.extraContainers) {
-    const release = releaseInput(resources);
-    const ready = confirmOwnedContainer(release, container, realWorld());
-    if (!ready.ok) continue;
-    spawnSync("docker", ["rm", "-f", container.id], {
-      encoding: "utf8",
-      timeout: 30_000,
-      windowsHide: true,
-    });
-  }
+export function finishRehearsal(resources: RehearsalResources): RehearsalCleanup {
+  return releaseRehearsalResources(resources, realWorld());
+}
+
+export function releaseRehearsalResources(
+  resources: RehearsalResources,
+  world: DockerWorld,
+): RehearsalCleanup {
+  const removed: string[] = [];
+  const preserved: RehearsalCleanup["preserved"] = [];
+  const failures: RehearsalCleanup["failures"] = [];
   const release = releaseInput(resources);
   if (resources.preserveDatabase) {
+    for (const resource of preservedResources(resources)) {
+      preserved.push({ resource, reason: "INTENTIONAL_PRESERVATION" });
+    }
     release.database = null;
     release.volume = null;
     release.network = null;
+  } else {
+    for (const container of resources.extraContainers) {
+      const ready = confirmOwnedContainer(release, container, world);
+      if (!ready.ok) {
+        preserved.push({ resource: container.name, reason: ready.reason });
+        continue;
+      }
+      const deleted = world.exec(["rm", "-f", container.id]);
+      if (deleted.status !== 0) {
+        failures.push({ resource: container.name, reason: "REMOVAL_FAILED" });
+      } else {
+        removed.push(container.name);
+      }
+    }
   }
-  if (resources.sharedImage) release.image = null;
-  releaseAppOnly(release, realWorld());
-  if (!resources.preserveDatabase && resources.migrationRoot)
-    fs.rmSync(resources.migrationRoot, { recursive: true, force: true });
+  if (resources.sharedImage && resources.image) {
+    preserved.push({ resource: resources.image.tag, reason: "SHARED_IMAGE" });
+    release.image = null;
+  }
+  const released = releaseAppOnly(release, world);
+  for (const name of released.removed) {
+    if (!removed.includes(name)) removed.push(name);
+  }
+  for (const item of released.preserved) {
+    if (removed.includes(item.resource)) continue;
+    if (preserved.some((row) => row.resource === item.resource)) continue;
+    preserved.push(item);
+  }
+  for (const item of released.failures) {
+    if (!failures.some((row) => row.resource === item.resource && row.reason === item.reason)) {
+      failures.push(item);
+    }
+  }
+  if (resources.migrationRoot) {
+    if (resources.preserveDatabase) {
+      preserved.push({ resource: resources.migrationRoot, reason: "INTENTIONAL_PRESERVATION" });
+    } else {
+      try {
+        fs.rmSync(resources.migrationRoot, { recursive: true, force: true });
+        removed.push(resources.migrationRoot);
+      } catch {
+        failures.push({ resource: resources.migrationRoot, reason: "REMOVAL_FAILED" });
+      }
+    }
+  }
+  return {
+    removed,
+    preserved,
+    failures,
+    status: failures.length > 0 ? "FAILED" : "COMPLETE",
+  };
+}
+
+function preservedResources(resources: RehearsalResources): string[] {
+  return [
+    resources.database?.name,
+    resources.volume?.name,
+    resources.network?.name,
+    ...resources.extraContainers.map((container) => container.name),
+  ].filter((name): name is string => typeof name === "string" && name.length > 0);
 }
 
 export function buildRehearsalImage(runId: string): { tag: string; id: string } {
@@ -330,9 +406,12 @@ function blankEvidence(runId: string): Evidence {
     secrets: [adminPassword],
     serverVersion: null,
     sourceHistoryMarker: null,
+    backupProbeKey: null,
+    backupProbeValue: null,
     p1Marker: null,
     archiveSha256: null,
     restoreMatched: null,
+    restoreProbeMatched: null,
     health: null,
     appLogin: null,
     markerPath: null,
@@ -373,9 +452,12 @@ function outcome(
     databaseContainerName: resources.database?.name ?? null,
     serverVersion: evidence.serverVersion,
     sourceHistoryMarker: evidence.sourceHistoryMarker,
+    backupProbeKey: evidence.backupProbeKey,
+    backupProbeValue: evidence.backupProbeValue,
     p1Marker: evidence.p1Marker,
     archiveSha256: evidence.archiveSha256,
     restoreMatched: evidence.restoreMatched,
+    restoreProbeMatched: evidence.restoreProbeMatched,
     health: evidence.health,
     appLogin: evidence.appLogin,
     markerPath: evidence.markerPath,
@@ -615,6 +697,67 @@ function verifyPreP1History(
   if (evidence.p1Marker !== "ABSENT") throw new Stop("C", "PENDING_MIGRATION");
 }
 
+function seedBackupProbe(
+  resources: RehearsalResources,
+  databaseName: string,
+  evidence: Evidence,
+): void {
+  const key = `p1rr_backup_${evidence.runId}`;
+  psql(
+    resources,
+    databaseName,
+    DISPOSABLE_ADMIN_ROLE,
+    `INSERT INTO public."Setting" (key, value) VALUES ('${key}', '${BACKUP_PROBE_VALUE}'::jsonb)`,
+    evidence,
+  );
+  const value = psql(
+    resources,
+    databaseName,
+    DISPOSABLE_ADMIN_ROLE,
+    `SELECT value::text FROM public."Setting" WHERE key = '${key}'`,
+    evidence,
+  );
+  if (value !== BACKUP_PROBE_VALUE)
+    throw new Stop("D", "BACKUP_FAILED", "backup probe was not stored");
+  evidence.backupProbeKey = key;
+  evidence.backupProbeValue = value;
+}
+
+export type BackupProbeComparison = {
+  sourceDatabase: string;
+  restoreDatabase: string;
+  sourceCurrentDatabase: string;
+  restoreCurrentDatabase: string;
+  capturedKey: string;
+  capturedValue: string;
+  sourceKey: string;
+  sourceValue: string;
+  restoredKey: string;
+  restoredValue: string;
+  sourceP1: string;
+  restoredP1: string;
+};
+
+export function compareBackupProbe(
+  input: BackupProbeComparison,
+): { ok: true } | { ok: false; code: "RESTORE_VERIFICATION_FAILED" } {
+  const separate =
+    input.sourceDatabase !== input.restoreDatabase &&
+    input.sourceCurrentDatabase === input.sourceDatabase &&
+    input.restoreCurrentDatabase === input.restoreDatabase;
+  const sourceIntact =
+    input.sourceKey === input.capturedKey && input.sourceValue === input.capturedValue;
+  const restoredExact =
+    input.restoredKey === input.capturedKey &&
+    input.restoredValue === input.capturedValue &&
+    input.restoredValue.length > 0;
+  const p1Absent = input.sourceP1 === "ABSENT" && input.restoredP1 === "ABSENT";
+  if (!separate || !sourceIntact || !restoredExact || !p1Absent) {
+    return { ok: false, code: "RESTORE_VERIFICATION_FAILED" };
+  }
+  return { ok: true };
+}
+
 function createBackup(
   resources: RehearsalResources,
   databaseName: string,
@@ -654,6 +797,7 @@ function verifyRestore(
   restoreDatabase: string,
   archive: Buffer,
   evidence: Evidence,
+  fault: RehearsalFault | undefined,
 ): void {
   if (sourceDatabase === restoreDatabase || !DATABASE_NAME.test(restoreDatabase))
     throw new Stop("E", "AMBIGUOUS_IDENTITY");
@@ -682,14 +826,78 @@ function verifyRestore(
       "RESTORE_VERIFICATION_FAILED",
       redact(restored.stderr.slice(-400), evidence.secrets),
     );
+  const probeKey = evidence.backupProbeKey ?? "";
+  if (fault === "missing-restore-business") {
+    psql(
+      resources,
+      restoreDatabase,
+      DISPOSABLE_ADMIN_ROLE,
+      `DELETE FROM public."Setting" WHERE key = '${probeKey}'`,
+      evidence,
+    );
+  }
+  if (fault === "changed-restore-business") {
+    psql(
+      resources,
+      restoreDatabase,
+      DISPOSABLE_ADMIN_ROLE,
+      `UPDATE public."Setting" SET value = '"changed"'::jsonb WHERE key = '${probeKey}'`,
+      evidence,
+    );
+  }
   const sourceMarker = historyMarker(resources, sourceDatabase, evidence);
   const restoredMarker = historyMarker(resources, restoreDatabase, evidence);
   if (sourceMarker !== evidence.sourceHistoryMarker || restoredMarker !== sourceMarker) {
     throw new Stop("E", "RESTORE_VERIFICATION_FAILED");
   }
-  if (p1Marker(resources, sourceDatabase, evidence) !== "ABSENT")
-    throw new Stop("E", "RESTORE_VERIFICATION_FAILED");
+  const probe = compareBackupProbe({
+    sourceDatabase,
+    restoreDatabase,
+    sourceCurrentDatabase: psql(
+      resources,
+      sourceDatabase,
+      DISPOSABLE_ADMIN_ROLE,
+      "SELECT current_database()",
+      evidence,
+    ),
+    restoreCurrentDatabase: psql(
+      resources,
+      restoreDatabase,
+      DISPOSABLE_ADMIN_ROLE,
+      "SELECT current_database()",
+      evidence,
+    ),
+    capturedKey: probeKey,
+    capturedValue: evidence.backupProbeValue ?? "",
+    sourceKey: settingText(resources, sourceDatabase, probeKey, "key", evidence),
+    sourceValue: settingText(resources, sourceDatabase, probeKey, "value::text", evidence),
+    restoredKey: settingText(resources, restoreDatabase, probeKey, "key", evidence),
+    restoredValue: settingText(resources, restoreDatabase, probeKey, "value::text", evidence),
+    sourceP1: p1Marker(resources, sourceDatabase, evidence),
+    restoredP1: p1Marker(resources, restoreDatabase, evidence),
+  });
+  if (!probe.ok) {
+    evidence.restoreProbeMatched = false;
+    throw new Stop("E", probe.code, "business record did not match");
+  }
   evidence.restoreMatched = true;
+  evidence.restoreProbeMatched = true;
+}
+
+function settingText(
+  resources: RehearsalResources,
+  databaseName: string,
+  key: string,
+  column: "key" | "value::text",
+  evidence: Evidence,
+): string {
+  return psql(
+    resources,
+    databaseName,
+    DISPOSABLE_ADMIN_ROLE,
+    `SELECT COALESCE((SELECT ${column} FROM public."Setting" WHERE key = '${key}'), '')`,
+    evidence,
+  );
 }
 
 function verifyPrerequisites(

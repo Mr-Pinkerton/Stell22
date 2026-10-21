@@ -1,6 +1,9 @@
+import { publishRehearsalReport } from "@/server/internal/p1-disposable-release/report";
 import {
   finishRehearsal,
   runDisposableReleaseRehearsal,
+  type RehearsalCleanup,
+  type RehearsalResources,
   type RehearsalRun,
 } from "@/server/internal/p1-disposable-release/rehearsal";
 
@@ -20,6 +23,7 @@ const FORBIDDEN_ARGUMENTS = new Set([
 export type CliIo = {
   log?: (line: string) => void;
   run?: () => RehearsalRun;
+  finish?: (resources: RehearsalResources) => RehearsalCleanup;
 };
 
 export function runCli(argv: readonly string[], io: CliIo = {}): number {
@@ -33,9 +37,20 @@ export function runCli(argv: readonly string[], io: CliIo = {}): number {
   }
   try {
     const outcome = (io.run ?? runDisposableReleaseRehearsal)();
-    log(JSON.stringify(outcome.report));
-    finishRehearsal(outcome.resources);
-    return outcome.report.failure === null ? 0 : 2;
+    let cleanup: RehearsalCleanup;
+    try {
+      cleanup = (io.finish ?? finishRehearsal)(outcome.resources);
+    } catch {
+      cleanup = {
+        removed: [],
+        preserved: [],
+        failures: [{ resource: "cleanup", reason: "UNEXPECTED" }],
+        status: "FAILED",
+      };
+    }
+    const published = publishRehearsalReport(outcome.report, cleanup);
+    log(JSON.stringify(published));
+    return published.commandResult === "SUCCESS" ? 0 : 2;
   } catch {
     log("STOP UNEXPECTED_REHEARSAL_FAILURE");
     return 2;

@@ -13,8 +13,10 @@ import {
 } from "@/server/internal/p1-role-split-disposable/topology";
 import { realWorld } from "@/server/internal/p1-write-freeze-historical/runtime";
 import {
+  BACKUP_PROBE_VALUE,
   buildRehearsalImage,
   finishRehearsal,
+  releaseRehearsalResources,
   runDisposableReleaseRehearsal,
   type RehearsalRun,
 } from "@/server/internal/p1-disposable-release/rehearsal";
@@ -134,10 +136,37 @@ describe.skipIf(!LIVE)("disposable release rehearsal on PostgreSQL 17", () => {
       expect(outcome.report.stages.find((stage) => stage.id === "G")?.result).toBe("NOT_RUN");
       expect(p1Absent(outcome)).toBe(true);
       expect(history(outcome)).toBe(outcome.report.sourceHistoryMarker);
+      expect(probeValue(outcome, outcome.report.databaseName)).toBe(BACKUP_PROBE_VALUE);
     } finally {
       finishRehearsal(outcome.resources);
     }
   }, 600_000);
+
+  it("stops before P1 when the restored business record is missing or changed", () => {
+    const image = sharedImage();
+    for (const fault of ["missing-restore-business", "changed-restore-business"] as const) {
+      const outcome = runDisposableReleaseRehearsal({
+        testFault: fault,
+        applicationImageTag: image,
+      });
+      try {
+        expect(outcome.report.failure).toMatchObject({
+          stage: "E",
+          code: "RESTORE_VERIFICATION_FAILED",
+        });
+        expect(outcome.report.stages.find((stage) => stage.id === "G")?.result).toBe("NOT_RUN");
+        expect(outcome.report.migrateSpawns).toBe(0);
+        expect(outcome.report.restoreProbeMatched).toBe(false);
+        expect(p1Absent(outcome)).toBe(true);
+        expect(probeValue(outcome, outcome.report.databaseName)).toBe(BACKUP_PROBE_VALUE);
+        const restored = probeValue(outcome, outcome.report.restoreDatabaseName ?? "");
+        expect(restored).not.toBe(BACKUP_PROBE_VALUE);
+        expect(outcome.report.databaseName).not.toBe(outcome.report.restoreDatabaseName);
+      } finally {
+        finishRehearsal(outcome.resources);
+      }
+    }
+  }, 900_000);
 
   it("does not retry an ambiguous P1 execution or restore over that database", () => {
     const first = runDisposableReleaseRehearsal({
@@ -173,6 +202,23 @@ describe.skipIf(!LIVE)("disposable release rehearsal on PostgreSQL 17", () => {
       });
       expect(again.stdout.trim().split(/\r?\n/).filter(Boolean)).toHaveLength(1);
       expect(query(first, "SELECT current_database()")).toBe(first.report.databaseName);
+      const cleanup = releaseRehearsalResources(first.resources, realWorld());
+      expect(cleanup.status).toBe("COMPLETE");
+      expect(cleanup.failures).toEqual([]);
+      expect(cleanup.removed).not.toContain(first.resources.database?.name);
+      expect(cleanup.preserved).toContainEqual({
+        resource: first.resources.database?.name,
+        reason: "INTENTIONAL_PRESERVATION",
+      });
+      expect(cleanup.preserved).toContainEqual({
+        resource: name,
+        reason: "INTENTIONAL_PRESERVATION",
+      });
+      const kept = spawnSync("docker", ["ps", "-aq", "--filter", `name=${name}`], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      expect(kept.stdout.trim().split(/\r?\n/).filter(Boolean)).toHaveLength(1);
     } finally {
       first.resources.preserveDatabase = false;
       finishRehearsal(first.resources);
@@ -237,6 +283,24 @@ describe.skipIf(!LIVE)("disposable release rehearsal on PostgreSQL 17", () => {
         windowsHide: true,
       });
       expect(`${logs.stdout}\n${logs.stderr}`).not.toMatch(/prisma\s+migrate\s+deploy/);
+      expect(outcome.report.backupProbeKey).toBe(`p1rr_backup_${outcome.report.runId}`);
+      expect(outcome.report.backupProbeValue).toBe(BACKUP_PROBE_VALUE);
+      expect(outcome.report.restoreProbeMatched).toBe(true);
+      expect(outcome.report.databaseName).not.toBe(outcome.report.restoreDatabaseName);
+      expect(probeValue(outcome, outcome.report.databaseName)).toBe(BACKUP_PROBE_VALUE);
+      expect(probeValue(outcome, outcome.report.restoreDatabaseName ?? "")).toBe(
+        BACKUP_PROBE_VALUE,
+      );
+      expect(queryDatabase(outcome, outcome.report.databaseName, "SELECT current_database()")).toBe(
+        outcome.report.databaseName,
+      );
+      expect(
+        queryDatabase(
+          outcome,
+          outcome.report.restoreDatabaseName ?? "",
+          "SELECT current_database()",
+        ),
+      ).toBe(outcome.report.restoreDatabaseName);
     } finally {
       finishRehearsal(outcome.resources);
     }
@@ -251,9 +315,21 @@ function sharedImage(): string {
   return imageTag;
 }
 
+function probeValue(outcome: RehearsalRun, database: string): string {
+  const key = outcome.report.backupProbeKey ?? "";
+  return queryDatabase(
+    outcome,
+    database,
+    `SELECT COALESCE((SELECT value::text FROM public."Setting" WHERE key = '${key}'), '')`,
+  );
+}
+
 function query(outcome: RehearsalRun, sql: string): string {
+  return queryDatabase(outcome, outcome.report.databaseName, sql);
+}
+
+function queryDatabase(outcome: RehearsalRun, database: string, sql: string): string {
   const container = outcome.resources.database?.id ?? "";
-  const database = outcome.report.databaseName;
   expect(database).toMatch(/^p1as_[0-9a-f]{8}$/);
   expect(database).not.toBe("stell22");
   const child = spawnSync(

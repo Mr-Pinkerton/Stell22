@@ -48,14 +48,29 @@ export type RehearsalReport = {
   databaseContainerName: string | null;
   serverVersion: string | null;
   sourceHistoryMarker: string | null;
+  backupProbeKey: string | null;
+  backupProbeValue: string | null;
   p1Marker: string | null;
   archiveSha256: string | null;
   restoreMatched: boolean | null;
+  restoreProbeMatched: boolean | null;
   health: string | null;
   appLogin: string | null;
   markerPath: string | null;
   stages: StageResult[];
   failure: RehearsalFailure | null;
+};
+
+export type RehearsalCleanup = {
+  removed: string[];
+  preserved: Array<{ resource: string; reason: string }>;
+  failures: Array<{ resource: string; reason: string }>;
+  status: "COMPLETE" | "FAILED";
+};
+
+export type PublishedRehearsalReport = RehearsalReport & {
+  cleanup: RehearsalCleanup;
+  commandResult: "SUCCESS" | "REHEARSAL_FAILED" | "CLEANUP_FAILED";
 };
 
 const STAGE_ORDER = Object.keys(STAGE_NAMES) as StageId[];
@@ -96,9 +111,12 @@ export function rehearsalReport(input: {
   databaseContainerName?: string | null;
   serverVersion?: string | null;
   sourceHistoryMarker?: string | null;
+  backupProbeKey?: string | null;
+  backupProbeValue?: string | null;
   p1Marker?: string | null;
   archiveSha256?: string | null;
   restoreMatched?: boolean | null;
+  restoreProbeMatched?: boolean | null;
   health?: string | null;
   appLogin?: string | null;
   markerPath?: string | null;
@@ -125,9 +143,12 @@ export function rehearsalReport(input: {
     databaseContainerName: input.databaseContainerName ?? null,
     serverVersion: input.serverVersion ?? null,
     sourceHistoryMarker: input.sourceHistoryMarker ?? null,
+    backupProbeKey: input.backupProbeKey ?? null,
+    backupProbeValue: input.backupProbeValue ?? null,
     p1Marker: input.p1Marker ?? null,
     archiveSha256: input.archiveSha256 ?? null,
     restoreMatched: input.restoreMatched ?? null,
+    restoreProbeMatched: input.restoreProbeMatched ?? null,
     health: input.health ?? null,
     appLogin: input.appLogin ?? null,
     markerPath: input.markerPath ?? null,
@@ -145,5 +166,29 @@ export function rehearsalReport(input: {
             nextAction: failureNextAction(input.failure.stage, input.failure.code),
             detail: input.failure.detail ?? null,
           },
+  };
+}
+
+export function publishRehearsalReport(
+  report: RehearsalReport,
+  cleanup: RehearsalCleanup,
+): PublishedRehearsalReport {
+  const status: RehearsalCleanup["status"] = cleanup.failures.length > 0 ? "FAILED" : "COMPLETE";
+  const stages =
+    report.failure === null && status === "FAILED"
+      ? report.stages.map((stage) =>
+          stage.id === "L" ? { ...stage, result: "FAIL" as const } : stage,
+        )
+      : report.stages;
+  return {
+    ...report,
+    stages,
+    cleanup: { ...cleanup, status },
+    commandResult:
+      report.failure !== null
+        ? "REHEARSAL_FAILED"
+        : status === "FAILED"
+          ? "CLEANUP_FAILED"
+          : "SUCCESS",
   };
 }
