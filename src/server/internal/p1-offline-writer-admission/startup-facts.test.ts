@@ -41,8 +41,55 @@ describe("configured startup is not a verified production runtime", () => {
     expect(overridden.deployedRuntimeVerified).toBe(false);
 
     const commanded = evaluateStartupFiles(sources(compose('    build: .\n    command: ["node", "server.js"]\n'), appOnlyDockerfile()));
-    expect(commanded.configuredBuildInheritsImageEntrypoint).toBe(false);
-    expect(commanded.configuredNextBuildSelectsAppOnly).toBe(false);
+    expect(commanded.configuredBuildInheritsImageEntrypoint).toBe(true);
+    expect(commanded.configuredNextBuildSelectsAppOnly).toBe(true);
+    expect(commanded.deployedRuntimeVerified).toBe(false);
+    expect(commanded.appOnlyIsProductionPath).toBe(false);
+
+    const commandBlock = evaluateStartupFiles(sources(compose("    build: .\n    command:\n      - node\n      - server.js\n"), appOnlyDockerfile()));
+    expect(commandBlock.configuredBuildInheritsImageEntrypoint).toBe(true);
+    expect(commandBlock.configuredNextBuildSelectsAppOnly).toBe(true);
+  });
+
+  it("inherits the image entrypoint unless an effective entrypoint replaces it", () => {
+    const dockerfile = appOnlyDockerfile();
+    const factsFor = (body: string) => evaluateStartupFiles(sources(compose(body), dockerfile));
+
+    const absent = factsFor("    build: .\n");
+    expect(absent.configuredBuildInheritsImageEntrypoint).toBe(true);
+    expect(absent.configuredNextBuildSelectsAppOnly).toBe(true);
+
+    const nulled = factsFor("    build: .\n    command: [\"npm\", \"run\", \"start\"]\n    entrypoint: null\n");
+    expect(nulled.configuredBuildInheritsImageEntrypoint).toBe(true);
+    expect(nulled.configuredNextBuildSelectsAppOnly).toBe(true);
+    expect(nulled.deployedRuntimeVerified).toBe(false);
+    expect(nulled.appOnlyIsProductionPath).toBe(false);
+
+    const yamlNull = factsFor("    build: .\n    entrypoint: ~\n");
+    expect(yamlNull.configuredBuildInheritsImageEntrypoint).toBe(true);
+
+    for (const disabled of ['    entrypoint: []\n', '    entrypoint: [ ]\n', '    entrypoint: ""\n', "    entrypoint: ''\n"]) {
+      const facts = factsFor(`    build: .\n${disabled}`);
+      expect(facts.configuredBuildInheritsImageEntrypoint).toBe(false);
+      expect(facts.configuredNextBuildSelectsAppOnly).toBe(false);
+      expect(facts.deployedRuntimeVerified).toBe(false);
+      expect(facts.appOnlyIsProductionPath).toBe(false);
+    }
+
+    for (const override of [
+      '    entrypoint: ["./docker-entrypoint.sh"]\n',
+      "    entrypoint: /code/entrypoint.sh\n",
+      '    entrypoint: "null"\n',
+      "    entrypoint:\n      - php\n      - -d\n",
+    ]) {
+      const facts = factsFor(`    build: .\n${override}`);
+      expect(facts.configuredBuildInheritsImageEntrypoint).toBe(false);
+      expect(facts.configuredNextBuildSelectsAppOnly).toBe(false);
+    }
+
+    const restored = factsFor('    build: .\n    entrypoint: ["./docker-entrypoint.sh"]\n    entrypoint: null\n');
+    expect(restored.configuredBuildInheritsImageEntrypoint).toBe(true);
+    expect(restored.configuredNextBuildSelectsAppOnly).toBe(true);
   });
 
   it("keeps a legacy image entrypoint distinct from the unverified deployed runtime", () => {

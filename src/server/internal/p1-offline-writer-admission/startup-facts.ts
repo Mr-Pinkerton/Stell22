@@ -21,7 +21,7 @@ export type StartupFacts = {
   productionDockerfileSelectsCandidate: boolean;
   /** Accepted deployed production path. Repository text does not establish it. */
   appOnlyIsProductionPath: boolean;
-  /** App service uses build: . and sets neither entrypoint nor command. */
+  /** App service uses build: . and does not replace the image ENTRYPOINT. command overrides CMD only. */
   configuredBuildInheritsImageEntrypoint: boolean;
   /** The inherited image ENTRYPOINT is the app-only script. */
   configuredNextBuildSelectsAppOnly: boolean;
@@ -89,9 +89,70 @@ export function startupBlocker(facts: StartupFacts): string {
 
 function inheritsImageEntrypoint(service: readonly string[]): boolean {
   const buildsDot = service.some((line) => /^build:\s*\.\s*$/.test(line.trim()));
-  const overridesEntrypoint = service.some((line) => /^entrypoint:/.test(line.trim()));
-  const overridesCommand = service.some((line) => /^command:/.test(line.trim()));
-  return buildsDot && !overridesEntrypoint && !overridesCommand;
+  return buildsDot && entrypointEffect(service) === "inherit";
+}
+
+/** Compose `command` replaces image CMD. Only an effective `entrypoint` replaces image ENTRYPOINT. */
+function entrypointEffect(service: readonly string[]): "inherit" | "disable" | "override" {
+  const indent = servicePropertyIndent(service);
+  const key = new RegExp(`^ {${indent}}entrypoint:\\s*(.*)$`);
+  let effect: "inherit" | "disable" | "override" = "inherit";
+  for (let index = 0; index < service.length; index += 1) {
+    const match = key.exec(service[index] ?? "");
+    if (!match) continue;
+    const value = stripYamlComment(match[1] ?? "").trim();
+    if (value !== "") {
+      effect = classifyEntrypointValue(value);
+      continue;
+    }
+    const nested = nestedBlock(service, index + 1, indent);
+    effect = nested.length === 0 ? "inherit" : "override";
+  }
+  return effect;
+}
+
+function classifyEntrypointValue(value: string): "inherit" | "disable" | "override" {
+  if (/^(?:null|Null|NULL|~)$/.test(value)) return "inherit";
+  if (/^\[\s*\]$/.test(value) || value === '""' || value === "''") return "disable";
+  return "override";
+}
+
+function servicePropertyIndent(service: readonly string[]): number {
+  let indent = Number.POSITIVE_INFINITY;
+  for (const line of service) {
+    if (line.trim() === "") continue;
+    const width = /^ */.exec(line)?.[0].length ?? 0;
+    if (width < indent) indent = width;
+  }
+  return Number.isFinite(indent) ? indent : 0;
+}
+
+function nestedBlock(service: readonly string[], start: number, indent: number): string[] {
+  const nested: string[] = [];
+  for (let index = start; index < service.length; index += 1) {
+    const line = service[index] ?? "";
+    if (line.trim() === "") continue;
+    const width = /^ */.exec(line)?.[0].length ?? 0;
+    if (width <= indent) break;
+    nested.push(line);
+  }
+  return nested;
+}
+
+function stripYamlComment(raw: string): string {
+  const value = raw.trimStart();
+  const quote = value[0];
+  if (quote === '"' || quote === "'") {
+    for (let index = 1; index < value.length; index += 1) {
+      if (quote === '"' && value[index] === "\\") {
+        index += 1;
+        continue;
+      }
+      if (value[index] === quote) return value.slice(0, index + 1);
+    }
+    return value;
+  }
+  return value.split(/\s+#/)[0] ?? value;
 }
 
 function serviceLines(compose: string, name: string): string[] {
