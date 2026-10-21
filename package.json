@@ -29,6 +29,7 @@
     "psr:reset-shadow-movements": "tsx scripts/reset-inventory-movement-shadow.ts",
     "psr:set-shadow-write": "tsx scripts/set-inventory-movement-shadow-write.ts",
     "psr:p1-isolated-runner": "tsx scripts/p1-isolated-runner.ts",
+    "disposable:release-rehearsal": "tsx scripts/disposable-release-rehearsal.ts",
     "psr:p1-production-adapter": "tsx scripts/p1-production-adapter.ts",
     "psr:p1-owner-sign": "tsx scripts/p1-owner-sign.ts",
     "db:up": "docker compose up -d",
