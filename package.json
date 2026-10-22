@@ -15,6 +15,7 @@
     "test:integrity": "node scripts/setup-integrity-db.mjs",
     "test:integrity:ci": "node scripts/run-integrity-ci.mjs",
     "test:restore-drill": "node scripts/restore-drill-ci.mjs",
+    "test:production-backup-restore": "node scripts/production-backup-restore-ci.mjs",
     "security:actions": "node scripts/security/check-server-action-source.mjs",
     "security:manifest": "node scripts/security/check-server-action-manifest.mjs",
     "security:classify": "node scripts/security/render-action-classification.mjs",
