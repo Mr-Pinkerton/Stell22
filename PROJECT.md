@@ -368,6 +368,8 @@ This NEXT is **PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01 — Resolve the deployment
 
 Disposable release rehearsal `audit/08.60` is a test-owned command only. It does not change this NEXT. Production role split, production P1 apply, and production deploy remain **NOT AUTHORIZED**. `FREEZE_PASS_FORBIDDEN`. `PRODUCTION RELEASE NO-GO`. The rehearsal does not prove production-wide writer exclusion.
 
+Legacy ownership transition `audit/08.61` is a disposable PostgreSQL rehearsal only. It does not change this NEXT, the production SHA, or any production authorization. Production role split, production P1 apply, and production deploy remain **NOT AUTHORIZED**. `FREEZE_PASS_FORBIDDEN`. `PRODUCTION RELEASE NO-GO`.
+
 Do **not** implement the full `ProductionOperationMutation` schema or Correction Center in this package.
 
 Do **not** start AUDIT 2. AUDIT 2 remains `NOT STARTED` / `NEXT AFTER INC-001`.
