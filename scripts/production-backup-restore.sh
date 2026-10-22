@@ -714,6 +714,45 @@ public_tables() {
   psql_at "$DEST_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p')"
 }
 
+schema_fingerprints() {
+  fp_dir=$(dirname "$EVIDENCE")
+  script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
+  helper=$(hostpath "$script_dir/production-backup-restore-fingerprint.mjs")
+  if ! node "$helper" --print-column-sql > "$fp_dir/column.sql"; then
+    finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+  fi
+  if ! node "$helper" --print-constraint-sql > "$fp_dir/constraint.sql"; then
+    finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+  fi
+  delim=$(printf '\037')
+  if ! docker exec -i "$CONTAINER" \
+    psql -X -U stell22 -d "$DEST_DB" -q -v ON_ERROR_STOP=1 -At -F "$delim" -f - \
+    < "$fp_dir/column.sql" > "$fp_dir/column.tsv"; then
+    finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+  fi
+  if ! docker exec -i "$CONTAINER" \
+    psql -X -U stell22 -d "$DEST_DB" -q -v ON_ERROR_STOP=1 -At -F "$delim" -f - \
+    < "$fp_dir/constraint.sql" > "$fp_dir/constraint.tsv"; then
+    finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+  fi
+  mark=$(printf '\036')
+  if ! fp_text=$(
+    {
+      cat "$fp_dir/column.tsv"
+      printf '%s' "$mark"
+      cat "$fp_dir/constraint.tsv"
+    } | node "$helper" --stdin
+  ); then
+    finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+  fi
+  rm -f "$fp_dir/column.sql" "$fp_dir/constraint.sql" "$fp_dir/column.tsv" "$fp_dir/constraint.tsv"
+  COLUMN_FP=$(printf '%s\n' "$fp_text" | awk -F= '$1 == "column_fingerprint" { print $2; exit }')
+  CONSTRAINT_FP=$(printf '%s\n' "$fp_text" | awk -F= '$1 == "constraint_fingerprint" { print $2; exit }')
+  if ! hex64 "$COLUMN_FP" || ! hex64 "$CONSTRAINT_FP"; then
+    finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+  fi
+}
+
 restore_sql() {
   if destination_exists; then
     finish 1 "RESULT=REFUSED_POPULATED" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
@@ -752,6 +791,8 @@ load_controls() {
   CTL_MIGRATION_SHA=""
   CTL_P1_ROW=""
   CTL_P1_APPLIED=""
+  CTL_COLUMN_FP=""
+  CTL_CONSTRAINT_FP=""
   CTL_CONTROL=""
   while IFS= read -r line || [ -n "$line" ]; do
     [ -n "$line" ] || continue
@@ -764,6 +805,8 @@ load_controls() {
       migration_names_sha256) CTL_MIGRATION_SHA=$value ;;
       p1_row) CTL_P1_ROW=$value ;;
       p1_applied) CTL_P1_APPLIED=$value ;;
+      column_fingerprint) CTL_COLUMN_FP=$value ;;
+      constraint_fingerprint) CTL_CONSTRAINT_FP=$value ;;
       control_rows) CTL_CONTROL=$value ;;
       *) finish 1 "RESULT=INSPECT_MISMATCH" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE" ;;
     esac
@@ -789,6 +832,9 @@ load_controls() {
     APPLIED|NOT_APPLIED) ;;
     *) finish 1 "RESULT=INSPECT_MISMATCH" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE" ;;
   esac
+  if ! hex64 "$CTL_COLUMN_FP" || ! hex64 "$CTL_CONSTRAINT_FP"; then
+    finish 1 "RESULT=INSPECT_MISMATCH" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+  fi
   if [ "$CTL_MIGRATIONS" = "ABSENT" ]; then
     [ "$CTL_MIGRATION_SHA" = "ABSENT" ] || finish 1 "RESULT=INSPECT_MISMATCH" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
   elif ! hex64 "$CTL_MIGRATION_SHA"; then
@@ -856,6 +902,7 @@ inspect_restored() {
     mig_sha=$(printf '%s' "$mig_line" | awk 'NR==1 { print $1; exit }' | tr -d '\r')
     rm -f "$names_file"
   fi
+  schema_fingerprints
   control_line=""
   if [ -n "$CTL_CONTROL" ]; then
     if ! control_count=$(psql_at "$DEST_DB" "SELECT count(*) FROM stell22_pbr_control"); then
@@ -871,6 +918,8 @@ inspect_restored() {
   [ "$mig_sha" = "$CTL_MIGRATION_SHA" ] || match=0
   [ "$p1_row" = "$CTL_P1_ROW" ] || match=0
   [ "$p1_applied" = "$CTL_P1_APPLIED" ] || match=0
+  [ "$COLUMN_FP" = "$CTL_COLUMN_FP" ] || match=0
+  [ "$CONSTRAINT_FP" = "$CTL_CONSTRAINT_FP" ] || match=0
   if [ -n "$CTL_CONTROL" ] && [ "$control_count" != "$CTL_CONTROL" ]; then
     match=0
   fi
@@ -879,7 +928,9 @@ P1_STATE=$p1_applied
 MIGRATION_ROWS=$mig_rows
 PUBLIC_TABLES=$tables
 PUBLIC_CONSTRAINTS=$constraints
-MIGRATION_NAMES_SHA256=$mig_sha"
+MIGRATION_NAMES_SHA256=$mig_sha
+COLUMN_FINGERPRINT=$COLUMN_FP
+CONSTRAINT_FINGERPRINT=$CONSTRAINT_FP"
   if [ -n "$control_line" ]; then
     lines="${lines}
 ${control_line}"

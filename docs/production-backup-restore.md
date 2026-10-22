@@ -58,15 +58,23 @@ file.
    is kept for evidence. Nothing is dropped to hide that state.
 7. Read the destination again in a separate `psql`. Compare table count,
    constraint count, migration count, the SHA-256 of the ordered migration
-   names, `P1_ROW`, and `P1_STATE`. `P1_ROW` is `PRESENT` or `ABSENT` for
-   migration `20261010210000_psr_p3_s2_b_batch_receipt_provenance`.
-   `P1_STATE` is `APPLIED` only when that single row has `finished_at` set,
-   `rolled_back_at` empty, and `applied_steps_count` greater than zero.
-   A failed or unfinished row stays `NOT_APPLIED`. Neither line is a P1
-   apply result.
+   names, the column fingerprint, the constraint fingerprint, `P1_ROW`, and
+   `P1_STATE`. The column fingerprint is ordinary public columns. It uses
+   type, nullability, default, identity, generated storage, and collation.
+   It does not use `attnum`, so a dropped-column hole and the closed numbering
+   after a plain restore are the same column. The constraint fingerprint uses
+   the constraint name, type, validated flag, deferral, and definition.
+   `CHECK` text keeps parentheses only where they change precedence. A chain
+   of `AND` or a chain of `OR` is flattened. `(a OR b) AND c` stays different
+   from `a OR (b AND c)`. `P1_ROW` is `PRESENT` or `ABSENT` for migration
+   `20261010210000_psr_p3_s2_b_batch_receipt_provenance`. `P1_STATE` is
+   `APPLIED` only when that single row has `finished_at` set, `rolled_back_at`
+   empty, and `applied_steps_count` greater than zero. A failed or unfinished
+   row stays `NOT_APPLIED`. Neither line is a P1 apply result.
 8. Print `RESULT=RESTORE_VERIFIED` only after that second read matches the
-   control file. The control file contains counts and digests, not business
-   rows.
+   control file. Required digest keys include `column_fingerprint` and
+   `constraint_fingerprint`. The control file contains counts and digests,
+   not business rows.
 
 Cleanup reads the evidence file and removes that container id only when the
 live name, label, and image still match. It then removes only anonymous

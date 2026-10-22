@@ -8,6 +8,13 @@ import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  COLUMN_SQL,
+  CONSTRAINT_SQL,
+  canonicalizeConstraintDefinition,
+  columnFingerprint,
+  constraintFingerprint,
+} from "./production-backup-restore-fingerprint.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const script = path.join(root, "scripts", "production-backup-restore.sh");
@@ -80,6 +87,194 @@ function writePosix(file, text) {
 
 function sha256(bytes) {
   return crypto.createHash("sha256").update(bytes).digest("hex");
+}
+
+function psqlText(container, database, sql) {
+  const result = run(
+    "docker",
+    [
+      "exec",
+      "-i",
+      container,
+      "psql",
+      "-X",
+      "-U",
+      "stell22",
+      "-d",
+      database,
+      "-q",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-At",
+      "-F",
+      "\u001f",
+      "-f",
+      "-",
+    ],
+    { input: `${sql}\n` },
+  );
+  if (result.status !== 0) {
+    const detail = (result.stderr ?? "").replace(/password=\S+/gi, "password").slice(0, 300);
+    fail(`fingerprint query failed ${detail}`);
+  }
+  return result.stdout ?? "";
+}
+
+function waitForPostgres(container) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const ready = run("docker", [
+      "exec",
+      container,
+      "psql",
+      "-X",
+      "-U",
+      "stell22",
+      "-d",
+      "stell22_pbr_dst",
+      "-q",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-At",
+      "-c",
+      "SELECT 1",
+    ]);
+    if (ready.status === 0) return;
+    sh("sleep 1");
+  }
+  fail("fingerprint postgres did not start");
+}
+
+function columnSqlFor(table) {
+  return COLUMN_SQL.replace(
+    "ORDER BY n.nspname, c.relname, a.attname",
+    `AND c.relname = '${table}'\nORDER BY n.nspname, c.relname, a.attname`,
+  );
+}
+
+function provePhysicalDifferencesAreNotLogical(container) {
+  const holes = psqlText(
+    container,
+    "stell22_pbr_dst",
+    [
+      "CREATE TABLE pbr_holes (id integer, gone integer, name text);",
+      "ALTER TABLE pbr_holes DROP COLUMN gone;",
+      "CREATE TABLE pbr_clean (id integer, name text);",
+      "SELECT a.attname || '=' || a.attnum::text",
+      "FROM pg_catalog.pg_attribute a",
+      "JOIN pg_catalog.pg_class c ON c.oid = a.attrelid",
+      "WHERE c.relname = 'pbr_holes' AND a.attnum > 0 AND NOT a.attisdropped",
+      "ORDER BY a.attname;",
+    ].join("\n"),
+  );
+  if (!holes.includes("id=1") || !holes.includes("name=3")) fail("dropped column did not leave an attnum hole");
+  const clean = psqlText(
+    container,
+    "stell22_pbr_dst",
+    [
+      "SELECT a.attname || '=' || a.attnum::text",
+      "FROM pg_catalog.pg_attribute a",
+      "JOIN pg_catalog.pg_class c ON c.oid = a.attrelid",
+      "WHERE c.relname = 'pbr_clean' AND a.attnum > 0 AND NOT a.attisdropped",
+      "ORDER BY a.attname;",
+    ].join("\n"),
+  );
+  if (!clean.includes("name=2")) fail("clean table did not renumber attnum");
+  const holeFp = columnFingerprint(
+    psqlText(container, "stell22_pbr_dst", columnSqlFor("pbr_holes")).replaceAll("pbr_holes", "pbr_shape"),
+  );
+  const cleanFp = columnFingerprint(
+    psqlText(container, "stell22_pbr_dst", columnSqlFor("pbr_clean")).replaceAll("pbr_clean", "pbr_shape"),
+  );
+  if (holeFp !== cleanFp) fail("attnum hole changed the column fingerprint");
+
+  psqlText(
+    container,
+    "stell22_pbr_dst",
+    [
+      "CREATE TABLE pbr_paren (a text, b text);",
+      "ALTER TABLE pbr_paren ADD CONSTRAINT pbr_extra CHECK ((((char_length(a) >= 1) AND (char_length(a) <= 200)) AND ((char_length(b) >= 1) AND (char_length(b) <= 200))));",
+      "ALTER TABLE pbr_paren ADD CONSTRAINT pbr_flat CHECK (((char_length(a) >= 1) AND (char_length(a) <= 200) AND ((char_length(b) >= 1) AND (char_length(b) <= 200))));",
+    ].join("\n"),
+  );
+  const defs = psqlText(
+    container,
+    "stell22_pbr_dst",
+    "SELECT pg_catalog.pg_get_constraintdef(oid) FROM pg_catalog.pg_constraint WHERE conname IN ('pbr_extra', 'pbr_flat') ORDER BY conname;",
+  )
+    .split(/\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => canonicalizeConstraintDefinition(line));
+  if (defs.length !== 2 || defs[0] !== defs[1]) fail("redundant AND grouping changed the constraint fingerprint");
+}
+
+function observeSchema(imageRef, sql) {
+  const name = `stell22-pbrfp${crypto.randomBytes(4).toString("hex")}`;
+  const created = run("docker", [
+    "run",
+    "-d",
+    "--name",
+    name,
+    "--network",
+    "none",
+    "--label",
+    "stell22.pbr-fingerprint=1",
+    "--memory",
+    "1073741824",
+    "--memory-swap",
+    "1073741824",
+    "--cpus",
+    "1",
+    "--pids-limit",
+    "128",
+    "--tmpfs",
+    "/var/lib/postgresql/data:rw,size=1073741824",
+    "--restart",
+    "no",
+    "-e",
+    "POSTGRES_HOST_AUTH_METHOD=trust",
+    "-e",
+    "POSTGRES_USER=stell22",
+    "-e",
+    "POSTGRES_PASSWORD=synthetic",
+    "-e",
+    "POSTGRES_DB=stell22_pbr_dst",
+    imageRef,
+  ]);
+  if (created.status !== 0) fail("fingerprint container was not created");
+  const id = (created.stdout ?? "").trim();
+  try {
+    waitForPostgres(id);
+    const loaded = run(
+      "docker",
+      [
+        "exec",
+        "-i",
+        id,
+        "psql",
+        "-X",
+        "-U",
+        "stell22",
+        "-d",
+        "stell22_pbr_dst",
+        "-q",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-f",
+        "-",
+      ],
+      { input: sql },
+    );
+    if (loaded.status !== 0) fail("fingerprint schema load failed");
+    const observed = {
+      columns: columnFingerprint(psqlText(id, "stell22_pbr_dst", COLUMN_SQL)),
+      constraints: constraintFingerprint(psqlText(id, "stell22_pbr_dst", CONSTRAINT_SQL)),
+    };
+    provePhysicalDifferencesAreNotLogical(id);
+    return observed;
+  } finally {
+    run("docker", ["rm", "-f", id]);
+  }
 }
 
 function pack(dir, name, sql) {
@@ -255,11 +450,17 @@ const networksBefore = ids(["network", "ls", "-q", "--no-trunc"]);
 const volumesBefore = ids(["volume", "ls", "-q"]);
 
 try {
+  const schema = observeSchema(imageRef, successSql);
+  const withSchema = (values) => ({
+    column_fingerprint: schema.columns,
+    constraint_fingerprint: schema.constraints,
+    ...values,
+  });
   const dir = posixTemp();
   const name = "stell22_2026-10-22_03-00-01.sql.gz";
   const packed = pack(dir, name, successSql);
   const trust = trustFile(dir, name, packed.digest, "synthetic-selector");
-  const control = controls(dir, {
+  const control = controls(dir, withSchema({
     public_tables: "2",
     public_constraints: "2",
     migration_rows: "1",
@@ -267,7 +468,7 @@ try {
     p1_row: "ABSENT",
     p1_applied: "NOT_APPLIED",
     control_rows: "2",
-  });
+  }));
   const runId = `pbr${crypto.randomBytes(8).toString("hex")}`;
   const env = {
     STELL22_PBR_SHA256: packed.digest,
@@ -294,6 +495,32 @@ try {
     `SELECT count(*) FROM "_prisma_migrations" WHERE migration_name = '${p1}';`,
   );
   if (p1Count !== "0") fail("independent P1 count mismatch");
+  if (field(restored.stdout ?? "", "COLUMN_FINGERPRINT") !== schema.columns) {
+    fail("column fingerprint was not reported");
+  }
+  if (field(restored.stdout ?? "", "CONSTRAINT_FINGERPRINT") !== schema.constraints) {
+    fail("constraint fingerprint was not reported");
+  }
+
+  const wrongColumns = schema.columns.startsWith("a") ? "b".repeat(64) : "a".repeat(64);
+  const wrongControl = controls(dir, withSchema({
+    public_tables: "2",
+    public_constraints: "2",
+    migration_rows: "1",
+    migration_names_sha256: migrationSha,
+    p1_row: "ABSENT",
+    p1_applied: "NOT_APPLIED",
+    control_rows: "2",
+    column_fingerprint: wrongColumns,
+  }));
+  const wrong = procedure(["run", packed.archive, trust, wrongControl], {
+    ...env,
+    STELL22_PBR_RUN: `pbr${crypto.randomBytes(8).toString("hex")}`,
+  });
+  assertResult(wrong, "INSPECT_MISMATCH");
+  if (field(wrong.stdout ?? "", "COLUMN_FINGERPRINT") !== schema.columns) {
+    fail("fingerprint mismatch did not report the restored columns");
+  }
 
   const again = procedure(["run", packed.archive, trust, control], env);
   assertResult(again, "REFUSED_POPULATED");
@@ -436,7 +663,7 @@ try {
   ].join("\n");
   const present = pack(presentDir, presentName, presentSql);
   const presentTrust = trustFile(presentDir, presentName, present.digest, "synthetic-selector");
-  const presentControl = controls(presentDir, {
+  const presentControl = controls(presentDir, withSchema({
     public_tables: "2",
     public_constraints: "2",
     migration_rows: "1",
@@ -444,7 +671,7 @@ try {
     p1_row: "PRESENT",
     p1_applied: "NOT_APPLIED",
     control_rows: "1",
-  });
+  }));
   const presentRun = `pbr${crypto.randomBytes(8).toString("hex")}`;
   const presentResult = procedure(["run", present.archive, presentTrust, presentControl], {
     ...env,
@@ -470,7 +697,7 @@ try {
   ].join("\n");
   const rolled = pack(appliedDir, appliedName, appliedSql);
   const rolledTrust = trustFile(appliedDir, appliedName, rolled.digest, "synthetic-selector");
-  const rolledControl = controls(appliedDir, {
+  const rolledControl = controls(appliedDir, withSchema({
     public_tables: "2",
     public_constraints: "2",
     migration_rows: "1",
@@ -478,7 +705,7 @@ try {
     p1_row: "PRESENT",
     p1_applied: "NOT_APPLIED",
     control_rows: "1",
-  });
+  }));
   const rolledResult = procedure(["run", rolled.archive, rolledTrust, rolledControl], {
     ...env,
     STELL22_PBR_SHA256: rolled.digest,
@@ -496,7 +723,7 @@ try {
   );
   const done = pack(doneDir, doneName, doneSql);
   const doneTrust = trustFile(doneDir, doneName, done.digest, "synthetic-selector");
-  const doneControl = controls(doneDir, {
+  const doneControl = controls(doneDir, withSchema({
     public_tables: "2",
     public_constraints: "2",
     migration_rows: "1",
@@ -504,7 +731,7 @@ try {
     p1_row: "PRESENT",
     p1_applied: "APPLIED",
     control_rows: "1",
-  });
+  }));
   const doneResult = procedure(["run", done.archive, doneTrust, doneControl], {
     ...env,
     STELL22_PBR_SHA256: done.digest,
@@ -554,6 +781,9 @@ try {
   console.log("[production-backup-restore-ci] sql-failure=rolled-back");
   console.log("[production-backup-restore-ci] partial=preserved");
   console.log("[production-backup-restore-ci] cleanup-failure=kept");
+  console.log("[production-backup-restore-ci] fingerprints=matched");
+  console.log("[production-backup-restore-ci] fingerprint-mismatch=refused");
+  console.log("[production-backup-restore-ci] attnum-hole=same-column-fingerprint");
 } catch (error) {
   if (!process.exitCode) process.exitCode = 1;
   if (error instanceof Error && !error.message.startsWith("expected") && process.exitCode) {
