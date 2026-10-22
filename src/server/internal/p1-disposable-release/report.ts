@@ -169,11 +169,19 @@ export function rehearsalReport(input: {
   };
 }
 
+const EXPECTED_PRESERVATION = new Set(["INTENTIONAL_PRESERVATION", "SHARED_IMAGE"]);
+
+export function classifyCleanup(cleanup: RehearsalCleanup): RehearsalCleanup["status"] {
+  if (cleanup.status === "FAILED" || cleanup.failures.length > 0) return "FAILED";
+  if (cleanup.preserved.some((item) => !EXPECTED_PRESERVATION.has(item.reason))) return "FAILED";
+  return "COMPLETE";
+}
+
 export function publishRehearsalReport(
   report: RehearsalReport,
   cleanup: RehearsalCleanup,
 ): PublishedRehearsalReport {
-  const status: RehearsalCleanup["status"] = cleanup.failures.length > 0 ? "FAILED" : "COMPLETE";
+  const status = classifyCleanup(cleanup);
   const stages =
     report.failure === null && status === "FAILED"
       ? report.stages.map((stage) =>

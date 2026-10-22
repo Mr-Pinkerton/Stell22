@@ -77,4 +77,84 @@ describe("disposable release report", () => {
     expect(published.commandResult).toBe("CLEANUP_FAILED");
     expect(published.stages.find((stage) => stage.id === "L")?.result).toBe("FAIL");
   });
+
+  it("fails a passed rehearsal when preservation was not expected", () => {
+    const published = publishRehearsalReport(
+      rehearsalReport({
+        runId: "abcdef01",
+        databaseName: "p1as_abcdef01",
+        stages: [{ id: "K", result: "PASS" }],
+        failure: null,
+      }),
+      {
+        removed: [],
+        preserved: [{ resource: "stell22-db", reason: "PRODUCTION_NAME" }],
+        failures: [],
+        status: "COMPLETE",
+      },
+    );
+    expect(published.failure).toBeNull();
+    expect(published.cleanup.status).toBe("FAILED");
+    expect(published.cleanup.preserved).toContainEqual({
+      resource: "stell22-db",
+      reason: "PRODUCTION_NAME",
+    });
+    expect(published.commandResult).toBe("CLEANUP_FAILED");
+  });
+
+  it("does not publish a failed cleanup as complete", () => {
+    const published = publishRehearsalReport(
+      rehearsalReport({
+        runId: "abcdef01",
+        databaseName: "p1as_abcdef01",
+        stages: [{ id: "K", result: "PASS" }],
+        failure: null,
+      }),
+      {
+        removed: [],
+        preserved: [{ resource: "p1as-app:abcdef01", reason: "SHARED_IMAGE" }],
+        failures: [],
+        status: "FAILED",
+      },
+    );
+    expect(published.cleanup.status).toBe("FAILED");
+    expect(published.commandResult).toBe("CLEANUP_FAILED");
+  });
+
+  it("keeps expected preservation out of a cleanup failure", () => {
+    const shared = publishRehearsalReport(
+      rehearsalReport({
+        runId: "abcdef01",
+        databaseName: "p1as_abcdef01",
+        stages: [{ id: "K", result: "PASS" }],
+        failure: null,
+      }),
+      {
+        removed: ["p1as-db-abcdef01"],
+        preserved: [{ resource: "p1as-app:abcdef01", reason: "SHARED_IMAGE" }],
+        failures: [],
+        status: "COMPLETE",
+      },
+    );
+    expect(shared.cleanup.status).toBe("COMPLETE");
+    expect(shared.commandResult).toBe("SUCCESS");
+
+    const uncertain = publishRehearsalReport(
+      rehearsalReport({
+        runId: "abcdef01",
+        databaseName: "p1as_abcdef01",
+        stages: [{ id: "G", result: "FAIL" }],
+        failure: { stage: "G", code: "MIGRATION_UNCERTAIN" },
+      }),
+      {
+        removed: [],
+        preserved: [{ resource: "p1as-db-abcdef01", reason: "INTENTIONAL_PRESERVATION" }],
+        failures: [],
+        status: "COMPLETE",
+      },
+    );
+    expect(uncertain.failure?.code).toBe("MIGRATION_UNCERTAIN");
+    expect(uncertain.commandResult).toBe("REHEARSAL_FAILED");
+    expect(uncertain.cleanup.status).toBe("COMPLETE");
+  });
 });

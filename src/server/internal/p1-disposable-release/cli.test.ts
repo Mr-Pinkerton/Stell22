@@ -90,6 +90,32 @@ describe("disposable release command", () => {
     expect(kept.commandResult).toBe("REHEARSAL_FAILED");
     expect(kept.cleanup.failures).toHaveLength(1);
   });
+
+  it("returns nonzero when a passed rehearsal preserves a foreign container", () => {
+    const lines: string[] = [];
+    const code = runCli([], {
+      log: (line) => lines.push(line),
+      run: () => rehearsalOutcome(null),
+      finish: () =>
+        cleanup({
+          preserved: [{ resource: "stell22-db", reason: "PRODUCTION_NAME" }],
+          status: "COMPLETE",
+        }),
+    });
+    const printed = JSON.parse(lines[0]) as {
+      commandResult: string;
+      failure: null;
+      cleanup: { status: string; preserved: Array<{ resource: string; reason: string }> };
+    };
+    expect(code).toBe(2);
+    expect(printed.failure).toBeNull();
+    expect(printed.commandResult).toBe("CLEANUP_FAILED");
+    expect(printed.cleanup.status).toBe("FAILED");
+    expect(printed.cleanup.preserved).toContainEqual({
+      resource: "stell22-db",
+      reason: "PRODUCTION_NAME",
+    });
+  });
 });
 
 function rehearsalOutcome(failure: { stage: "G"; code: string } | null): RehearsalRun {

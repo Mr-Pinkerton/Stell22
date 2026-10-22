@@ -15,6 +15,7 @@ const LABEL = "stell22.p1.disposable-release";
 
 class FakeDocker implements DockerWorld {
   readonly calls: string[][] = [];
+  daemonValue = DAEMON;
   private readonly routes = new Map<string, ExecResult>();
 
   route(args: readonly string[], result: ExecResult): void {
@@ -26,7 +27,7 @@ class FakeDocker implements DockerWorld {
   }
 
   daemonId(): string {
-    return DAEMON;
+    return this.daemonValue;
   }
 
   exec(args: readonly string[]): ExecResult {
@@ -150,10 +151,60 @@ describe("rehearsal cleanup report", () => {
       }),
     );
     const report = releaseRehearsalResources(wanted, fake);
-    expect(report.status).toBe("COMPLETE");
-    expect(report.failures).toEqual([]);
+    expect(report.status).toBe("FAILED");
     expect(report.removed).toEqual([]);
     expect(report.preserved).toContainEqual({ resource: "stell22-db", reason: "PRODUCTION_NAME" });
+    expect(fake.destructive()).toEqual([]);
+  });
+
+  it("fails cleanup when the label does not match and does not remove the container", () => {
+    const wanted = resources({ volume: null, network: null });
+    const fake = new FakeDocker();
+    fake.route(
+      ["inspect", DB],
+      json({
+        Id: DB,
+        Name: `/${wanted.database?.name}`,
+        Image: DB_IMAGE,
+        Config: { Labels: { [LABEL]: "other-run" } },
+      }),
+    );
+    const report = releaseRehearsalResources(wanted, fake);
+    expect(report.status).toBe("FAILED");
+    expect(report.preserved).toContainEqual({
+      resource: `p1as-db-${RUN}`,
+      reason: "LABEL_MISMATCH",
+    });
+    expect(report.removed).not.toContain(`p1as-db-${RUN}`);
+    expect(fake.destructive()).toEqual([]);
+  });
+
+  it("fails cleanup when the daemon changes and leaves the container in place", () => {
+    const wanted = resources({ volume: null, network: null });
+    const fake = new FakeDocker();
+    fake.daemonValue = "other-daemon";
+    const report = releaseRehearsalResources(wanted, fake);
+    expect(report.status).toBe("FAILED");
+    expect(report.preserved).toContainEqual({
+      resource: `p1as-db-${RUN}`,
+      reason: "DAEMON_CHANGED",
+    });
+    expect(fake.destructive()).toEqual([]);
+  });
+
+  it("treats an explicitly shared image as expected preservation", () => {
+    const wanted = resources({
+      database: null,
+      volume: null,
+      network: null,
+      sharedImage: true,
+      image: { tag: `p1as-app:${RUN}`, id: DB_IMAGE },
+    });
+    const fake = new FakeDocker();
+    const report = releaseRehearsalResources(wanted, fake);
+    expect(report.status).toBe("COMPLETE");
+    expect(report.failures).toEqual([]);
+    expect(report.preserved).toEqual([{ resource: `p1as-app:${RUN}`, reason: "SHARED_IMAGE" }]);
     expect(fake.destructive()).toEqual([]);
   });
 

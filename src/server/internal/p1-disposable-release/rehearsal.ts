@@ -48,6 +48,7 @@ import {
 } from "@/server/internal/p1-disposable-release/identity";
 import {
   rehearsalReport,
+  classifyCleanup,
   type RehearsalCleanup,
   type RehearsalReport,
   type StageId,
@@ -371,12 +372,13 @@ export function releaseRehearsalResources(
       }
     }
   }
-  return {
+  const cleanup = {
     removed,
     preserved,
     failures,
-    status: failures.length > 0 ? "FAILED" : "COMPLETE",
+    status: "COMPLETE" as const,
   };
+  return { ...cleanup, status: classifyCleanup(cleanup) };
 }
 
 function preservedResources(resources: RehearsalResources): string[] {
