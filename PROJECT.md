@@ -366,6 +366,8 @@ Does **not** mean dual-write, SHADOW posting, authoritative ledger, `OPENING_BAL
 
 This NEXT is **PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01 — Resolve the deployment blocker and the missing production evidence**. Rollout readiness is `audit/08.36` (**CANDIDATE / NOT READY / EVIDENCE INCOMPLETE**). It does not authorize a migration or a deploy. It does not authorize a production migration, a deploy, or production access. P1 is already in `main` and is not deployed (`audit/08.33`). P2 is already in `main` and is not deployed (`audit/08.34`). P3 is already in `main` and is not deployed (`audit/08.35`). The readiness assessment is `audit/08.36` and is not a go decision. Do not start the gate-resolution package from this file. Do not treat a Slice 1 `MATCH_OBSERVED` as proof that a warehouse projection changed, or as authority to remove paper.
 
+Disposable release rehearsal `audit/08.60` is a test-owned command only. It does not change this NEXT. Production role split, production P1 apply, and production deploy remain **NOT AUTHORIZED**. `FREEZE_PASS_FORBIDDEN`. `PRODUCTION RELEASE NO-GO`. The rehearsal does not prove production-wide writer exclusion.
+
 Do **not** implement the full `ProductionOperationMutation` schema or Correction Center in this package.
 
 Do **not** start AUDIT 2. AUDIT 2 remains `NOT STARTED` / `NEXT AFTER INC-001`.
