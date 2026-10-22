@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
+import { removeOwnedTemps } from "../../scripts/production-backup-restore-ci.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const scriptPath = path.join(repoRoot, "scripts", "production-backup-restore.sh");
@@ -96,14 +97,20 @@ function trust(dir: string, sha: string, name = NAME, selector = SELECTOR): stri
   return file;
 }
 
-function mockPath(bin: string): Record<string, string> {
-  const current = process.env.PATH ?? process.env.Path ?? "";
-  const prefix = `${toWin(bin)};${current}`;
-  return { PATH: prefix, Path: prefix };
-}
+const scriptSource = readFileSync(scriptPath, "utf8");
+const imageDigest = scriptSource.match(/^IMAGE_DIGEST=(sha256:[0-9a-f]{64})$/m)?.[1] ?? "";
+const imageRef = `postgres:17-alpine@${imageDigest}`;
+const imageId = "c".repeat(64);
 
-function invoke(args: string[], env: Record<string, string | undefined> = {}): SpawnSyncReturns<string> {
-  return spawnSync("sh", [scriptPath, ...args], {
+function invoke(
+  args: string[],
+  env: Record<string, string | undefined> = {},
+  mockBin?: string,
+): SpawnSyncReturns<string> {
+  const command = mockBin
+    ? (["-c", 'export PATH="$1:$PATH"; shift; exec "$@"', "sh", mockBin, "sh", scriptPath, ...args] as const)
+    : ([scriptPath, ...args] as const);
+  return spawnSync("sh", [...command], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -112,6 +119,106 @@ function invoke(args: string[], env: Record<string, string | undefined> = {}): S
       ...env,
     },
   });
+}
+
+function mockText(log: string): string {
+  return runShell('if [ -f "$1" ]; then cat "$1"; fi', [log]).stdout ?? "";
+}
+
+function requireMockGrew(log: string, before: string): string {
+  const after = mockText(log);
+  const added = after.slice(before.length);
+  if (!added.trim()) throw new Error("fake docker was not invoked");
+  return added;
+}
+
+function writeDockerMock(bin: string, logFile: string, root: string, versionSql: string): void {
+  writeExec(bin, "docker", [
+    `log=${logFile}`,
+    `root=${root}`,
+    'printf "%s\\n" "$*" >> "$log"',
+    "cmd=$1",
+    "shift",
+    'case "$cmd" in',
+    '  ps) if [ -f "$root/engine" ]; then cat "$root/engine"; fi ;;',
+    "  image)",
+    "    sub=$1; shift",
+    '    case "$sub" in',
+    `      inspect) printf '%s\\n' 'sha256:${imageId}' ;;`,
+    "      *) exit 1 ;;",
+    "    esac ;;",
+    "  network)",
+    "    sub=$1; shift",
+    '    case "$sub" in',
+    "      create)",
+    `        printf '%s\\n' '${NET}' ;;`,
+    "      inspect)",
+    "        fmt=",
+    "        while [ $# -gt 0 ]; do",
+    '          case "$1" in',
+    "            -f) fmt=$2; shift 2 ;;",
+    "            *) shift ;;",
+    "          esac",
+    "        done",
+    '        case "$fmt" in',
+    `          '{{.Id}}') printf '%s\\n' '${NET}' ;;`,
+    "          '{{index .Labels \"stell22.production-backup-restore\"}}') printf '%s\\n' \"$STELL22_PBR_RUN\" ;;",
+    "          '{{len .Containers}}') printf '0\\n' ;;",
+    "          *) exit 1 ;;",
+    "        esac ;;",
+    "      rm) exit 0 ;;",
+    "      *) exit 1 ;;",
+    "    esac ;;",
+    "  run)",
+    `    printf '%s\\n' '${CID}' ;;`,
+    "  inspect)",
+    "    fmt=",
+    "    target=",
+    "    while [ $# -gt 0 ]; do",
+    '      case "$1" in',
+    "        -f) fmt=$2; shift 2 ;;",
+    "        *) target=$1; shift ;;",
+    "      esac",
+    "    done",
+    '    case "$fmt" in',
+    `      '{{.Id}}') printf '%s\\n' '${CID}' ;;`,
+    "      '{{.Name}}') tr -d '\\r' < \"$root/name\" ;;",
+    `      '{{.Config.Image}}') printf '%s\\n' '${imageRef}' ;;`,
+    `      '{{.Image}}') printf '%s\\n' 'sha256:${imageId}' ;;`,
+    "      '{{index .Config.Labels \"stell22.production-backup-restore\"}}') printf '%s\\n' \"$STELL22_PBR_RUN\" ;;",
+    "      '{{index .Config.Labels \"com.docker.compose.project\"}}') printf '%s\\n' '<no value>' ;;",
+    "      '{{.HostConfig.NetworkMode}}') tr -d '\\r' < \"$root/network\" ;;",
+    "      '{{.HostConfig.Memory}}') printf '%s\\n' 1073741824 ;;",
+    "      '{{.HostConfig.NanoCpus}}') printf '%s\\n' 1000000000 ;;",
+    "      '{{.HostConfig.PidsLimit}}') printf '%s\\n' 128 ;;",
+    "      '{{range .Mounts}}{{.Type}}|{{.Name}}|{{.Destination}}{{println}}{{end}}') cat \"$root/mounts\" ;;",
+    "      '{{json .NetworkSettings.Ports}}') printf '%s\\n' '{}' ;;",
+    "      '{{json .HostConfig.PortBindings}}') printf '%s\\n' '{}' ;;",
+    "      '{{json .HostConfig.Tmpfs}}') printf '%s\\n' '{\"/var/lib/postgresql/data\":\"rw,size=1073741824\"}' ;;",
+    "      '{{range .Config.Env}}{{println .}}{{end}}')",
+    `        printf '%s\\n' "POSTGRES_USER=stell22" "POSTGRES_PASSWORD=${SECRET}" "POSTGRES_DB=stell22_pbr_admin" ;;`,
+    "      *) exit 1 ;;",
+    "    esac ;;",
+    "  exec)",
+    '    if [ "$1" = "-i" ]; then exit 0; fi',
+    "    shift",
+    '    text="$*"',
+    '    case "$text" in',
+    "      *pg_isready*) exit 0 ;;",
+    '      *"SELECT 1"*) exit 0 ;;',
+    "      *current_database*) printf '%s\\n' stell22_pbr_admin ;;",
+    "      *current_user*) printf '%s\\n' stell22 ;;",
+    `      *server_version*) ${versionSql} ;;`,
+    "      *datname*) printf '%s\\n' postgres; printf '%s\\n' stell22_pbr_admin; printf '%s\\n' template0; printf '%s\\n' template1 ;;",
+    "      *) exit 1 ;;",
+    "    esac ;;",
+    "  rm)",
+    '    code=$(tr -d "[:space:]" < "$root/rm")',
+    '    exit "$code" ;;',
+    "  volume) exit 1 ;;",
+    "  *) exit 1 ;;",
+    "esac",
+  ]);
 }
 
 function resultOf(result: SpawnSyncReturns<string>): string {
@@ -197,7 +304,7 @@ describe("production backup restore verification", () => {
       STELL22_PBR_SHA256: renamed.sha,
     });
     expect(resultOf(identity)).toBe("REFUSED_ARCHIVE_IDENTITY");
-  });
+  }, 20000);
 
   it("rejects a meta-command and does not print its payload", () => {
     const packed = packageArchive(dump("\\echo SYNTHETIC_META_VISIBLE\n"));
@@ -216,23 +323,25 @@ describe("production backup restore verification", () => {
     const packed = packageArchive(dump());
     const selected = trust(packed.dir, packed.sha);
     const base = {
-      ...mockPath(bin),
       STELL22_MOCK_LOG: log,
       STELL22_PBR_SHA256: packed.sha,
       STELL22_PBR_RUN: RUN,
     };
-    const database = invoke(["run", packed.archive, selected, `${packed.dir}/controls`], {
-      ...base,
-      STELL22_PBR_DATABASE: "stell22",
-    });
-    const named = invoke(["run", packed.archive, selected, `${packed.dir}/controls`], {
-      ...base,
-      STELL22_PBR_CONTAINER_NAME: "stell22-db-prod",
-    });
-    const image = invoke(["run", packed.archive, selected, `${packed.dir}/controls`], {
-      ...base,
-      STELL22_PBR_IMAGE: "postgres:16-alpine",
-    });
+    const database = invoke(
+      ["run", packed.archive, selected, `${packed.dir}/controls`],
+      { ...base, STELL22_PBR_DATABASE: "stell22" },
+      bin,
+    );
+    const named = invoke(
+      ["run", packed.archive, selected, `${packed.dir}/controls`],
+      { ...base, STELL22_PBR_CONTAINER_NAME: "stell22-db-prod" },
+      bin,
+    );
+    const image = invoke(
+      ["run", packed.archive, selected, `${packed.dir}/controls`],
+      { ...base, STELL22_PBR_IMAGE: "postgres:16-alpine" },
+      bin,
+    );
     expect(resultOf(database)).toBe("REFUSED_DESTINATION");
     expect(resultOf(named)).toBe("REFUSED_PRODUCTION_CONTAINER");
     expect(resultOf(image)).toBe("REFUSED_POSTGRES_IDENTITY");
@@ -248,119 +357,135 @@ describe("production backup restore verification", () => {
     writeText(`${root}/network`, "none\n");
     writeText(`${root}/mounts`, "tmpfs||/var/lib/postgresql/data\n");
     writeText(`${root}/rm`, "0\n");
-    writeExec(bin, "docker", [
-      "log=${STELL22_MOCK_LOG:?}",
-      "root=${STELL22_MOCK_ROOT:?}",
-      'printf "%s\\n" "$*" >> "$log"',
-      "cmd=$1",
-      "shift",
-      'case "$cmd" in',
-      "  network)",
-      "    sub=$1; shift",
-      '    case "$sub" in',
-      "      create)",
-      `        printf '%s\\n' '${NET}' ;;`,
-      "      inspect)",
-      "        fmt=",
-      "        while [ $# -gt 0 ]; do",
-      '          case "$1" in',
-      "            -f) fmt=$2; shift 2 ;;",
-      "            *) shift ;;",
-      "          esac",
-      "        done",
-      '        case "$fmt" in',
-      `          '{{.Id}}') printf '%s\\n' '${NET}' ;;`,
-      "          '{{index .Labels \"stell22.production-backup-restore\"}}') printf '%s\\n' \"$STELL22_PBR_RUN\" ;;",
-      "          '{{len .Containers}}') printf '0\\n' ;;",
-      "          *) exit 1 ;;",
-      "        esac ;;",
-      "      rm) exit 0 ;;",
-      "      *) exit 1 ;;",
-      "    esac ;;",
-      "  run) ",
-      `    printf '%s\\n' '${CID}' ;;`,
-      "  inspect)",
-      "    fmt=",
-      "    target=",
-      "    while [ $# -gt 0 ]; do",
-      '      case "$1" in',
-      "        -f) fmt=$2; shift 2 ;;",
-      "        *) target=$1; shift ;;",
-      "      esac",
-      "    done",
-      '    case "$fmt" in',
-      `      '{{.Id}}') printf '%s\\n' '${CID}' ;;`,
-      "      '{{.Name}}') tr -d '\\r' < \"$root/name\" ;;",
-      "      '{{.Config.Image}}') printf '%s\\n' postgres:17-alpine ;;",
-      "      '{{index .Config.Labels \"stell22.production-backup-restore\"}}') printf '%s\\n' \"$STELL22_PBR_RUN\" ;;",
-      "      '{{index .Config.Labels \"com.docker.compose.project\"}}') printf '%s\\n' '<no value>' ;;",
-      "      '{{.HostConfig.NetworkMode}}') tr -d '\\r' < \"$root/network\" ;;",
-      "      '{{range .Mounts}}{{.Type}}|{{.Name}}|{{.Destination}}{{println}}{{end}}') cat \"$root/mounts\" ;;",
-      "      '{{json .NetworkSettings.Ports}}') printf '%s\\n' '{}' ;;",
-      "      '{{json .HostConfig.Tmpfs}}') printf '%s\\n' '{\"/var/lib/postgresql/data\":\"rw,size=1073741824\"}' ;;",
-      "      '{{range .Config.Env}}{{println .}}{{end}}')",
-      `        printf '%s\\n' "POSTGRES_USER=stell22" "POSTGRES_PASSWORD=${SECRET}" "POSTGRES_DB=stell22_pbr_admin" ;;`,
-      "      *) exit 1 ;;",
-      "    esac ;;",
-      "  exec)",
-      '    if [ "$1" = "-i" ]; then exit 0; fi',
-      "    shift",
-      '    text="$*"',
-      '    case "$text" in',
-      "      *pg_isready*) exit 0 ;;",
-      '      *"SELECT 1"*) exit 0 ;;',
-      "      *current_database*) printf '%s\\n' stell22_pbr_admin ;;",
-      "      *current_user*) printf '%s\\n' stell22 ;;",
-      "      *server_version*) tr -d '\\r' < \"$root/version\" ;;",
-      "      *datname*) printf '%s\\n' postgres; printf '%s\\n' stell22_pbr_admin; printf '%s\\n' template0; printf '%s\\n' template1 ;;",
-      "      *) exit 1 ;;",
-      "    esac ;;",
-      "  rm)",
-      '    code=$(tr -d "[:space:]" < "$root/rm")',
-      '    exit "$code" ;;',
-      "  volume) exit 1 ;;",
-      "  *) exit 1 ;;",
-      "esac",
-    ]);
+    writeDockerMock(bin, log, root, "tr -d '\\r' < \"$root/version\"");
     const env = {
-      ...mockPath(bin),
-      STELL22_MOCK_LOG: log,
-      STELL22_MOCK_ROOT: root,
       STELL22_PBR_SHA256: "ab".repeat(32),
       STELL22_PBR_RUN: RUN,
       STELL22_PBR_SELECTOR: SELECTOR,
     };
     writeText(`${root}/version`, "16.9\n");
-    const version = invoke(["prepare"], env);
+    const versionBefore = mockText(log);
+    const version = invoke(["prepare"], env, bin);
+    const versionLog = requireMockGrew(log, versionBefore);
+    expect(versionLog).toContain(imageDigest);
     expect(resultOf(version)).toBe("REFUSED_POSTGRES_IDENTITY");
     expect(`${version.stdout}${version.stderr}`).not.toContain(SECRET);
 
+    writeText(`${root}/engine`, "stell22-app\n");
+    const engineBefore = mockText(log);
+    const engine = invoke(["prepare"], env, bin);
+    const engineLog = requireMockGrew(log, engineBefore);
+    expect(engineLog).toContain("ps -a");
+    expect(engineLog).not.toContain(" run ");
+    expect(resultOf(engine)).toBe("REFUSED_PRODUCTION_CONTAINER");
+    runShell('rm -f "$1/engine"', [root]);
+
     writeText(`${root}/version`, "17.6\n");
     writeText(`${root}/name`, "/stell22-db-prod\n");
-    const forbidden = invoke(["prepare"], env);
+    const forbiddenBefore = mockText(log);
+    const forbidden = invoke(["prepare"], env, bin);
+    requireMockGrew(log, forbiddenBefore);
     expect(resultOf(forbidden)).toBe("REFUSED_PRODUCTION_CONTAINER");
 
     writeText(`${root}/name`, `/stell22-pbr-${RUN}\n`);
     writeText(`${root}/mounts`, "volume|db-data|/var/lib/postgresql/data\n");
-    const volume = invoke(["prepare"], env);
+    const volumeBefore = mockText(log);
+    const volume = invoke(["prepare"], env, bin);
+    requireMockGrew(log, volumeBefore);
     expect(resultOf(volume)).toBe("REFUSED_PRODUCTION_CONTAINER");
 
     writeText(`${root}/mounts`, "tmpfs||/var/lib/postgresql/data\n");
     writeText(`${root}/network`, "host\n");
-    const host = invoke(["prepare"], env);
+    const hostBefore = mockText(log);
+    const host = invoke(["prepare"], env, bin);
+    requireMockGrew(log, hostBefore);
     expect(resultOf(host)).toBe("REFUSED_PRODUCTION_CONTAINER");
 
     writeText(`${root}/network`, "none\n");
-    const prepared = invoke(["prepare"], env);
+    const preparedBefore = mockText(log);
+    const prepared = invoke(["prepare"], env, bin);
+    requireMockGrew(log, preparedBefore);
     expect(resultOf(prepared)).toBe("PREPARED");
     const evidence = field(prepared.stdout, "EVIDENCE_FILE");
     expect(evidence).toContain("/tmp/stell22-pbr.");
     writeText(`${root}/rm`, "1\n");
-    const cleaned = invoke(["cleanup", evidence], env);
+    const cleanedBefore = mockText(log);
+    const cleaned = invoke(["cleanup", evidence], env, bin);
+    requireMockGrew(log, cleanedBefore);
     expect(resultOf(cleaned)).toBe("FAILED_CLEANUP");
     const rmLines = runShell('grep -c "^rm " "$1" || true', [log]);
     expect(rmLines.stdout.trim()).toBe("1");
     const prune = runShell('grep -c "prune" "$1" || true', [log]);
     expect(prune.stdout.trim()).toBe("0");
-  }, 20000);
+  }, 60000);
+
+  it("reproduces the Linux mock miss and then rejects PostgreSQL 16.9", () => {
+    const mockBin = makePosixTemp();
+    const decoyBin = makePosixTemp();
+    const root = makePosixTemp();
+    const mockLogPath = `${root}/mock.log`;
+    const decoyLogPath = `${root}/decoy.log`;
+    writeText(`${root}/version`, "16.9\n");
+    writeText(`${root}/name`, `/stell22-pbr-${RUN}\n`);
+    writeText(`${root}/network`, "none\n");
+    writeText(`${root}/mounts`, "tmpfs||/var/lib/postgresql/data\n");
+    writeText(`${root}/rm`, "0\n");
+    writeDockerMock(mockBin, mockLogPath, root, "tr -d '\\r' < \"$root/version\"");
+    writeDockerMock(decoyBin, decoyLogPath, root, "printf '%s\\n' 17.9");
+    const env = {
+      ...process.env,
+      STELL22_PBR_SHA256: "ab".repeat(32),
+      STELL22_PBR_SELECTOR: SELECTOR,
+      STELL22_PBR_RUN: RUN,
+    };
+    const found = spawnSync(
+      "sh",
+      ["-c", 'PATH="$1;/nowhere:$2:$PATH"; export PATH; command -v docker', "sh", mockBin, decoyBin],
+      { encoding: "utf8", env },
+    );
+    expect(found.stdout.trim()).toBe(`${decoyBin}/docker`);
+    const broken = spawnSync(
+      "sh",
+      [
+        "-c",
+        'PATH="$1;/nowhere:$2:$PATH"; export PATH; shift 2; exec "$@"',
+        "sh",
+        mockBin,
+        decoyBin,
+        "sh",
+        scriptPath,
+        "prepare",
+      ],
+      { encoding: "utf8", env },
+    );
+    expect(resultOf(broken)).toBe("PREPARED");
+    expect(mockText(mockLogPath)).toBe("");
+    expect(mockText(decoyLogPath)).toContain("run -d");
+    const fixedBefore = mockText(mockLogPath);
+    const decoyBefore = mockText(decoyLogPath);
+    const fixed = invoke(["prepare"], env, mockBin);
+    expect(requireMockGrew(mockLogPath, fixedBefore)).toContain("exec");
+    expect(mockText(decoyLogPath)).toBe(decoyBefore);
+    expect(resultOf(fixed)).toBe("REFUSED_POSTGRES_IDENTITY");
+    for (const result of [broken, fixed]) {
+      const evidence = field(result.stdout ?? "", "EVIDENCE_FILE");
+      if (!evidence) continue;
+      runShell('dir=$(dirname "$1"); case "$dir" in /tmp/stell22-pbr.*) rm -rf "$dir" ;; esac', [evidence]);
+    }
+  }, 60000);
+
+  it("leaves a foreign directory with the same temp prefix", () => {
+    const owned = runShell("mktemp -d /tmp/stell22-pbr-ci.XXXXXX");
+    const foreign = runShell("mktemp -d /tmp/stell22-pbr-ci.XXXXXX");
+    expect(owned.status).toBe(0);
+    expect(foreign.status).toBe(0);
+    const ownedDir = owned.stdout.trim();
+    const foreignDir = foreign.stdout.trim();
+    temps.push(ownedDir, foreignDir);
+    writeText(`${foreignDir}/marker`, "keep\n");
+    removeOwnedTemps([ownedDir]);
+    expect(mockText(`${foreignDir}/marker`)).toBe("keep\n");
+    expect(runShell('if [ -d "$1" ]; then echo present; fi', [ownedDir]).stdout.trim()).toBe("");
+    expect(() => removeOwnedTemps(["/tmp/other-prefix"])).toThrow(/untracked/);
+  });
 });

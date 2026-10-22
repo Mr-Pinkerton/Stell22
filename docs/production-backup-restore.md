@@ -40,21 +40,30 @@ file.
    a changed file, a failed `gzip -t`, and a dump that is not plain SQL.
 2. Reject `CREATE DATABASE`, `DROP DATABASE`, and psql meta-commands other
    than `\restrict` and `\unrestrict`.
-3. Create container `stell22-pbr-<run>` from `postgres:17-alpine` with
-   `--network none`. `<run>` is 12 to 32 lowercase letters or digits. No
-   Docker network is created and no port is published.
-4. Refuse Compose, any network other than `none`, a published port, the
-   application database name, the integrity database name, and the
-   application container names. Data is on tmpfs, not on a named volume.
+3. Create container `stell22-pbr-<run>` from the pinned image
+   `postgres:17-alpine@sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb`
+   with `--network none`, 1 GiB memory, 1 CPU, a 128 PID limit, and a 1 GiB
+   tmpfs for PostgreSQL data. `<run>` is 12 to 32 lowercase letters or
+   digits. No Docker network is created and no port is published. After
+   create, the container image id must match that digest. Any other image
+   is refused.
+4. Refuse the Docker engine when it already contains `stell22-db-prod`,
+   `stell22-app`, or `stell22-caddy`. Refuse Compose, any network other
+   than `none`, a published port, the application database name, the
+   integrity database name, and the application container names. Data is
+   on tmpfs, not on a named volume. Production volume names are refused.
 5. Refuse `stell22_pbr_dst` if it already exists.
 6. Restore with one transaction. A SQL error that leaves no tables is
    `FAILED_RESTORE_SQL`. Leftover tables are `FAILED_PARTIAL`. The destination
    is kept for evidence. Nothing is dropped to hide that state.
 7. Read the destination again in a separate `psql`. Compare table count,
    constraint count, migration count, the SHA-256 of the ordered migration
-   names, and `P1_STATE`. `P1_STATE` is `PRESENT` or `ABSENT` for migration
-   `20261010210000_psr_p3_s2_b_batch_receipt_provenance`. It is not a P1 apply
-   result.
+   names, `P1_ROW`, and `P1_STATE`. `P1_ROW` is `PRESENT` or `ABSENT` for
+   migration `20261010210000_psr_p3_s2_b_batch_receipt_provenance`.
+   `P1_STATE` is `APPLIED` only when that single row has `finished_at` set,
+   `rolled_back_at` empty, and `applied_steps_count` greater than zero.
+   A failed or unfinished row stays `NOT_APPLIED`. Neither line is a P1
+   apply result.
 8. Print `RESULT=RESTORE_VERIFIED` only after that second read matches the
    control file. The control file contains counts and digests, not business
    rows.
@@ -81,7 +90,7 @@ No step below is authorized by the existence of this document.
 | Run `scripts/production-backup-restore.sh` against that archive | Required. Synthetic archives in disposable tests are the only runs covered by the preparation task. |
 | Independent schema, migration, and control-count check | Part of the same authorized run. The script does this before `RESTORE_VERIFIED`. |
 | Read-only check that the application is still running | Separate read. This script does not connect to the application. |
-| Report `RESTORE VERIFIED` or `RESTORE NOT VERIFIED` | After the isolated run. `P1_STATE` is a separate line. |
+| Report `RESTORE VERIFIED` or `RESTORE NOT VERIFIED` | After the isolated run. `P1_ROW` and `P1_STATE` are separate lines. `P1_STATE=APPLIED` does not authorize P1 apply. |
 
 `RESTORE NOT VERIFIED` covers refusal, SQL failure, a partial destination,
 inspect mismatch, and uncertainty. On `UNCERTAIN` or `FAILED_PARTIAL`, keep

@@ -14,7 +14,9 @@
 #
 # RESTORE_VERIFIED means the isolated PostgreSQL 17 destination passed the
 # independent checks below. It does not authorize production restore, P1
-# apply, role split, or deploy. P1_STATE is reported separately.
+# apply, role split, or deploy. P1_ROW is whether that migration row exists.
+# P1_STATE is APPLIED only when that one row finished and was not rolled
+# back. A failed or unfinished row is not applied.
 #
 # Cleanup removes only the container id recorded in the evidence file, and
 # anonymous volumes attached to it, after the name, label, and image match.
@@ -31,7 +33,12 @@ fi
 P1_MIGRATION='20261010210000_psr_p3_s2_b_batch_receipt_provenance'
 ADMIN_DB=stell22_pbr_admin
 DEST_DB=stell22_pbr_dst
-IMAGE=postgres:17-alpine
+IMAGE_DIGEST=sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb
+IMAGE_REF="postgres:17-alpine@${IMAGE_DIGEST}"
+MEMORY_BYTES=1073741824
+NANO_CPUS=1000000000
+PIDS_LIMIT=128
+TMPFS_SIZE=1073741824
 
 WORK=""
 CONTAINER=""
@@ -95,13 +102,22 @@ reject_overrides() {
     *) finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER" ;;
   esac
   case "${STELL22_PBR_IMAGE:-}" in
-    ""|postgres:17-alpine) ;;
+    ""|"$IMAGE_REF") ;;
     *) finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" ;;
   esac
   case "${STELL22_PBR_DATABASE:-}" in
     ""|stell22_pbr_dst) ;;
     *) finish 1 "RESULT=REFUSED_DESTINATION" ;;
   esac
+}
+
+refuse_production_engine() {
+  if ! names=$(docker ps -a --format '{{.Names}}'); then
+    finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER"
+  fi
+  if printf '%s\n' "$names" | grep -x -q -e stell22-db-prod -e stell22-app -e stell22-caddy; then
+    finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER"
+  fi
 }
 
 psql_at() {
@@ -158,9 +174,20 @@ prove_identity() {
   fi
   image=$(printf '%s' "$image" | tr -d '[:space:]')
   case "$image" in
-    postgres:17-alpine|docker.io/library/postgres:17-alpine) ;;
+    "$IMAGE_REF"|"docker.io/library/${IMAGE_REF}") ;;
     *) finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT" ;;
   esac
+  if ! expected_image=$(docker image inspect --format '{{.Id}}' "$IMAGE_REF"); then
+    finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT"
+  fi
+  if ! actual_image=$(inspect_field "$CONTAINER" '{{.Image}}'); then
+    finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT"
+  fi
+  expected_image=$(strip_id "$expected_image")
+  actual_image=$(strip_id "$actual_image")
+  if ! hex64 "$expected_image" || [ "$actual_image" != "$expected_image" ]; then
+    finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT"
+  fi
 
   if ! label=$(inspect_field "$CONTAINER" '{{index .Config.Labels "stell22.production-backup-restore"}}'); then
     finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT"
@@ -232,6 +259,33 @@ EOF
   fi
   case "$ports" in
     *HostPort*) finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT" ;;
+  esac
+  if ! bindings=$(inspect_field "$CONTAINER" '{{json .HostConfig.PortBindings}}'); then
+    finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT"
+  fi
+  bindings=$(printf '%s' "$bindings" | tr -d '[:space:]')
+  case "$bindings" in
+    ""|null|{}|"<no value>") ;;
+    *) finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT" ;;
+  esac
+  if ! memory=$(inspect_field "$CONTAINER" '{{.HostConfig.Memory}}'); then
+    finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT"
+  fi
+  if ! cpus=$(inspect_field "$CONTAINER" '{{.HostConfig.NanoCpus}}'); then
+    finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT"
+  fi
+  if ! pids=$(inspect_field "$CONTAINER" '{{.HostConfig.PidsLimit}}'); then
+    finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT"
+  fi
+  memory=$(printf '%s' "$memory" | tr -d '[:space:]')
+  cpus=$(printf '%s' "$cpus" | tr -d '[:space:]')
+  pids=$(printf '%s' "$pids" | tr -d '[:space:]')
+  if [ "$memory" != "$MEMORY_BYTES" ] || [ "$cpus" != "$NANO_CPUS" ] || [ "$pids" != "$PIDS_LIMIT" ]; then
+    finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT"
+  fi
+  case "$tmpfs" in
+    *'"/var/lib/postgresql/data"'*"size=${TMPFS_SIZE}"*) ;;
+    *) finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT" ;;
   esac
 
   ok_db=0
@@ -321,7 +375,7 @@ container_id=${CONTAINER}
 container_name=${CNAME}
 network_id=${NETWORK}
 network_name=${NNAME}
-image=postgres:17-alpine
+image=${IMAGE_REF}
 EOF
   mv "$tmp" "$EVIDENCE"
   chmod 600 "$EVIDENCE" || true
@@ -330,6 +384,7 @@ EOF
 prepare_cluster() {
   require_run
   reject_overrides
+  refuse_production_engine
   if [ -z "$EVIDENCE" ]; then
     if ! dir=$(mktemp -d /tmp/stell22-pbr.XXXXXX); then
       finish 1 "RESULT=UNCERTAIN"
@@ -369,9 +424,13 @@ EOF
     --label "stell22.production-backup-restore=${RUN}" \
     --label "stell22.pbr-owner=disposable" \
     --env-file "$(hostpath "$envfile")" \
-    --tmpfs /var/lib/postgresql/data:rw,size=1073741824 \
+    --memory "$MEMORY_BYTES" \
+    --memory-swap "$MEMORY_BYTES" \
+    --cpus 1 \
+    --pids-limit "$PIDS_LIMIT" \
+    --tmpfs "/var/lib/postgresql/data:rw,size=${TMPFS_SIZE}" \
     --restart no \
-    "$IMAGE" 2>"$(dirname "$EVIDENCE")/docker.err"); then
+    "$IMAGE_REF" 2>"$(dirname "$EVIDENCE")/docker.err"); then
     finish 1 "RESULT=UNCERTAIN" "DETAIL=container-create"
   fi
   CONTAINER=$(strip_id "$created")
@@ -691,7 +750,8 @@ load_controls() {
   CTL_CONSTRAINTS=""
   CTL_MIGRATIONS=""
   CTL_MIGRATION_SHA=""
-  CTL_P1=""
+  CTL_P1_ROW=""
+  CTL_P1_APPLIED=""
   CTL_CONTROL=""
   while IFS= read -r line || [ -n "$line" ]; do
     [ -n "$line" ] || continue
@@ -702,7 +762,8 @@ load_controls() {
       public_constraints) CTL_CONSTRAINTS=$value ;;
       migration_rows) CTL_MIGRATIONS=$value ;;
       migration_names_sha256) CTL_MIGRATION_SHA=$value ;;
-      p1) CTL_P1=$value ;;
+      p1_row) CTL_P1_ROW=$value ;;
+      p1_applied) CTL_P1_APPLIED=$value ;;
       control_rows) CTL_CONTROL=$value ;;
       *) finish 1 "RESULT=INSPECT_MISMATCH" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE" ;;
     esac
@@ -720,8 +781,12 @@ load_controls() {
       fi
       ;;
   esac
-  case "$CTL_P1" in
+  case "$CTL_P1_ROW" in
     PRESENT|ABSENT) ;;
+    *) finish 1 "RESULT=INSPECT_MISMATCH" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE" ;;
+  esac
+  case "$CTL_P1_APPLIED" in
+    APPLIED|NOT_APPLIED) ;;
     *) finish 1 "RESULT=INSPECT_MISMATCH" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE" ;;
   esac
   if [ "$CTL_MIGRATIONS" = "ABSENT" ]; then
@@ -749,13 +814,25 @@ inspect_restored() {
     finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
   fi
   constraints=$(printf '%s' "$constraints" | tr -d '[:space:]')
-  if ! p1=$(psql_at "$DEST_DB" "SELECT CASE WHEN to_regclass('public.\"_prisma_migrations\"') IS NULL THEN 'ABSENT' WHEN (SELECT count(*) FROM \"_prisma_migrations\" WHERE migration_name = '${P1_MIGRATION}') = 0 THEN 'ABSENT' WHEN (SELECT count(*) FROM \"_prisma_migrations\" WHERE migration_name = '${P1_MIGRATION}') = 1 THEN 'PRESENT' ELSE 'UNKNOWN' END"); then
+  if ! p1_row=$(psql_at "$DEST_DB" "SELECT CASE WHEN to_regclass('public.\"_prisma_migrations\"') IS NULL THEN 'ABSENT' WHEN (SELECT count(*) FROM \"_prisma_migrations\" WHERE migration_name = '${P1_MIGRATION}') = 0 THEN 'ABSENT' WHEN (SELECT count(*) FROM \"_prisma_migrations\" WHERE migration_name = '${P1_MIGRATION}') = 1 THEN 'PRESENT' ELSE 'UNKNOWN' END"); then
     finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
   fi
-  p1=$(printf '%s' "$p1" | tr -d '[:space:]')
-  case "$p1" in
+  p1_row=$(printf '%s' "$p1_row" | tr -d '[:space:]')
+  case "$p1_row" in
     PRESENT|ABSENT) ;;
-    *) finish 1 "RESULT=UNCERTAIN" "P1_STATE=UNKNOWN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE" ;;
+    *) finish 1 "RESULT=UNCERTAIN" "P1_ROW=UNKNOWN" "P1_STATE=UNKNOWN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE" ;;
+  esac
+  if [ "$p1_row" = "ABSENT" ]; then
+    p1_applied=NOT_APPLIED
+  else
+    if ! p1_applied=$(psql_at "$DEST_DB" "SELECT CASE WHEN (SELECT count(*) FROM \"_prisma_migrations\" WHERE migration_name = '${P1_MIGRATION}' AND finished_at IS NOT NULL AND rolled_back_at IS NULL AND applied_steps_count > 0) = 1 AND (SELECT count(*) FROM \"_prisma_migrations\" WHERE migration_name = '${P1_MIGRATION}') = 1 THEN 'APPLIED' WHEN (SELECT count(*) FROM \"_prisma_migrations\" WHERE migration_name = '${P1_MIGRATION}') = 1 THEN 'NOT_APPLIED' ELSE 'UNKNOWN' END"); then
+      finish 1 "RESULT=UNCERTAIN" "P1_ROW=$p1_row" "P1_STATE=UNKNOWN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+    fi
+    p1_applied=$(printf '%s' "$p1_applied" | tr -d '[:space:]')
+  fi
+  case "$p1_applied" in
+    APPLIED|NOT_APPLIED) ;;
+    *) finish 1 "RESULT=UNCERTAIN" "P1_ROW=$p1_row" "P1_STATE=UNKNOWN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE" ;;
   esac
   if ! present=$(psql_at "$DEST_DB" "SELECT CASE WHEN to_regclass('public.\"_prisma_migrations\"') IS NULL THEN 'ABSENT' ELSE 'PRESENT' END"); then
     finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
@@ -782,7 +859,7 @@ inspect_restored() {
   control_line=""
   if [ -n "$CTL_CONTROL" ]; then
     if ! control_count=$(psql_at "$DEST_DB" "SELECT count(*) FROM stell22_pbr_control"); then
-      finish 1 "RESULT=INSPECT_MISMATCH" "P1_STATE=$p1" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+      finish 1 "RESULT=INSPECT_MISMATCH" "P1_ROW=$p1_row" "P1_STATE=$p1_applied" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
     fi
     control_count=$(printf '%s' "$control_count" | tr -d '[:space:]')
     control_line="CONTROL_ROWS=$control_count"
@@ -792,11 +869,13 @@ inspect_restored() {
   [ "$constraints" = "$CTL_CONSTRAINTS" ] || match=0
   [ "$mig_rows" = "$CTL_MIGRATIONS" ] || match=0
   [ "$mig_sha" = "$CTL_MIGRATION_SHA" ] || match=0
-  [ "$p1" = "$CTL_P1" ] || match=0
+  [ "$p1_row" = "$CTL_P1_ROW" ] || match=0
+  [ "$p1_applied" = "$CTL_P1_APPLIED" ] || match=0
   if [ -n "$CTL_CONTROL" ] && [ "$control_count" != "$CTL_CONTROL" ]; then
     match=0
   fi
-  lines="P1_STATE=$p1
+  lines="P1_ROW=$p1_row
+P1_STATE=$p1_applied
 MIGRATION_ROWS=$mig_rows
 PUBLIC_TABLES=$tables
 PUBLIC_CONSTRAINTS=$constraints
@@ -835,7 +914,7 @@ read_evidence() {
       image=*) image_pin=${line#image=} ;;
     esac
   done < "$file"
-  if [ "$image_pin" != "postgres:17-alpine" ]; then
+  if [ "$image_pin" != "$IMAGE_REF" ]; then
     finish 1 "RESULT=REFUSED_POSTGRES_IDENTITY" "EVIDENCE=KEPT"
   fi
   case "$RUN" in
@@ -856,6 +935,7 @@ read_evidence() {
 
 cleanup_resources() {
   read_evidence "$1"
+  refuse_production_engine
   if failpoint cleanup-rm; then
     finish 1 "RESULT=FAILED_CLEANUP" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
   fi
@@ -931,6 +1011,7 @@ case "$cmd" in
     finish 0 "RESULT=PREPARED" "CONTAINER=$CONTAINER" "NETWORK=$NETWORK" "EVIDENCE_FILE=$EVIDENCE"
     ;;
   restore)
+    refuse_production_engine
     read_evidence "${4:-}"
     prove_identity
     verify_archive "${1:-}" "${2:-}"

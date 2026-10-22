@@ -5,14 +5,29 @@
  */
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const script = path.join(root, "scripts", "production-backup-restore.sh");
 const secretMarker = "SYNTHETIC_NOTE_DO_NOT_PRINT";
 const p1 = "20261010210000_psr_p3_s2_b_batch_receipt_provenance";
 const evidence = [];
+const ownedTemps = [];
+const ownedTempPattern = /^\/tmp\/stell22-pbr-ci\.[A-Za-z0-9]+$/;
+
+export function removeOwnedTemps(dirs) {
+  for (const dir of dirs) {
+    if (!ownedTempPattern.test(dir)) {
+      throw new Error("refusing to delete an untracked directory");
+    }
+  }
+  for (const dir of dirs) {
+    const removed = sh('rm -rf "$1"', [dir]);
+    if (removed.status !== 0) throw new Error("temp removal failed");
+  }
+}
 
 function fail(message) {
   console.error(`[production-backup-restore-ci] ОШИБКА: ${message}`);
@@ -53,7 +68,8 @@ function posixTemp() {
   const made = sh("mktemp -d /tmp/stell22-pbr-ci.XXXXXX");
   if (made.status !== 0) fail("mktemp failed");
   const dir = (made.stdout ?? "").trim();
-  if (!dir.startsWith("/tmp/stell22-pbr-ci.")) fail("unexpected temp");
+  if (!ownedTempPattern.test(dir)) fail("unexpected temp");
+  ownedTemps.push(dir);
   return dir;
 }
 
@@ -187,7 +203,12 @@ function cleanupAll() {
       }
     }
   }
-  sh('find /tmp -maxdepth 1 -type d -name "stell22-pbr-ci.*" -exec rm -rf {} +');
+  removeOwnedTemps(ownedTemps.splice(0, ownedTemps.length));
+  for (const file of seen) {
+    const dir = path.posix.dirname(file);
+    if (!/^\/tmp\/stell22-pbr\.[A-Za-z0-9]+$/.test(dir)) continue;
+    sh('rm -rf "$1"', [dir]);
+  }
 }
 
 const migrationName = "20261001000000_synthetic_init";
@@ -198,12 +219,36 @@ const successSql = [
   `-- ${secretMarker}`,
   "CREATE TABLE stell22_pbr_control (id integer PRIMARY KEY, n integer NOT NULL);",
   "INSERT INTO stell22_pbr_control (id, n) VALUES (1, 1), (2, 2);",
-  'CREATE TABLE "_prisma_migrations" (id text PRIMARY KEY, migration_name text NOT NULL);',
-  `INSERT INTO "_prisma_migrations" (id, migration_name) VALUES ('m1', '${migrationName}');`,
+  'CREATE TABLE "_prisma_migrations" (id text PRIMARY KEY, migration_name text NOT NULL, finished_at timestamptz, rolled_back_at timestamptz, applied_steps_count integer NOT NULL);',
+  `INSERT INTO "_prisma_migrations" (id, migration_name, finished_at, rolled_back_at, applied_steps_count) VALUES ('m1', '${migrationName}', '2026-01-01 00:00:00+00', NULL, 1);`,
   "\\unrestrict stell22pbrtesttoken",
   "-- PostgreSQL database dump complete",
   "",
 ].join("\n");
+
+function main() {
+  const foreignMade = sh("mktemp -d /tmp/stell22-pbr-ci.XXXXXX");
+  if (foreignMade.status !== 0) fail("foreign temp failed");
+  const foreignDir = (foreignMade.stdout ?? "").trim();
+  if (!ownedTempPattern.test(foreignDir) || ownedTemps.includes(foreignDir)) fail("foreign temp was tracked");
+  writePosix(`${foreignDir}/marker`, "keep\n");
+  const digest = readFileSync(script, "utf8").match(/^IMAGE_DIGEST=(sha256:[0-9a-f]{64})$/m)?.[1];
+  if (!digest) fail("image digest missing");
+  const imageRef = `postgres:17-alpine@${digest}`;
+  const foreignName = `pbr-ci-foreign-${crypto.randomBytes(4).toString("hex")}`;
+  const foreignCreated = run("docker", [
+    "create",
+    "--name",
+    foreignName,
+    "--network",
+    "none",
+    "--label",
+    "stell22.pbr-ci-foreign=1",
+    imageRef,
+  ]);
+  if (foreignCreated.status !== 0) fail("foreign container was not created");
+  const foreignId = (foreignCreated.stdout ?? "").trim();
+  if (!/^[0-9a-f]{64}$/.test(foreignId)) fail("foreign container id missing");
 
 const containersBefore = ids(["ps", "-aq", "--no-trunc"]);
 const networksBefore = ids(["network", "ls", "-q", "--no-trunc"]);
@@ -219,7 +264,8 @@ try {
     public_constraints: "2",
     migration_rows: "1",
     migration_names_sha256: migrationSha,
-    p1: "ABSENT",
+    p1_row: "ABSENT",
+    p1_applied: "NOT_APPLIED",
     control_rows: "2",
   });
   const runId = `pbr${crypto.randomBytes(8).toString("hex")}`;
@@ -234,8 +280,9 @@ try {
 
   const restored = procedure(["run", packed.archive, trust, control], env);
   assertResult(restored, "RESTORE_VERIFIED");
-  if (field(restored.stdout ?? "", "P1_STATE") !== "ABSENT") fail("P1 state was not separate");
-  if ((restored.stdout ?? "").includes("APPLY")) fail("restore claimed P1 apply");
+  if (field(restored.stdout ?? "", "P1_ROW") !== "ABSENT") fail("P1 row was not reported separately");
+  if (field(restored.stdout ?? "", "P1_STATE") !== "NOT_APPLIED") fail("P1 completion was not reported separately");
+  if (/P1 apply|P1_APPLY/i.test(restored.stdout ?? "")) fail("restore claimed P1 apply");
   const container = field(restored.stdout ?? "", "CONTAINER");
   if (!/^[0-9a-f]{64}$/.test(container)) fail("container id was not recorded");
   if (containersBefore.includes(container)) fail("procedure reused an existing container");
@@ -382,8 +429,8 @@ try {
     "-- PostgreSQL database dump",
     "CREATE TABLE stell22_pbr_control (id integer PRIMARY KEY, n integer NOT NULL);",
     "INSERT INTO stell22_pbr_control (id, n) VALUES (1, 1);",
-    'CREATE TABLE "_prisma_migrations" (id text PRIMARY KEY, migration_name text NOT NULL);',
-    `INSERT INTO "_prisma_migrations" (id, migration_name) VALUES ('p1', '${p1}');`,
+    'CREATE TABLE "_prisma_migrations" (id text PRIMARY KEY, migration_name text NOT NULL, finished_at timestamptz, rolled_back_at timestamptz, applied_steps_count integer NOT NULL);',
+    `INSERT INTO "_prisma_migrations" (id, migration_name, finished_at, rolled_back_at, applied_steps_count) VALUES ('p1', '${p1}', NULL, NULL, 0);`,
     "-- PostgreSQL database dump complete",
     "",
   ].join("\n");
@@ -394,7 +441,8 @@ try {
     public_constraints: "2",
     migration_rows: "1",
     migration_names_sha256: sha256(`${p1}\n`),
-    p1: "PRESENT",
+    p1_row: "PRESENT",
+    p1_applied: "NOT_APPLIED",
     control_rows: "1",
   });
   const presentRun = `pbr${crypto.randomBytes(8).toString("hex")}`;
@@ -404,8 +452,68 @@ try {
     STELL22_PBR_RUN: presentRun,
   });
   assertResult(presentResult, "RESTORE_VERIFIED");
-  if (field(presentResult.stdout ?? "", "P1_STATE") !== "PRESENT")
-    fail("P1 presence was not reported separately");
+  if (field(presentResult.stdout ?? "", "P1_ROW") !== "PRESENT") fail("unfinished P1 row was not reported");
+  if (field(presentResult.stdout ?? "", "P1_STATE") !== "NOT_APPLIED")
+    fail("unfinished P1 row was treated as applied");
+  if (/P1 apply|P1_APPLY/i.test(presentResult.stdout ?? "")) fail("restore claimed P1 apply");
+
+  const appliedDir = posixTemp();
+  const appliedName = "stell22_2026-10-22_03-00-05.sql.gz";
+  const appliedSql = [
+    "-- PostgreSQL database dump",
+    "CREATE TABLE stell22_pbr_control (id integer PRIMARY KEY, n integer NOT NULL);",
+    "INSERT INTO stell22_pbr_control (id, n) VALUES (1, 1);",
+    'CREATE TABLE "_prisma_migrations" (id text PRIMARY KEY, migration_name text NOT NULL, finished_at timestamptz, rolled_back_at timestamptz, applied_steps_count integer NOT NULL);',
+    `INSERT INTO "_prisma_migrations" (id, migration_name, finished_at, rolled_back_at, applied_steps_count) VALUES ('rolled', '${p1}', '2026-01-01 00:00:00+00', '2026-01-02 00:00:00+00', 1);`,
+    "-- PostgreSQL database dump complete",
+    "",
+  ].join("\n");
+  const rolled = pack(appliedDir, appliedName, appliedSql);
+  const rolledTrust = trustFile(appliedDir, appliedName, rolled.digest, "synthetic-selector");
+  const rolledControl = controls(appliedDir, {
+    public_tables: "2",
+    public_constraints: "2",
+    migration_rows: "1",
+    migration_names_sha256: sha256(`${p1}\n`),
+    p1_row: "PRESENT",
+    p1_applied: "NOT_APPLIED",
+    control_rows: "1",
+  });
+  const rolledResult = procedure(["run", rolled.archive, rolledTrust, rolledControl], {
+    ...env,
+    STELL22_PBR_SHA256: rolled.digest,
+    STELL22_PBR_RUN: `pbr${crypto.randomBytes(8).toString("hex")}`,
+  });
+  assertResult(rolledResult, "RESTORE_VERIFIED");
+  if (field(rolledResult.stdout ?? "", "P1_STATE") !== "NOT_APPLIED")
+    fail("rolled back P1 row was treated as applied");
+
+  const doneDir = posixTemp();
+  const doneName = "stell22_2026-10-22_03-00-06.sql.gz";
+  const doneSql = appliedSql.replace(
+    `'rolled', '${p1}', '2026-01-01 00:00:00+00', '2026-01-02 00:00:00+00', 1`,
+    `'done', '${p1}', '2026-01-01 00:00:00+00', NULL, 1`,
+  );
+  const done = pack(doneDir, doneName, doneSql);
+  const doneTrust = trustFile(doneDir, doneName, done.digest, "synthetic-selector");
+  const doneControl = controls(doneDir, {
+    public_tables: "2",
+    public_constraints: "2",
+    migration_rows: "1",
+    migration_names_sha256: sha256(`${p1}\n`),
+    p1_row: "PRESENT",
+    p1_applied: "APPLIED",
+    control_rows: "1",
+  });
+  const doneResult = procedure(["run", done.archive, doneTrust, doneControl], {
+    ...env,
+    STELL22_PBR_SHA256: done.digest,
+    STELL22_PBR_RUN: `pbr${crypto.randomBytes(8).toString("hex")}`,
+  });
+  assertResult(doneResult, "RESTORE_VERIFIED");
+  if (field(doneResult.stdout ?? "", "P1_ROW") !== "PRESENT") fail("completed P1 row was not reported");
+  if (field(doneResult.stdout ?? "", "P1_STATE") !== "APPLIED") fail("completed P1 row was not reported");
+  if (/P1 apply|P1_APPLY/i.test(doneResult.stdout ?? "")) fail("restore claimed P1 apply");
 
   const early = procedure(["run", packed.archive, trust, control], {
     ...env,
@@ -479,6 +587,26 @@ try {
   } else if (!process.exitCode) {
     console.log("[production-backup-restore-ci] docker-resources=unchanged");
   }
+  const marker = sh('cat "$1/marker"', [foreignDir]);
+  if ((marker.stdout ?? "") !== "keep\n") {
+    console.error("[production-backup-restore-ci] foreign temp directory changed");
+    process.exitCode = 1;
+  } else if (!process.exitCode) {
+    console.log("[production-backup-restore-ci] foreign-temp=unchanged");
+  }
+  const foreignStill = run("docker", ["inspect", "-f", "{{.Id}}", foreignId]);
+  if (foreignStill.status !== 0 || !(foreignStill.stdout ?? "").includes(foreignId)) {
+    console.error("[production-backup-restore-ci] foreign container changed");
+    process.exitCode = 1;
+  } else if (!process.exitCode) {
+    console.log("[production-backup-restore-ci] foreign-container=unchanged");
+  }
+  run("docker", ["rm", foreignId]);
+  sh('rm -rf "$1"', [foreignDir]);
+  }
 }
 
-if (process.exitCode) process.exit(process.exitCode);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+  if (process.exitCode) process.exit(process.exitCode);
+}
