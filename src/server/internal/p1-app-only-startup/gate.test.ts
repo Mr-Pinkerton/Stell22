@@ -59,8 +59,15 @@ describe("app-only startup gate", () => {
     expect(dockerfile).toContain('ENTRYPOINT ["./docker-entrypoint-app-only.sh"]');
     expect(dockerfile).not.toContain('ENTRYPOINT ["./docker-entrypoint.sh"]');
     expect(dockerfile).not.toContain("prisma migrate deploy");
-    expect(fs.readFileSync("docker-compose.prod.yml", "utf8")).not.toContain("app-only");
-    expect(fs.readFileSync("scripts/deploy.sh", "utf8")).toContain("migrate deploy выполнит entrypoint");
+    const compose = fs.readFileSync("docker-compose.prod.yml", "utf8");
+    expect(compose).toContain("postgresql://stell22_app:");
+    expect(compose).not.toContain("postgresql://stell22:");
+    expect(compose).not.toContain("docker-entrypoint");
+    const deploy = fs.readFileSync("scripts/deploy.sh", "utf8");
+    expect(deploy).not.toContain("git reset --hard");
+    expect(deploy).not.toContain("migrate deploy выполнит entrypoint");
+    expect(deploy).toContain("RESULT=STOP_APP_ROLE");
+    expect(deploy).toContain("FORWARD_RECOVERY");
     const candidate = fs.readFileSync("docker-entrypoint-app-only.sh", "utf8");
     expect(candidate).toContain("exec npm run start");
     expect(candidate).not.toContain("\r");

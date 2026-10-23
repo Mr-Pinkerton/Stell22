@@ -20,6 +20,7 @@ const DISPOSABLE_DATABASE = /^p1as_[0-9a-f]{8}$/;
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ROUTINE_ARGUMENTS = /^[A-Za-z0-9_[\], ]*$/;
 const PASSWORD = /^[0-9a-f]{32}$/;
+const PRODUCTION_PASSWORD = /^[A-Za-z0-9+/=_-]{24,128}$/;
 const RELATION_KIND = {
   r: "table",
   p: "table",
@@ -39,6 +40,8 @@ const HISTORICAL_CHECKSUMS = new Map(
 if (HISTORICAL_CHECKSUMS.size !== EXPECTED_HISTORICAL_MIGRATION_COUNT) {
   throw new Error("pinned historical migration count is not 45");
 }
+
+export type DatabasePolicy = "disposable" | "production-candidate";
 
 export type TransitionCode =
   | "PRODUCTION_DATABASE"
@@ -101,13 +104,19 @@ export function planLegacyTransition(input: {
   appPassword: string;
   migratorPassword: string;
   p1Checksum: string;
+  databasePolicy?: DatabasePolicy;
 }): { ok: true; inventory: OwnershipItem[]; sql: string } | { ok: false; code: TransitionCode } {
+  const policy = input.databasePolicy ?? "disposable";
   const database = input.catalog.databaseName;
-  if (FORBIDDEN_DATABASE_NAMES.some((name) => name === database.toLowerCase())) {
-    return refuse("PRODUCTION_DATABASE");
+  if (policy === "production-candidate") {
+    if (database !== LEGACY_ADMIN_ROLE) return refuse("PRODUCTION_DATABASE");
+  } else {
+    if (FORBIDDEN_DATABASE_NAMES.some((name) => name === database.toLowerCase())) {
+      return refuse("PRODUCTION_DATABASE");
+    }
+    if (!DISPOSABLE_DATABASE.test(database)) return refuse("DISPOSABLE_DATABASE_REFUSED");
   }
-  if (!DISPOSABLE_DATABASE.test(database)) return refuse("DISPOSABLE_DATABASE_REFUSED");
-  if (!PASSWORD.test(input.appPassword) || !PASSWORD.test(input.migratorPassword) || input.appPassword === input.migratorPassword) {
+  if (!passwordAccepted(policy, input.appPassword) || !passwordAccepted(policy, input.migratorPassword) || input.appPassword === input.migratorPassword) {
     return refuse("CREDENTIAL_REFUSED");
   }
   if (input.catalog.schemaOwner !== LEGACY_SCHEMA_OWNER) return refuse("UNEXPECTED_SCHEMA_OWNER");
@@ -248,6 +257,10 @@ function compareText(left: string, right: string): number {
 
 function quoteIdent(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
+}
+
+function passwordAccepted(policy: DatabasePolicy, value: string): boolean {
+  return policy === "production-candidate" ? PRODUCTION_PASSWORD.test(value) : PASSWORD.test(value);
 }
 
 function refuse<Code extends TransitionCode>(code: Code): { ok: false; code: Code } {
