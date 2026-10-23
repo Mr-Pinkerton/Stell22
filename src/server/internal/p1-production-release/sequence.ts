@@ -27,6 +27,8 @@ export const RELEASE_STEPS = [
   "OWNER_GATE",
   "PROTECTED_FILES",
   "RESOURCE_BUDGET",
+  "IMAGE_BUILD",
+  "NON_MUTATING_VALIDATION",
   "WRITE_FREEZE",
   "ROLE_TRANSITION",
   "WRITER_EXCLUSION",
@@ -88,14 +90,136 @@ export function failureAfterMigration(): {
   action: "FORWARD_RECOVERY";
   databaseRestore: false;
   schemaRollback: false;
+  restartLegacy: false;
+  retryP1: false;
   code: "FORWARD_RECOVERY";
 } {
   return {
     action: "FORWARD_RECOVERY",
     databaseRestore: false,
     schemaRollback: false,
+    restartLegacy: false,
+    retryP1: false,
     code: "FORWARD_RECOVERY",
   };
+}
+
+export type ReleaseBoundary = {
+  code: "STOP_APP_START" | "STOP_ROLE_TRANSITION" | "STOP_WRITER" | "STOP_APP_ROLE" | "STOP_MIGRATOR" | "FORWARD_RECOVERY" | "LEGACY_RESTART" | "ADMITTED" | "RELEASE_APPLIED";
+  restartLegacy: boolean;
+  databaseRestore: false;
+  schemaRollback: false;
+  retryP1: false;
+  terminateSessions: false;
+  demoteSuperuser: false;
+  futurePrivilegedWritesProvenImpossible: false;
+  privilegedRolesRemain: readonly ["stell22", "stell22_migrator"];
+  emptyActivityProvesFutureExclusion: false;
+};
+
+const CLOSED: Omit<ReleaseBoundary, "code" | "restartLegacy"> = {
+  databaseRestore: false,
+  schemaRollback: false,
+  retryP1: false,
+  terminateSessions: false,
+  demoteSuperuser: false,
+  futurePrivilegedWritesProvenImpossible: false,
+  privilegedRolesRemain: ["stell22", "stell22_migrator"] as const,
+  emptyActivityProvesFutureExclusion: false,
+};
+
+function closed(code: ReleaseBoundary["code"], restartLegacy: boolean): ReleaseBoundary {
+  return { code, restartLegacy, ...CLOSED };
+}
+
+export type LegacyRestartFacts = {
+  roleTransitionCommitted: boolean;
+  p1Present: boolean;
+  p1MigrationInLegacyImage: boolean;
+  rolesAbsent: boolean;
+  historyUnchanged: boolean;
+  databaseStateKnown: boolean;
+};
+
+/** The deployed entrypoint runs migrate deploy. Restart it only while the original database and a P1-free image are both proven. */
+export function decideLegacyRestart(facts: LegacyRestartFacts): ReleaseBoundary {
+  const original =
+    facts.databaseStateKnown &&
+    !facts.roleTransitionCommitted &&
+    !facts.p1Present &&
+    !facts.p1MigrationInLegacyImage &&
+    facts.rolesAbsent &&
+    facts.historyUnchanged;
+  if (!original) return closed(facts.roleTransitionCommitted || facts.p1Present ? "FORWARD_RECOVERY" : "STOP_ROLE_TRANSITION", false);
+  return closed("LEGACY_RESTART", true);
+}
+
+export function decideImageBuildFailure(): ReleaseBoundary {
+  return closed("STOP_APP_START", false);
+}
+
+export type WriterSession = {
+  user: string;
+  applicationName: string;
+  backendType: string;
+};
+
+export type WriterAdmissionFacts = {
+  maintenanceDeclared: boolean;
+  appRunning: boolean;
+  expectAppStopped: boolean;
+  backupRunning: boolean;
+  statementImportRunning: boolean;
+  externalWriterCount: number;
+  checkSessions: boolean;
+  inspectionApp: string;
+  sessions: readonly WriterSession[];
+};
+
+/** An empty session list is not proof that a superuser write cannot start later. */
+export function decideWriterAdmission(facts: WriterAdmissionFacts): ReleaseBoundary {
+  const unknown = unknownSessions(facts);
+  const blocked =
+    !facts.maintenanceDeclared ||
+    facts.backupRunning ||
+    facts.statementImportRunning ||
+    facts.externalWriterCount > 0 ||
+    (facts.expectAppStopped && facts.appRunning) ||
+    (facts.checkSessions && (unknown > 0 || !inspectionSeen(facts)));
+  if (blocked) return closed("STOP_WRITER", false);
+  return closed("ADMITTED", false);
+}
+
+export function unknownSessions(facts: WriterAdmissionFacts): number {
+  let count = 0;
+  for (const session of facts.sessions) {
+    if (session.backendType !== "client backend") continue;
+    const inspection = session.user === "stell22" && session.applicationName === facts.inspectionApp && !session.user.includes("|");
+    if (!inspection) count += 1;
+  }
+  return count;
+}
+
+function inspectionSeen(facts: WriterAdmissionFacts): boolean {
+  return facts.sessions.some(
+    (session) => session.backendType === "client backend" && session.applicationName === facts.inspectionApp && session.user === "stell22",
+  );
+}
+
+export function decideAfterCommittedRoleChange(code: "STOP_WRITER" | "STOP_APP_ROLE" | "STOP_MIGRATOR"): ReleaseBoundary {
+  return closed(code, false);
+}
+
+export function decideP1Uncertain(): ReleaseBoundary {
+  return closed("FORWARD_RECOVERY", false);
+}
+
+export function decideAppUnhealthy(): ReleaseBoundary {
+  return closed("FORWARD_RECOVERY", false);
+}
+
+export function decideReleaseApplied(): ReleaseBoundary {
+  return closed("RELEASE_APPLIED", false);
 }
 
 export function appMayStart(input: { entrypoint: string; databaseUser: string; p1AppliedBy: string; p1Checksum: string }): { ok: true } | { ok: false; code: "STOP_APP_ROLE" | "STOP_MIGRATOR" } {

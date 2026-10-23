@@ -15,6 +15,13 @@ import {
   assertOwnerGate,
   assertProtectedCheckout,
   assertWriterExclusionBeforeP1,
+  decideAfterCommittedRoleChange,
+  decideAppUnhealthy,
+  decideImageBuildFailure,
+  decideLegacyRestart,
+  decideP1Uncertain,
+  decideReleaseApplied,
+  decideWriterAdmission,
   failureAfterMigration,
   releaseOrder,
   releaseResourceBudget,
@@ -54,8 +61,12 @@ describe("production release sequence", () => {
       action: "FORWARD_RECOVERY",
       databaseRestore: false,
       schemaRollback: false,
+      restartLegacy: false,
+      retryP1: false,
       code: "FORWARD_RECOVERY",
     });
+    expect(releaseOrder().indexOf("IMAGE_BUILD")).toBeLessThan(releaseOrder().indexOf("WRITE_FREEZE"));
+    expect(releaseOrder().indexOf("NON_MUTATING_VALIDATION")).toBeLessThan(releaseOrder().indexOf("WRITE_FREEZE"));
   });
 
   it("accepts the production database only on the production-candidate policy", () => {
@@ -116,6 +127,12 @@ describe("production release sequence", () => {
     expect(locked.status).not.toBe(0);
     expect(locked.stdout).toContain("RESULT=STOP_LOCKED");
     expect(locked.stdout).not.toContain("RESTORE_VERIFIED");
+    const releaseScript = fs.readFileSync("scripts/release-role-split.sh", "utf8");
+    expect(releaseScript.indexOf("docker compose -f docker-compose.prod.yml build app")).toBeLessThan(releaseScript.indexOf("docker stop stell22-app"));
+    expect(releaseScript).not.toContain("pg_terminate_backend");
+    expect(releaseScript).not.toContain("git reset --hard");
+    expect(releaseScript).not.toContain("restore-db.sh");
+    expect(releaseScript).not.toContain("prisma migrate deploy --schema /app/prisma/schema.prisma >/dev/null 2>&1 || app_migrate");
     const source = catalog("stell22");
     const text = [
       `database ${source.databaseName}`,
@@ -143,6 +160,130 @@ describe("production release sequence", () => {
     expect(bundled.status).toBe(0);
     if (!planned.ok) return;
     expect(bundled.stdout).toBe(planned.sql);
+  });
+});
+
+describe("release failure boundaries", () => {
+  const original = {
+    roleTransitionCommitted: false,
+    p1Present: false,
+    p1MigrationInLegacyImage: false,
+    rolesAbsent: true,
+    historyUnchanged: true,
+    databaseStateKnown: true,
+  };
+
+  it("stops an image build before the freeze and leaves the legacy app running", () => {
+    const decision = decideImageBuildFailure();
+    expect(decision.code).toBe("STOP_APP_START");
+    expect(decision.restartLegacy).toBe(false);
+    expect(decision.databaseRestore).toBe(false);
+  });
+
+  it("restarts the legacy image only when the original database and a P1-free image are proven", () => {
+    expect(decideLegacyRestart(original).code).toBe("LEGACY_RESTART");
+    expect(decideLegacyRestart(original).restartLegacy).toBe(true);
+    expect(decideLegacyRestart({ ...original, databaseStateKnown: false }).restartLegacy).toBe(false);
+    expect(decideLegacyRestart({ ...original, p1MigrationInLegacyImage: true }).restartLegacy).toBe(false);
+    expect(decideLegacyRestart({ ...original, rolesAbsent: false }).restartLegacy).toBe(false);
+    expect(decideLegacyRestart({ ...original, historyUnchanged: false }).restartLegacy).toBe(false);
+    expect(decideLegacyRestart({ ...original, p1Present: true })).toMatchObject({ code: "FORWARD_RECOVERY", restartLegacy: false, retryP1: false });
+  });
+
+  it("does not restart the legacy image after the role transaction commits", () => {
+    expect(decideLegacyRestart({ ...original, roleTransitionCommitted: true }).restartLegacy).toBe(false);
+    expect(decideAfterCommittedRoleChange("STOP_WRITER")).toMatchObject({ restartLegacy: false, databaseRestore: false, retryP1: false, demoteSuperuser: false });
+    expect(decideAfterCommittedRoleChange("STOP_APP_ROLE").restartLegacy).toBe(false);
+  });
+
+  it("stops on an unknown writer and does not treat an empty snapshot as future exclusion", () => {
+    const admitted = decideWriterAdmission({
+      maintenanceDeclared: true,
+      appRunning: false,
+      expectAppStopped: true,
+      backupRunning: false,
+      statementImportRunning: false,
+      externalWriterCount: 0,
+      checkSessions: true,
+      inspectionApp: "stell22-release-inspect",
+      sessions: [{ user: "stell22", applicationName: "stell22-release-inspect", backendType: "client backend" }],
+    });
+    expect(admitted.code).toBe("ADMITTED");
+    expect(admitted.futurePrivilegedWritesProvenImpossible).toBe(false);
+    expect(admitted.emptyActivityProvesFutureExclusion).toBe(false);
+    expect(admitted.terminateSessions).toBe(false);
+    expect(admitted.privilegedRolesRemain).toEqual(["stell22", "stell22_migrator"]);
+    const unknown = decideWriterAdmission({
+      maintenanceDeclared: true,
+      appRunning: false,
+      expectAppStopped: true,
+      backupRunning: false,
+      statementImportRunning: false,
+      externalWriterCount: 0,
+      checkSessions: true,
+      inspectionApp: "stell22-release-inspect",
+      sessions: [
+        { user: "stell22", applicationName: "stell22-release-inspect", backendType: "client backend" },
+        { user: "stell22", applicationName: "psql", backendType: "client backend" },
+      ],
+    });
+    expect(unknown.code).toBe("STOP_WRITER");
+    expect(unknown.terminateSessions).toBe(false);
+    expect(decideWriterAdmission({
+      maintenanceDeclared: true,
+      appRunning: false,
+      expectAppStopped: true,
+      backupRunning: true,
+      statementImportRunning: false,
+      externalWriterCount: 0,
+      checkSessions: false,
+      inspectionApp: "stell22-release-inspect",
+      sessions: [],
+    }).code).toBe("STOP_WRITER");
+    expect(decideWriterAdmission({
+      maintenanceDeclared: false,
+      appRunning: true,
+      expectAppStopped: false,
+      backupRunning: false,
+      statementImportRunning: false,
+      externalWriterCount: 0,
+      checkSessions: false,
+      inspectionApp: "stell22-release-inspect",
+      sessions: [],
+    }).code).toBe("STOP_WRITER");
+    expect(decideWriterAdmission({
+      maintenanceDeclared: true,
+      appRunning: false,
+      expectAppStopped: true,
+      backupRunning: false,
+      statementImportRunning: false,
+      externalWriterCount: 0,
+      checkSessions: true,
+      inspectionApp: "stell22-release-inspect",
+      sessions: [],
+    }).code).toBe("STOP_WRITER");
+  });
+
+  it("keeps pinned P1 failure and an unhealthy app on forward recovery", () => {
+    expect(decideP1Uncertain()).toMatchObject({ code: "FORWARD_RECOVERY", restartLegacy: false, retryP1: false, databaseRestore: false });
+    expect(decideAppUnhealthy()).toMatchObject({ code: "FORWARD_RECOVERY", restartLegacy: false, databaseRestore: false });
+    expect(decideReleaseApplied()).toMatchObject({ code: "RELEASE_APPLIED", restartLegacy: false });
+    const facts = path.join(os.tmpdir(), `stell22-release-boundary-${process.pid}.txt`);
+    fs.writeFileSync(facts, [
+      "roleTransitionCommitted=1",
+      "p1Present=0",
+      "p1MigrationInLegacyImage=0",
+      "rolesAbsent=0",
+      "historyUnchanged=1",
+      "databaseStateKnown=1",
+    ].join("\n"));
+    const cli = spawnSync(process.execPath, ["scripts/release-decision.cjs", "legacy-restart", facts], { encoding: "utf8" });
+    fs.rmSync(facts, { force: true });
+    expect(cli.status).toBe(0);
+    expect(cli.stdout).toContain("CODE=FORWARD_RECOVERY");
+    expect(cli.stdout).toContain("RESTART_LEGACY=NO");
+    expect(cli.stdout).toContain("FUTURE_PRIVILEGED_WRITES_PROVEN_IMPOSSIBLE=NO");
+    expect(cli.stdout).not.toContain("a".repeat(32));
   });
 });
 
