@@ -42,10 +42,17 @@ EVIDENCE=""
 WORK=""
 OWNED=0
 RELEASED=0
+MONITOR_PID=""
+PHASE=prepare
+PHASE_DEADLINE=0
+TIMEOUT_SEC=120
+RESTORE_SQL_STARTED=0
+FINAL_CODE=""
 
 finish() {
   code=$1
   shift
+  FINAL_CODE=$code
   printf '%s\n' "$@"
   exit "$code"
 }
@@ -137,30 +144,139 @@ docker_health() {
 
 require_health() {
   if [ "$MODE" = "synthetic" ]; then
-    # Synthetic runs have no production containers to inspect. A command
-    # fixture can fail on a later probe. Execute mode ignores it and reads
-    # the live container health below.
+    # Synthetic runs have no production containers to inspect. Exit 2 from
+    # the fixture is an unknown reading. Execute mode ignores the fixture.
     cmd=${STELL22_SAME_HOST_HEALTH_CMD:-}
     if [ -z "$cmd" ]; then
       return 0
     fi
-    if ! sh -c "$cmd"; then
+    hrc=0
+    sh -c "$cmd" || hrc=$?
+    if [ "$hrc" -eq 0 ]; then
+      return 0
+    fi
+    if [ "$hrc" -eq 2 ]; then
+      return 2
+    fi
+    return 1
+  fi
+  app=$(docker_health stell22-app) || return 2
+  db=$(docker_health stell22-db-prod) || return 2
+  caddy=$(docker inspect -f '{{.State.Status}}' stell22-caddy 2>/dev/null | tr -d '[:space:]') || return 2
+  case "$app" in
+    healthy) ;;
+    unhealthy) return 1 ;;
+    *) return 2 ;;
+  esac
+  case "$db" in
+    healthy) ;;
+    unhealthy) return 1 ;;
+    *) return 2 ;;
+  esac
+  case "$caddy" in
+    running) ;;
+    exited|dead) return 1 ;;
+    *) return 2 ;;
+  esac
+  return 0
+}
+
+arm_deadline() {
+  TIMEOUT_SEC=${STELL22_SAME_HOST_TIMEOUT_SEC:-120}
+  case "$TIMEOUT_SEC" in
+    ""|*[!0-9]*) finish 1 "RESULT=STOP_MONITOR" "DETAIL=timeout-unreadable" ;;
+  esac
+  if [ "$TIMEOUT_SEC" -lt 1 ] || [ "$TIMEOUT_SEC" -gt 600 ]; then
+    finish 1 "RESULT=STOP_MONITOR" "DETAIL=timeout-bounds"
+  fi
+  now=$(date +%s) || finish 1 "RESULT=STOP_MONITOR" "DETAIL=clock-unreadable"
+  PHASE_DEADLINE=$((now + TIMEOUT_SEC))
+}
+
+monitor_tick() {
+  MONITOR_REASON=""
+  fp=${STELL22_SAME_HOST_FAILPOINT:-}
+  if [ "$RESTORE_SQL_STARTED" = "1" ]; then
+    case "$fp" in
+      health-during-restore) MONITOR_REASON=health; return 1 ;;
+      memory-during-restore) MONITOR_REASON=memory; return 1 ;;
+    esac
+  fi
+  if [ "$PHASE_DEADLINE" -gt 0 ]; then
+    now=$(date +%s) || {
+      MONITOR_REASON=unknown
+      return 1
+    }
+    if [ "$now" -ge "$PHASE_DEADLINE" ]; then
+      MONITOR_REASON=timeout
       return 1
     fi
-    return 0
   fi
-  app=$(docker_health stell22-app)
-  db=$(docker_health stell22-db-prod)
-  caddy=$(docker inspect -f '{{.State.Status}}' stell22-caddy 2>/dev/null | tr -d '[:space:]' || true)
-  if [ "$app" != "healthy" ] || [ "$db" != "healthy" ] || [ "$caddy" != "running" ]; then
+  hrc=0
+  require_health || hrc=$?
+  if [ "$hrc" -eq 2 ]; then
+    MONITOR_REASON=unknown
+    return 1
+  fi
+  if [ "$hrc" -ne 0 ]; then
+    MONITOR_REASON=health
+    return 1
+  fi
+  kb=$(memory_kb) || {
+    MONITOR_REASON=unknown
+    return 1
+  }
+  if [ "$kb" -lt "$NEED_KB" ]; then
+    MONITOR_REASON=memory
     return 1
   fi
   return 0
 }
 
-stop_health() {
-  release_owned || true
-  finish 1 "RESULT=STOP_HEALTH"
+begin_child() {
+  # Background commands run in a subshell that inherits the EXIT trap.
+  # Clear it here so the child cannot remove the container or hide the
+  # parent's status. The parent remains the only cleanup owner.
+  CHILD=1
+  trap '' EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+}
+
+stop_child() {
+  if [ -z "$MONITOR_PID" ]; then
+    return 0
+  fi
+  kill "$MONITOR_PID" 2>/dev/null || :
+  wait "$MONITOR_PID" 2>/dev/null || :
+  MONITOR_PID=""
+}
+
+abort_watch() {
+  reason=$1
+  stop_child
+  if ! release_owned; then
+    finish 1 "RESULT=FAILED_CLEANUP" "DETAIL=during-$reason" "CONTAINER=${CONTAINER:-}"
+  fi
+  case "$reason" in
+    health) finish 1 "RESULT=STOP_HEALTH" ;;
+    memory) finish 1 "RESULT=STOP_RESOURCES" "NEED_KB=$NEED_KB" ;;
+    timeout) finish 1 "RESULT=STOP_TIMEOUT" "TIMEOUT_SEC=$TIMEOUT_SEC" ;;
+    *) finish 1 "RESULT=STOP_MONITOR" ;;
+  esac
+}
+
+watch_pid() {
+  MONITOR_PID=$1
+  while kill -0 "$MONITOR_PID" 2>/dev/null; do
+    if ! monitor_tick; then
+      abort_watch "${MONITOR_REASON:-unknown}"
+    fi
+    sleep 1
+  done
+  waited=$MONITOR_PID
+  MONITOR_PID=""
+  wait "$waited"
 }
 
 require_image() {
@@ -356,7 +472,15 @@ stage_archive() {
 psql_at() {
   db=$1
   sql=$2
-  docker exec "$CONTAINER" psql -X -U stell22 -d "$db" -q -v ON_ERROR_STOP=1 -At -c "$sql"
+  out=$(dirname "$EVIDENCE")/psql.out
+  : > "$out"
+  (
+    begin_child
+    docker exec "$CONTAINER" psql -X -U stell22 -d "$db" -q -v ON_ERROR_STOP=1 -At -c "$sql"
+  ) >"$out" &
+  watch_pid "$!"
+  cat "$out"
+  rm -f "$out"
 }
 
 prove_container() {
@@ -424,37 +548,76 @@ prove_container() {
   return 0
 }
 
+cleanup_work() {
+  if [ -z "$WORK" ]; then
+    return 0
+  fi
+  case "$WORK" in
+    /tmp/stell22-samehost-work.*)
+      rm -rf "$WORK" || return 1
+      WORK=""
+      ;;
+  esac
+  return 0
+}
+
 release_owned() {
   [ "$OWNED" = 1 ] || return 0
   [ "$RELEASED" = 1 ] && return 0
+  fp=${STELL22_SAME_HOST_FAILPOINT:-}
+  case "$fp" in
+    cleanup-rm)
+      printf '%s\n' "RESULT=FAILED_CLEANUP" "DETAIL=docker-rm" "CONTAINER=$CONTAINER"
+      OWNED=0
+      return 1
+      ;;
+    cleanup-identity)
+      printf '%s\n' "RESULT=FAILED_CLEANUP" "DETAIL=identity" "CONTAINER=${CONTAINER:-}"
+      OWNED=0
+      return 1
+      ;;
+  esac
   if ! prove_container; then
     printf '%s\n' "RESULT=FAILED_CLEANUP" "DETAIL=identity" "CONTAINER=${CONTAINER:-}"
     OWNED=0
     return 1
   fi
   if ! docker rm -f -v "$CONTAINER" >/dev/null; then
-    printf '%s\n' "RESULT=FAILED_CLEANUP" "CONTAINER=$CONTAINER"
+    printf '%s\n' "RESULT=FAILED_CLEANUP" "DETAIL=docker-rm" "CONTAINER=$CONTAINER"
     return 1
+  fi
+  if [ -n "$EVIDENCE" ]; then
+    rm -f "$(dirname "$EVIDENCE")/db.env" "$(dirname "$EVIDENCE")/psql.err" || return 1
   fi
   RELEASED=1
   OWNED=0
-  if [ -n "$EVIDENCE" ]; then
-    rm -f "$(dirname "$EVIDENCE")/db.env" "$(dirname "$EVIDENCE")/psql.err" || true
-  fi
   printf '%s\n' "RESULT=CLEANED" "CONTAINER=$CONTAINER"
 }
 
 on_exit() {
-  if [ -n "$WORK" ]; then
-    case "$WORK" in
-      /tmp/stell22-samehost-work.*) rm -rf "$WORK" || true ;;
-    esac
+  rc=$?
+  trap '' EXIT INT TERM
+  if [ "${CHILD:-}" = 1 ]; then
+    exit "$rc"
   fi
-  release_owned || true
+  if [ -n "$FINAL_CODE" ]; then
+    rc=$FINAL_CODE
+  fi
+  stop_child
+  if ! cleanup_work; then
+    rc=1
+    printf '%s\n' "RESULT=FAILED_CLEANUP" "DETAIL=work"
+  fi
+  if [ "$OWNED" = 1 ] && [ "$RELEASED" != 1 ]; then
+    if ! release_owned; then
+      rc=1
+    fi
+  fi
+  exit "$rc"
 }
 trap on_exit EXIT
-trap 'on_exit; exit 130' INT
-trap 'on_exit; exit 143' TERM
+trap 'FINAL_CODE=130; on_exit' INT
+trap 'FINAL_CODE=143; on_exit' TERM
 
 create_container() {
   require_run
@@ -473,7 +636,7 @@ POSTGRES_PASSWORD=${secret}
 POSTGRES_DB=${ADMIN_DB}
 POSTGRES_HOST_AUTH_METHOD=trust
 EOF
-  chmod 600 "$envfile" || true
+  chmod 600 "$envfile" || finish 1 "RESULT=UNCERTAIN" "DETAIL=env-mode"
   unset secret
   if ! created=$(docker run -d \
     --name "$CNAME" \
@@ -509,13 +672,8 @@ EOF
   ready=0
   i=0
   while [ "$i" -lt 40 ]; do
-    if ! require_health; then
-      stop_health
-    fi
-    kb=$(memory_kb) || finish 1 "RESULT=STOP_RESOURCES" "DETAIL=memory-unreadable"
-    if [ "$kb" -lt "$NEED_KB" ]; then
-      release_owned || true
-      finish 1 "RESULT=STOP_RESOURCES" "MEM_AVAILABLE_KB=$kb" "NEED_KB=$NEED_KB"
+    if ! monitor_tick; then
+      abort_watch "${MONITOR_REASON:-unknown}"
     fi
     if docker exec "$CONTAINER" psql -X -U stell22 -d "$ADMIN_DB" -q -v ON_ERROR_STOP=1 -At -c "SELECT 1" >/dev/null 2>&1; then
       ready=1
@@ -553,12 +711,18 @@ schema_fingerprints() {
   node "$helper" --print-column-sql > "$fp_dir/column.sql"
   node "$helper" --print-constraint-sql > "$fp_dir/constraint.sql"
   delim=$(printf '\037')
-  docker exec -i "$CONTAINER" \
-    psql -X -U stell22 -d "$DEST_DB" -q -v ON_ERROR_STOP=1 -At -F "$delim" -f - \
-    < "$fp_dir/column.sql" > "$fp_dir/column.tsv"
-  docker exec -i "$CONTAINER" \
-    psql -X -U stell22 -d "$DEST_DB" -q -v ON_ERROR_STOP=1 -At -F "$delim" -f - \
-    < "$fp_dir/constraint.sql" > "$fp_dir/constraint.tsv"
+  (
+    begin_child
+    docker exec -i "$CONTAINER" \
+      psql -X -U stell22 -d "$DEST_DB" -q -v ON_ERROR_STOP=1 -At -F "$delim" -f -
+  ) < "$fp_dir/column.sql" > "$fp_dir/column.tsv" &
+  watch_pid "$!"
+  (
+    begin_child
+    docker exec -i "$CONTAINER" \
+      psql -X -U stell22 -d "$DEST_DB" -q -v ON_ERROR_STOP=1 -At -F "$delim" -f -
+  ) < "$fp_dir/constraint.sql" > "$fp_dir/constraint.tsv" &
+  watch_pid "$!"
   mark=$(printf '\036')
   fp_text=$(
     {
@@ -574,6 +738,7 @@ schema_fingerprints() {
 }
 
 measure_restored() {
+  PHASE=inspect
   tables=$(public_tables | tr -d '[:space:]')
   constraints=$(psql_at "$DEST_DB" "SELECT count(*) FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace WHERE n.nspname = 'public'" | tr -d '[:space:]')
   p1_row=$(psql_at "$DEST_DB" "SELECT CASE WHEN to_regclass('public.\"_prisma_migrations\"') IS NULL THEN 'ABSENT' WHEN (SELECT count(*) FROM \"_prisma_migrations\" WHERE migration_name = '${P1_MIGRATION}') = 1 THEN 'PRESENT' WHEN (SELECT count(*) FROM \"_prisma_migrations\" WHERE migration_name = '${P1_MIGRATION}') = 0 THEN 'ABSENT' ELSE 'UNKNOWN' END" | tr -d '[:space:]')
@@ -593,7 +758,11 @@ measure_restored() {
     mig_sha=ABSENT
   else
     mig_rows=$(psql_at "$DEST_DB" "SELECT count(*) FROM \"_prisma_migrations\"" | tr -d '[:space:]')
-    docker exec "$CONTAINER" psql -X -U stell22 -d "$DEST_DB" -q -v ON_ERROR_STOP=1 -At -c "SELECT migration_name FROM \"_prisma_migrations\" ORDER BY migration_name" > "$names_file"
+    (
+      begin_child
+      docker exec "$CONTAINER" psql -X -U stell22 -d "$DEST_DB" -q -v ON_ERROR_STOP=1 -At -c "SELECT migration_name FROM \"_prisma_migrations\" ORDER BY migration_name"
+    ) > "$names_file" &
+    watch_pid "$!"
     mig_sha=$(sha256sum -t "$names_file" | awk 'NR==1 { print $1; exit }' | tr -d '\r')
     rm -f "$names_file"
   fi
@@ -616,15 +785,34 @@ measure_restored() {
 }
 
 restore_sql() {
+  PHASE=restore
   count=$(psql_at "$ADMIN_DB" "SELECT count(*) FROM pg_database WHERE datname = '${DEST_DB}'" | tr -d '[:space:]')
   if [ "$count" != "0" ]; then
     finish 1 "RESULT=REFUSED_POPULATED"
   fi
   psql_at "$ADMIN_DB" "CREATE DATABASE ${DEST_DB}" >/dev/null
-  if ! docker exec -i "$CONTAINER" \
-    psql -X -U stell22 -d "$DEST_DB" -q -v ON_ERROR_STOP=1 --single-transaction -f - \
-    < "$WORK/dump.sql" >/dev/null 2>"$(dirname "$EVIDENCE")/psql.err"; then
-    left=$(public_tables 2>/dev/null | tr -d '[:space:]' || true)
+  RESTORE_SQL_STARTED=1
+  arm_deadline
+  printf '%s\n' "RESTORE_STARTED=1"
+  (
+    begin_child
+    docker exec -i "$CONTAINER" \
+      psql -X -U stell22 -d "$DEST_DB" -q -v ON_ERROR_STOP=1 --single-transaction -f -
+  ) < "$WORK/dump.sql" >/dev/null 2>"$(dirname "$EVIDENCE")/psql.err" &
+  MONITOR_PID=$!
+  while kill -0 "$MONITOR_PID" 2>/dev/null; do
+    if ! monitor_tick; then
+      abort_watch "${MONITOR_REASON:-unknown}"
+    fi
+    sleep 1
+  done
+  waited=$MONITOR_PID
+  MONITOR_PID=""
+  sql_rc=0
+  wait "$waited" || sql_rc=$?
+  if [ "$sql_rc" -ne 0 ]; then
+    left=""
+    left=$(public_tables 2>/dev/null | tr -d '[:space:]') || left=""
     if [ "$left" = "0" ] || [ -z "$left" ]; then
       finish 1 "RESULT=FAILED_RESTORE_SQL" "ROLLBACK=YES"
     fi
@@ -676,9 +864,21 @@ compare_controls() {
     "PUBLIC_TABLES=$MEASURED_TABLES" \
     "MIGRATION_ROWS=$MEASURED_MIGRATIONS"
   if [ "$match" -ne 1 ]; then
+    if ! release_owned; then
+      finish 1 "RESULT=FAILED_CLEANUP" "RESULT=INSPECT_MISMATCH"
+    fi
+    if ! cleanup_work; then
+      finish 1 "RESULT=FAILED_CLEANUP" "DETAIL=work" "RESULT=INSPECT_MISMATCH"
+    fi
     finish 1 "RESULT=INSPECT_MISMATCH"
   fi
-  printf '%s\n' "RESULT=RESTORE_VERIFIED" "P1_APPLY=NOT_AUTHORIZED"
+  if ! release_owned; then
+    finish 1 "RESULT=FAILED_CLEANUP"
+  fi
+  if ! cleanup_work; then
+    finish 1 "RESULT=FAILED_CLEANUP" "DETAIL=work"
+  fi
+  finish 0 "RESULT=RESTORE_VERIFIED" "P1_APPLY=NOT_AUTHORIZED"
 }
 
 run_restore() {
@@ -701,19 +901,23 @@ run_restore() {
   fi
   require_image
   require_resources
-  if ! require_health; then
-    stop_health
+  hrc=0
+  require_health || hrc=$?
+  if [ "$hrc" -eq 2 ]; then
+    finish 1 "RESULT=STOP_MONITOR"
+  fi
+  if [ "$hrc" -ne 0 ]; then
+    finish 1 "RESULT=STOP_HEALTH"
   fi
   create_container
   restore_sql
-  if ! require_health; then
-    stop_health
-  fi
   measure_restored
 }
 
 cmd=${1:-}
-shift || true
+if [ "$#" -gt 0 ]; then
+  shift
+fi
 case "$cmd" in
   preflight)
     MODE=synthetic
@@ -724,25 +928,33 @@ case "$cmd" in
     if docker image inspect "$IMAGE_REF" --format '{{.Id}}' >/dev/null 2>&1; then
       printf '%s\n' "IMAGE=present"
     else
-      printf '%s\n' "IMAGE=absent" "RESULT=STOP_IMAGE"
-      exit 1
+      finish 1 "IMAGE=absent" "RESULT=STOP_IMAGE"
     fi
     require_resources
     if [ "$MODE" = "execute" ]; then
-      if require_health; then
-        printf '%s\n' "HEALTH=ok" "RESULT=PREFLIGHT_HOST"
-      else
-        printf '%s\n' "RESULT=STOP_HEALTH"
-        exit 1
+      hrc=0
+      require_health || hrc=$?
+      if [ "$hrc" -eq 0 ]; then
+        finish 0 "HEALTH=ok" "RESULT=PREFLIGHT_HOST"
       fi
+      if [ "$hrc" -eq 2 ]; then
+        finish 1 "RESULT=STOP_MONITOR"
+      fi
+      finish 1 "RESULT=STOP_HEALTH"
     else
-      printf '%s\n' "RESULT=PREFLIGHT_WORKSTATION"
+      finish 0 "RESULT=PREFLIGHT_WORKSTATION"
     fi
     ;;
   measure)
     MODE=synthetic
     run_restore "${1:-}"
-    printf '%s\n' "RESULT=MEASURED"
+    if ! release_owned; then
+      finish 1 "RESULT=FAILED_CLEANUP"
+    fi
+    if ! cleanup_work; then
+      finish 1 "RESULT=FAILED_CLEANUP" "DETAIL=work"
+    fi
+    finish 0 "RESULT=MEASURED"
     ;;
   synthetic)
     MODE=synthetic

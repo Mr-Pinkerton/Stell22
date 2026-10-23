@@ -28,14 +28,18 @@ count, migration count, the migration-name digest, both schema fingerprints,
 `P1_ROW`, and `P1_STATE`. `RESULT=RESTORE_VERIFIED` is not production
 restore, P1 apply, role split, or release.
 
-Before and during startup the script stops unless available memory is at
-least the 768 MiB cap plus 1 GiB, `stell22-app` and `stell22-db-prod` are
-healthy, and `stell22-caddy` is running. It does not pull a missing image.
-On `STOP_RESOURCES`, `STOP_HEALTH`, mismatch, or exit, it removes only the
-container id it created, including that container's anonymous volumes.
-`SIGINT` and `SIGTERM` use the same cleanup. A control file is required;
-without matching controls the result is `INSPECT_MISMATCH`, not
-`RESTORE_VERIFIED`.
+From the start of the SQL restore through inspection, the same shell polls
+app and database health, available memory, and a bounded deadline. An
+unreadable health or memory reading is `STOP_MONITOR`. The poll is the
+foreground shell; it reaps the `psql` it started and does not leave a
+monitor behind. A safety stop removes only that disposable container. It
+does not stop or restart production containers and it does not prune Docker.
+
+`RESULT=RESTORE_VERIFIED` is printed only after that container and the
+plaintext work directory have been removed. A failed cleanup exits nonzero
+with `FAILED_CLEANUP` and is not a pass. `SIGINT` and `SIGTERM` use the
+same cleanup. A control file is required; without matching controls the
+result is `INSPECT_MISMATCH`, not `RESTORE_VERIFIED`.
 
 ## Synthetic proof
 

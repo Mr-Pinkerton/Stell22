@@ -61,7 +61,7 @@ function writeText(posixPath: string, text: string): void {
   writeFileSync(toWin(posixPath), text.replace(/\r\n/g, "\n"), "utf8");
 }
 
-function packageArchive(name: string): { archive: string; sha: string } {
+function packageArchive(name: string, extraSql = ""): { archive: string; sha: string } {
   const dir = makePosixTemp();
   const sql = [
     "-- PostgreSQL database dump",
@@ -84,6 +84,7 @@ function packageArchive(name: string): { archive: string; sha: string } {
     "INSERT INTO \"_prisma_migrations\" (id, checksum, migration_name, started_at, applied_steps_count)",
     "VALUES ('synthetic', 'abc', '20260101000000_synthetic', now(), 0);",
     "INSERT INTO synthetic_witness (id, qty) VALUES (1, 2);",
+    extraSql,
     "\\unrestrict syntheticwitness",
     "-- PostgreSQL database dump complete",
     "",
@@ -111,6 +112,8 @@ describe("same-host scenario locks", () => {
     expect(text.stdout).toContain(productionSha);
     expect(text.stdout).toContain("RESULT=STOP_IMAGE");
     expect(text.stdout).not.toContain("docker pull");
+    expect(text.stdout).not.toContain("docker prune");
+    expect(text.stdout).not.toContain("|| true");
     expect(text.stdout).not.toContain("sh \"$script_dir/restore-db.sh\"");
   });
 
@@ -134,10 +137,13 @@ describe("same-host scenario locks", () => {
 describe.skipIf(!dockerEnabled)("same-host synthetic docker proof", () => {
   afterAll(() => {
     for (const run of runIds) {
-      runShell('ids=$(docker ps -aq --filter "name=stell22-samehost-$1"); if [ -n "$ids" ]; then docker rm -f $ids >/dev/null; fi', [
+      runShell('ids=$(docker ps -aq --filter "name=stell22-samehost-$1"); if [ -n "$ids" ]; then docker rm -f -v $ids >/dev/null; fi', [
         run,
       ]);
     }
+    runShell(
+      'ids=$(docker ps -aq --filter "name=stell22-witness-"); if [ -n "$ids" ]; then docker rm -f -v $ids >/dev/null; fi',
+    );
   });
 
   it("restores a synthetic archive under the same-host limits and removes only that container", () => {
@@ -186,9 +192,11 @@ describe.skipIf(!dockerEnabled)("same-host synthetic docker proof", () => {
       STELL22_SAME_HOST_RUN: run,
     });
     expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
-    expect(verified.stdout).toContain("RESULT=RESTORE_VERIFIED");
+    const cleanedAt = verified.stdout.indexOf("RESULT=CLEANED");
+    const verifiedAt = verified.stdout.indexOf("RESULT=RESTORE_VERIFIED");
+    expect(cleanedAt).toBeGreaterThanOrEqual(0);
+    expect(verifiedAt).toBeGreaterThan(cleanedAt);
     expect(verified.stdout).toContain("P1_APPLY=NOT_AUTHORIZED");
-    expect(verified.stdout).toContain("RESULT=CLEANED");
     expect(containerGone(run)).toBe(true);
 
     const mismatch = lines.map((line) =>
@@ -206,24 +214,50 @@ describe.skipIf(!dockerEnabled)("same-host synthetic docker proof", () => {
     expect(containerGone(run)).toBe(true);
   }, 180_000);
 
-  it("stops when the health probe fails and does not leave the container", () => {
-    const packed = packageArchive("synthetic-health.sql.gz");
-    const run = "samehostsyn0002";
-    runIds.push(run);
-    const counter = makePosixTemp();
-    writeText(`${counter}/hits`, "0\n");
-    const stopped = invoke(["synthetic", packed.archive, "/tmp/unused-controls"], {
-      STELL22_SAME_HOST_SHA256: packed.sha,
-      STELL22_SAME_HOST_RUN: run,
-      STELL22_SAME_HOST_HEALTH_CMD: `hits=$(cat "${counter}/hits"); hits=$((hits + 1)); printf '%s\n' "$hits" > "${counter}/hits"; [ "$hits" -lt 2 ]`,
+  it("stops when health or memory fails during SQL restore, or the restore times out", () => {
+    const slow = "SELECT pg_sleep(30);";
+    const health = packageArchive("synthetic-health.sql.gz", slow);
+    const healthRun = "samehostsyn0002";
+    runIds.push(healthRun);
+    const healthStopped = invoke(["synthetic", health.archive, "/tmp/unused-controls"], {
+      STELL22_SAME_HOST_SHA256: health.sha,
+      STELL22_SAME_HOST_RUN: healthRun,
+      STELL22_SAME_HOST_FAILPOINT: "health-during-restore",
     });
-    const hits = Number(runShell('cat "$1/hits"', [counter]).stdout.trim());
-    expect(stopped.status, `${stopped.stdout}\n${stopped.stderr}`).not.toBe(0);
-    expect(stopped.stdout).toContain("RESULT=STOP_HEALTH");
-    expect(stopped.stdout).toContain("RESULT=CLEANED");
-    expect(stopped.stdout).not.toContain("RESULT=RESTORE_VERIFIED");
-    expect(containerGone(run)).toBe(true);
-    expect(hits).toBeGreaterThan(1);
+    expect(healthStopped.status, `${healthStopped.stdout}\n${healthStopped.stderr}`).not.toBe(0);
+    expect(healthStopped.stdout).toContain("RESTORE_STARTED=1");
+    expect(healthStopped.stdout).toContain("RESULT=STOP_HEALTH");
+    expect(healthStopped.stdout).toContain("RESULT=CLEANED");
+    expect(healthStopped.stdout).not.toContain("RESULT=RESTORE_VERIFIED");
+    expect(containerGone(healthRun)).toBe(true);
+
+    const memory = packageArchive("synthetic-memory-during.sql.gz", slow);
+    const memoryRun = "samehostsyn0005";
+    runIds.push(memoryRun);
+    const memoryStopped = invoke(["synthetic", memory.archive, "/tmp/unused-controls"], {
+      STELL22_SAME_HOST_SHA256: memory.sha,
+      STELL22_SAME_HOST_RUN: memoryRun,
+      STELL22_SAME_HOST_FAILPOINT: "memory-during-restore",
+    });
+    expect(memoryStopped.status, `${memoryStopped.stdout}\n${memoryStopped.stderr}`).not.toBe(0);
+    expect(memoryStopped.stdout).toContain("RESTORE_STARTED=1");
+    expect(memoryStopped.stdout).toContain("RESULT=STOP_RESOURCES");
+    expect(memoryStopped.stdout).not.toContain("RESULT=RESTORE_VERIFIED");
+    expect(containerGone(memoryRun)).toBe(true);
+
+    const timed = packageArchive("synthetic-timeout.sql.gz", slow);
+    const timedRun = "samehostsyn0006";
+    runIds.push(timedRun);
+    const timedStopped = invoke(["synthetic", timed.archive, "/tmp/unused-controls"], {
+      STELL22_SAME_HOST_SHA256: timed.sha,
+      STELL22_SAME_HOST_RUN: timedRun,
+      STELL22_SAME_HOST_TIMEOUT_SEC: "2",
+    });
+    expect(timedStopped.status, `${timedStopped.stdout}\n${timedStopped.stderr}`).not.toBe(0);
+    expect(timedStopped.stdout).toContain("RESTORE_STARTED=1");
+    expect(timedStopped.stdout).toContain("RESULT=STOP_TIMEOUT");
+    expect(timedStopped.stdout).not.toContain("RESULT=RESTORE_VERIFIED");
+    expect(containerGone(timedRun)).toBe(true);
   }, 180_000);
 
   it("stops before create when available memory is below the reserve", () => {
@@ -240,6 +274,70 @@ describe.skipIf(!dockerEnabled)("same-host synthetic docker proof", () => {
     expect(stopped.stdout).not.toContain("CONTAINER=");
     expect(containerGone(run)).toBe(true);
   }, 60_000);
+
+  it("does not pass when cleanup fails and leaves a foreign container untouched", () => {
+    const packed = packageArchive("synthetic-cleanup.sql.gz");
+    const run = "samehostsyn0008";
+    runIds.push(run);
+    const measured = invoke(["measure", packed.archive], {
+      STELL22_SAME_HOST_SHA256: packed.sha,
+      STELL22_SAME_HOST_RUN: run,
+    });
+    expect(measured.status, `${measured.stdout}\n${measured.stderr}`).toBe(0);
+    const keys = [
+      "public_tables",
+      "public_constraints",
+      "migration_rows",
+      "migration_names_sha256",
+      "p1_row",
+      "p1_applied",
+      "column_fingerprint",
+      "constraint_fingerprint",
+    ];
+    const controls = makePosixTemp();
+    writeText(
+      `${controls}/controls`,
+      `${keys.map((key) => `${key}=${field(measured.stdout, key)}`).join("\n")}\n`,
+    );
+    expect(containerGone(run)).toBe(true);
+
+    const rmFailed = invoke(["synthetic", packed.archive, `${controls}/controls`], {
+      STELL22_SAME_HOST_SHA256: packed.sha,
+      STELL22_SAME_HOST_RUN: run,
+      STELL22_SAME_HOST_FAILPOINT: "cleanup-rm",
+    });
+    expect(rmFailed.status).not.toBe(0);
+    expect(rmFailed.stdout).toContain("RESULT=FAILED_CLEANUP");
+    expect(rmFailed.stdout).toContain("DETAIL=docker-rm");
+    expect(rmFailed.stdout).not.toContain("RESULT=RESTORE_VERIFIED");
+    expect(containerGone(run)).toBe(false);
+    runShell('docker rm -f -v "stell22-samehost-$1" >/dev/null', [run]);
+    expect(containerGone(run)).toBe(true);
+
+    const witness = "stell22-witness-samehostsyn0008";
+    const created = runShell(
+      'docker run -d --name "$1" --network none --entrypoint sleep "$2" 300',
+      [witness, "postgres:17-alpine@sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb"],
+    );
+    expect(created.status, created.stderr).toBe(0);
+    const before = runShell('docker inspect -f "{{.Id}} {{.State.Status}}" "$1"', [witness]);
+    expect(before.stdout.trim()).toContain("running");
+
+    const mismatch = invoke(["synthetic", packed.archive, `${controls}/controls`], {
+      STELL22_SAME_HOST_SHA256: packed.sha,
+      STELL22_SAME_HOST_RUN: run,
+      STELL22_SAME_HOST_FAILPOINT: "cleanup-identity",
+    });
+    const after = runShell('docker inspect -f "{{.Id}} {{.State.Status}}" "$1"', [witness]);
+    expect(mismatch.status).not.toBe(0);
+    expect(mismatch.stdout).toContain("RESULT=FAILED_CLEANUP");
+    expect(mismatch.stdout).toContain("DETAIL=identity");
+    expect(mismatch.stdout).not.toContain("RESULT=RESTORE_VERIFIED");
+    expect(after.stdout).toBe(before.stdout);
+    expect(containerGone(run)).toBe(false);
+    runShell('docker rm -f -v "stell22-samehost-$1" "$2" >/dev/null', [run, witness]);
+    expect(containerGone(run)).toBe(true);
+  }, 180_000);
 
   it("refuses execute on a workstation that is not the production engine", () => {
     const run = "samehostsyn0004";
