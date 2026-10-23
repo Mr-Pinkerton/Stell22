@@ -30,7 +30,7 @@ function field(text: string, key: string): string {
 
 function invoke(
   args: readonly string[],
-  env?: NodeJS.ProcessEnv,
+  env?: Record<string, string>,
 ): SpawnSyncReturns<string> {
   return spawnSync("sh", [scriptPath, ...args], {
     cwd: repoRoot,
