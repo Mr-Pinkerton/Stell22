@@ -139,6 +139,11 @@ if ! grep -q '42501' "$work/insert.err"; then
 fi
 
 app_image="$(docker compose -f docker-compose.prod.yml images -q app | awk 'NF { print; exit }')"
+if [ -z "$app_image" ]; then
+  echo "RESULT=STOP_APP_START" >&2
+  echo "DATABASE_RESTORE=NO" >&2
+  exit 1
+fi
 OUT="$work/app.url" ROLE=stell22_app python3 - <<'PY'
 import os, pathlib, urllib.parse
 url = "postgresql://" + os.environ["ROLE"] + ":" + urllib.parse.quote(os.environ["APP_DB_PASSWORD"], safe="") + "@127.0.0.1:5432/stell22?schema=public"
@@ -155,12 +160,12 @@ if [ "$app_migrate" -eq 0 ] || [ "$p1_present" = "PRESENT" ]; then
   exit 1
 fi
 
-restart_old=0
 OUT="$work/migrator.url" ROLE=stell22_migrator python3 - <<'PY'
 import os, pathlib, urllib.parse
 url = "postgresql://" + os.environ["ROLE"] + ":" + urllib.parse.quote(os.environ["MIGRATOR_DB_PASSWORD"], safe="") + "@127.0.0.1:5432/stell22?schema=public"
 pathlib.Path(os.environ["OUT"]).write_text("DATABASE_URL=" + url + "\n")
 PY
+restart_old=0
 if ! docker run --rm --pull never --network container:stell22-db-prod --memory 536870912 --cpus 0.25 --pids-limit 128 --entrypoint npx --env-file "$work/migrator.url" "$app_image" prisma migrate deploy --schema /app/prisma/schema.prisma >/dev/null; then
   echo "RESULT=FORWARD_RECOVERY" >&2
   echo "DATABASE_RESTORE=NO" >&2
