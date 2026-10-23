@@ -64,9 +64,12 @@ file.
    It does not use `attnum`, so a dropped-column hole and the closed numbering
    after a plain restore are the same column. The constraint fingerprint uses
    the constraint name, type, validated flag, deferral, and definition.
-   `CHECK` text keeps parentheses only where they change precedence. A chain
-   of `AND` or a chain of `OR` is flattened. `(a OR b) AND c` stays different
-   from `a OR (b AND c)`. `P1_ROW` is `PRESENT` or `ABSENT` for migration
+   `CHECK` text drops parentheses only when the reprint parses to the same
+   tree. Same-precedence arithmetic keeps its right-hand grouping, because
+   integer division, modulo, and overflow are not associative. A chain of
+   `AND` or a chain of `OR` is flattened. `(a OR b) AND c` stays different
+   from `a OR (b AND c)`. Syntax the canonicalizer does not recognize fails
+   closed as `UNCERTAIN`. `P1_ROW` is `PRESENT` or `ABSENT` for migration
    `20261010210000_psr_p3_s2_b_batch_receipt_provenance`. `P1_STATE` is
    `APPLIED` only when that single row has `finished_at` set, `rolled_back_at`
    empty, and `applied_steps_count` greater than zero. A failed or unfinished

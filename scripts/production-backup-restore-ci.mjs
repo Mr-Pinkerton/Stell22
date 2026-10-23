@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   COLUMN_SQL,
   CONSTRAINT_SQL,
+  FingerprintSyntaxError,
   canonicalizeConstraintDefinition,
   columnFingerprint,
   constraintFingerprint,
@@ -206,6 +207,203 @@ function provePhysicalDifferencesAreNotLogical(container) {
     .filter(Boolean)
     .map((line) => canonicalizeConstraintDefinition(line));
   if (defs.length !== 2 || defs[0] !== defs[1]) fail("redundant AND grouping changed the constraint fingerprint");
+  proveSemanticGroupings(container);
+}
+
+const productionIdentity = String.raw`CHECK ((((char_length(btrim("causationId")) >= 1) AND (char_length(btrim("causationId")) <= 200)) AND ((char_length(btrim("effectKey")) >= 1) AND (char_length(btrim("effectKey")) <= 200)) AND (("epochId" IS NULL) OR ((char_length(btrim("epochId")) >= 1) AND (char_length(btrim("epochId")) <= 200)))))`;
+const restoredIdentity = String.raw`CHECK (((char_length(btrim("causationId")) >= 1) AND (char_length(btrim("causationId")) <= 200) AND ((char_length(btrim("effectKey")) >= 1) AND (char_length(btrim("effectKey")) <= 200)) AND (("epochId" IS NULL) OR ((char_length(btrim("epochId")) >= 1) AND (char_length(btrim("epochId")) <= 200)))))`;
+
+function expectQuery(container, sql, expected, message) {
+  const got = psqlText(container, "stell22_pbr_dst", sql).trim();
+  if (got !== expected) fail(message);
+}
+
+function proveSemanticGroupings(container) {
+  expectQuery(container, "SELECT (5 * (3 / 2) >= 6)::text", "false", "right-grouped integer division was true");
+  expectQuery(container, "SELECT ((5 * 3) / 2 >= 6)::text", "true", "left-grouped integer division was false");
+  expectQuery(container, "SELECT (5 * (3 % 2))::text", "5", "right-grouped modulo changed");
+  expectQuery(container, "SELECT ((5 * 3) % 2)::text", "1", "left-grouped modulo changed");
+  expectQuery(container, "SELECT (5 - (3 + 2))::text", "0", "right-grouped subtraction changed");
+  expectQuery(container, "SELECT ((5 - 3) + 2)::text", "4", "left-grouped subtraction changed");
+  expectQuery(container, "SELECT (8 / (4 * 2))::text", "1", "right-grouped division changed");
+  expectQuery(container, "SELECT ((8 / 4) * 2)::text", "4", "left-grouped division changed");
+  expectQuery(container, "SELECT (-(-2))::text", "2", "nested unary minus changed");
+  expectQuery(container, "SELECT ((1::numeric / 2)::int)::text", "1", "cast after division changed");
+  expectQuery(container, "SELECT pg_typeof((1::numeric / 2)::int)::text", "integer", "cast after division changed type");
+  expectQuery(container, "SELECT pg_typeof(1::numeric / 2::int)::text", "numeric", "division of casts changed type");
+  expectQuery(container, "SELECT ((false = NULL::boolean) IS NULL)::text", "true", "grouped IS NULL changed");
+  expectQuery(container, "SELECT (false = (NULL::boolean IS NULL))::text", "false", "right-grouped IS NULL changed");
+  expectQuery(container, "SELECT ((true OR false) AND false)::text", "false", "AND-outside-OR changed");
+  expectQuery(container, "SELECT (true OR (false AND false))::text", "true", "OR-outside-AND changed");
+  expectQuery(
+    container,
+    [
+      "CREATE FUNCTION pbr_overflow_probe(kind text) RETURNS text LANGUAGE plpgsql AS $fn$",
+      "DECLARE result integer;",
+      "BEGIN",
+      "  IF kind = 'right' THEN",
+      "    result := 2000000000 + (2000000000 + (-2000000000));",
+      "  ELSIF kind = 'mul' THEN",
+      "    result := 2147483647 * (2 / 2);",
+      "  ELSIF kind = 'mul-left' THEN",
+      "    result := (2147483647 * 2) / 2;",
+      "  ELSE",
+      "    result := (2000000000 + 2000000000) + (-2000000000);",
+      "  END IF;",
+      "  RETURN result::text;",
+      "EXCEPTION",
+      "  WHEN SQLSTATE '22003' THEN",
+      "    RETURN 'overflow';",
+      "END",
+      "$fn$;",
+      "SELECT pbr_overflow_probe('right') || ',' || pbr_overflow_probe('left') || ',' || pbr_overflow_probe('mul') || ',' || pbr_overflow_probe('mul-left');",
+    ].join("\n"),
+    "2000000000,overflow,2147483647,overflow",
+    "integer overflow grouping matched",
+  );
+
+  psqlText(
+    container,
+    "stell22_pbr_dst",
+    [
+      "CREATE TABLE pbr_mul_right (a integer, b integer, c integer);",
+      "ALTER TABLE pbr_mul_right ADD CONSTRAINT pbr_mul_right CHECK (a * (b / c) >= 6);",
+      "CREATE TABLE pbr_mul_left (a integer, b integer, c integer);",
+      "ALTER TABLE pbr_mul_left ADD CONSTRAINT pbr_mul_left CHECK ((a * b) / c >= 6);",
+      "DO $do$",
+      "BEGIN",
+      "  INSERT INTO pbr_mul_right (a, b, c) VALUES (5, 3, 2);",
+      "  RAISE EXCEPTION 'right-check-accepted';",
+      "EXCEPTION",
+      "  WHEN check_violation THEN",
+      "    NULL;",
+      "END",
+      "$do$;",
+      "INSERT INTO pbr_mul_left (a, b, c) VALUES (5, 3, 2);",
+    ].join("\n"),
+  );
+  expectQuery(container, "SELECT count(*)::text FROM pbr_mul_left", "1", "left-grouped check rejected a true row");
+
+  const mathDefs = psqlText(
+    container,
+    "stell22_pbr_dst",
+    [
+      "SELECT con.conname || '=' || pg_catalog.pg_get_constraintdef(con.oid)",
+      "FROM pg_catalog.pg_constraint con",
+      "WHERE con.conname IN ('pbr_mul_right', 'pbr_mul_left')",
+      "ORDER BY con.conname;",
+    ].join("\n"),
+  )
+    .split(/\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const canonicalMath = Object.fromEntries(
+    mathDefs.map((line) => {
+      const splitAt = line.indexOf("=");
+      return [line.slice(0, splitAt), canonicalizeConstraintDefinition(line.slice(splitAt + 1))];
+    }),
+  );
+  if (canonicalMath.pbr_mul_left === canonicalMath.pbr_mul_right) {
+    fail("division grouping produced one fingerprint");
+  }
+  const mathDigest = (name, definition) =>
+    constraintFingerprint(
+      `${["public", name, name, "c", "validated", "not-deferrable", "not-initially-deferred", definition].join("\u001f")}\n`,
+    );
+  if (mathDigest("pbr_math", canonicalMath.pbr_mul_left) === mathDigest("pbr_math", canonicalMath.pbr_mul_right)) {
+    fail("division grouping hashes matched");
+  }
+
+  psqlText(
+    container,
+    "stell22_pbr_dst",
+    [
+      "CREATE TABLE pbr_and_outer (a boolean, b boolean, c boolean);",
+      "ALTER TABLE pbr_and_outer ADD CONSTRAINT pbr_and_outer CHECK ((a OR b) AND c);",
+      "CREATE TABLE pbr_or_outer (a boolean, b boolean, c boolean);",
+      "ALTER TABLE pbr_or_outer ADD CONSTRAINT pbr_or_outer CHECK (a OR (b AND c));",
+      "DO $do$",
+      "BEGIN",
+      "  INSERT INTO pbr_and_outer (a, b, c) VALUES (true, false, false);",
+      "  RAISE EXCEPTION 'and-outer-accepted';",
+      "EXCEPTION",
+      "  WHEN check_violation THEN",
+      "    NULL;",
+      "END",
+      "$do$;",
+      "INSERT INTO pbr_or_outer (a, b, c) VALUES (true, false, false);",
+    ].join("\n"),
+  );
+  const boolDefs = psqlText(
+    container,
+    "stell22_pbr_dst",
+    "SELECT pg_catalog.pg_get_constraintdef(oid) FROM pg_catalog.pg_constraint WHERE conname IN ('pbr_and_outer', 'pbr_or_outer') ORDER BY conname;",
+  )
+    .split(/\n/)
+    .map((line) => canonicalizeConstraintDefinition(line.trim()))
+    .filter(Boolean);
+  if (boolDefs.length !== 2 || boolDefs[0] === boolDefs[1]) fail("AND/OR precedence produced one fingerprint");
+  expectQuery(
+    container,
+    "SELECT count(*)::text FROM pbr_or_outer WHERE a AND NOT b AND NOT c",
+    "1",
+    "OR-outside-AND rejected a true row",
+  );
+  expectQuery(container, "SELECT count(*)::text FROM pbr_and_outer", "0", "AND-outside-OR accepted a false row");
+
+  psqlText(
+    container,
+    "stell22_pbr_dst",
+    [
+      'CREATE TABLE pbr_identity ("causationId" text, "effectKey" text, "epochId" text);',
+      `ALTER TABLE pbr_identity ADD CONSTRAINT pbr_prod ${productionIdentity};`,
+      `ALTER TABLE pbr_identity ADD CONSTRAINT pbr_rest ${restoredIdentity};`,
+    ].join("\n"),
+  );
+  const identityDefs = psqlText(
+    container,
+    "stell22_pbr_dst",
+    "SELECT pg_catalog.pg_get_constraintdef(oid) FROM pg_catalog.pg_constraint WHERE conname IN ('pbr_prod', 'pbr_rest') ORDER BY conname;",
+  )
+    .split(/\n/)
+    .map((line) => canonicalizeConstraintDefinition(line.trim()))
+    .filter(Boolean);
+  if (identityDefs.length !== 2 || identityDefs[0] !== identityDefs[1]) {
+    fail("InventoryMovement AND grouping changed the fingerprint");
+  }
+
+  const between = psqlText(
+    container,
+    "stell22_pbr_dst",
+    [
+      "CREATE TABLE pbr_unknown (a text);",
+      "ALTER TABLE pbr_unknown ADD CONSTRAINT pbr_unknown CHECK (a ~ '^[0-9]$');",
+      "SELECT pg_catalog.pg_get_constraintdef(oid) FROM pg_catalog.pg_constraint WHERE conname = 'pbr_unknown';",
+    ].join("\n"),
+  ).trim();
+  if (!between.includes("~")) fail("postgres did not keep the unknown operator");
+  let syntaxFailed = false;
+  try {
+    canonicalizeConstraintDefinition(between);
+  } catch (error) {
+    syntaxFailed = error instanceof FingerprintSyntaxError;
+  }
+  if (!syntaxFailed) fail("unknown syntax was canonicalized");
+  const helper = path.join(root, "scripts", "production-backup-restore-fingerprint.mjs");
+  const unknownRow = [
+    "public",
+    "pbr_unknown",
+    "pbr_unknown",
+    "c",
+    "validated",
+    "not-deferrable",
+    "not-initially-deferred",
+    between,
+  ].join("\u001f");
+  const rejected = run(process.execPath, [helper, "--stdin"], { input: `\u001e${unknownRow}\n` });
+  if (rejected.status === 0 || (rejected.stdout ?? "").includes("constraint_fingerprint=")) {
+    fail("unknown syntax fell back to a fingerprint");
+  }
 }
 
 function observeSchema(imageRef, sql) {
@@ -521,6 +719,39 @@ try {
   if (field(wrong.stdout ?? "", "COLUMN_FINGERPRINT") !== schema.columns) {
     fail("fingerprint mismatch did not report the restored columns");
   }
+  if ((wrong.stdout ?? "").includes("RESULT=RESTORE_VERIFIED")) fail("altered fingerprint was verified");
+
+  const unknownSql = [
+    "-- PostgreSQL database dump",
+    "CREATE TABLE pbr_unknown (a text);",
+    "ALTER TABLE pbr_unknown ADD CONSTRAINT pbr_unknown CHECK (a ~ '^[0-9]$');",
+    'CREATE TABLE "_prisma_migrations" (id text PRIMARY KEY, migration_name text NOT NULL, finished_at timestamptz, rolled_back_at timestamptz, applied_steps_count integer NOT NULL);',
+    `INSERT INTO "_prisma_migrations" (id, migration_name, finished_at, rolled_back_at, applied_steps_count) VALUES ('m1', '${migrationName}', '2026-01-01 00:00:00+00', NULL, 1);`,
+    "-- PostgreSQL database dump complete",
+    "",
+  ].join("\n");
+  const unknownDir = posixTemp();
+  const unknownName = "stell22_2026-10-22_03-00-01.sql.gz";
+  const unknownPacked = pack(unknownDir, unknownName, unknownSql);
+  const unknownTrust = trustFile(unknownDir, unknownName, unknownPacked.digest, "synthetic-selector");
+  const unknownControl = controls(unknownDir, {
+    public_tables: "2",
+    public_constraints: "2",
+    migration_rows: "1",
+    migration_names_sha256: migrationSha,
+    p1_row: "ABSENT",
+    p1_applied: "NOT_APPLIED",
+    column_fingerprint: "c".repeat(64),
+    constraint_fingerprint: "d".repeat(64),
+  });
+  const unknown = procedure(["run", unknownPacked.archive, unknownTrust, unknownControl], {
+    STELL22_PBR_SHA256: unknownPacked.digest,
+    STELL22_PBR_SELECTOR: "synthetic-selector",
+    STELL22_PBR_RUN: `pbr${crypto.randomBytes(8).toString("hex")}`,
+  });
+  assertResult(unknown, "UNCERTAIN");
+  if ((unknown.stdout ?? "").includes("RESULT=RESTORE_VERIFIED")) fail("unknown syntax was verified");
+  if ((unknown.stdout ?? "").includes("CONSTRAINT_FINGERPRINT=")) fail("unknown syntax returned a constraint fingerprint");
 
   const again = procedure(["run", packed.archive, trust, control], env);
   assertResult(again, "REFUSED_POPULATED");
@@ -784,6 +1015,8 @@ try {
   console.log("[production-backup-restore-ci] fingerprints=matched");
   console.log("[production-backup-restore-ci] fingerprint-mismatch=refused");
   console.log("[production-backup-restore-ci] attnum-hole=same-column-fingerprint");
+  console.log("[production-backup-restore-ci] arithmetic-grouping=distinct");
+  console.log("[production-backup-restore-ci] unknown-syntax=uncertain");
 } catch (error) {
   if (!process.exitCode) process.exitCode = 1;
   if (error instanceof Error && !error.message.startsWith("expected") && process.exitCode) {

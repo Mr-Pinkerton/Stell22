@@ -87,6 +87,33 @@ describe("production backup fingerprints", () => {
       constraintFingerprint(`${constraintRow(productionIdentity)}\n`),
     );
     expect(() => canonicalizeConstraintDefinition("CHECK (a = )")).toThrow(FingerprintSyntaxError);
+    expect(() => canonicalizeConstraintDefinition("CHECK (a BETWEEN 1 AND 3)")).toThrow(FingerprintSyntaxError);
+    expect(() => canonicalizeConstraintDefinition("CHECK (a LIKE 'x')")).toThrow(FingerprintSyntaxError);
+  });
+
+  it("keeps arithmetic grouping that integer evaluation does not treat as the same expression", () => {
+    const text = (definition: string) => canonicalizeConstraintDefinition(definition);
+    const digest = (definition: string) => constraintFingerprint(`${constraintRow(definition)}\n`);
+
+    expect(text("CHECK (a * (b / c) >= 6)")).toBe("CHECK (a * (b / c) >= 6)");
+    expect(text("CHECK ((a * b) / c >= 6)")).toBe("CHECK (a * b / c >= 6)");
+    expect(text("CHECK (a * (b / c) >= 6)")).not.toBe(text("CHECK ((a * b) / c >= 6)"));
+    expect(digest("CHECK (a * (b / c) >= 6)")).not.toBe(digest("CHECK ((a * b) / c >= 6)"));
+
+    expect(text("CHECK (a * (b % c) = 1)")).toBe("CHECK (a * (b % c) = 1)");
+    expect(text("CHECK ((a * b) % c = 1)")).toBe("CHECK (a * b % c = 1)");
+    expect(text("CHECK (a + (b - c) = 1)")).toBe("CHECK (a + (b - c) = 1)");
+    expect(text("CHECK ((a + b) - c = 1)")).toBe("CHECK (a + b - c = 1)");
+    expect(text("CHECK (a + (b + c) = 1)")).not.toBe(text("CHECK ((a + b) + c = 1)"));
+    expect(text("CHECK (a - (b + c) = 1)")).not.toBe(text("CHECK ((a - b) + c = 1)"));
+    expect(text("CHECK (a / (b * c) = 1)")).toBe("CHECK (a / (b * c) = 1)");
+    expect(text("CHECK ((a / b) * c = 1)")).toBe("CHECK (a / b * c = 1)");
+    expect(text("CHECK (-(-a) = 1)")).toBe("CHECK (-(-a) = 1)");
+    expect(text("CHECK ((a::numeric / 2)::int = 1)")).not.toBe(text("CHECK (a::numeric / 2::int = 1)"));
+    expect(text("CHECK ((a::int)::bigint = 1)")).toBe(text("CHECK (a::int::bigint = 1)"));
+    expect(text("CHECK ((a = b) IS NULL)")).toBe("CHECK ((a = b) IS NULL)");
+    expect(text("CHECK (a = (b IS NULL))")).toBe("CHECK (a = (b IS NULL))");
+    expect(text("CHECK ((a = b) IS NULL)")).not.toBe(text("CHECK (a = (b IS NULL))"));
   });
 
   it("is the fingerprint the restore script asks PostgreSQL to compute", () => {

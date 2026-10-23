@@ -3,9 +3,13 @@
  *
  * attnum is not part of a column. A plain restore closes holes left by
  * dropped columns, so ordinal_position changes while the logical column
- * does not. CHECK text keeps parentheses only where precedence needs them.
+ * does not. CHECK text drops parentheses only when the reprint parses to
+ * the same tree. Same-precedence arithmetic on the right stays grouped:
+ * integer division, modulo, and int4 overflow are not associative.
  * AND with AND, and OR with OR, are flattened. AND inside OR is not.
- * OID, business rows, and constraint definition bytes are not the digest.
+ * A cast chain is postfix, so (a::int)::bigint reprints as a::int::bigint.
+ * Unknown syntax throws. OID, business rows, and raw definition bytes
+ * are not the digest.
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -355,7 +359,7 @@ class Parser {
       this.expectKeyword("NULL");
       return {
         prec: PRECEDENCE.cmp,
-        text: `${wrap(left, PRECEDENCE.cmp, false)} IS ${negated ? "NOT " : ""}NULL`,
+        text: `${wrap(left, PRECEDENCE.cmp, true)} IS ${negated ? "NOT " : ""}NULL`,
       };
     }
     const operator = this.peek();
@@ -368,13 +372,13 @@ class Parser {
       this.expectPunct(")");
       return {
         prec: PRECEDENCE.cmp,
-        text: `${wrap(left, PRECEDENCE.cmp, false)} ${operator.text} ${form} (${inner})`,
+        text: `${wrap(left, PRECEDENCE.cmp, true)} ${operator.text} ${form} (${inner})`,
       };
     }
     const right = this.parseSum();
     return {
       prec: PRECEDENCE.cmp,
-      text: `${wrap(left, PRECEDENCE.cmp, false)} ${operator.text} ${wrap(right, PRECEDENCE.cmp, false)}`,
+      text: `${wrap(left, PRECEDENCE.cmp, true)} ${operator.text} ${wrap(right, PRECEDENCE.cmp, true)}`,
     };
   }
 
@@ -398,10 +402,9 @@ class Parser {
       const operator = this.accept("op", "+") ?? this.accept("op", "-");
       if (!operator) return left;
       const right = this.parseProduct();
-      const wrapRight = operator.text === "-";
       left = {
         prec: PRECEDENCE.add,
-        text: `${wrap(left, PRECEDENCE.add, false)} ${operator.text} ${wrap(right, PRECEDENCE.add, wrapRight)}`,
+        text: `${wrap(left, PRECEDENCE.add, false)} ${operator.text} ${wrap(right, PRECEDENCE.add, true)}`,
       };
     }
   }
@@ -412,10 +415,9 @@ class Parser {
       const operator = this.accept("op", "*") ?? this.accept("op", "/") ?? this.accept("op", "%");
       if (!operator) return left;
       const right = this.parseUnary();
-      const wrapRight = operator.text !== "*";
       left = {
         prec: PRECEDENCE.mul,
-        text: `${wrap(left, PRECEDENCE.mul, false)} ${operator.text} ${wrap(right, PRECEDENCE.mul, wrapRight)}`,
+        text: `${wrap(left, PRECEDENCE.mul, false)} ${operator.text} ${wrap(right, PRECEDENCE.mul, true)}`,
       };
     }
   }
@@ -424,7 +426,7 @@ class Parser {
     const operator = this.accept("op", "+") ?? this.accept("op", "-");
     if (!operator) return this.parseCast();
     const operand = this.parseUnary();
-    return { prec: PRECEDENCE.unary, text: `${operator.text}${wrap(operand, PRECEDENCE.unary, false)}` };
+    return { prec: PRECEDENCE.unary, text: `${operator.text}${wrap(operand, PRECEDENCE.unary, true)}` };
   }
 
   parseCast() {
