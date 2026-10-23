@@ -1,0 +1,101 @@
+name: Production role split release
+
+# Manual owner gate only. Push does not run this workflow.
+# An empty phrase stops before SSH. This file does not dispatch itself.
+on:
+  workflow_dispatch:
+    inputs:
+      authorization:
+        description: Owner phrase. Empty stops before SSH.
+        required: false
+        default: ""
+      sha:
+        description: Exact 40-character release SHA
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  owner-gate:
+    name: Owner authorization
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Stop unless the owner phrase and SHA match
+        env:
+          AUTHORIZATION: ${{ inputs.authorization }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          if [ "$AUTHORIZATION" != "OWNER_AUTHORIZES_ROLE_SPLIT_RELEASE" ]; then
+            echo "RESULT=STOP_OWNER_GATE"
+            echo "PRODUCTION_RELEASE=NO-GO"
+            exit 1
+          fi
+          if ! printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "RESULT=STOP_CHECKOUT"
+            exit 1
+          fi
+
+  release:
+    name: Role split on the production host
+    needs: owner-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: production
+    steps:
+      - name: Check required secrets
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+        run: |
+          missing=0
+          for name in PROD_HOST PROD_USER PROD_SSH_KEY PROD_APP_DIR; do
+            if [ -z "${!name}" ]; then
+              echo "Missing required secret: ${name}" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Checkout, role split, pinned P1, app-only start
+        uses: appleboy/ssh-action@v1.2.4
+        env:
+          EXPECTED_SHA: ${{ inputs.sha }}
+          APP_DIR: ${{ secrets.PROD_APP_DIR }}
+          STELL22_RELEASE_EXECUTE: "1"
+          STELL22_RELEASE_MAINTENANCE: "1"
+          STELL22_RELEASE_AUTHORIZATION: ${{ inputs.authorization }}
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT || 22 }}
+          command_timeout: 35m
+          envs: EXPECTED_SHA,APP_DIR,STELL22_RELEASE_EXECUTE,STELL22_RELEASE_MAINTENANCE,STELL22_RELEASE_AUTHORIZATION
+          script: |
+            set -euo pipefail
+            cd "$APP_DIR"
+            git fetch origin
+            if ! git cat-file -e "${EXPECTED_SHA}^{commit}"; then
+              echo "RESULT=STOP_CHECKOUT" >&2
+              exit 1
+            fi
+            TMP_DIR="$(mktemp -d)"
+            cleanup() { rm -rf "$TMP_DIR"; }
+            trap cleanup EXIT
+            git show "${EXPECTED_SHA}:scripts/release-checkout.sh" > "$TMP_DIR/release-checkout.sh"
+            sh "$TMP_DIR/release-checkout.sh" "$EXPECTED_SHA"
+            STELL22_RELEASE_EXECUTE="$STELL22_RELEASE_EXECUTE" \
+              STELL22_RELEASE_MAINTENANCE="$STELL22_RELEASE_MAINTENANCE" \
+              STELL22_RELEASE_AUTHORIZATION="$STELL22_RELEASE_AUTHORIZATION" \
+              STELL22_RELEASE_SHA="$EXPECTED_SHA" \
+              sh scripts/release-role-split.sh

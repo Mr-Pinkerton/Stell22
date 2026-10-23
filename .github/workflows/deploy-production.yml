@@ -4,6 +4,11 @@ name: Production Deploy
 # Сначала тот же CI, что на push/PR; SSH и preflight — только после зелёного CI.
 on:
   workflow_dispatch:
+    inputs:
+      authorization:
+        description: Owner phrase. Empty stops before SSH.
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -13,6 +18,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  owner-gate:
+    name: Owner authorization
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Stop unless the owner phrase matches
+        env:
+          AUTHORIZATION: ${{ inputs.authorization }}
+        run: |
+          if [ "$AUTHORIZATION" != "OWNER_AUTHORIZES_ROLE_SPLIT_RELEASE" ]; then
+            echo "RESULT=STOP_OWNER_GATE"
+            echo "PRODUCTION_RELEASE=NO-GO"
+            exit 1
+          fi
+
   resolve-sha:
     name: Resolve origin/main SHA
     runs-on: ubuntu-latest
@@ -38,14 +58,14 @@ jobs:
 
   ci:
     name: CI
-    needs: resolve-sha
+    needs: [owner-gate, resolve-sha]
     uses: ./.github/workflows/ci.yml
     with:
       ref: ${{ needs.resolve-sha.outputs.sha }}
 
   deploy:
     name: Deploy origin/main
-    needs: [resolve-sha, ci]
+    needs: [owner-gate, resolve-sha, ci]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production

@@ -13,6 +13,7 @@
 # testing
 /coverage
 /.p1-historical-runtime*
+/.p1rr-migrate-*
 
 # next.js
 /.next/

@@ -1,5 +1,6 @@
 # Прод-развёртывание Stell22: база + приложение + Caddy (HTTPS автоматически).
-# Запуск:  docker compose -f docker-compose.prod.yml up -d --build
+# Приложение: docker compose -f docker-compose.prod.yml up -d --no-deps app
+# Контейнер базы и том db-data этим запуском не пересоздаются.
 # Значения берутся из файла .env рядом (скопируйте .env.deploy.example → .env).
 
 services:
@@ -13,6 +14,8 @@ services:
       POSTGRES_DB: stell22
     volumes:
       - db-data:/var/lib/postgresql/data
+    mem_limit: 1280m
+    cpus: 0.70
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U stell22 -d stell22"]
       interval: 5s
@@ -28,7 +31,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://stell22:${POSTGRES_PASSWORD}@db:5432/stell22?schema=public
+      DATABASE_URL: postgresql://stell22_app:${APP_DB_PASSWORD}@db:5432/stell22?schema=public
       SESSION_SECRET: ${SESSION_SECRET}
       NODE_ENV: production
       # Мониторинг ошибок (необязательно): вставьте DSN из Sentry в .env.
@@ -46,6 +49,8 @@ services:
       MAIL_MARK_SEEN: ${MAIL_MARK_SEEN:-true}
     expose:
       - "3000"
+    mem_limit: 1536m
+    cpus: 0.70
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 15s
@@ -64,6 +69,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    mem_limit: 192m
+    cpus: 0.20
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

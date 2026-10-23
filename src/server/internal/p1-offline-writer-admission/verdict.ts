@@ -146,7 +146,7 @@ export function judgeOfflineAdmission(facts: OfflineFacts): OfflineVerdict {
     proven.push("The application role could not update the admission row.");
   }
   if (facts.prismaMigrationsRelation === "absent" && !facts.appOnlyIsProductionPath) {
-    proven.push("This run did not create _prisma_migrations. The production entrypoint is still the migrate-on-start script.");
+    proven.push("This run did not create _prisma_migrations. appOnlyIsProductionPath is false, so this candidate is not an accepted production path.");
   }
   if (facts.postHocActivitySawThatSession) {
     proven.push("One later pg_stat_activity sample still showed the application insert text. That sample does not account for sessions that had already exited.");
