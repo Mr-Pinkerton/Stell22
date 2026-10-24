@@ -38,6 +38,8 @@ If sources conflict, verify the actual GitHub `main` and record the divergence.
 
 A Cursor/chat statement without a committed project artifact is not canonical.
 
+Release candidate checkpoint, 2026-10-23: PR #110 is the integrated candidate for `stell22_app` / `stell22_migrator`, pinned P1, and app-only startup. R1 corrects legacy restart and moves the image build before the write freeze. The release image is the id Compose tagged at build time, not the image of the still-running container, and the new role passwords are URL-safe. It is not merged and not deployed. Production release remains **NO-GO**. The backup restore gate stays closed. The sequence is `audit/08.62-psr-p3-release-integration.md`.
+
 ## 4. Current verified technical checkpoint
 
 Repository: `Mr-Pinkerton/Stell22`
@@ -365,6 +367,10 @@ R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOY
 Does **not** mean dual-write, SHADOW posting, authoritative ledger, `OPENING_BALANCE` data, paper removal, `production_cost_flow` activation, or Correction Center.
 
 This NEXT is **PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01 — Resolve the deployment blocker and the missing production evidence**. Rollout readiness is `audit/08.36` (**CANDIDATE / NOT READY / EVIDENCE INCOMPLETE**). It does not authorize a migration or a deploy. It does not authorize a production migration, a deploy, or production access. P1 is already in `main` and is not deployed (`audit/08.33`). P2 is already in `main` and is not deployed (`audit/08.34`). P3 is already in `main` and is not deployed (`audit/08.35`). The readiness assessment is `audit/08.36` and is not a go decision. Do not start the gate-resolution package from this file. Do not treat a Slice 1 `MATCH_OBSERVED` as proof that a warehouse projection changed, or as authority to remove paper.
+
+Disposable release rehearsal `audit/08.60` is a test-owned command only. It does not change this NEXT. Production role split, production P1 apply, and production deploy remain **NOT AUTHORIZED**. `FREEZE_PASS_FORBIDDEN`. `PRODUCTION RELEASE NO-GO`. The rehearsal does not prove production-wide writer exclusion.
+
+Legacy ownership transition `audit/08.61` is a disposable PostgreSQL rehearsal only. It does not change this NEXT, the production SHA, or any production authorization. Production role split, production P1 apply, and production deploy remain **NOT AUTHORIZED**. `FREEZE_PASS_FORBIDDEN`. `PRODUCTION RELEASE NO-GO`.
 
 Do **not** implement the full `ProductionOperationMutation` schema or Correction Center in this package.
 

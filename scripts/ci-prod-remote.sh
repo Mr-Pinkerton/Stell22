@@ -62,12 +62,8 @@ PREVIOUS_SHA="$(git rev-parse HEAD)"
 echo "previous_sha=${PREVIOUS_SHA}"
 
 echo "===== STAGE: checkout ====="
-if git show-ref --verify --quiet refs/heads/main; then
-  git checkout main
-  git reset --hard "$EXPECTED_SHA"
-else
-  git checkout -B main "$EXPECTED_SHA"
-fi
+git show "${EXPECTED_SHA}:scripts/release-checkout.sh" > "$TMP_DIR/release-checkout.sh"
+sh "$TMP_DIR/release-checkout.sh" "$EXPECTED_SHA"
 
 echo "===== STAGE: deploy ====="
 PREVIOUS_SHA="$PREVIOUS_SHA" \

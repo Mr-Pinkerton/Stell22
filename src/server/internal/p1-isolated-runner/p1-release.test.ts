@@ -515,6 +515,8 @@ describe("writer preflight script stays a shell file", () => {
     const remote = fs.readFileSync(path.join(process.cwd(), "scripts", "ci-prod-remote.sh"), "utf8");
     expect(remote.indexOf("p1-writer-preflight.sql")).toBeGreaterThan(-1);
     expect(remote.indexOf("p1-writer-preflight.sh")).toBeGreaterThan(-1);
-    expect(remote.indexOf("p1-writer-preflight.sh")).toBeLessThan(remote.indexOf("git reset --hard"));
+    expect(remote).not.toContain("git reset --hard");
+    expect(remote.indexOf("p1-writer-preflight.sh")).toBeLessThan(remote.indexOf("STAGE: checkout"));
+    expect(remote).toContain("release-checkout.sh");
   });
 });

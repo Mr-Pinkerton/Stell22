@@ -1,8 +1,7 @@
 #!/bin/sh
-# Безопасное обновление Stell22 на проде (Beget VPS, Docker).
-# Порядок: бэкап БД → обновление кода → сборка (миграции применит entrypoint) →
-# проверка здоровья. При сбое build/start/health откатывает только приложение
-# на предыдущий SHA. Базу и Prisma-миграции назад не откатывает.
+# Обновление приложения Stell22 на проде.
+# Сборка не применяет миграции. Роль stell22_app и pinned P1 должны уже быть готовы.
+# Сбой после запуска не восстанавливает старую базу.
 #
 # Запуск на сервере:  cd /root/Stell22 && sh scripts/deploy.sh
 # Из CI:              PREVIOUS_SHA=<старый SHA> DEPLOY_SHA=<новый SHA> sh scripts/deploy.sh
@@ -46,36 +45,19 @@ wait_for_health() {
   return 1
 }
 
-rollback_app() {
-  echo "" >&2
-  echo "!! Откатываю приложение на $PREV_COMMIT ($PREV_COMMIT_FULL)" >&2
-  echo "!! Откат только кода/контейнера. Схема БД и Prisma-миграции НЕ откатываются." >&2
-  if [ -n "$LAST_BACKUP" ]; then
-    echo "!! Бэкап БД (вручную, если миграция испортила данные): $LAST_BACKUP" >&2
-  fi
-
-  if ! git cat-file -e "${PREV_COMMIT_FULL}^{commit}"; then
-    echo "DEPLOY FAILED, ROLLBACK FAILED" >&2
-    echo "!! Предыдущий SHA $PREV_COMMIT_FULL недоступен" >&2
-    exit 1
-  fi
-
-  if git show-ref --verify --quiet refs/heads/main; then
-    git checkout main
-    git reset --hard "$PREV_COMMIT_FULL"
-  else
-    git checkout -B main "$PREV_COMMIT_FULL"
-  fi
-
-  if docker compose -f "$COMPOSE_FILE" up -d --build && wait_for_health; then
-    echo "DEPLOY FAILED, ROLLBACK SUCCESSFUL" >&2
-    echo "    Восстановлен релиз $PREV_COMMIT" >&2
-    exit 1
-  fi
-
-  echo "DEPLOY FAILED, ROLLBACK FAILED" >&2
+forward_recovery() {
+  echo "RESULT=FORWARD_RECOVERY" >&2
+  echo "SCHEMA_ROLLBACK=NO" >&2
+  echo "DATABASE_RESTORE=NO" >&2
+  docker compose -f "$COMPOSE_FILE" stop app >/dev/null 2>&1 || true
+  echo "!! Приложение остановлено. Старая база не восстанавливается." >&2
   echo "!! Логи: docker compose -f $COMPOSE_FILE logs --tail=50 app" >&2
   exit 1
+}
+
+app_role_ready() {
+  ready=$(docker exec stell22-db-prod psql -X -U stell22 -d stell22 -q -v ON_ERROR_STOP=1 -At -c "BEGIN TRANSACTION READ ONLY; SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'stell22_app' AND rolcanlogin AND NOT rolsuper) AND EXISTS (SELECT 1 FROM \"_prisma_migrations\" WHERE migration_name = '20261010210000_psr_p3_s2_b_batch_receipt_provenance' AND finished_at IS NOT NULL AND rolled_back_at IS NULL AND applied_steps_count > 0) THEN 'READY' ELSE 'NOT_READY' END; ROLLBACK;") || return 1
+  [ "$ready" = "READY" ]
 }
 
 echo "==> [0/5] Проверка P1 перед выкатом нового писателя"
@@ -85,19 +67,16 @@ echo "==> [1/5] Бэкап базы перед деплоем"
 sh scripts/backup-db.sh
 LAST_BACKUP="$(ls -1t backups/stell22_*.sql.gz 2>/dev/null | head -1 || true)"
 
-echo "==> [2/5] Забираю свежий код (был на $PREV_COMMIT)"
+echo "==> [2/5] Забираю свежий код без reset --hard (был на $PREV_COMMIT)"
 if [ -n "${DEPLOY_SHA:-}" ]; then
   echo "    Целевой SHA: $DEPLOY_SHA"
   git fetch origin
   DEPLOY_SHA="$(git rev-parse "$DEPLOY_SHA")"
-  if git show-ref --verify --quiet refs/heads/main; then
-    git checkout main
-    git reset --hard "$DEPLOY_SHA"
-  else
-    git checkout -B main "$DEPLOY_SHA"
-  fi
+  sh scripts/release-checkout.sh "$DEPLOY_SHA"
 else
-  git pull
+  echo "RESULT=STOP_CHECKOUT" >&2
+  echo "DATABASE_RESTORE=NO" >&2
+  exit 1
 fi
 
 NEW_COMMIT="$(git rev-parse --short HEAD)"
@@ -112,22 +91,35 @@ else
   echo "    Обновление: $PREV_COMMIT -> $NEW_COMMIT"
 fi
 
-echo "==> [3/5] Сборка и запуск (migrate deploy выполнит entrypoint контейнера)"
-if ! docker compose -f "$COMPOSE_FILE" up -d --build; then
-  echo "!! Сборка или запуск не удались." >&2
-  rollback_app
+echo "==> [3/5] Проверяю роль stell22_app и pinned P1 до запуска образа"
+if ! app_role_ready; then
+  echo "RESULT=STOP_APP_ROLE" >&2
+  echo "DATABASE_RESTORE=NO" >&2
+  echo "!! Новый образ не запускается: stell22_app не готов или P1 не применён мигратором." >&2
+  exit 1
 fi
 
-echo "==> [4/5] Жду готовности приложения ($HEALTH_URL)"
+echo "==> [4/5] Сборка и запуск приложения без миграции на старте"
+if ! docker compose -f "$COMPOSE_FILE" build app; then
+  echo "RESULT=STOP_APP_START" >&2
+  echo "DATABASE_RESTORE=NO" >&2
+  exit 1
+fi
+if ! docker compose -f "$COMPOSE_FILE" up -d --no-deps app; then
+  echo "RESULT=STOP_APP_START" >&2
+  echo "DATABASE_RESTORE=NO" >&2
+  exit 1
+fi
+
+echo "==> [5/5] Жду готовности приложения ($HEALTH_URL)"
 if wait_for_health; then
   echo "    OK: приложение отвечает."
 else
   echo "" >&2
   echo "!! Приложение не поднялось за $HEALTH_RETRIES попыток." >&2
-  echo "!! Логи:   docker compose -f $COMPOSE_FILE logs --tail=50 app" >&2
-  rollback_app
+  forward_recovery
 fi
 
-echo "==> [5/5] Готово. Релиз $NEW_COMMIT в проде."
+echo "==> Готово. Релиз $NEW_COMMIT в проде. Схема назад не откатывается."
 echo "    Логи:    docker compose -f $COMPOSE_FILE logs -f app"
-echo "    Откат приложения (код, не БД): git checkout $PREV_COMMIT && docker compose -f $COMPOSE_FILE up -d --build"
+echo "    Повторный запуск приложения не откатывает схему и не вызывает restore-db.sh."
