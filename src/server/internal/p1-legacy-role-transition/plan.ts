@@ -20,7 +20,7 @@ const DISPOSABLE_DATABASE = /^p1as_[0-9a-f]{8}$/;
 const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const ROUTINE_ARGUMENTS = /^[A-Za-z0-9_[\], ]*$/;
 const PASSWORD = /^[0-9a-f]{32}$/;
-const PRODUCTION_PASSWORD = /^[A-Za-z0-9+/=_-]{24,128}$/;
+const PRODUCTION_PASSWORD = /^[A-Za-z0-9_-]{24,128}$/;
 const RELATION_KIND = {
   r: "table",
   p: "table",
@@ -261,6 +261,30 @@ function quoteIdent(name: string): string {
 
 function passwordAccepted(policy: DatabasePolicy, value: string): boolean {
   return policy === "production-candidate" ? PRODUCTION_PASSWORD.test(value) : PASSWORD.test(value);
+}
+
+/** The role password and the database URL userinfo are the same bytes. Characters that need percent-encoding are refused. */
+export function productionDatabaseUrl(input: {
+  user: "stell22_app" | "stell22_migrator";
+  password: string;
+  host: string;
+}): { ok: true; url: string } | { ok: false; code: "CREDENTIAL_REFUSED" } {
+  if (!PRODUCTION_PASSWORD.test(input.password) || encodeURIComponent(input.password) !== input.password) {
+    return { ok: false, code: "CREDENTIAL_REFUSED" };
+  }
+  if (!/^[A-Za-z0-9.-]+$/.test(input.host)) return { ok: false, code: "CREDENTIAL_REFUSED" };
+  const url = `postgresql://${input.user}:${input.password}@${input.host}:5432/stell22?schema=public`;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { ok: false, code: "CREDENTIAL_REFUSED" };
+  }
+  if (parsed.username !== input.user || parsed.password !== input.password) return { ok: false, code: "CREDENTIAL_REFUSED" };
+  if (parsed.hostname !== input.host || parsed.pathname !== "/stell22" || parsed.searchParams.get("schema") !== "public") {
+    return { ok: false, code: "CREDENTIAL_REFUSED" };
+  }
+  return { ok: true, url };
 }
 
 function refuse<Code extends TransitionCode>(code: Code): { ok: false; code: Code } {

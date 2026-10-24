@@ -6,12 +6,27 @@ var import_node_fs = require("node:fs");
 
 // src/server/internal/p1-isolated-runner/contract.ts
 var P1_MIGRATION_NAME = "20261010210000_psr_p3_s2_b_batch_receipt_provenance";
+var P1_SHA256 = "47ff9c932aea0a692b81ecfaf6c4a931b431e3e332e3e9c5b3fca96694550fe5";
 var EXPECTED_HISTORICAL_MIGRATION_COUNT = 45;
 var FORBIDDEN_CONTAINER_IDENTIFIERS = [
   "stell22-db-prod",
   "stell22-app",
   "stell22-caddy"
 ];
+
+// src/server/internal/p1-production-release/image-identity.ts
+var IMAGE_ID = /^sha256:[0-9a-f]{64}$/;
+var APP_ONLY_ENTRYPOINT = ["./docker-entrypoint-app-only.sh"];
+function selectReleaseImage(input) {
+  if (!IMAGE_ID.test(input.legacyImageId) || !IMAGE_ID.test(input.builtImageId)) return { ok: false, code: "STOP_APP_START" };
+  if (input.builtImageId === input.legacyImageId) return { ok: false, code: "STOP_APP_START" };
+  if (input.entrypoint.length !== APP_ONLY_ENTRYPOINT.length) return { ok: false, code: "STOP_APP_START" };
+  for (let index = 0; index < APP_ONLY_ENTRYPOINT.length; index += 1) {
+    if (input.entrypoint[index] !== APP_ONLY_ENTRYPOINT[index]) return { ok: false, code: "STOP_APP_START" };
+  }
+  if (input.p1Checksum !== P1_SHA256) return { ok: false, code: "STOP_APP_START" };
+  return { ok: true, imageId: input.builtImageId };
+}
 
 // src/server/internal/p1-isolated-runner/inventory.ts
 var PINNED_MIGRATION_FILES = [
@@ -450,6 +465,9 @@ function decideLegacyRestart(facts2) {
 function decideImageBuildFailure() {
   return closed("STOP_APP_START", false);
 }
+function decideImageIdentityAccepted() {
+  return closed("ADMITTED", false);
+}
 function decideWriterAdmission(facts2) {
   const unknown = unknownSessions(facts2);
   const blocked = !facts2.maintenanceDeclared || facts2.backupRunning || facts2.statementImportRunning || facts2.externalWriterCount > 0 || facts2.expectAppStopped && facts2.appRunning || facts2.checkSessions && (unknown > 0 || !inspectionSeen(facts2));
@@ -487,7 +505,19 @@ if (!event || !factsPath) {
   process.stdout.write("CODE=STOP_ROLE_TRANSITION\nRESTART_LEGACY=NO\nDATABASE_RESTORE=NO\n");
   process.exit(1);
 }
-var facts = readFacts((0, import_node_fs.readFileSync)(factsPath, "utf8"));
+var factText = (0, import_node_fs.readFileSync)(factsPath, "utf8");
+if (event === "image-identity") {
+  const selected = selectFromFacts(factText);
+  if (!selected.ok) {
+    process.stdout.write(formatDecision(decideImageBuildFailure()));
+    process.exit(1);
+  }
+  process.stdout.write(formatDecision(decideImageIdentityAccepted()));
+  process.stdout.write(`IMAGE_ID=${selected.imageId}
+`);
+  process.exit(0);
+}
+var facts = readFacts(factText);
 var decision = decide(event, facts);
 if (!decision) {
   process.stdout.write("CODE=STOP_ROLE_TRANSITION\nRESTART_LEGACY=NO\nDATABASE_RESTORE=NO\n");
@@ -505,6 +535,33 @@ function decide(name, facts2) {
     return decideAfterCommittedRoleChange(facts2.probeCode);
   }
   return null;
+}
+function selectFromFacts(text) {
+  const values = { legacyImageId: "", builtImageId: "", entrypoint: "", p1Checksum: "" };
+  for (const line of text.split(/\r?\n/)) {
+    const index = line.indexOf("=");
+    if (index === -1) continue;
+    const key = line.slice(0, index);
+    const value = line.slice(index + 1);
+    if (key === "legacyImageId") values.legacyImageId = value;
+    if (key === "builtImageId") values.builtImageId = value;
+    if (key === "entrypoint") values.entrypoint = value;
+    if (key === "p1Checksum") values.p1Checksum = value;
+  }
+  let entrypoint;
+  try {
+    const parsed = JSON.parse(values.entrypoint);
+    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) return { ok: false, code: "STOP_APP_START" };
+    entrypoint = parsed;
+  } catch {
+    return { ok: false, code: "STOP_APP_START" };
+  }
+  return selectReleaseImage({
+    legacyImageId: values.legacyImageId,
+    builtImageId: values.builtImageId,
+    entrypoint,
+    p1Checksum: values.p1Checksum
+  });
 }
 function readFacts(text) {
   const facts2 = {

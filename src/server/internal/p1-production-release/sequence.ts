@@ -158,6 +158,10 @@ export function decideImageBuildFailure(): ReleaseBoundary {
   return closed("STOP_APP_START", false);
 }
 
+export function decideImageIdentityAccepted(): ReleaseBoundary {
+  return closed("ADMITTED", false);
+}
+
 export type WriterSession = {
   user: string;
   applicationName: string;

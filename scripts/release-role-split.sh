@@ -37,6 +37,21 @@ if [ -z "${APP_DB_PASSWORD:-}" ] || [ -z "${MIGRATOR_DB_PASSWORD:-}" ] || [ "$AP
   exit 1
 fi
 export APP_DB_PASSWORD MIGRATOR_DB_PASSWORD
+if python3 -c "import sys" >/dev/null 2>&1; then
+  release_python=python3
+elif python -c "import sys" >/dev/null 2>&1; then
+  release_python=python
+else
+  echo "RESULT=STOP_LOCKED" >&2
+  echo "PRODUCTION_RELEASE=NO-GO" >&2
+  exit 1
+fi
+if ! sh scripts/release-url-password.sh; then
+  echo "RESULT=STOP_LOCKED" >&2
+  echo "PRODUCTION_RELEASE=NO-GO" >&2
+  echo "DATABASE_RESTORE=NO" >&2
+  exit 1
+fi
 
 sh scripts/release-checkout.sh "$sha"
 
@@ -171,13 +186,37 @@ if ! grep -q '^CODE=ADMITTED$' "$work/writers.out"; then
 fi
 cat "$work/writers.out"
 
+if ! docker tag "$legacy_image" stell22-release-legacy:hold; then
+  exit_decision STOP_APP_START
+fi
 if ! docker compose -f docker-compose.prod.yml build app >/dev/null; then
   printf '%s\n' "maintenanceDeclared=0" > "$work/build.facts"
   run_decision image-build-failed "$work/build.facts" || true
   exit_decision STOP_APP_START
 fi
-app_image="$(docker compose -f docker-compose.prod.yml images -q app | awk 'NF { print; exit }')"
-if [ -z "$app_image" ] || ! docker image inspect "$app_image" >/dev/null; then
+if ! identity=$(sh scripts/release-built-image-id.sh docker-compose.prod.yml "$legacy_image"); then
+  exit_decision STOP_APP_START
+fi
+built_ref=$(printf '%s\n' "$identity" | awk -F= '$1 == "IMAGE_REF" { print $2; exit }')
+app_image=$(printf '%s\n' "$identity" | awk -F= '$1 == "IMAGE_ID" { print $2; exit }')
+entrypoint=$(docker image inspect --format '{{json .Config.Entrypoint}}' "$app_image" 2>/dev/null || true)
+if ! docker run --rm --network none --pull never --entrypoint sha256sum "$app_image" /app/prisma/migrations/20261010210000_psr_p3_s2_b_batch_receipt_provenance/migration.sql >"$work/p1.sum" 2>/dev/null; then
+  exit_decision STOP_APP_START
+fi
+p1_sum=$(awk 'NR == 1 { print $1; exit }' "$work/p1.sum")
+cat > "$work/image.facts" <<EOF
+legacyImageId=$legacy_image
+builtImageId=$app_image
+entrypoint=$entrypoint
+p1Checksum=$p1_sum
+EOF
+if ! run_decision image-identity "$work/image.facts" >"$work/image.out"; then
+  exit_decision STOP_APP_START
+fi
+if ! grep -q '^CODE=ADMITTED$' "$work/image.out" || ! grep -F -x -q "IMAGE_ID=$app_image" "$work/image.out"; then
+  exit_decision STOP_APP_START
+fi
+if [ -z "$built_ref" ] || [ "$app_image" = "$legacy_image" ]; then
   exit_decision STOP_APP_START
 fi
 
@@ -284,13 +323,13 @@ if ! run_decision writer-admission "$work/writers.facts" > "$work/before-p1.out"
   exit_decision STOP_WRITER
 fi
 
+if ! OUT="$work/migrator.url" ROLE=stell22_migrator "$release_python" scripts/release-migrator-url.py; then
+  printf '%s\n' "probeCode=STOP_MIGRATOR" > "$work/after.facts"
+  run_decision after-commit "$work/after.facts" || true
+  exit_decision STOP_MIGRATOR
+fi
 p1_attempted=1
 legacy_restart=0
-OUT="$work/migrator.url" ROLE=stell22_migrator python3 - <<'PY'
-import os, pathlib, urllib.parse
-url = "postgresql://" + os.environ["ROLE"] + ":" + urllib.parse.quote(os.environ["MIGRATOR_DB_PASSWORD"], safe="") + "@127.0.0.1:5432/stell22?schema=public"
-pathlib.Path(os.environ["OUT"]).write_text("DATABASE_URL=" + url + "\n")
-PY
 migrate_status=0
 docker run --rm --pull never --network container:stell22-db-prod --memory 536870912 --cpus 0.25 --pids-limit 128 --entrypoint npx --env-file "$work/migrator.url" "$app_image" prisma migrate deploy --schema /app/prisma/schema.prisma >/dev/null 2>&1 || migrate_status=$?
 p1_row="$(docker exec stell22-db-prod psql -X -U stell22 -d stell22 -q -v ON_ERROR_STOP=1 -At -c "SELECT CASE WHEN EXISTS (SELECT 1 FROM public.\"_prisma_migrations\" WHERE migration_name = '20261010210000_psr_p3_s2_b_batch_receipt_provenance' AND finished_at IS NOT NULL AND rolled_back_at IS NULL AND applied_steps_count > 0) THEN 'PRESENT' ELSE 'ABSENT' END" || true)"
@@ -302,6 +341,12 @@ fi
 
 app_replaced=1
 legacy_restart=0
+current_id="$(docker image inspect --format '{{.Id}}' "$built_ref" 2>/dev/null || true)"
+if [ "$current_id" != "$app_image" ]; then
+  printf '%s\n' "maintenanceDeclared=1" > "$work/app.facts"
+  run_decision app-unhealthy "$work/app.facts" || true
+  exit_decision FORWARD_RECOVERY
+fi
 if ! docker compose -f docker-compose.prod.yml up -d --no-deps app >/dev/null; then
   docker compose -f docker-compose.prod.yml stop app >/dev/null 2>&1 || true
   printf '%s\n' "maintenanceDeclared=1" > "$work/app.facts"
@@ -326,6 +371,7 @@ if [ "$healthy" != 1 ]; then
   exit_decision FORWARD_RECOVERY
 fi
 
+docker image rm stell22-release-legacy:hold >/dev/null 2>&1 || true
 echo "RESULT=RELEASE_APPLIED"
 echo "P1_APPLY=MIGRATOR"
 echo "DATABASE_RESTORE=NO"

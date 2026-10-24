@@ -4,6 +4,7 @@ import { PINNED_MIGRATION_FILES } from "@/server/internal/p1-isolated-runner/inv
 import {
   LEGACY_ADMIN_ROLE,
   planLegacyTransition,
+  productionDatabaseUrl,
   verifyAdminPreserved,
   verifyAppRestrictions,
   verifyPrivilegedAppLogin,
@@ -138,6 +139,34 @@ describe("legacy role transition plan", () => {
   it("does not report a preserved administrator when stell22 is no longer superuser", () => {
     expect(verifyAdminPreserved({ superuser: false, login: true })).toEqual({ ok: false, code: "ADMIN_NOT_PRESERVED" });
     expect(verifyAdminPreserved({ superuser: true, login: true })).toEqual({ ok: true });
+  });
+
+  it("keeps the role password identical to the database URL password", () => {
+    const plan = planLegacyTransition(input());
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    const appUrl = productionDatabaseUrl({ user: "stell22_app", password: APP_PASSWORD, host: "db" });
+    const migratorUrl = productionDatabaseUrl({ user: "stell22_migrator", password: MIGRATOR_PASSWORD, host: "127.0.0.1" });
+    expect(appUrl.ok).toBe(true);
+    expect(migratorUrl.ok).toBe(true);
+    if (!appUrl.ok || !migratorUrl.ok) return;
+    expect(new URL(appUrl.url).password).toBe(APP_PASSWORD);
+    expect(new URL(migratorUrl.url).password).toBe(MIGRATOR_PASSWORD);
+    expect(plan.sql).toContain(`PASSWORD '${APP_PASSWORD}'`);
+    expect(plan.sql).toContain(`PASSWORD '${MIGRATOR_PASSWORD}'`);
+    for (const mark of ["+", "/", "="]) {
+      const password = `${"a".repeat(23)}${mark}`;
+      expect(productionDatabaseUrl({ user: "stell22_app", password, host: "db" })).toEqual({ ok: false, code: "CREDENTIAL_REFUSED" });
+      const catalog = baseCatalog();
+      catalog.databaseName = "stell22";
+      expect(planLegacyTransition({
+        catalog,
+        appPassword: password,
+        migratorPassword: MIGRATOR_PASSWORD,
+        p1Checksum: P1_SHA256,
+        databasePolicy: "production-candidate",
+      })).toEqual({ ok: false, code: "CREDENTIAL_REFUSED" });
+    }
   });
 
   it("refuses the production database name", () => {

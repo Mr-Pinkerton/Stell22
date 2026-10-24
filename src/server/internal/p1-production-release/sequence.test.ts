@@ -128,7 +128,13 @@ describe("production release sequence", () => {
     expect(locked.stdout).toContain("RESULT=STOP_LOCKED");
     expect(locked.stdout).not.toContain("RESTORE_VERIFIED");
     const releaseScript = fs.readFileSync("scripts/release-role-split.sh", "utf8");
-    expect(releaseScript.indexOf("docker compose -f docker-compose.prod.yml build app")).toBeLessThan(releaseScript.indexOf("docker stop stell22-app"));
+    const stopAt = releaseScript.indexOf("docker stop stell22-app");
+    expect(releaseScript.indexOf("docker compose -f docker-compose.prod.yml build app")).toBeLessThan(stopAt);
+    expect(releaseScript.indexOf("stell22-release-legacy:hold")).toBeLessThan(releaseScript.indexOf("docker compose -f docker-compose.prod.yml build app"));
+    expect(releaseScript.indexOf("scripts/release-built-image-id.sh")).toBeLessThan(stopAt);
+    expect(releaseScript.indexOf("image-identity")).toBeLessThan(stopAt);
+    expect(releaseScript.indexOf("scripts/release-url-password.sh")).toBeLessThan(releaseScript.indexOf("docker compose -f docker-compose.prod.yml build app"));
+    expect(releaseScript).not.toContain("docker compose -f docker-compose.prod.yml images");
     expect(releaseScript).not.toContain("pg_terminate_backend");
     expect(releaseScript).not.toContain("git reset --hard");
     expect(releaseScript).not.toContain("restore-db.sh");

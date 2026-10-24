@@ -451,7 +451,7 @@ var DISPOSABLE_DATABASE = /^p1as_[0-9a-f]{8}$/;
 var IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 var ROUTINE_ARGUMENTS = /^[A-Za-z0-9_[\], ]*$/;
 var PASSWORD = /^[0-9a-f]{32}$/;
-var PRODUCTION_PASSWORD = /^[A-Za-z0-9+/=_-]{24,128}$/;
+var PRODUCTION_PASSWORD = /^[A-Za-z0-9_-]{24,128}$/;
 var RELATION_KIND = {
   r: "table",
   p: "table",

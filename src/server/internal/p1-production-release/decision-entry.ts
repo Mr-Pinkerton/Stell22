@@ -4,10 +4,12 @@
  */
 
 import { readFileSync } from "node:fs";
+import { selectReleaseImage } from "@/server/internal/p1-production-release/image-identity";
 import {
   decideAfterCommittedRoleChange,
   decideAppUnhealthy,
   decideImageBuildFailure,
+  decideImageIdentityAccepted,
   decideLegacyRestart,
   decideP1Uncertain,
   decideWriterAdmission,
@@ -22,7 +24,19 @@ if (!event || !factsPath) {
   process.exit(1);
 }
 
-const facts = readFacts(readFileSync(factsPath, "utf8"));
+const factText = readFileSync(factsPath, "utf8");
+if (event === "image-identity") {
+  const selected = selectFromFacts(factText);
+  if (!selected.ok) {
+    process.stdout.write(formatDecision(decideImageBuildFailure()));
+    process.exit(1);
+  }
+  process.stdout.write(formatDecision(decideImageIdentityAccepted()));
+  process.stdout.write(`IMAGE_ID=${selected.imageId}\n`);
+  process.exit(0);
+}
+
+const facts = readFacts(factText);
 const decision = decide(event, facts);
 if (!decision) {
   process.stdout.write("CODE=STOP_ROLE_TRANSITION\nRESTART_LEGACY=NO\nDATABASE_RESTORE=NO\n");
@@ -61,6 +75,34 @@ type Facts = {
   sessions: WriterSession[];
   probeCode: "STOP_WRITER" | "STOP_APP_ROLE" | "STOP_MIGRATOR" | "";
 };
+
+function selectFromFacts(text: string): ReturnType<typeof selectReleaseImage> {
+  const values = { legacyImageId: "", builtImageId: "", entrypoint: "", p1Checksum: "" };
+  for (const line of text.split(/\r?\n/)) {
+    const index = line.indexOf("=");
+    if (index === -1) continue;
+    const key = line.slice(0, index);
+    const value = line.slice(index + 1);
+    if (key === "legacyImageId") values.legacyImageId = value;
+    if (key === "builtImageId") values.builtImageId = value;
+    if (key === "entrypoint") values.entrypoint = value;
+    if (key === "p1Checksum") values.p1Checksum = value;
+  }
+  let entrypoint: string[];
+  try {
+    const parsed = JSON.parse(values.entrypoint) as unknown;
+    if (!Array.isArray(parsed) || parsed.some((item) => typeof item !== "string")) return { ok: false, code: "STOP_APP_START" };
+    entrypoint = parsed as string[];
+  } catch {
+    return { ok: false, code: "STOP_APP_START" };
+  }
+  return selectReleaseImage({
+    legacyImageId: values.legacyImageId,
+    builtImageId: values.builtImageId,
+    entrypoint,
+    p1Checksum: values.p1Checksum,
+  });
+}
 
 function readFacts(text: string): Facts {
   const facts: Facts = {

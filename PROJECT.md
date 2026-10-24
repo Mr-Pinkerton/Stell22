@@ -38,7 +38,7 @@ If sources conflict, verify the actual GitHub `main` and record the divergence.
 
 A Cursor/chat statement without a committed project artifact is not canonical.
 
-Release candidate checkpoint, 2026-10-23: PR #110 is the integrated candidate for `stell22_app` / `stell22_migrator`, pinned P1, and app-only startup. R1 corrects legacy restart and moves the image build before the write freeze. It is not merged and not deployed. Production release remains **NO-GO**. The backup restore gate stays closed. The sequence is `audit/08.62-psr-p3-release-integration.md`.
+Release candidate checkpoint, 2026-10-23: PR #110 is the integrated candidate for `stell22_app` / `stell22_migrator`, pinned P1, and app-only startup. R1 corrects legacy restart and moves the image build before the write freeze. The release image is the id Compose tagged at build time, not the image of the still-running container, and the new role passwords are URL-safe. It is not merged and not deployed. Production release remains **NO-GO**. The backup restore gate stays closed. The sequence is `audit/08.62-psr-p3-release-integration.md`.
 
 ## 4. Current verified technical checkpoint
 
