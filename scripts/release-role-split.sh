@@ -19,6 +19,8 @@ if [ -n "${STELL22_RELEASE_RESTORE:-}" ]; then
 fi
 
 cd "$(dirname "$0")/.."
+# shellcheck disable=SC1091
+. ./scripts/release-diagnostics.sh
 sha="${STELL22_RELEASE_SHA:-}"
 if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
   echo "RESULT=STOP_CHECKOUT" >&2
@@ -53,9 +55,38 @@ if ! sh scripts/release-url-password.sh; then
   exit 1
 fi
 
-sh scripts/release-checkout.sh "$sha"
+probe_running_health() {
+  app_health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' stell22-app 2>/dev/null || printf '%s' missing)
+  db_health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' stell22-db-prod 2>/dev/null || printf '%s' missing)
+  if [ "$app_health" != "healthy" ] || [ "$db_health" != "healthy" ]; then
+    echo "RESULT=STOP_HEALTH" >&2
+    echo "DATABASE_RESTORE=NO" >&2
+    exit 1
+  fi
+  if ! docker exec stell22-app node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
+    echo "RESULT=STOP_HEALTH" >&2
+    echo "DATABASE_RESTORE=NO" >&2
+    exit 1
+  fi
+  if ! docker exec stell22-db-prod psql -X -U stell22 -d stell22 -q -v ON_ERROR_STOP=1 -At -c "BEGIN TRANSACTION READ ONLY; SELECT 1; ROLLBACK;" >/dev/null 2>&1; then
+    echo "RESULT=STOP_HEALTH" >&2
+    echo "DATABASE_RESTORE=NO" >&2
+    exit 1
+  fi
+}
 
-work="$(mktemp -d)"
+if ! git fetch origin main; then
+  echo "RESULT=STOP_CHECKOUT" >&2
+  exit 1
+fi
+if [ "$(git rev-parse origin/main)" != "$sha" ]; then
+  echo "RESULT=STOP_CHECKOUT" >&2
+  exit 1
+fi
+probe_running_health
+
+work=""
+diag=""
 legacy_restart=0
 roles_committed=0
 p1_attempted=0
@@ -65,13 +96,27 @@ history_count=0
 p1_in_legacy=1
 legacy_image=""
 cleanup() {
-  rm -rf "$work"
+  if [ -n "$work" ]; then
+    rm -rf "$work"
+  fi
   docker exec stell22-db-prod rm -f /tmp/stell22-release-app.pgpass >/dev/null 2>&1 || true
   if [ "$legacy_restart" = 1 ] && [ "$roles_committed" != 1 ] && [ "$p1_attempted" != 1 ] && [ "$app_replaced" != 1 ]; then
     docker start stell22-app >/dev/null 2>&1 || true
   fi
 }
+on_signal() {
+  trap '' HUP INT TERM
+  echo "RESULT=STOP_SIGNAL" >&2
+  echo "DATABASE_RESTORE=NO" >&2
+  echo "RETRY_P1=NO" >&2
+  release_redact_diag
+  exit 1
+}
+trap on_signal HUP INT TERM
 trap cleanup EXIT
+
+sh scripts/release-checkout.sh "$sha"
+work="$(mktemp -d)"
 
 run_decision() {
   event=$1
@@ -186,14 +231,19 @@ if ! grep -q '^CODE=ADMITTED$' "$work/writers.out"; then
 fi
 cat "$work/writers.out"
 
+diag="$(git rev-parse --absolute-git-dir)/stell22-release-diagnostics"
+mkdir -p "$diag"
+chmod 700 "$diag"
 if ! docker tag "$legacy_image" stell22-release-legacy:hold; then
   exit_decision STOP_APP_START
 fi
-if ! docker compose -f docker-compose.prod.yml build app >/dev/null; then
+if ! docker compose -f docker-compose.prod.yml build app >"$diag/image-build.log" 2>&1; then
+  release_redact_file "$diag/image-build.log"
   printf '%s\n' "maintenanceDeclared=0" > "$work/build.facts"
   run_decision image-build-failed "$work/build.facts" || true
   exit_decision STOP_APP_START
 fi
+rm -f "$diag/image-build.log"
 if ! identity=$(sh scripts/release-built-image-id.sh docker-compose.prod.yml "$legacy_image"); then
   exit_decision STOP_APP_START
 fi
@@ -331,13 +381,15 @@ fi
 p1_attempted=1
 legacy_restart=0
 migrate_status=0
-docker run --rm --pull never --network container:stell22-db-prod --memory 536870912 --cpus 0.25 --pids-limit 128 --entrypoint npx --env-file "$work/migrator.url" "$app_image" prisma migrate deploy --schema /app/prisma/schema.prisma >/dev/null 2>&1 || migrate_status=$?
+docker run --rm --pull never --network container:stell22-db-prod --memory 536870912 --cpus 0.25 --pids-limit 128 --entrypoint npx --env-file "$work/migrator.url" "$app_image" prisma migrate deploy --schema /app/prisma/schema.prisma >"$diag/p1-migrate.log" 2>&1 || migrate_status=$?
 p1_row="$(docker exec stell22-db-prod psql -X -U stell22 -d stell22 -q -v ON_ERROR_STOP=1 -At -c "SELECT CASE WHEN EXISTS (SELECT 1 FROM public.\"_prisma_migrations\" WHERE migration_name = '20261010210000_psr_p3_s2_b_batch_receipt_provenance' AND finished_at IS NOT NULL AND rolled_back_at IS NULL AND applied_steps_count > 0) THEN 'PRESENT' ELSE 'ABSENT' END" || true)"
 if [ "$migrate_status" != 0 ] || [ "$p1_row" != "PRESENT" ]; then
+  release_redact_file "$diag/p1-migrate.log"
   printf '%s\n' "maintenanceDeclared=1" > "$work/p1.facts"
   run_decision p1-uncertain "$work/p1.facts" || true
   exit_decision FORWARD_RECOVERY
 fi
+rm -f "$diag/p1-migrate.log"
 
 app_replaced=1
 legacy_restart=0
@@ -347,7 +399,8 @@ if [ "$current_id" != "$app_image" ]; then
   run_decision app-unhealthy "$work/app.facts" || true
   exit_decision FORWARD_RECOVERY
 fi
-if ! docker compose -f docker-compose.prod.yml up -d --no-deps app >/dev/null; then
+if ! docker compose -f docker-compose.prod.yml up -d --no-deps app >"$diag/app-start.log" 2>&1; then
+  release_redact_file "$diag/app-start.log"
   docker compose -f docker-compose.prod.yml stop app >/dev/null 2>&1 || true
   printf '%s\n' "maintenanceDeclared=1" > "$work/app.facts"
   run_decision app-unhealthy "$work/app.facts" || true
@@ -365,11 +418,14 @@ while [ "$i" -le 20 ]; do
   i=$((i + 1))
 done
 if [ "$healthy" != 1 ]; then
+  printf '%s\n' "application health check failed" >> "$diag/app-start.log"
+  release_redact_file "$diag/app-start.log"
   docker compose -f docker-compose.prod.yml stop app >/dev/null 2>&1 || true
   printf '%s\n' "maintenanceDeclared=1" > "$work/app.facts"
   run_decision app-unhealthy "$work/app.facts" || true
   exit_decision FORWARD_RECOVERY
 fi
+rm -f "$diag/app-start.log"
 
 docker image rm stell22-release-legacy:hold >/dev/null 2>&1 || true
 echo "RESULT=RELEASE_APPLIED"
