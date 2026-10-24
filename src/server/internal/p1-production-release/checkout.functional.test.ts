@@ -71,8 +71,8 @@ function blob(spec: string): Buffer {
 
 function runCheckout(repo: string, arg: string, extra: Record<string, string> = {}): SpawnSyncReturns<string> {
   const command = extra.STELL22_WRAPPER
-    ? 'export PATH="$STELL22_WRAPPER:$PATH"; exec "$1" "$2"'
-    : 'exec "$1" "$2"';
+    ? 'export PATH="$STELL22_WRAPPER:$PATH"; exec sh "$1" "$2"'
+    : 'exec sh "$1" "$2"';
   return spawnSync("sh", ["-c", command, "sh", checkoutScript, arg], {
     cwd: repo,
     encoding: "utf8",
