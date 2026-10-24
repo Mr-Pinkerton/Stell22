@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: production-deploy
@@ -41,9 +42,38 @@ jobs:
             exit 1
           fi
 
+  approve-sha:
+    name: Approve exact main SHA
+    needs: owner-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - name: Require origin/main and successful CI
+        env:
+          SHA: ${{ inputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          main_sha="$(git rev-parse origin/main)"
+          if [ "$SHA" != "$main_sha" ]; then
+            echo "RESULT=STOP_CHECKOUT" >&2
+            exit 1
+          fi
+          count="$(gh api --jq '[.workflow_runs[] | select(.head_sha == "'"$SHA"'" and .conclusion == "success" and .name == "CI")] | length' "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${SHA}&status=success&per_page=100")"
+          if [ "$count" -lt 1 ]; then
+            echo "RESULT=STOP_CHECKOUT" >&2
+            exit 1
+          fi
+          echo "RESULT=SHA_APPROVED"
+
   release:
     name: Role split on the production host
-    needs: owner-gate
+    needs: [owner-gate, approve-sha]
     runs-on: ubuntu-latest
     timeout-minutes: 40
     environment: production
@@ -84,7 +114,12 @@ jobs:
           script: |
             set -euo pipefail
             cd "$APP_DIR"
-            git fetch origin
+            git fetch origin main
+            origin_main="$(git rev-parse origin/main)"
+            if [ "$origin_main" != "$EXPECTED_SHA" ]; then
+              echo "RESULT=STOP_CHECKOUT" >&2
+              exit 1
+            fi
             if ! git cat-file -e "${EXPECTED_SHA}^{commit}"; then
               echo "RESULT=STOP_CHECKOUT" >&2
               exit 1
