@@ -69,10 +69,8 @@ apply_file() {
 }
 
 align_scripts_to_head() {
-  head_now=$(git rev-parse HEAD) || return 1
   chmod u+w scripts/backup-db.sh scripts/restore-db.sh 2>/dev/null || return 1
-  git show "${head_now}:scripts/backup-db.sh" > scripts/backup-db.sh || return 1
-  git show "${head_now}:scripts/restore-db.sh" > scripts/restore-db.sh || return 1
+  git checkout -- scripts/backup-db.sh scripts/restore-db.sh
 }
 
 switch_to() {
