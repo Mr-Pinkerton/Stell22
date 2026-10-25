@@ -127,6 +127,32 @@ describe("planBatchPackageEdit", () => {
     ).toThrow(PACKAGE_REALLOCATE_BLOCKED);
   });
 
+  it("keeps length, type, sort and package identity after a cancelled operation, and still allows quantity", () => {
+    const historical = lot({ operationCount: 1, activeOperationCount: 0, remainingQuantity: 10 });
+    const plan = planBatchPackageEdit({
+      frozen: false,
+      costFlowActive: false,
+      lots: [historical],
+      drafts: [{ ...draft, quantity: 12 }],
+    });
+    expect(plan.updates[0]).toMatchObject({ quantity: 12, remainingQuantity: 12, lengthM: "2.4000" });
+    for (const changed of [
+      { ...draft, lengthM: 3 },
+      { ...draft, railType: "KANAVKA" as const },
+      { ...draft, sort: "SORT2" as const },
+      { ...draft, mode: "piece" as const },
+    ]) {
+      expect(() =>
+        planBatchPackageEdit({
+          frozen: false,
+          costFlowActive: false,
+          lots: [historical],
+          drafts: [changed],
+        }),
+      ).toThrow(PACKAGE_IDENTITY_AFTER_USE);
+    }
+  });
+
   it("rejects deleting a package that has history", () => {
     expect(() =>
       planBatchPackageEdit({

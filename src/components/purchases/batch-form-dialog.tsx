@@ -749,7 +749,7 @@ function BatchFormBody({
               {entries.length > 0 && (
                 <div className="space-y-2">
                   {entries.map((e) => {
-                    const lockedIdentity = (e.consumed ?? 0) > 0 || (e.activeOperationCount ?? 0) > 0;
+                    const lockedIdentity = (e.consumed ?? 0) > 0 || (e.operationCount ?? 0) > 0;
                     const deleteBlocked = (e.consumed ?? 0) > 0 || (e.operationCount ?? 0) > 0;
                     return (
                     <div

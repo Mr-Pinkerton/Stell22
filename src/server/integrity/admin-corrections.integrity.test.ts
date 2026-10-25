@@ -32,8 +32,9 @@ import { prisma } from "@/server/db";
 import { getSalaryReport } from "@/server/payroll";
 import { cancelProductionOperation, updateProductionLineQuantity } from "@/server/production";
 import { getBatchPackageEditor, updateBatch, type BatchFormValues } from "@/server/purchases";
-import { submitTorcovka } from "@/server/terminal";
+import { submitPrisadka, submitTorcovka, submitUpakovka } from "@/server/terminal";
 import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
+import { setInventoryMovementShadowWriteGate } from "@/server/internal/inventory-movement-shadow-write";
 import { editPhysicalQuantityByLineIndex } from "./physical-quantity-edit-call";
 import { createIntegrityClients, ensureIntegritySchema, resetIntegrityInventory } from "./harness";
 
@@ -449,5 +450,275 @@ describe.skipIf(!enabled)("admin corrections", () => {
     expect(lot.remainingValue?.toString()).toBe("10000");
     expect(blanks.every((row) => row.quantity === 0)).toBe(true);
     expect(loss).toBe(0);
+  });
+
+  it("replays an older package edit without overwriting a newer scalar change", async () => {
+    const world = await seedWorld();
+    const requestR1 = newRequestId();
+    const first = await formFor(world.batch.id, (values) => {
+      values.name = `r1-${world.suffix}`;
+      values.purchaseCost = 12_000;
+      values.rails[0]!.quantity = 11;
+    });
+    await updateBatch(world.batch.id, first, requestR1);
+    await updateBatch(
+      world.batch.id,
+      await formFor(world.batch.id, (values) => {
+        values.name = `r2-${world.suffix}`;
+        values.purchaseCost = 13_000;
+      }),
+      newRequestId(),
+    );
+    const logsBefore = await prisma.changeLog.count({ where: { entityId: world.batch.id } });
+    const movementsBefore = await prisma.inventoryMovement.count();
+    const commandsBefore = await prisma.batchPackageEditCommand.count({ where: { batchId: world.batch.id } });
+    await updateBatch(world.batch.id, first, requestR1);
+    const batch = await prisma.batch.findUniqueOrThrow({ where: { id: world.batch.id } });
+    const lot = await prisma.railLot.findUniqueOrThrow({ where: { id: world.lot.id } });
+    expect(batch.name).toBe(`r2-${world.suffix}`);
+    expect(Number(batch.purchaseCost)).toBe(13_000);
+    expect(lot.quantity).toBe(11);
+    expect(lot.remainingQuantity).toBe(11);
+    expect(await prisma.changeLog.count({ where: { entityId: world.batch.id } })).toBe(logsBefore);
+    expect(await prisma.inventoryMovement.count()).toBe(movementsBefore);
+    expect(await prisma.batchPackageEditCommand.count({ where: { batchId: world.batch.id } })).toBe(commandsBefore);
+  });
+
+  async function setShadow(active: boolean) {
+    await prismaA.$transaction((tx) => setInventoryMovementShadowWriteGate(tx, active));
+  }
+
+  async function seedBlankDetail(suffix: string, quantity: number) {
+    const material = await prismaA.material.create({
+      data: { name: `mat-${suffix}`, sectionWidthMm: 40, sectionHeightMm: 20 },
+    });
+    const emp = await prismaA.employee.create({
+      data: {
+        fullName: `emp-${suffix}`,
+        pin: "1234",
+        hourlyRate: 100,
+        ratePrisadkaTorcev: 10,
+        rateUpakovka: 8,
+      },
+    });
+    const detail = await prismaA.detail.create({
+      data: {
+        name: `det-${suffix}`,
+        materialId: material.id,
+        detailNumber: 1,
+        lengthM: new Prisma.Decimal("1.8000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        prisadkaTorcevaya: true,
+        prisadkaPloskost: false,
+      },
+    });
+    await prismaA.blankStock.create({
+      data: {
+        materialId: material.id,
+        lengthM: new Prisma.Decimal("1.8000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        quantity,
+      },
+    });
+    return { material, emp, detail };
+  }
+
+  async function loadCancelOp(id: string) {
+    return prisma.productionOperation.findUniqueOrThrow({
+      where: { id },
+      include: { lines: true },
+    });
+  }
+
+  it("annuls prisadka once, restores stock, and keeps it out of payroll", async () => {
+    await setShadow(true);
+    const world = await seedBlankDetail(`pris-${seq}`, 4);
+    await submitPrisadka({
+      employeeId: world.emp.id,
+      clientRequestId: newRequestId(),
+      picks: [{ detailId: world.detail.id, kind: "torcev", quantity: 2 }],
+    });
+    const op = await prisma.productionOperation.findFirstOrThrow({
+      where: { type: "PRISADKA", employeeId: world.emp.id },
+      include: { lines: true },
+    });
+    const beforePay = await getSalaryReport();
+    expect(beforePay.find((row) => row.id === `unpaid:${world.emp.id}`)?.total).toBeGreaterThan(0);
+    const movesBefore = await prisma.inventoryMovement.count();
+    const requestId = newRequestId();
+    const input = {
+      operationId: op.id,
+      requestId,
+      reason: "ошибочная присадка",
+      expectedStateFingerprint: cancelFingerprint(op),
+    };
+    const first = await cancelProductionOperation(input);
+    const second = await cancelProductionOperation(input);
+    const blank = await prisma.blankStock.findFirstOrThrow({ where: { materialId: world.material.id } });
+    const details = await prisma.detailStock.findMany({ where: { detailId: world.detail.id } });
+    const kept = await prisma.productionOperation.findUniqueOrThrow({ where: { id: op.id } });
+    expect(first.replayed).toBe(false);
+    expect(second.replayed).toBe(true);
+    expect(blank.quantity).toBe(4);
+    expect(details.reduce((sum, row) => sum + row.quantity, 0)).toBe(0);
+    expect(kept.cancelledAt).not.toBeNull();
+    expect(await prisma.productionOperationCancellation.count({ where: { operationId: op.id } })).toBe(1);
+    expect(await prisma.inventoryMovement.count()).toBeGreaterThan(movesBefore);
+    const movesAfter = await prisma.inventoryMovement.count();
+    await cancelProductionOperation(input);
+    expect(await prisma.inventoryMovement.count()).toBe(movesAfter);
+    expect((await getSalaryReport()).find((row) => row.id === `unpaid:${world.emp.id}`)).toBeUndefined();
+  });
+
+  it("blocks prisadka annulment when the detail was already consumed or the operation was paid", async () => {
+    const world = await seedBlankDetail(`pris-block-${seq}`, 4);
+    await submitPrisadka({
+      employeeId: world.emp.id,
+      clientRequestId: newRequestId(),
+      picks: [{ detailId: world.detail.id, kind: "torcev", quantity: 2 }],
+    });
+    const op = await loadCancelOp(
+      (
+        await prisma.productionOperation.findFirstOrThrow({
+          where: { type: "PRISADKA", employeeId: world.emp.id },
+        })
+      ).id,
+    );
+    await prismaA.detailStock.updateMany({ where: { detailId: world.detail.id }, data: { quantity: 0 } });
+    await expect(
+      cancelProductionOperation({
+        operationId: op.id,
+        requestId: newRequestId(),
+        reason: "поздно",
+        expectedStateFingerprint: cancelFingerprint(op),
+      }),
+    ).rejects.toThrow(/уже использована/);
+    expect((await prisma.productionOperation.findUniqueOrThrow({ where: { id: op.id } })).cancelledAt).toBeNull();
+    expect((await prisma.blankStock.findFirstOrThrow({ where: { materialId: world.material.id } })).quantity).toBe(2);
+
+    const paidWorld = await seedBlankDetail(`pris-paid-${seq}`, 4);
+    await submitPrisadka({
+      employeeId: paidWorld.emp.id,
+      clientRequestId: newRequestId(),
+      picks: [{ detailId: paidWorld.detail.id, kind: "torcev", quantity: 1 }],
+    });
+    const paidId = (
+      await prisma.productionOperation.findFirstOrThrow({
+        where: { type: "PRISADKA", employeeId: paidWorld.emp.id },
+      })
+    ).id;
+    await prismaA.productionOperation.update({ where: { id: paidId }, data: { isPaid: true } });
+    const paid = await loadCancelOp(paidId);
+    await expect(
+      cancelProductionOperation({
+        operationId: paid.id,
+        requestId: newRequestId(),
+        reason: "выплачено",
+        expectedStateFingerprint: cancelFingerprint(paid),
+      }),
+    ).rejects.toThrow(CANCEL_PAID_BLOCKED);
+  });
+
+  it("annuls upakovka once and blocks it when the product is already gone or paid", async () => {
+    await setShadow(true);
+    const material = await prismaA.material.create({
+      data: { name: `mat-up-${seq}`, sectionWidthMm: 40, sectionHeightMm: 20 },
+    });
+    const emp = await prismaA.employee.create({
+      data: { fullName: `emp-up-${seq}`, pin: "1234", rateUpakovka: 8 },
+    });
+    const detail = await prismaA.detail.create({
+      data: {
+        name: `det-up-${seq}`,
+        materialId: material.id,
+        detailNumber: 1,
+        lengthM: new Prisma.Decimal("1.8000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        prisadkaTorcevaya: false,
+        prisadkaPloskost: false,
+      },
+    });
+    await prismaA.blankStock.create({
+      data: {
+        materialId: material.id,
+        lengthM: new Prisma.Decimal("1.8000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        quantity: 5,
+      },
+    });
+    const product = await prismaA.product.create({
+      data: {
+        name: `prod-up-${seq}`,
+        materialId: material.id,
+        skuOzon: `OZ-up-${seq}`,
+        skuWb: `WB-up-${seq}`,
+        sort: "SORT1",
+        details: { create: [{ detailId: detail.id, quantity: 1 }] },
+      },
+    });
+    await submitUpakovka({
+      employeeId: emp.id,
+      clientRequestId: newRequestId(),
+      picks: [{ productId: product.id, quantity: 1 }],
+    });
+    const op = await prisma.productionOperation.findFirstOrThrow({
+      where: { type: "UPAKOVKA", productId: product.id },
+      include: { lines: true },
+    });
+    expect((await getSalaryReport()).find((row) => row.id === `unpaid:${emp.id}`)?.total).toBeGreaterThan(0);
+    const movesBefore = await prisma.inventoryMovement.count();
+    const input = {
+      operationId: op.id,
+      requestId: newRequestId(),
+      reason: "ошибочная упаковка",
+      expectedStateFingerprint: cancelFingerprint(op),
+    };
+    const first = await cancelProductionOperation(input);
+    const movesAfter = await prisma.inventoryMovement.count();
+    const second = await cancelProductionOperation(input);
+    expect(first.replayed).toBe(false);
+    expect(second.replayed).toBe(true);
+    expect(movesAfter).toBeGreaterThan(movesBefore);
+    expect(await prisma.inventoryMovement.count()).toBe(movesAfter);
+    expect((await prisma.blankStock.findFirstOrThrow({ where: { materialId: material.id } })).quantity).toBe(5);
+    expect((await prisma.productStock.findUniqueOrThrow({ where: { productId: product.id } })).quantity).toBe(0);
+    expect((await prisma.productionOperation.findUniqueOrThrow({ where: { id: op.id } })).cancelledAt).not.toBeNull();
+    expect((await getSalaryReport()).find((row) => row.id === `unpaid:${emp.id}`)).toBeUndefined();
+
+    await submitUpakovka({
+      employeeId: emp.id,
+      clientRequestId: newRequestId(),
+      picks: [{ productId: product.id, quantity: 1 }],
+    });
+    const blocked = await prisma.productionOperation.findFirstOrThrow({
+      where: { type: "UPAKOVKA", productId: product.id, cancelledAt: null },
+      include: { lines: true },
+    });
+    await prismaA.productStock.update({ where: { productId: product.id }, data: { quantity: 0 } });
+    await expect(
+      cancelProductionOperation({
+        operationId: blocked.id,
+        requestId: newRequestId(),
+        reason: "уже продано",
+        expectedStateFingerprint: cancelFingerprint(blocked),
+      }),
+    ).rejects.toThrow(/отгружено/);
+    expect((await prisma.productionOperation.findUniqueOrThrow({ where: { id: blocked.id } })).cancelledAt).toBeNull();
+
+    await prismaA.productStock.update({ where: { productId: product.id }, data: { quantity: 1 } });
+    await prismaA.productionOperation.update({ where: { id: blocked.id }, data: { isPaid: true } });
+    const paid = await loadCancelOp(blocked.id);
+    await expect(
+      cancelProductionOperation({
+        operationId: paid.id,
+        requestId: newRequestId(),
+        reason: "выплачено",
+        expectedStateFingerprint: cancelFingerprint(paid),
+      }),
+    ).rejects.toThrow(CANCEL_PAID_BLOCKED);
   });
 });

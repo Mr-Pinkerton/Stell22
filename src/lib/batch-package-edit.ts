@@ -173,7 +173,7 @@ export function planBatchPackageEdit(input: {
       lot.sort !== draft.sort ||
       lot.isPackage !== (draft.mode === "package");
     const quantityChanged = draft.quantity !== lot.quantity;
-    if (identityChanged && (consumed > 0 || lot.activeOperationCount > 0)) {
+    if (identityChanged && (consumed > 0 || lot.operationCount > 0)) {
       throw new Error(PACKAGE_IDENTITY_AFTER_USE);
     }
     if ((identityChanged || quantityChanged) && input.frozen) {

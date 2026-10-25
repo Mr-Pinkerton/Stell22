@@ -552,7 +552,8 @@ export async function updateBatch(
           values,
         });
         outcome.replayed = packageResult.replayed;
-        packageReallocate = packageResult.reallocate && !packageResult.replayed;
+        if (packageResult.replayed) return;
+        packageReallocate = packageResult.reallocate;
       }
 
       await tx.batch.update({ where: { id }, data: scalarData });
