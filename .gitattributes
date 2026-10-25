@@ -1,2 +1,3 @@
 docker-entrypoint-app-only.sh text eol=lf
 docker/app-only-startup/Dockerfile text eol=lf
+scripts/admin-corrections-release.sh text eol=lf

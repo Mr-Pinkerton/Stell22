@@ -209,6 +209,36 @@ describe("app-only startup gate", () => {
     expect(classifySchemaShape(absentP1Schema())).toBe("absent");
   });
 
+  it("accepts 47 completed migrations that include the admin corrections checksum", () => {
+    const migrations = readImageMigrations(process.cwd());
+    expect(migrations).toHaveLength(47);
+    const targetName = "20261025120000_admin_corrections_batch_and_cancel";
+    const target = migrations.find((migration) => migration.name === targetName);
+    expect(target?.sha256).toBe("d8d83b48d536bd42cb9f394958dc981003d43da5b5904bcecadd3899b179f834");
+    const history = migrations.map((migration) => row(migration.name, migration.sha256));
+    const app = role({ currentUser: "stell22_app", sessionUser: "stell22_app", databaseName: "stell22" });
+    expect(
+      evaluateAppOnlyStartup({
+        imageMigrations: migrations,
+        history,
+        schemaShape: "match",
+        role: app,
+        urlDatabase: "stell22",
+        urlUser: "stell22_app",
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      evaluateAppOnlyStartup({
+        imageMigrations: migrations,
+        history: history.filter((item) => item.migrationName !== targetName),
+        schemaShape: "match",
+        role: app,
+        urlDatabase: "stell22",
+        urlUser: "stell22_app",
+      }),
+    ).toMatchObject({ code: "PENDING_MIGRATION" });
+  });
+
   it("does not clean a production name, a compose project, or a changed image", () => {
     const base = {
       expectedId: "a".repeat(64),
