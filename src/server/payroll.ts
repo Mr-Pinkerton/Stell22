@@ -109,7 +109,10 @@ function aggregate(items: ComputedOp[]): { produced: number; total: number; days
 export async function getSalaryReport(scope?: Period | null): Promise<SalaryReportRow[]> {
   await requireAdmin();
   const maps = await buildRefMaps();
-  const ops = await prisma.productionOperation.findMany({ include: { lines: true } });
+  const ops = await prisma.productionOperation.findMany({
+    where: { cancelledAt: null },
+    include: { lines: true },
+  });
   const computed = new Map(ops.map((op) => [op.id, computeOp(op, maps)]));
 
   // Невыплаченные — по работнику.
@@ -175,7 +178,7 @@ export async function getSalaryReport(scope?: Period | null): Promise<SalaryRepo
 export async function markEmployeePaid(employeeId: string): Promise<SalaryReportRow[]> {
   await requireAdmin();
   const unpaid = await prisma.productionOperation.findMany({
-    where: { employeeId, isPaid: false },
+    where: { employeeId, isPaid: false, cancelledAt: null },
     select: { id: true },
   });
   const opIds = sortedUniqueIds(unpaid.map((o) => o.id));
@@ -189,7 +192,7 @@ export async function markEmployeePaid(employeeId: string): Promise<SalaryReport
       where: { id: { in: opIds } },
       include: { lines: true },
     });
-    if (ops.length !== opIds.length || ops.some((o) => o.isPaid)) {
+    if (ops.length !== opIds.length || ops.some((o) => o.isPaid || o.cancelledAt)) {
       throw new Error("Операции уже выплачены — обновите отчёт");
     }
 
@@ -197,7 +200,7 @@ export async function markEmployeePaid(employeeId: string): Promise<SalaryReport
     const amount = round2(ops.reduce((s, op) => s + computeOp(op, maps).amount, 0));
 
     const claimed = await tx.productionOperation.updateMany({
-      where: { id: { in: opIds }, isPaid: false },
+      where: { id: { in: opIds }, isPaid: false, cancelledAt: null },
       data: { isPaid: true, paidAt },
     });
     if (claimed.count !== opIds.length) {

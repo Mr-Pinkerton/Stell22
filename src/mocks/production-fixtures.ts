@@ -32,6 +32,9 @@ export interface ProductionEntryRow {
   amount: number;
   unitRate: number;
   isPaid: boolean;
+  cancelledAt?: string | null;
+  cancelReason?: string | null;
+  cancelStateFingerprint?: string | null;
   batchName?: string;
   railsTaken?: number;
   railLengthM?: number;

@@ -58,7 +58,7 @@ export async function getDashboardData(): Promise<DashboardSource> {
       getGoalsData(),
       getPurchasesData(),
       prisma.productionOperation.findMany({
-        where: { type: { in: ["TORCOVKA", "UPAKOVKA"] } },
+        where: { type: { in: ["TORCOVKA", "UPAKOVKA"] }, cancelledAt: null },
         include: { lines: true },
       }),
       prisma.railLot.findMany({ select: { id: true, lengthM: true } }),

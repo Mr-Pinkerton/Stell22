@@ -147,6 +147,7 @@ export async function correctTorcovkaRailsTakenInTransaction(
     throw new Error("У операции не указаны пакет и количество реек");
   }
   if (op.isPaid) throw new Error("Нельзя исправить — операция уже выплачена");
+  if (op.cancelledAt) throw new Error("Операция аннулирована — правка недоступна.");
   if (op.railsTaken !== expectedOldRailsTaken) {
     throw new Error(STALE_CORRECTION);
   }

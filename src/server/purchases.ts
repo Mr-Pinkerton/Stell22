@@ -54,6 +54,11 @@ import {
   appendBatchWriteOffShadowMovements,
   appendSimplePurchaseShadowMovement,
 } from "@/server/internal/raw-purchase-shadow-write";
+import { applyBatchPackageEditInTx } from "@/server/internal/batch-package-edit-tx";
+import {
+  packageSetFingerprint,
+  type PackageLotSnapshot,
+} from "@/lib/batch-package-edit";
 import type { Material, NomenclatureItem, RailType, Sort } from "@/types/domain";
 
 const PATH = "/purchases";
@@ -178,6 +183,8 @@ export async function getPurchasesData(): Promise<PurchasesData> {
 // ============================ ПАРТИЯ РЕЙКИ =================================
 
 export interface BatchRailInput {
+  /** Existing RailLot id. Absent or `draft-*` means a new package. */
+  id?: string | null;
   mode: "package" | "piece";
   lengthM: number;
   railType: RailType;
@@ -199,6 +206,10 @@ export interface BatchFormValues {
   priceSort2: number | null;
   note: string;
   rails: BatchRailInput[];
+  /** When true, `rails` is the full desired package set and is saved with the scalars. */
+  editPackages?: boolean;
+  packageEditReason?: string;
+  expectedPackageFingerprint?: string;
 }
 
 function parseDate(iso: string | null): Date {
@@ -403,12 +414,18 @@ export async function createBatch(
 }
 
 /**
- * Редактирование партии: меняем только скалярные поля (название, сечение,
- * финансы, примечание). Рейки/остатки не трогаем — они списываются в терминале
- * и их правка ведётся отдельно (чтобы не сбить remainingQuantity).
+ * Редактирование партии. Без `editPackages` меняются только скалярные поля
+ * (название, материал, финансы, дата, примечание) — старые вызовы это сохраняют.
+ * С `editPackages` тот же запрос атомарно правит пакеты: нетронутые можно
+ * менять целиком, у начатых сохраняется израсходованное количество.
  */
-export async function updateBatch(id: string, values: BatchFormValues): Promise<PurchaseBatchRow> {
-  await requireAdmin();
+export async function updateBatch(
+  id: string,
+  values: BatchFormValues,
+  requestId?: string,
+): Promise<PurchaseBatchRow> {
+  const admin = await requireAdmin();
+  const actor = values.editPackages ? userMovementActorFromAdmin(admin) : null;
   validateBatch(values);
   await assertUniqueBatchName(values.name, id);
   const section = await resolveMaterialSection(values.materialId);
@@ -435,8 +452,10 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
   };
 
   let batchIds: string[] = [];
+  const outcome = { replayed: false };
   await retryOnLockSetChange(async () => {
     batchIds = [];
+    outcome.replayed = false;
     await prisma.$transaction(async (tx) => {
       const candidateDealIds = sortedUniqueIds(
         (
@@ -446,8 +465,9 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
           })
         ).map((r) => r.dealId),
       );
+      const lockLots = Boolean(values.editPackages);
       if (candidateDealIds.length > 0) {
-        await lockDealsThenBatches(tx, candidateDealIds, [id]);
+        await lockDealsThenBatches(tx, candidateDealIds, [id], { lockLots });
         const currentDealIds = sortedUniqueIds(
           (
             await tx.dealItem.findMany({
@@ -460,7 +480,7 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
           throw new LockSetChangedError();
         }
       } else {
-        await lockDealsThenBatches(tx, [], [id]);
+        await lockDealsThenBatches(tx, [], [id], { lockLots });
         const currentDealIds = sortedUniqueIds(
           (
             await tx.dealItem.findMany({
@@ -522,6 +542,20 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
       }
       const skipLateDeltaC = costFlowActive && !anyConsumed && driversChanged && lotsInitialized;
 
+      let packageReallocate = false;
+      if (values.editPackages) {
+        const packageResult = await applyBatchPackageEditInTx(tx, {
+          actor: actor!,
+          adminUserId: admin.id,
+          batchId: id,
+          requestId: requireClientRequestId(requestId),
+          values,
+        });
+        outcome.replayed = packageResult.replayed;
+        if (packageResult.replayed) return;
+        packageReallocate = packageResult.reallocate;
+      }
+
       await tx.batch.update({ where: { id }, data: scalarData });
       const dealIds = sortedUniqueIds(
         (
@@ -545,7 +579,13 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
         const written = await syncBatchTotalCostInternal(id, tx, { skipLateDeltaC });
         if (written) batchIds.push(written);
       }
-      if (skipLateDeltaC && lots.length > 0) {
+      if (packageReallocate) {
+        const after = await tx.batch.findUniqueOrThrow({ where: { id } });
+        const afterLots = await tx.railLot.findMany({ where: { batchId: id } });
+        if (afterLots.length > 0) {
+          await initializeCreatedRailLotsInTx(tx, { ...after, railLots: afterLots });
+        }
+      } else if (skipLateDeltaC && lots.length > 0) {
         const after = await tx.batch.findUniqueOrThrow({ where: { id } });
         const afterLots = await tx.railLot.findMany({ where: { batchId: id } });
         await reallocateUnconsumedRailLotValuesInTx(tx, after, afterLots);
@@ -553,19 +593,94 @@ export async function updateBatch(id: string, values: BatchFormValues): Promise<
     });
   });
 
-  const updated = await prisma.batch.findUniqueOrThrow({ where: { id } });
-  await writeChangeLog({
-    entity: "Batch",
-    entityId: id,
-    oldValues: { name: before.name, purchaseCost: num(before.purchaseCost) },
-    newValues: { name: updated.name, purchaseCost: num(updated.purchaseCost) },
-  });
+  if (!outcome.replayed) {
+    const updated = await prisma.batch.findUniqueOrThrow({ where: { id } });
+    await writeChangeLog({
+      entity: "Batch",
+      entityId: id,
+      userId: admin?.id,
+      oldValues: { name: before.name, purchaseCost: num(before.purchaseCost) },
+      newValues: { name: updated.name, purchaseCost: num(updated.purchaseCost) },
+    });
+  }
 
   for (const batchId of [...new Set(batchIds)]) await enqueueRecalcBatchCosts(batchId);
 
   revalidatePath(PATH);
   revalidatePath("/reports");
   return loadRow(id);
+}
+
+export interface BatchPackageEditorRail {
+  id: string;
+  mode: "package" | "piece";
+  lengthM: number;
+  railType: RailType;
+  sort: Sort;
+  quantity: number;
+  rows: number | null;
+  layers: number | null;
+  code: string | null;
+  consumed: number;
+  operationCount: number;
+  activeOperationCount: number;
+}
+
+export interface BatchPackageEditor {
+  fingerprint: string;
+  rails: BatchPackageEditorRail[];
+}
+
+export async function getBatchPackageEditor(batchId: string): Promise<BatchPackageEditor> {
+  await requireAdmin();
+  const [lots, operations] = await Promise.all([
+    prisma.railLot.findMany({ where: { batchId }, orderBy: { code: "asc" } }),
+    prisma.productionOperation.findMany({
+      where: { batchId, railLotId: { not: null } },
+      select: { railLotId: true, cancelledAt: true },
+    }),
+  ]);
+  const operationCount = new Map<string, { all: number; active: number }>();
+  for (const op of operations) {
+    if (!op.railLotId) continue;
+    const cur = operationCount.get(op.railLotId) ?? { all: 0, active: 0 };
+    cur.all += 1;
+    if (!op.cancelledAt) cur.active += 1;
+    operationCount.set(op.railLotId, cur);
+  }
+  const snapshots: PackageLotSnapshot[] = lots.map((lot) => {
+    const counts = operationCount.get(lot.id) ?? { all: 0, active: 0 };
+    return {
+      id: lot.id,
+      lengthM: num(lot.lengthM).toString(),
+      railType: lot.railType as RailType,
+      sort: lot.sort as Sort,
+      isPackage: lot.isPackage,
+      quantity: lot.quantity,
+      remainingQuantity: lot.remainingQuantity,
+      rows: lot.rows,
+      layers: lot.layers,
+      operationCount: counts.all,
+      activeOperationCount: counts.active,
+    };
+  });
+  return {
+    fingerprint: packageSetFingerprint(snapshots),
+    rails: snapshots.map((lot) => ({
+      id: lot.id,
+      mode: lot.isPackage ? "package" : "piece",
+      lengthM: Number(lot.lengthM),
+      railType: lot.railType,
+      sort: lot.sort,
+      quantity: lot.quantity,
+      rows: lot.rows,
+      layers: lot.layers,
+      code: lots.find((row) => row.id === lot.id)?.code ?? null,
+      consumed: lot.quantity - lot.remainingQuantity,
+      operationCount: lot.operationCount,
+      activeOperationCount: lot.activeOperationCount,
+    })),
+  };
 }
 
 /** Списать остаток партии в отход: обнуляем остатки всех реек (атомарно). */

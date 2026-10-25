@@ -419,3 +419,53 @@ export async function appendSimplePurchaseShadowMovement(
     effects: [effect],
   });
 }
+
+export type BatchPackageQuantityDelta = {
+  railLotId: string;
+  quantityDelta: number;
+};
+
+/** Remaining-quantity adjustments for an admin package edit. Replay must not call this. */
+export async function appendBatchPackageEditShadowMovements(
+  tx: Prisma.TransactionClient,
+  input: {
+    shadowWriteActive: boolean;
+    actor: MovementActorSnapshot;
+    command: RawPurchaseCommandIdentity & { batchId: string };
+    deltas: readonly BatchPackageQuantityDelta[];
+  },
+): Promise<void> {
+  const effects: MovementEffect[] = [];
+  for (const delta of input.deltas) {
+    if (!Number.isInteger(delta.quantityDelta) || delta.quantityDelta === 0) continue;
+    effects.push({
+      role: "adjust",
+      kind: "ADJUSTMENT",
+      quantityDelta: delta.quantityDelta,
+      qualifier: delta.railLotId,
+      target: { stockDomain: "RAIL_LOT", railLotId: delta.railLotId },
+    });
+  }
+  if (effects.length === 0) return;
+  await appendRawPurchaseShadowMovements(tx, {
+    shadowWriteActive: input.shadowWriteActive,
+    actor: input.actor,
+    adminUserId: input.command.adminUserId,
+    effectiveAt: input.command.recordedAt,
+    causationKind: "BATCH",
+    causationId: input.command.id,
+    causationSnapshot: {
+      v: 1,
+      d: RAW_PURCHASE_BATCH_DOMAIN,
+      type: "PACKAGE_EDIT",
+      commandId: input.command.id,
+      requestId: input.command.requestId,
+      batchId: input.command.batchId,
+      effects: input.deltas.map((delta) => ({
+        railLotId: delta.railLotId,
+        quantityDelta: delta.quantityDelta,
+      })),
+    } as Prisma.InputJsonValue,
+    effects,
+  });
+}

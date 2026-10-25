@@ -99,7 +99,7 @@ export async function getPurchaseReport(
     }),
     prisma.railLot.findMany(),
     prisma.productionOperation.findMany({
-      where: { type: "TORCOVKA" },
+      where: { type: "TORCOVKA", cancelledAt: null },
       include: { lines: true },
       orderBy: { workDate: "asc" },
     }),
@@ -180,7 +180,7 @@ export async function getWasteReport(period?: Period | null): Promise<WasteRepor
     prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
     prisma.railLot.findMany(),
     prisma.productionOperation.findMany({
-      where: { type: "TORCOVKA" },
+      where: { type: "TORCOVKA", cancelledAt: null },
       include: { lines: true },
     }),
     prisma.employee.findMany({ select: { id: true, fullName: true } }),

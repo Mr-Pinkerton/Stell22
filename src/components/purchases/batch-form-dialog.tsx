@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import type { Material, NomenclatureItem, RailType, Sort } from "@/types/domain";
-import type { BatchFormValues, SimplePurchaseFormValues } from "@/server/purchases";
+import type { BatchFormValues, BatchPackageEditor, SimplePurchaseFormValues } from "@/server/purchases";
 
 const fieldClass =
   "border-border bg-card hover:border-[#98a2b3] focus-visible:border-ring focus-visible:bg-card h-10 rounded-xl border px-4";
@@ -90,6 +90,7 @@ function todayIso(): string {
 
 interface DraftRailEntry {
   id: string;
+  persistedId?: string | null;
   mode: RailAddMode;
   lengthM: number;
   railType: RailType;
@@ -98,6 +99,9 @@ interface DraftRailEntry {
   rows?: number;
   layers?: number;
   code?: string;
+  consumed?: number;
+  operationCount?: number;
+  activeOperationCount?: number;
 }
 
 interface BatchFormDialogProps {
@@ -107,6 +111,7 @@ interface BatchFormDialogProps {
   items: NomenclatureItem[];
   /** Материалы (порода рейки) для партии. */
   materials: Material[];
+  packages?: BatchPackageEditor | null;
   onOpenChange: (open: boolean) => void;
   onSubmitBatch?: (values: BatchFormValues) => void | Promise<void>;
   onSubmitSimple?: (values: SimplePurchaseFormValues) => void | Promise<void>;
@@ -143,13 +148,15 @@ function RailTypeSelect({
   id,
   value,
   onChange,
+  disabled,
 }: {
   id: string;
   value: RailType;
   onChange: (value: RailType) => void;
+  disabled?: boolean;
 }) {
   return (
-    <Select value={value} onValueChange={(v) => onChange(v as RailType)}>
+    <Select value={value} onValueChange={(v) => onChange(v as RailType)} disabled={disabled}>
       <SelectTrigger id={id} className={selectTriggerClass}>
         <SelectValue>{RAIL_TYPE_LABEL[value]}</SelectValue>
       </SelectTrigger>
@@ -169,13 +176,15 @@ function SortSelect({
   id,
   value,
   onChange,
+  disabled,
 }: {
   id: string;
   value: Sort;
   onChange: (value: Sort) => void;
+  disabled?: boolean;
 }) {
   return (
-    <Select value={value} onValueChange={(v) => onChange(v as Sort)}>
+    <Select value={value} onValueChange={(v) => onChange(v as Sort)} disabled={disabled}>
       <SelectTrigger id={id} className={selectTriggerClass}>
         <SelectValue>{SORT_LABEL[value]}</SelectValue>
       </SelectTrigger>
@@ -195,6 +204,7 @@ function BatchFormBody({
   batch,
   items,
   materials,
+  packages,
   onSubmitBatch,
   onSubmitSimple,
   pending,
@@ -203,6 +213,7 @@ function BatchFormBody({
   batch?: PurchaseBatchRow | null;
   items: NomenclatureItem[];
   materials: Material[];
+  packages?: BatchPackageEditor | null;
   onSubmitBatch?: (values: BatchFormValues) => void | Promise<void>;
   onSubmitSimple?: (values: SimplePurchaseFormValues) => void | Promise<void>;
   pending?: boolean;
@@ -211,7 +222,24 @@ function BatchFormBody({
   const isEdit = Boolean(batch);
   const [kind, setKind] = useState<PurchaseKind>("batch");
   const [addMode, setAddMode] = useState<RailAddMode>("package");
-  const [entries, setEntries] = useState<DraftRailEntry[]>([]);
+  const [entries, setEntries] = useState<DraftRailEntry[]>(() =>
+    (packages?.rails ?? []).map((rail) => ({
+      id: rail.id,
+      persistedId: rail.id,
+      mode: rail.mode,
+      lengthM: rail.lengthM,
+      railType: rail.railType,
+      sort: rail.sort,
+      quantity: rail.quantity,
+      rows: rail.rows ?? undefined,
+      layers: rail.layers ?? undefined,
+      code: rail.code ?? undefined,
+      consumed: rail.consumed,
+      operationCount: rail.operationCount,
+      activeOperationCount: rail.activeOperationCount,
+    })),
+  );
+  const [editReason, setEditReason] = useState("");
 
   const activeMaterials = materials.filter((m) => m.status === "ACTIVE" || m.id === batch?.materialId);
   const [materialId, setMaterialId] = useState(batch?.materialId ?? activeMaterials[0]?.id ?? "");
@@ -333,6 +361,7 @@ function BatchFormBody({
     hMm > 0 &&
     (purchaseCost ?? 0) > 0 &&
     entries.some((e) => e.mode === "package") &&
+    (!isEdit || editReason.trim().length > 0) &&
     !pending;
   const simpleQtyNum = Number(simpleQty) || 0;
   const canSubmitSimple =
@@ -361,7 +390,11 @@ function BatchFormBody({
       priceSort1,
       priceSort2,
       note,
+      editPackages: isEdit,
+      packageEditReason: isEdit ? editReason : undefined,
+      expectedPackageFingerprint: isEdit ? packages?.fingerprint : undefined,
       rails: entries.map((e) => ({
+        id: e.persistedId ?? e.id,
         mode: e.mode,
         lengthM: e.lengthM,
         railType: e.railType,
@@ -715,34 +748,144 @@ function BatchFormBody({
 
               {entries.length > 0 && (
                 <div className="space-y-2">
-                  {entries.map((e) => (
+                  {entries.map((e) => {
+                    const lockedIdentity = (e.consumed ?? 0) > 0 || (e.operationCount ?? 0) > 0;
+                    const deleteBlocked = (e.consumed ?? 0) > 0 || (e.operationCount ?? 0) > 0;
+                    return (
                     <div
                       key={e.id}
-                      className="border-border bg-card flex items-center gap-3 rounded-xl border px-3 py-2 text-sm"
+                      className="border-border bg-card space-y-3 rounded-xl border px-3 py-3 text-sm"
                     >
-                      <div className="min-w-0 flex-1">
-                        <p className="font-medium">
-                          {e.code ? `${e.code} · ` : ""}
-                          {formatLength(e.lengthM)} · {RAIL_TYPE_LABEL[e.railType]} · {SORT_LABEL[e.sort]}
-                        </p>
-                        <p className="text-muted-foreground text-xs">
-                          {e.rows && e.layers ? `${e.rows}×${e.layers} · ` : ""}
-                          {e.quantity} шт · {formatLength(e.quantity * e.lengthM)} ·{" "}
-                          {formatVolume(e.quantity * area * e.lengthM)}
-                        </p>
+                      <div className="flex items-center gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium">
+                            {e.code ? `${e.code} · ` : ""}
+                            {formatLength(e.lengthM)} · {RAIL_TYPE_LABEL[e.railType]} · {SORT_LABEL[e.sort]}
+                          </p>
+                          <p className="text-muted-foreground text-xs">
+                            {e.rows && e.layers ? `${e.rows}×${e.layers} · ` : ""}
+                            {e.quantity} шт
+                            {(e.consumed ?? 0) > 0 ? ` · израсходовано ${e.consumed}` : ""}
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-sm"
+                          className="text-muted-foreground hover:text-destructive size-8 cursor-pointer rounded-lg"
+                          aria-label={deleteBlocked ? "Удаление недоступно" : "Удалить"}
+                          disabled={deleteBlocked}
+                          title={
+                            deleteBlocked
+                              ? "Нельзя удалить: по пакету уже есть расход или история операций"
+                              : "Удалить"
+                          }
+                          onClick={() => removeEntry(e.id)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
                       </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-sm"
-                        className="text-muted-foreground hover:text-destructive size-8 cursor-pointer rounded-lg"
-                        aria-label="Удалить"
-                        onClick={() => removeEntry(e.id)}
-                      >
-                        <Trash2 className="size-4" />
-                      </Button>
+                      {isEdit && (
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                          <Field id={`len-${e.id}`} label="Длина, м">
+                            <Input
+                              id={`len-${e.id}`}
+                              className={narrowFieldClass}
+                              inputMode="decimal"
+                              disabled={lockedIdentity}
+                              value={String(e.lengthM)}
+                              onChange={(ev) => {
+                                const lengthM = Number(ev.target.value.replace(",", "."));
+                                if (!Number.isFinite(lengthM)) return;
+                                setEntries((prev) =>
+                                  prev.map((row) => (row.id === e.id ? { ...row, lengthM } : row)),
+                                );
+                              }}
+                            />
+                          </Field>
+                          <Field id={`qty-${e.id}`} label="Количество">
+                            <Input
+                              id={`qty-${e.id}`}
+                              className={narrowFieldClass}
+                              inputMode="numeric"
+                              value={String(e.quantity)}
+                              onChange={(ev) => {
+                                const quantity = Number(ev.target.value);
+                                if (!Number.isInteger(quantity)) return;
+                                setEntries((prev) =>
+                                  prev.map((row) => (row.id === e.id ? { ...row, quantity } : row)),
+                                );
+                              }}
+                            />
+                          </Field>
+                          <Field id={`type-${e.id}`} label="Тип">
+                            <RailTypeSelect
+                              id={`type-${e.id}`}
+                              value={e.railType}
+                              disabled={lockedIdentity}
+                              onChange={(railType) =>
+                                setEntries((prev) =>
+                                  prev.map((row) => (row.id === e.id ? { ...row, railType } : row)),
+                                )
+                              }
+                            />
+                          </Field>
+                          <Field id={`sort-${e.id}`} label="Сорт">
+                            <SortSelect
+                              id={`sort-${e.id}`}
+                              value={e.sort}
+                              disabled={lockedIdentity}
+                              onChange={(sort) =>
+                                setEntries((prev) =>
+                                  prev.map((row) => (row.id === e.id ? { ...row, sort } : row)),
+                                )
+                              }
+                            />
+                          </Field>
+                          <Field id={`rows-${e.id}`} label="Рядов">
+                            <Input
+                              id={`rows-${e.id}`}
+                              className={narrowFieldClass}
+                              inputMode="numeric"
+                              value={e.rows ? String(e.rows) : ""}
+                              onChange={(ev) => {
+                                const rows = Number(ev.target.value);
+                                setEntries((prev) =>
+                                  prev.map((row) =>
+                                    row.id === e.id
+                                      ? { ...row, rows: Number.isInteger(rows) && rows > 0 ? rows : undefined }
+                                      : row,
+                                  ),
+                                );
+                              }}
+                            />
+                          </Field>
+                          <Field id={`layers-${e.id}`} label="Слоёв">
+                            <Input
+                              id={`layers-${e.id}`}
+                              className={narrowFieldClass}
+                              inputMode="numeric"
+                              value={e.layers ? String(e.layers) : ""}
+                              onChange={(ev) => {
+                                const layers = Number(ev.target.value);
+                                setEntries((prev) =>
+                                  prev.map((row) =>
+                                    row.id === e.id
+                                      ? {
+                                          ...row,
+                                          layers: Number.isInteger(layers) && layers > 0 ? layers : undefined,
+                                        }
+                                      : row,
+                                  ),
+                                );
+                              }}
+                            />
+                          </Field>
+                        </div>
+                      )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -827,6 +970,18 @@ function BatchFormBody({
               </p>
             </section>
 
+            {isEdit && (
+              <Field id="batch-edit-reason" label="Причина исправления" required>
+                <Input
+                  id="batch-edit-reason"
+                  className={fieldClass}
+                  placeholder="Зачем меняется партия или пакеты"
+                  value={editReason}
+                  onChange={(e) => setEditReason(e.target.value)}
+                />
+              </Field>
+            )}
+
             <Field id="batch-note" label="Примечание" className="sm:col-span-2">
               <Input
                 id="batch-note"
@@ -873,6 +1028,7 @@ export function BatchFormDialog({
   batch,
   items,
   materials,
+  packages,
   onOpenChange,
   onSubmitBatch,
   onSubmitSimple,
@@ -883,10 +1039,11 @@ export function BatchFormDialog({
       <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-2xl" showCloseButton={false}>
         {open ? (
           <BatchFormBody
-            key={batch?.id ?? "new"}
+            key={`${batch?.id ?? "new"}:${packages?.fingerprint ?? ""}`}
             batch={batch}
             items={items}
             materials={materials}
+            packages={packages}
             onSubmitBatch={onSubmitBatch}
             onSubmitSimple={onSubmitSimple}
             pending={pending}

@@ -17,7 +17,11 @@ export const PURCHASE_COMMAND_REQUEST_LOCK_NAMESPACE = 8326;
 export const PURCHASE_COMMAND_REQUEST_LOCK_TX_REQUIRED =
   "Purchase command request lock requires an open Prisma transaction client.";
 
-export type PurchaseCommandKind = "batch-create" | "batch-writeoff" | "simple-purchase";
+export type PurchaseCommandKind =
+  | "batch-create"
+  | "batch-writeoff"
+  | "batch-edit"
+  | "simple-purchase";
 
 export function purchaseCommandLockKey(kind: PurchaseCommandKind, requestId: string): string {
   return `${kind}:${requestId}`;

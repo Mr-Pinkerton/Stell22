@@ -460,6 +460,137 @@ export async function reverseActiveTorcovkaStockInTx(args: {
   });
 }
 
+/**
+ * Annul an active TORCOVKA: remove its blank receipts and return rails and raw
+ * value to the lot. Does not book the raw as a loss and does not delete the operation.
+ * Caller holds the operation, lot and blank-pool locks.
+ */
+export async function cancelActiveTorcovkaOperationInTx(args: {
+  tx: Prisma.TransactionClient;
+  op: {
+    id: string;
+    batchId: string | null;
+    railLotId: string | null;
+    railsTaken: number | null;
+    consumedRawValue: Prisma.Decimal | null;
+    pieceLaborCost: Prisma.Decimal | null;
+    lines: Array<{
+      id: string;
+      quantity: number;
+      blankLengthM: Prisma.Decimal | null;
+      blankType: BlankSpec["detailType"] | null;
+      blankSort: Sort | null;
+      blankMaterialId: string | null;
+      receiptMaterialValue: Prisma.Decimal | null;
+      receiptLaborValue: Prisma.Decimal | null;
+      outputCostVersion: number | null;
+    }>;
+  };
+  lot: {
+    id: string;
+    quantity: number;
+    remainingQuantity: number;
+    remainingValue: Prisma.Decimal | null;
+  };
+}): Promise<void> {
+  const { tx, op, lot } = args;
+  if (
+    op.consumedRawValue == null ||
+    op.pieceLaborCost == null ||
+    op.railLotId == null ||
+    op.railsTaken == null ||
+    lot.remainingValue == null
+  ) {
+    throw new Error(COST_FLOW_PRE_CUTOVER_REVERSE);
+  }
+  for (const line of op.lines) {
+    if (
+      line.receiptMaterialValue == null ||
+      line.receiptLaborValue == null ||
+      line.outputCostVersion == null ||
+      line.blankLengthM == null ||
+      line.blankType == null ||
+      line.blankSort == null ||
+      line.blankMaterialId == null
+    ) {
+      throw new Error(COST_FLOW_PRE_CUTOVER_REVERSE);
+    }
+  }
+  if (lot.remainingQuantity + op.railsTaken > lot.quantity) {
+    throw new Error("Нельзя аннулировать: остаток пакета не сходится с этой торцовкой.");
+  }
+
+  const specs = uniqueSortedBlankSpecs(
+    op.lines.map((l) => ({
+      materialId: l.blankMaterialId!,
+      lengthM: l.blankLengthM!,
+      detailType: l.blankType!,
+      sort: l.blankSort!,
+    })),
+  );
+  const poolIds = await lockExistingActiveBlankPools(tx, specs);
+  const receiptBySpec = new Map<
+    string,
+    { qty: number; material: ReturnType<typeof D>; labor: ReturnType<typeof D>; version: number }
+  >();
+  for (const line of op.lines) {
+    const spec: BlankSpec = {
+      materialId: line.blankMaterialId!,
+      lengthM: line.blankLengthM!,
+      detailType: line.blankType!,
+      sort: line.blankSort!,
+    };
+    const key = blankSpecSortKey(spec);
+    const cur = receiptBySpec.get(key) ?? {
+      qty: 0,
+      material: D(0),
+      labor: D(0),
+      version: line.outputCostVersion!,
+    };
+    if (cur.version !== line.outputCostVersion) throw new Error(COST_FLOW_VERSION_MISMATCH);
+    cur.qty += line.quantity;
+    cur.material = cur.material.plus(D(line.receiptMaterialValue!.toString()));
+    cur.labor = cur.labor.plus(D(line.receiptLaborValue!.toString()));
+    receiptBySpec.set(key, cur);
+  }
+
+  for (const spec of specs) {
+    const key = blankSpecSortKey(spec);
+    const receipt = receiptBySpec.get(key)!;
+    const poolId = poolIds.get(key);
+    if (!poolId) throw new Error(COST_FLOW_VERSION_MISMATCH);
+    const locked = await tx.blankStock.findUniqueOrThrow({ where: { id: poolId } });
+    if (locked.costVersion !== receipt.version) throw new Error(COST_FLOW_VERSION_MISMATCH);
+    assertPoolInitialized(locked);
+    const nextQty = locked.quantity - receipt.qty;
+    if (nextQty < 0) {
+      throw new Error("Нельзя аннулировать: заготовки этой торцовки уже ушли в следующие операции.");
+    }
+    const nextMaterial = D(locked.materialValue!.toString()).minus(receipt.material);
+    const nextLabor = D(locked.laborValue!.toString()).minus(receipt.labor);
+    if (nextMaterial.isNeg() || nextLabor.isNeg()) throw new Error(COST_FLOW_VERSION_MISMATCH);
+    const nextTotal = nextQty === 0 ? D(0) : nextMaterial.plus(nextLabor);
+    await tx.blankStock.update({
+      where: { id: locked.id },
+      data: {
+        quantity: nextQty,
+        materialValue: money6(nextQty === 0 ? D(0) : nextMaterial),
+        laborValue: money6(nextQty === 0 ? D(0) : nextLabor),
+        totalValue: money6(nextTotal),
+        costVersion: locked.costVersion + 1,
+      },
+    });
+  }
+
+  await tx.railLot.update({
+    where: { id: lot.id },
+    data: {
+      remainingQuantity: { increment: op.railsTaken },
+      remainingValue: money6(D(lot.remainingValue.toString()).plus(D(op.consumedRawValue.toString()))),
+    },
+  });
+}
+
 type ActiveTorcovkaLine = {
   id: string;
   quantity: number;

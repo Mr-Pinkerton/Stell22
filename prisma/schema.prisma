@@ -327,6 +327,20 @@ model BatchRemainderWriteOff {
   @@index([batchId, recordedAt])
 }
 
+// Admin edit of rail packages. Scalar IDs only — no FK / CASCADE.
+model BatchPackageEditCommand {
+  id              String   @id @default(cuid())
+  requestId       String   @unique
+  batchId         String
+  adminUserId     String
+  reason          String
+  requestSnapshot Json
+  effectSnapshot  Json
+  recordedAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([batchId, recordedAt])
+}
+
 model SimplePurchaseCreationCommand {
   id               String   @id @default(cuid())
   requestId        String   @unique
@@ -497,6 +511,9 @@ model ProductionOperation {
   isPaid Boolean   @default(false)
   paidAt DateTime?
 
+  // Аннулирование ошибочной записи терминала. Строка и проводки остаются.
+  cancelledAt DateTime?
+
   lines             OperationDetailLine[]
   nomenclatureLines OperationNomenclatureLine[]
   payment           PaymentBatchItem?
@@ -540,6 +557,22 @@ model ProductionOperationQuantityEdit {
   newQuantity              Int
   expectedStateFingerprint String
   requestSnapshot          Json
+  effectSnapshot           Json
+  recordedAt               DateTime      @default(now()) @db.Timestamptz(3)
+
+  @@index([operationId, recordedAt])
+}
+
+// Admin annulment of a terminal operation. Scalar IDs only — no FK / CASCADE.
+// The ProductionOperation row is retained; cancelledAt excludes it from active totals.
+model ProductionOperationCancellation {
+  id                       String        @id @default(cuid())
+  requestId                String        @unique
+  operationId              String        @unique
+  adminUserId              String
+  operationType            OperationType
+  reason                   String
+  expectedStateFingerprint String
   effectSnapshot           Json
   recordedAt               DateTime      @default(now()) @db.Timestamptz(3)
 

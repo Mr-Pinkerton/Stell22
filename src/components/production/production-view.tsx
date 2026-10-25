@@ -12,6 +12,7 @@ import {
   updateProductionLineQuantity,
   editProductionOperationQuantity,
   correctTorcovkaRailsTaken,
+  cancelProductionOperation,
 } from "@/server/production";
 import {
   filterProductionEntries,
@@ -47,6 +48,10 @@ import {
   retainOrMintQuantityEditRequestId,
   shouldRotateQuantityEditRequestId,
 } from "@/lib/production-quantity-edit-request";
+import {
+  cancelCommandKey,
+  shouldRotateCancelRequestId,
+} from "@/lib/production-operation-cancel";
 import { XLSX_FMT } from "@/lib/xlsx-types";
 import { scrollTableYClass } from "@/lib/scroll-classes";
 import { cn } from "@/lib/utils";
@@ -312,10 +317,14 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
   const [correctRow, setCorrectRow] = useState<ProductionEntryRow | null>(null);
   const [newRailsTakenRaw, setNewRailsTakenRaw] = useState("");
   const [correctReason, setCorrectReason] = useState("");
+  const [cancelRow, setCancelRow] = useState<ProductionEntryRow | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
   const correctionRequestIdRef = useRef<string | null>(null);
   const correctionBoundKeyRef = useRef<string | null>(null);
   const quantityEditRequestIdRef = useRef<string | null>(null);
   const quantityEditBoundKeyRef = useRef<string | null>(null);
+  const cancelRequestIdRef = useRef<string | null>(null);
+  const cancelBoundKeyRef = useRef<string | null>(null);
   const [quantityEditPending, startTransition] = useTransition();
   const [exporting, startExport] = useTransition();
 
@@ -360,8 +369,8 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
               operation: OPERATION_TYPE_LABEL[r.type],
               batch: r.batchName ?? "",
               quantity: r.quantity,
-              amount: r.amount,
-              status: r.isPaid ? "Выплачено" : "Не выплачено",
+              amount: r.cancelledAt ? 0 : r.amount,
+              status: r.cancelledAt ? "Аннулирована" : r.isPaid ? "Выплачено" : "Не выплачено",
             })),
           },
         ]);
@@ -390,6 +399,53 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
         toast.success("Операция удалена");
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Ошибка удаления");
+      }
+    });
+  };
+
+  const handleCancel = () => {
+    if (!cancelRow?.cancelStateFingerprint) {
+      toast.error("Не удалось прочитать состояние записи. Обновите страницу.");
+      return;
+    }
+    if (!cancelReason.trim()) {
+      toast.error("Укажите причину аннулирования");
+      return;
+    }
+    const minted = retainOrMintQuantityEditRequestId({
+      requestId: cancelRequestIdRef.current,
+      boundKey: cancelBoundKeyRef.current,
+      commandKey: cancelCommandKey({
+        operationId: cancelRow.id,
+        expectedStateFingerprint: cancelRow.cancelStateFingerprint,
+        reason: cancelReason,
+      }),
+    });
+    cancelRequestIdRef.current = minted.requestId;
+    cancelBoundKeyRef.current = minted.boundKey;
+    const rowId = cancelRow.id;
+    const fingerprint = cancelRow.cancelStateFingerprint;
+    startTransition(async () => {
+      try {
+        const result = await cancelProductionOperation({
+          operationId: rowId,
+          requestId: minted.requestId,
+          reason: cancelReason,
+          expectedStateFingerprint: fingerprint,
+        });
+        setEntries((prev) => prev.map((item) => (item.id === rowId ? result.entry : item)));
+        setCancelRow(null);
+        setCancelReason("");
+        cancelRequestIdRef.current = null;
+        cancelBoundKeyRef.current = null;
+        toast.success(result.replayed ? "Аннулирование уже было выполнено" : "Запись аннулирована");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Ошибка аннулирования";
+        if (shouldRotateCancelRequestId(message)) {
+          cancelRequestIdRef.current = null;
+          cancelBoundKeyRef.current = null;
+        }
+        toast.error(message);
       }
     });
   };
@@ -618,6 +674,12 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
                       }
                       onDelete={() => handleDelete(row.id)}
                       onCorrect={() => openCorrect(row)}
+                      onCancel={() => {
+                        setCancelReason("");
+                        cancelRequestIdRef.current = null;
+                        cancelBoundKeyRef.current = null;
+                        setCancelRow(row);
+                      }}
                       onSaveQuantity={(line, qty) => handleSaveQuantity(row, line, qty)}
                       quantityEditLocked={quantityEditUiLocked(quantityEditPending)}
                     />
@@ -686,6 +748,42 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
           </div>
         )}
       </FormDialog>
+
+      <FormDialog
+        open={cancelRow != null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCancelRow(null);
+            setCancelReason("");
+            cancelRequestIdRef.current = null;
+            cancelBoundKeyRef.current = null;
+          }
+        }}
+        title="Аннулировать запись"
+        maxWidth="sm:max-w-lg"
+        submitLabel="Аннулировать"
+        canSubmit={cancelReason.trim().length > 0 && !quantityEditPending}
+        onInvalid={() => toast.error("Укажите причину аннулирования")}
+        onSubmit={handleCancel}
+      >
+        {cancelRow && (
+          <div className="grid gap-4">
+            <p className="text-sm leading-relaxed">
+              {OPERATION_TYPE_LABEL[cancelRow.type]} · сейчас {cancelRow.quantity}. Запись останется
+              в журнале, но выйдет из активного учёта: склад, зарплата и себестоимость будут
+              скорректированы, если это безопасно.
+            </p>
+            <Field id="cancel-reason" label="Причина" required>
+              <Input
+                id="cancel-reason"
+                className={fieldClass}
+                value={cancelReason}
+                onChange={(e) => setCancelReason(e.target.value)}
+              />
+            </Field>
+          </div>
+        )}
+      </FormDialog>
     </>
   );
 }
@@ -697,6 +795,7 @@ function ProductionRowGroup({
   onToggle,
   onDelete,
   onCorrect,
+  onCancel,
   onSaveQuantity,
   quantityEditLocked,
 }: {
@@ -706,6 +805,7 @@ function ProductionRowGroup({
   onToggle: () => void;
   onDelete: () => void;
   onCorrect: () => void;
+  onCancel: () => void;
   onSaveQuantity: (line: DetailEditRow, qty: number) => void;
   quantityEditLocked: boolean;
 }) {
@@ -767,8 +867,8 @@ function ProductionRowGroup({
           <span className="block truncate">{formatProductionQuantity(row)}</span>
         </TableCell>
         <TableCell className={cn(expandableSummaryCellClass, "text-center")}>
-          <Badge variant={row.isPaid ? "outline" : "secondary"}>
-            {row.isPaid ? "Выплачено" : "Не выплачено"}
+          <Badge variant={row.cancelledAt ? "outline" : row.isPaid ? "outline" : "secondary"}>
+            {row.cancelledAt ? "Аннулирована" : row.isPaid ? "Выплачено" : "Не выплачено"}
           </Badge>
         </TableCell>
         <TableCell
@@ -827,6 +927,7 @@ function ProductionRowGroup({
               }
               onSaveLine={(line) => onSaveQuantity(line, Number(editQty[line.index]))}
               onCorrect={onCorrect}
+              onCancel={onCancel}
               quantityEditLocked={quantityEditLocked}
             />
           </div>
@@ -843,6 +944,7 @@ function ProductionEntryDetail({
   onEditQtyChange,
   onSaveLine,
   onCorrect,
+  onCancel,
   quantityEditLocked,
 }: {
   row: ProductionEntryRow;
@@ -851,6 +953,7 @@ function ProductionEntryDetail({
   onEditQtyChange: (index: number, value: string) => void;
   onSaveLine: (line: DetailEditRow) => void;
   onCorrect: () => void;
+  onCancel: () => void;
   quantityEditLocked: boolean;
 }) {
   const unit = OPERATION_TYPE_UNIT[row.type];
@@ -896,10 +999,18 @@ function ProductionEntryDetail({
         <span className="font-semibold tabular-nums">{formatMoney(row.amount)}</span>
       </p>
 
-      {row.type === "TORCOVKA" && !row.batchFrozenAt && (
+      {row.type === "TORCOVKA" && !row.batchFrozenAt && !row.cancelledAt && !row.isPaid && (
         <div className="pl-1">
           <Button type="button" variant="outline" className="h-9 rounded-xl" onClick={onCorrect}>
             Исправить количество фактически взятых реек
+          </Button>
+        </div>
+      )}
+
+      {!row.cancelledAt && !row.isPaid && !row.batchFrozenAt && (
+        <div className="pl-1">
+          <Button type="button" variant="outline" className="h-9 rounded-xl" onClick={onCancel}>
+            Аннулировать запись
           </Button>
         </div>
       )}
@@ -914,7 +1025,11 @@ function ProductionEntryDetail({
           const raw = editQty[line.index] ?? String(line.terminalQty);
           const parsed = Number(raw);
           const hasChange =
-            !row.isPaid && Number.isFinite(parsed) && parsed > 0 && parsed !== line.terminalQty;
+            !row.isPaid &&
+            !row.cancelledAt &&
+            Number.isFinite(parsed) &&
+            parsed > 0 &&
+            parsed !== line.terminalQty;
 
           return (
             <TableRow key={`${row.id}-line-${line.lineId ?? line.index}`}>
@@ -928,7 +1043,7 @@ function ProductionEntryDetail({
                 {line.terminalQty}
               </NestedTableCell>
               <NestedTableCell className="text-center">
-                {row.isPaid ? (
+                {row.isPaid || row.cancelledAt ? (
                   <span className="text-muted-foreground tabular-nums">—</span>
                 ) : (
                   <Input
@@ -942,7 +1057,7 @@ function ProductionEntryDetail({
                 )}
               </NestedTableCell>
               <NestedTableCell className="text-right">
-                {!row.isPaid && (
+                {!row.isPaid && !row.cancelledAt && (
                   <div className="flex justify-end">
                     <Button
                       type="button"
@@ -1000,10 +1115,24 @@ function ProductionEntryDetail({
         </div>
       )}
 
+      {row.cancelledAt && (
+        <p className="text-muted-foreground pl-1 text-xs leading-relaxed">
+          Запись аннулирована и исключена из активного учёта
+          {row.cancelReason ? `: ${row.cancelReason}` : ""}. Исходные значения сохранены в журнале.
+        </p>
+      )}
+
       {row.isPaid && (
         <p className="text-muted-foreground pl-1 text-xs leading-relaxed">
-          Операция выплачена — изменение выхода и удаление недоступны.
-          Ошибочно указанное количество взятых реек можно исправить отдельно.
+          Операция выплачена — изменение, аннулирование и удаление недоступны.
+          Нужна отдельная проверенная корректировка выплаты.
+        </p>
+      )}
+
+      {!row.isPaid && !row.cancelledAt && row.batchFrozenAt && (
+        <p className="text-muted-foreground pl-1 text-xs leading-relaxed">
+          Себестоимость партии заморожена — аннулирование недоступно. Нужна отдельная
+          проверенная корректировка.
         </p>
       )}
     </div>

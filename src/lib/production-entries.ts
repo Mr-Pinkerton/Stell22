@@ -117,7 +117,7 @@ export function filterProductionTableRows<T extends ProductionEntryRow>(
       return false;
     }
     if (filters.payment === "PAID" && row.isPaid !== true) return false;
-    if (filters.payment === "UNPAID" && row.isPaid !== false) return false;
+    if (filters.payment === "UNPAID" && (row.isPaid !== false || row.cancelledAt)) return false;
     return true;
   });
 }
