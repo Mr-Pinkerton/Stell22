@@ -9,6 +9,23 @@ const SCRIPT = "scripts/admin-corrections-release.sh";
 const SHA = `${"ab".repeat(16)}${"cd".repeat(4)}`;
 const directories: string[] = [];
 
+function absentSchema() {
+  return [
+    "batchPackageEdit=false",
+    "productionOperationCancellation=false",
+    "cancelledAtPresent=false",
+    "indexProductionOperationCancelledAt=false",
+    "indexBatchRequest=false",
+    "indexBatchBatchRecorded=false",
+    "indexCancelRequest=false",
+    "indexCancelOperation=false",
+    "indexCancelOperationRecorded=false",
+    "sentinelProductionOperation=0",
+    "sentinelInventoryMovement=0",
+    "",
+  ].join("\n");
+}
+
 function baseEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
@@ -68,6 +85,8 @@ function fixture(options: {
   history?: string;
   privileges?: string;
   sessions?: string;
+  schema?: string;
+  schemaNow?: string;
   backupExit?: number;
   checksumOk?: string;
   buildExit?: string;
@@ -102,6 +121,8 @@ function fixture(options: {
       ].join("\n") + "\n",
   );
   fs.writeFileSync(path.join(facts, "sessions.txt"), options.sessions ?? "");
+  fs.writeFileSync(path.join(facts, "schema.env"), options.schema ?? absentSchema());
+  if (options.schemaNow) fs.writeFileSync(path.join(facts, "schema.now"), options.schemaNow);
   fs.writeFileSync(path.join(facts, "objects.env"), "sentinelProductionOperation=0\nsentinelInventoryMovement=0\n");
   fs.writeFileSync(path.join(facts, "runtime.env"), options.runtime ?? "old_image_app_only=1\n");
   fs.writeFileSync(
@@ -270,6 +291,140 @@ describe("admin corrections release operator", () => {
     expect(log).not.toContain("start acrel-app-abcd1234");
   }, 30_000);
 
+  it("verifies a fresh basename checksum from the repository root and rejects an older archive", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "ac-backup-"));
+    directories.push(directory);
+    const root = directory.replace(/\\/g, "/");
+    fs.mkdirSync(path.join(directory, "backups"));
+    fs.writeFileSync(path.join(directory, "backups", "stell22_2020-01-01_00-00-00.sql.gz"), "old\n");
+    fs.writeFileSync(path.join(directory, "backups", "stell22_2026-10-25_12-00-00.sql.gz"), "new\n");
+    const summed = spawnSync("sh", ["-c", 'cd "$1" && sha256sum "$2" > "$2.sha256"', "sh", `${root}/backups`, "stell22_2026-10-25_12-00-00.sql.gz"], { encoding: "utf8" });
+    expect(summed.status, summed.stderr).toBe(0);
+    const oldPath = `${root}/backups/stell22_2020-01-01_00-00-00.sql.gz`;
+    const newPath = `${root}/backups/stell22_2026-10-25_12-00-00.sql.gz`;
+    fs.writeFileSync(path.join(directory, "before"), `${oldPath}\n`);
+    fs.writeFileSync(path.join(directory, "success"), `[backup] BACKUP SUCCESS: ${newPath}\n`);
+    const success = `${root}/success`;
+    const before = `${root}/before`;
+    const fresh = run(disposable({
+      STELL22_AC_PHASE: "backup-gate",
+      STELL22_AC_BACKUP_STDOUT: success,
+      STELL22_AC_BACKUP_BEFORE: before,
+    }));
+    expect(fresh.status, fresh.out).toBe(0);
+    expect(fresh.out).toContain("RESULT=BACKUP_OK");
+    const checksum = fs.readFileSync(`${root}/backups/stell22_2026-10-25_12-00-00.sql.gz.sha256`, "utf8");
+    expect(checksum.trim().split(/\s+/)[1]?.replace(/^\*/, "")).toBe("stell22_2026-10-25_12-00-00.sql.gz");
+    const stale = spawnSync("sh", ["-c", `printf '[backup] BACKUP SUCCESS: %s\\n' "$1" > "$2/stale"`, "sh", oldPath, root], { encoding: "utf8" });
+    expect(stale.status).toBe(0);
+    const rejected = run(disposable({
+      STELL22_AC_PHASE: "backup-gate",
+      STELL22_AC_BACKUP_STDOUT: `${root}/stale`,
+      STELL22_AC_BACKUP_BEFORE: before,
+    }));
+    expect(rejected.status, rejected.out).not.toBe(0);
+    expect(rejected.out).toContain("RESULT=STOP_BACKUP");
+  }, 30_000);
+
+  it("stops when the session probe fails and does not treat that as a clear writer set", () => {
+    const spec = fixture({});
+    const result = run({ ...spec.env, STELL22_AC_SESSION_STATUS: "1" });
+    expect(result.status, result.out).not.toBe(0);
+    expect(result.out).toContain("RESULT=STOP_WRITER");
+    expect(result.out).not.toContain("WRITERS_CLEAR");
+    expect(result.out).not.toContain("RELEASE_APPLIED");
+    expect(result.out).toContain("OLD_IMAGE_RESTART=NO");
+  }, 30_000);
+
+  it("stops without restarting when a database read or process check fails after the app stop", () => {
+    const sql = run(fixture({}).env);
+    const sqlFail = run({ ...fixture({}).env, STELL22_AC_SQL_FAIL: "after-stop" });
+    expect(sql.status, sql.out).toBe(0);
+    expect(sqlFail.status, sqlFail.out).not.toBe(0);
+    expect(sqlFail.out).toContain("RESULT=STOP_HISTORY");
+    expect(sqlFail.out).toContain("OLD_IMAGE_RESTART=NO");
+    expect(sqlFail.out).not.toContain("RELEASE_APPLIED");
+    const processFail = run({ ...fixture({}).env, STELL22_AC_PS_FAIL: "after-stop" });
+    expect(processFail.status, processFail.out).not.toBe(0);
+    expect(processFail.out).toContain("RESULT=STOP_WRITER");
+    expect(processFail.out).toContain("OLD_IMAGE_RESTART=NO");
+  }, 30_000);
+
+  it("does not restart the old image on a signal before migration", () => {
+    const spec = fixture({});
+    const result = run({ ...spec.env, STELL22_AC_SIGNAL_AT: "after-stop" });
+    expect(result.status, result.out).not.toBe(0);
+    expect(result.out).toContain("RESULT=STOP_SIGNAL");
+    expect(result.out).toContain("OLD_IMAGE_RESTART=NO");
+    expect(result.out).toContain("DATABASE_RESTORE=NO");
+    const log = fs.readFileSync(spec.log, "utf8");
+    expect(log).toContain("stop acrel-app-abcd1234");
+    expect(log).not.toContain("start acrel-app-abcd1234");
+  }, 30_000);
+
+  it("restarts the old image only after positive schema and history proofs", () => {
+    const proved = fixture({ backupExit: 1 });
+    const ok = run(proved.env);
+    expect(ok.out).toContain("RESULT=STOP_BACKUP");
+    expect(ok.out).toContain("OLD_IMAGE_RESTART=YES");
+    expect(fs.readFileSync(proved.log, "utf8")).toContain("start acrel-app-abcd1234");
+    const drifted = absentSchema().replace("batchPackageEdit=false", "batchPackageEdit=true");
+    const bad = fixture({ backupExit: 1, schemaNow: drifted });
+    const stopped = run(bad.env);
+    expect(stopped.out).toContain("RESULT=STOP_BACKUP");
+    expect(stopped.out).toContain("OLD_IMAGE_RESTART=NO");
+    expect(fs.readFileSync(bad.log, "utf8")).not.toContain("start acrel-app-abcd1234");
+  }, 30_000);
+
+  it("does not restart the old image after a migration attempt", () => {
+    const spec = fixture({});
+    const result = run({ ...spec.env, STELL22_AC_FAIL_AFTER_MIGRATE: "1" });
+    expect(result.status, result.out).not.toBe(0);
+    expect(result.out).toContain("OLD_IMAGE_RESTART=NO");
+    expect(result.out).toContain("FORWARD_RECOVERY=YES");
+    expect(result.out).not.toContain("RELEASE_APPLIED");
+    expect(fs.readFileSync(spec.log, "utf8")).not.toContain("start acrel-app-abcd1234");
+  }, 30_000);
+
+  it("leaves the checkout unchanged when preflight fails", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-checkout-"));
+    directories.push(root);
+    const log = `${root.replace(/\\/g, "/")}/checkout.log`;
+    const spec = fixture({
+      privileges: "serverVersionNum=170011\nmigratorLogin=true\nmigratorSuper=false\nmigratorCreate=true\nmigratorOwnsAlteredTable=true\nmigratorOperationTypeUsage=false\nappOperationTypeUsage=false\nappLogin=true\nappSuper=false\ndefaultPrivileges=true\n",
+    });
+    const result = run({
+      ...spec.env,
+      STELL22_AC_PHASE: "gated",
+      STELL22_AC_CHECKOUT_LOG: log,
+      STELL22_AC_GATE_ONLY: "1",
+    });
+    expect(result.out).toContain("RESULT=STOP_OPERATION_TYPE");
+    expect(result.out).toContain("APP_UNCHANGED=YES");
+    expect(fs.existsSync(log)).toBe(false);
+  }, 30_000);
+
+  it("redacts migrate.log when execution is interrupted", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-diag-"));
+    directories.push(root);
+    const diag = root.replace(/\\/g, "/");
+    const secret = "super-secret-migrator-pass";
+    fs.writeFileSync(path.join(root, "migrate.log"), `postgresql://stell22_migrator:${secret}@127.0.0.1/acrel_abcd1234\n`);
+    const spec = fixture({});
+    const result = run({
+      ...spec.env,
+      STELL22_AC_DIAG_DIR: diag,
+      STELL22_AC_SIGNAL_AT: "during-migrate",
+    });
+    expect(result.status, result.out).not.toBe(0);
+    expect(result.out).toContain("RESULT=STOP_SIGNAL");
+    expect(result.out).toContain("OLD_IMAGE_RESTART=NO");
+    expect(result.out).not.toContain(secret);
+    const redacted = fs.readFileSync(path.join(root, "migrate.log"), "utf8");
+    expect(redacted).toContain("postgresql://REDACTED");
+    expect(redacted).not.toContain(secret);
+  }, 30_000);
+
   it("does not wire restore, reset, or an automatic production deploy", () => {
     const operator = fs.readFileSync(SCRIPT, "utf8");
     const restart = operator.slice(operator.indexOf("# RESTART_OLD_IMAGE_BEGIN"), operator.indexOf("# RESTART_OLD_IMAGE_END"));
@@ -279,6 +434,9 @@ describe("admin corrections release operator", () => {
     expect(operator).not.toContain("migrate reset");
     expect(operator).not.toContain("db push");
     expect(operator).not.toContain("prisma migrate resolve");
+    expect(operator).not.toContain("unexpected_sessions || true");
+    expect(operator).not.toContain('sha256sum -c "${newest}.sha256"');
+    expect(operator.indexOf("if ! checkout_after_gate")).toBeGreaterThan(operator.indexOf("decide_ok preflight"));
     const workflow = fs.readFileSync(".github/workflows/release-admin-corrections.yml", "utf8");
     expect(workflow).toContain("workflow_dispatch:");
     expect(workflow).not.toMatch(/\n\s*push:/);
@@ -286,6 +444,7 @@ describe("admin corrections release operator", () => {
     expect(workflow).toContain("group: production-deploy");
     expect(workflow).toContain("environment: production");
     expect(workflow).not.toContain("prisma migrate deploy");
+    expect(workflow).not.toContain('sh "$TMP_DIR/release-checkout.sh"');
     const deploy = fs.readFileSync(".github/workflows/deploy-production.yml", "utf8");
     expect(deploy).toContain("workflow_dispatch:");
     expect(deploy).not.toMatch(/\n\s*push:/);

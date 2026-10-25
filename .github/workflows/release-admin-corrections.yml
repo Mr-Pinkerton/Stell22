@@ -137,12 +137,19 @@ jobs:
             TMP_DIR="$(mktemp -d)"
             cleanup() { rm -rf "$TMP_DIR"; }
             trap cleanup EXIT
-            git show "${EXPECTED_SHA}:scripts/release-checkout.sh" > "$TMP_DIR/release-checkout.sh"
             git show "${EXPECTED_SHA}:scripts/admin-corrections-release.sh" > "$TMP_DIR/admin-corrections-release.sh"
-            sh "$TMP_DIR/release-checkout.sh" "$EXPECTED_SHA"
-            STELL22_ADMIN_CORRECTIONS_EXECUTE="$STELL22_ADMIN_CORRECTIONS_EXECUTE" \
+            git show "${EXPECTED_SHA}:scripts/release-diagnostics.sh" > "$TMP_DIR/release-diagnostics.sh"
+            git show "${EXPECTED_SHA}:scripts/release-checkout.sh" > "$TMP_DIR/release-checkout.sh"
+            mkdir -p "$TMP_DIR/decide"
+            git show "${EXPECTED_SHA}:src/server/internal/admin-corrections-release/decide.mjs" > "$TMP_DIR/decide/decide.mjs"
+            # Read-only gate runs from the pinned commit before release-checkout switches the tree.
+            STELL22_AC_APP_DIR="$APP_DIR" \
+              STELL22_AC_DECIDE="$TMP_DIR/decide/decide.mjs" \
+              STELL22_AC_DIAGNOSTICS="$TMP_DIR/release-diagnostics.sh" \
+              STELL22_AC_CHECKOUT="$TMP_DIR/release-checkout.sh" \
+              STELL22_ADMIN_CORRECTIONS_EXECUTE="$STELL22_ADMIN_CORRECTIONS_EXECUTE" \
               STELL22_ADMIN_CORRECTIONS_MAINTENANCE="$STELL22_ADMIN_CORRECTIONS_MAINTENANCE" \
               STELL22_ADMIN_CORRECTIONS_CI="$STELL22_ADMIN_CORRECTIONS_CI" \
               STELL22_ADMIN_CORRECTIONS_AUTHORIZATION="$STELL22_ADMIN_CORRECTIONS_AUTHORIZATION" \
               STELL22_ADMIN_CORRECTIONS_SHA="$STELL22_ADMIN_CORRECTIONS_SHA" \
-              sh scripts/admin-corrections-release.sh
+              sh "$TMP_DIR/admin-corrections-release.sh"

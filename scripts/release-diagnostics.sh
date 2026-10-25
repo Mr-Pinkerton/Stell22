@@ -24,5 +24,6 @@ release_redact_diag() {
   fi
   release_redact_file "$diag/image-build.log"
   release_redact_file "$diag/p1-migrate.log"
+  release_redact_file "$diag/migrate.log"
   release_redact_file "$diag/app-start.log"
 }

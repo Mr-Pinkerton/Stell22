@@ -12,16 +12,19 @@ umask 077
 AUTHORIZATION_PHRASE="OWNER_AUTHORIZES_ADMIN_CORRECTIONS_01_RELEASE"
 MIGRATION_NAME="20261025120000_admin_corrections_batch_and_cancel"
 MIGRATION_SHA256="d8d83b48d536bd42cb9f394958dc981003d43da5b5904bcecadd3899b179f834"
-DECIDE="src/server/internal/admin-corrections-release/decide.mjs"
+DECIDE="${STELL22_AC_DECIDE:-src/server/internal/admin-corrections-release/decide.mjs}"
 COMPOSE_FILE="docker-compose.prod.yml"
 INSPECT_APP="stell22-ac-inspect"
 
 cd "$(dirname "$0")/.."
-# shellcheck disable=SC1091
-. ./scripts/release-diagnostics.sh
+if [ -n "${STELL22_AC_APP_DIR:-}" ]; then
+  cd "$STELL22_AC_APP_DIR"
+fi
+# shellcheck disable=SC1090
+. "${STELL22_AC_DIAGNOSTICS:-./scripts/release-diagnostics.sh}"
 
 work=""
-diag=""
+diag="${STELL22_AC_DIAG_DIR:-}"
 db_container="stell22-db-prod"
 app_container="stell22-app"
 caddy_container="stell22-caddy"
@@ -35,6 +38,14 @@ schema_unchanged=0
 migration_attempted=0
 old_image_app_only=0
 app_stopped=0
+handled_exit=0
+session_state=unknown
+process_check_ok=0
+target_objects_absent=0
+schema_compared=0
+old_image_identity=0
+unexpected_writes=1
+facts_mode=0
 db_id_before=""
 caddy_id_before=""
 legacy_image=""
@@ -50,25 +61,67 @@ if [ "${STELL22_ADMIN_CORRECTIONS_DISPOSABLE:-}" = "1" ]; then
   hold_tag="acrel-legacy-${STELL22_AC_DATABASE#acrel_}:hold"
 fi
 
-cleanup() {
-  if [ -n "$work" ]; then
-    rm -rf "$work"
-  fi
-  unset DATABASE_URL || true
-}
 on_signal() {
   trap '' HUP INT TERM
+  handled_exit=1
   echo "RESULT=STOP_SIGNAL" >&2
   echo "DATABASE_RESTORE=NO" >&2
   echo "RETRY_MIGRATION=NO" >&2
   echo "OLD_IMAGE_RESTART=NO" >&2
+  if [ "$migration_attempted" = 1 ]; then
+    echo "FORWARD_RECOVERY=YES" >&2
+  elif [ "$app_stopped" != 1 ]; then
+    echo "APP_UNCHANGED=YES" >&2
+  fi
   release_redact_diag
+  if [ -n "${work:-}" ]; then
+    release_redact_file "$work/migrate.log"
+  fi
+  if [ -n "${diag:-}" ]; then
+    release_redact_file "$diag/migrate.log"
+  fi
   exit 1
 }
+on_exit() {
+  status=$?
+  trap '' EXIT HUP INT TERM
+  if [ "$handled_exit" != 1 ] && [ "$status" != 0 ]; then
+    echo "RESULT=STOP_UNEXPECTED"
+    echo "DATABASE_RESTORE=NO"
+    echo "RETRY_MIGRATION=NO"
+    if prove_old_restart; then
+      if restart_old_image; then
+        echo "OLD_IMAGE_RESTART=YES"
+      else
+        echo "OLD_IMAGE_RESTART=NO"
+        echo "RESULT=STOP_OLD_RESTART"
+      fi
+    else
+      echo "OLD_IMAGE_RESTART=NO"
+      if [ "$migration_attempted" = 1 ]; then
+        echo "FORWARD_RECOVERY=YES"
+      elif [ "$app_stopped" != 1 ]; then
+        echo "APP_UNCHANGED=YES"
+      fi
+    fi
+    release_redact_diag
+    if [ -n "${work:-}" ]; then
+      release_redact_file "$work/migrate.log"
+    fi
+    if [ -n "${diag:-}" ]; then
+      release_redact_file "$diag/migrate.log"
+    fi
+  fi
+  if [ -n "${work:-}" ]; then
+    rm -rf "$work"
+  fi
+  unset DATABASE_URL || true
+}
 trap on_signal HUP INT TERM
-trap cleanup EXIT
+trap on_exit EXIT
 
 refuse() {
+  handled_exit=1
   echo "RESULT=$1"
   echo "DATABASE_RESTORE=NO"
   echo "RETRY_MIGRATION=NO"
@@ -93,14 +146,29 @@ if [ "$disposable" != 1 ]; then
   require_absent "${STELL22_AC_CHECKSUM_OK:-}"
   require_absent "${STELL22_AC_ORIGIN_MAIN:-}"
   require_absent "${STELL22_AC_HEAD:-}"
+  require_absent "${STELL22_AC_SESSION_STATUS:-}"
+  require_absent "${STELL22_AC_SQL_FAIL:-}"
+  require_absent "${STELL22_AC_PS_FAIL:-}"
+  require_absent "${STELL22_AC_DIAG_DIR:-}"
+  require_absent "${STELL22_AC_BACKUP_ROOT:-}"
+  require_absent "${STELL22_AC_BACKUP_STDOUT:-}"
+  require_absent "${STELL22_AC_BACKUP_BEFORE:-}"
+  require_absent "${STELL22_AC_CHECKOUT_LOG:-}"
+  require_absent "${STELL22_AC_SIGNAL_AT:-}"
+  require_absent "${STELL22_AC_FAIL_AFTER_STOP:-}"
+  require_absent "${STELL22_AC_FAIL_AFTER_MIGRATE:-}"
+  require_absent "${STELL22_AC_GATE_ONLY:-}"
   if [ "$phase" != "production" ]; then
     refuse STOP_LOCKED
   fi
 else
   case "$phase" in
-    migrate-only|fixture) ;;
+    migrate-only|fixture|backup-gate|gated) ;;
     *) refuse STOP_LOCKED ;;
   esac
+fi
+if [ "$phase" = "fixture" ] || [ "$phase" = "gated" ]; then
+  facts_mode=1
 fi
 
 work="$(mktemp -d)"
@@ -140,23 +208,31 @@ if [ "$phase" = "production" ]; then
   if ! git cat-file -e "${sha}^{commit}"; then
     refuse STOP_CHECKOUT
   fi
-  sh scripts/release-checkout.sh "$sha" > "$work/checkout.out"
   head="$(git rev-parse HEAD)"
-else
-  origin_main="${STELL22_AC_ORIGIN_MAIN:-$sha}"
-  head="${STELL22_AC_HEAD:-$sha}"
-fi
-cat > "$work/sha.env" <<EOF
+  cat > "$work/sha.env" <<EOF
 sha=$sha
 originMain=$origin_main
 head=$head
 ci=${STELL22_ADMIN_CORRECTIONS_CI:-}
 EOF
-if ! node "$DECIDE" sha "$work/sha.env" > "$work/sha.out"; then
-  refuse STOP_CHECKOUT
+  if ! node "$DECIDE" remote-sha "$work/sha.env" > "$work/sha.out"; then
+    refuse STOP_CHECKOUT
+  fi
+  blob_sha=$(git show "${sha}:prisma/migrations/${MIGRATION_NAME}/migration.sql" | sha256sum | awk 'NR == 1 { print $1; exit }')
+else
+  origin_main="${STELL22_AC_ORIGIN_MAIN:-$sha}"
+  head="${STELL22_AC_HEAD:-$sha}"
+  cat > "$work/sha.env" <<EOF
+sha=$sha
+originMain=$origin_main
+head=$head
+ci=${STELL22_ADMIN_CORRECTIONS_CI:-}
+EOF
+  if ! node "$DECIDE" sha "$work/sha.env" > "$work/sha.out"; then
+    refuse STOP_CHECKOUT
+  fi
+  blob_sha=$(git cat-file blob "HEAD:prisma/migrations/${MIGRATION_NAME}/migration.sql" | sha256sum | awk 'NR == 1 { print $1; exit }')
 fi
-
-blob_sha=$(git cat-file blob "HEAD:prisma/migrations/${MIGRATION_NAME}/migration.sql" | sha256sum | awk 'NR == 1 { print $1; exit }')
 if [ "$blob_sha" != "$MIGRATION_SHA256" ]; then
   refuse STOP_CHECKSUM
 fi
@@ -167,13 +243,118 @@ restart_old_image() {
 }
 # RESTART_OLD_IMAGE_END
 
+fact_value() {
+  key=$1
+  file=$2
+  awk -F= -v wanted="$key" '$1 == wanted { print $2; exit }' "$file"
+}
+
+schema_objects_absent() {
+  file=$1
+  key=""
+  value=""
+  for key in batchPackageEdit productionOperationCancellation cancelledAtPresent indexProductionOperationCancelledAt indexBatchRequest indexBatchBatchRecorded indexCancelRequest indexCancelOperation indexCancelOperationRecorded; do
+    value=$(fact_value "$key" "$file")
+    if [ "$value" != "false" ] && [ "$value" != "0" ]; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+sentinels_match() {
+  key=""
+  left=""
+  right=""
+  for key in sentinelProductionOperation sentinelInventoryMovement; do
+    left=$(fact_value "$key" "$1")
+    right=$(fact_value "$key" "$2")
+    if [ -z "$left" ] || [ "$left" != "$right" ]; then
+      return 1
+    fi
+  done
+  return 0
+}
+
+verify_published_backup() {
+  success_file=$1
+  before_file=$2
+  line=""
+  archive=""
+  base=""
+  sumfile=""
+  recorded_name=""
+  recorded_hash=""
+  count=0
+  dir=""
+  if [ ! -f "$success_file" ] || [ ! -f "$before_file" ]; then
+    return 1
+  fi
+  count=$(grep -c 'BACKUP SUCCESS:' "$success_file" || true)
+  if [ "$count" != "1" ]; then
+    return 1
+  fi
+  line=$(grep 'BACKUP SUCCESS:' "$success_file")
+  archive=${line#*BACKUP SUCCESS: }
+  archive=${archive#"${archive%%[![:space:]]*}"}
+  archive=${archive%"${archive##*[![:space:]]}"}
+  case "$archive" in
+    *stell22_[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_[0-9][0-9]-[0-9][0-9]-[0-9][0-9].sql.gz) ;;
+    *) return 1 ;;
+  esac
+  if grep -Fxq "$archive" "$before_file"; then
+    return 1
+  fi
+  base=$(basename "$archive")
+  if grep -Fxq "$base" "$before_file"; then
+    return 1
+  fi
+  sumfile="${archive}.sha256"
+  if [ ! -f "$archive" ] || [ ! -f "$sumfile" ]; then
+    return 1
+  fi
+  recorded_hash=$(awk 'NR == 1 { print $1; exit }' "$sumfile")
+  recorded_name=$(awk 'NR == 1 { print $2; exit }' "$sumfile")
+  case "$recorded_name" in
+    \**) recorded_name=${recorded_name#\*} ;;
+  esac
+  if [ "$recorded_name" != "$base" ]; then
+    return 1
+  fi
+  printf '%s\n' "$recorded_hash" | grep -Eq '^[0-9a-f]{64}$' || return 1
+  dir=$(dirname "$archive")
+  (CDPATH= cd "$dir" && sha256sum -c "$(basename "$sumfile")") >/dev/null 2>&1
+}
+
+if [ "$phase" = "backup-gate" ]; then
+  if verify_published_backup "${STELL22_AC_BACKUP_STDOUT:-}" "${STELL22_AC_BACKUP_BEFORE:-}"; then
+    handled_exit=1
+    echo "RESULT=BACKUP_OK"
+    exit 0
+  fi
+  handled_exit=1
+  echo "RESULT=STOP_BACKUP"
+  echo "DATABASE_RESTORE=NO"
+  echo "OLD_IMAGE_RESTART=NO"
+  exit 1
+fi
+
 finish() {
   stage=$1
   code=$2
+  if [ "$stage" = "after-stop" ]; then
+    if ! prove_old_restart; then
+      :
+    fi
+  fi
   cat > "$work/recovery.env" <<EOF
 stage=$stage
 historyUnchanged=$history_unchanged
 schemaUnchanged=$schema_unchanged
+targetObjectsAbsent=$target_objects_absent
+schemaCompared=$schema_compared
+oldImageIdentity=$old_image_identity
+unexpectedWrites=$unexpected_writes
 migrationAttempted=$migration_attempted
 oldImageAppOnly=$old_image_app_only
 EOF
@@ -186,11 +367,13 @@ EOF
       if [ "$app_stopped" != 1 ] || [ "$migration_attempted" = 1 ]; then
         echo "OLD_IMAGE_RESTART=NO"
         echo "RESULT=STOP_OLD_RESTART"
+        handled_exit=1
         exit 1
       fi
       if ! restart_old_image; then
         echo "OLD_IMAGE_RESTART=NO"
         echo "RESULT=STOP_OLD_RESTART"
+        handled_exit=1
         exit 1
       fi
       echo "OLD_IMAGE_RESTART=YES"
@@ -201,12 +384,94 @@ EOF
         echo "APP_UNCHANGED=YES"
       fi
       ;;
-    *)
+    forward-recovery)
       echo "OLD_IMAGE_RESTART=NO"
       echo "FORWARD_RECOVERY=YES"
       ;;
+    *)
+      echo "OLD_IMAGE_RESTART=NO"
+      ;;
   esac
+  handled_exit=1
   exit 1
+}
+
+prove_old_restart() {
+  history_unchanged=0
+  schema_unchanged=0
+  target_objects_absent=0
+  schema_compared=0
+  old_image_identity=0
+  unexpected_writes=1
+  if [ "$migration_attempted" = 1 ] || [ "$app_stopped" != 1 ] || [ "$old_image_app_only" != 1 ]; then
+    return 1
+  fi
+  if [ ! -f "$work/history.before" ] || [ ! -f "$work/schema.before" ]; then
+    return 1
+  fi
+  if ! confirm_old_image; then
+    return 1
+  fi
+  if ! note_processes; then
+    process_check_ok=0
+    return 1
+  fi
+  process_check_ok=1
+  if ! read_sessions "$work/sessions.prove"; then
+    session_state=failed
+    return 1
+  fi
+  if [ -s "$work/sessions.prove" ]; then
+    session_state=present
+  else
+    session_state=clear
+  fi
+  if ! write_history "$work/history.prove"; then
+    return 1
+  fi
+  if cmp -s "$work/history.before" "$work/history.prove"; then
+    history_unchanged=1
+  fi
+  if ! write_schema "$work/schema.prove" recheck; then
+    return 1
+  fi
+  schema_compared=1
+  if cmp -s "$work/schema.before" "$work/schema.prove"; then
+    schema_unchanged=1
+  fi
+  if schema_objects_absent "$work/schema.before" && schema_objects_absent "$work/schema.prove"; then
+    target_objects_absent=1
+  fi
+  if sentinels_match "$work/schema.before" "$work/schema.prove"; then
+    unexpected_writes=0
+  fi
+  [ "$history_unchanged" = 1 ] && [ "$schema_unchanged" = 1 ] && [ "$target_objects_absent" = 1 ] && [ "$unexpected_writes" = 0 ] && [ "$old_image_identity" = 1 ]
+}
+
+confirm_old_image() {
+  now=""
+  entry=""
+  if [ "$facts_mode" = 1 ]; then
+    if [ "$old_image_app_only" != 1 ]; then
+      return 1
+    fi
+    old_image_identity=1
+    return 0
+  fi
+  now=$(docker inspect -f '{{.Image}}' "$app_container") || return 1
+  if [ -z "$legacy_image" ] || [ "$now" != "$legacy_image" ]; then
+    return 1
+  fi
+  entry=$(docker image inspect --format '{{json .Config.Entrypoint}}' "$now") || return 1
+  case "$entry" in
+    *docker-entrypoint-app-only.sh*) ;;
+    *) return 1 ;;
+  esac
+  case "$entry" in
+    *"prisma migrate"*) return 1 ;;
+  esac
+  old_image_identity=1
+  return 0
 }
 
 note_processes() {
@@ -214,6 +479,9 @@ note_processes() {
   import_running=0
   migrate_process=0
   conflicting=0
+  if [ "${STELL22_AC_PS_FAIL:-}" = "after-stop" ] && [ "$app_stopped" = 1 ]; then
+    return 1
+  fi
   ps -eo args > "$work/processes.txt" 2>/dev/null || ps > "$work/processes.txt" || return 1
   while IFS= read -r line; do
     case "$line" in
@@ -245,7 +513,10 @@ run_sql() {
 
 write_history() {
   out=$1
-  if [ "$phase" = "fixture" ]; then
+  if [ "$facts_mode" = 1 ]; then
+    if [ "${STELL22_AC_SQL_FAIL:-}" = "after-stop" ] && [ "$app_stopped" = 1 ]; then
+      return 1
+    fi
     cp "$STELL22_AC_FACTS_DIR/history.txt" "$out"
     return 0
   fi
@@ -259,7 +530,10 @@ SQL
 
 write_privilege_facts() {
   out=$1
-  if [ "$phase" = "fixture" ]; then
+  if [ "$facts_mode" = 1 ]; then
+    if [ "${STELL22_AC_SQL_FAIL:-}" = "after-stop" ] && [ "$app_stopped" = 1 ]; then
+      return 1
+    fi
     cp "$STELL22_AC_FACTS_DIR/privileges.env" "$out"
     return 0
   fi
@@ -349,7 +623,7 @@ SQL
 
 write_object_facts() {
   out=$1
-  if [ "$phase" = "fixture" ]; then
+  if [ "$facts_mode" = 1 ]; then
     cp "$STELL22_AC_FACTS_DIR/objects.env" "$out"
     return 0
   fi
@@ -397,9 +671,58 @@ SQL
   run_sql "$work/objects.sql" > "$out"
 }
 
-unexpected_sessions() {
-  if [ "$phase" = "fixture" ]; then
-    cat "$STELL22_AC_FACTS_DIR/sessions.txt"
+write_schema() {
+  out=$1
+  when=$2
+  if [ "$facts_mode" = 1 ]; then
+    if [ "${STELL22_AC_SQL_FAIL:-}" = "after-stop" ] && [ "$app_stopped" = 1 ]; then
+      return 1
+    fi
+    if [ "$when" = "recheck" ] && [ -f "$STELL22_AC_FACTS_DIR/schema.now" ]; then
+      cp "$STELL22_AC_FACTS_DIR/schema.now" "$out"
+      return 0
+    fi
+    cp "$STELL22_AC_FACTS_DIR/schema.env" "$out"
+    return 0
+  fi
+  cat > "$work/schema.sql" <<'SQL'
+SELECT 'batchPackageEdit=' || (to_regclass('public."BatchPackageEditCommand"') IS NOT NULL)::text
+UNION ALL
+SELECT 'productionOperationCancellation=' || (to_regclass('public."ProductionOperationCancellation"') IS NOT NULL)::text
+UNION ALL
+SELECT 'cancelledAtPresent=' || EXISTS (
+  SELECT 1 FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = 'public' AND c.relname = 'ProductionOperation' AND a.attname = 'cancelledAt' AND a.attnum > 0 AND NOT a.attisdropped
+)::text
+UNION ALL
+SELECT 'indexProductionOperationCancelledAt=' || EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'ProductionOperation_cancelledAt_idx')::text
+UNION ALL
+SELECT 'indexBatchRequest=' || EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'BatchPackageEditCommand_requestId_key')::text
+UNION ALL
+SELECT 'indexBatchBatchRecorded=' || EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'BatchPackageEditCommand_batchId_recordedAt_idx')::text
+UNION ALL
+SELECT 'indexCancelRequest=' || EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'ProductionOperationCancellation_requestId_key')::text
+UNION ALL
+SELECT 'indexCancelOperation=' || EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'ProductionOperationCancellation_operationId_key')::text
+UNION ALL
+SELECT 'indexCancelOperationRecorded=' || EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'ProductionOperationCancellation_operationId_recordedAt_idx')::text
+UNION ALL
+SELECT 'sentinelProductionOperation=' || (SELECT count(*)::text FROM public."ProductionOperation")
+UNION ALL
+SELECT 'sentinelInventoryMovement=' || (SELECT count(*)::text FROM public."InventoryMovement")
+SQL
+  run_sql "$work/schema.sql" > "$out"
+}
+
+read_sessions() {
+  out=$1
+  if [ "$facts_mode" = 1 ]; then
+    if [ "${STELL22_AC_SESSION_STATUS:-0}" != "0" ]; then
+      return 1
+    fi
+    cat "$STELL22_AC_FACTS_DIR/sessions.txt" > "$out"
     return 0
   fi
   cat > "$work/sessions.sql" <<'SQL'
@@ -407,7 +730,20 @@ SELECT COALESCE(usename, '') || '|' || COALESCE(application_name, '') || '|' || 
 FROM pg_stat_activity
 WHERE datname = current_database() AND backend_type = 'client backend'
 SQL
-  run_sql "$work/sessions.sql" | awk -F'|' -v app="$INSPECT_APP" '$2 != app { print }'
+  if ! run_sql "$work/sessions.sql" > "$work/sessions.raw"; then
+    return 1
+  fi
+  if [ ! -f "$work/sessions.raw" ]; then
+    return 1
+  fi
+  awk -F'|' -v app="$INSPECT_APP" '$2 != app { print }' "$work/sessions.raw" > "$out"
+}
+
+unexpected_sessions() {
+  read_sessions "$work/sessions.filtered"
+  if [ -f "$work/sessions.filtered" ]; then
+    cat "$work/sessions.filtered"
+  fi
 }
 
 schema_root() {
@@ -534,14 +870,15 @@ else
   running_present=1
   running_entrypoint="./docker-entrypoint-app-only.sh"
   old_image_app_only=1
-  if [ "$phase" = "fixture" ]; then
+  if [ "$phase" = "fixture" ] || [ "$phase" = "gated" ]; then
     # shellcheck disable=SC1091
     . "$STELL22_AC_FACTS_DIR/runtime.env"
   fi
 fi
 
 note_processes || finish before-stop STOP_WRITER
-write_history "$work/history.before"
+write_history "$work/history.before" || finish before-stop STOP_HISTORY
+write_schema "$work/schema.before" baseline || finish before-stop STOP_SCHEMA
 compare_inventory "$work/history.before" "$work/history.env"
 write_privilege_facts "$work/privileges.env"
 cat > "$work/runtime.facts" <<EOF
@@ -562,6 +899,53 @@ merge_facts "$work/preflight.part" "$work/runtime.facts" "$work/preflight.env"
 if ! decide_ok preflight "$work/preflight.env" "$work/preflight.out"; then
   code=$(awk -F= '$1 == "CODE" { print $2; exit }' "$work/preflight.out")
   finish before-stop "$code"
+fi
+
+checkout_after_gate() {
+  backup_hash=""
+  restore_hash=""
+  blob_now=""
+  if [ "$disposable" = 1 ]; then
+    if [ -z "${STELL22_AC_CHECKOUT_LOG:-}" ]; then
+      return 1
+    fi
+    printf '%s\n' "$sha" >> "$STELL22_AC_CHECKOUT_LOG"
+    return 0
+  fi
+  if [ ! -f scripts/backup-db.sh ] || [ ! -f scripts/restore-db.sh ]; then
+    return 1
+  fi
+  sha256sum scripts/backup-db.sh > "$work/backup.protected" || return 1
+  sha256sum scripts/restore-db.sh > "$work/restore.protected" || return 1
+  sh "${STELL22_AC_CHECKOUT:-scripts/release-checkout.sh}" "$sha" > "$work/checkout.out" || return 1
+  if [ "$(git rev-parse HEAD)" != "$sha" ]; then
+    return 1
+  fi
+  backup_hash=$(sha256sum scripts/backup-db.sh) || return 1
+  restore_hash=$(sha256sum scripts/restore-db.sh) || return 1
+  if [ "$backup_hash" != "$(cat "$work/backup.protected")" ] || [ "$restore_hash" != "$(cat "$work/restore.protected")" ]; then
+    return 1
+  fi
+  blob_now=$(git show "HEAD:prisma/migrations/${MIGRATION_NAME}/migration.sql" | sha256sum | awk 'NR == 1 { print $1; exit }')
+  if [ "$blob_now" != "$MIGRATION_SHA256" ]; then
+    return 1
+  fi
+  write_history "$work/history.recheck" || return 1
+  cmp -s "$work/history.before" "$work/history.recheck" || return 1
+  write_privilege_facts "$work/privileges.recheck" || return 1
+  cmp -s "$work/privileges.env" "$work/privileges.recheck"
+}
+
+if [ "$phase" = "production" ] || [ "$phase" = "gated" ]; then
+  if ! checkout_after_gate; then
+    finish before-stop STOP_CHECKOUT
+  fi
+  if [ "$phase" = "gated" ] && [ "${STELL22_AC_GATE_ONLY:-}" = "1" ]; then
+    handled_exit=1
+    echo "RESULT=GATE_ACCEPTED"
+    echo "CHECKOUT=YES"
+    exit 0
+  fi
 fi
 
 if [ "$phase" = "migrate-only" ]; then
@@ -618,6 +1002,7 @@ EOF
   echo "OLD_IMAGE_RESTART=NO"
   echo "RETRY_MIGRATION=NO"
   echo "APP_START=SKIPPED_DISPOSABLE"
+  handled_exit=1
   exit 0
 fi
 
@@ -690,28 +1075,49 @@ if [ "$phase" = "production" ]; then
     finish after-stop STOP_WRITER
   fi
 else
-  docker stop "$app_container" >/dev/null
+  if ! docker stop "$app_container" >/dev/null; then
+    finish after-stop STOP_WRITER
+  fi
 fi
 app_stopped=1
-sleep_seconds=0
-if [ "$phase" != "fixture" ]; then
-while [ "$sleep_seconds" -lt 10 ]; do
-  sessions=$(unexpected_sessions || true)
-  if [ -z "$sessions" ]; then
-    break
-  fi
-  sleep 1
-  sleep_seconds=$((sleep_seconds + 1))
-done
+if [ "$disposable" = 1 ] && [ "${STELL22_AC_SIGNAL_AT:-}" = "after-stop" ]; then
+  on_signal
 fi
-sessions=$(unexpected_sessions || true)
-unexpected=0
-inspection_only=1
-if [ -n "$sessions" ]; then
+if [ "$disposable" = 1 ] && [ "${STELL22_AC_FAIL_AFTER_STOP:-}" = "1" ]; then
+  false
+fi
+if [ "$phase" = "production" ]; then
+  sleep_seconds=0
+  while [ "$sleep_seconds" -lt 10 ]; do
+    if ! read_sessions "$work/sessions.drain"; then
+      session_state=failed
+      finish after-stop STOP_WRITER
+    fi
+    if [ ! -s "$work/sessions.drain" ]; then
+      break
+    fi
+    sleep 1
+    sleep_seconds=$((sleep_seconds + 1))
+  done
+fi
+if ! read_sessions "$work/sessions.now"; then
+  session_state=failed
+  finish after-stop STOP_WRITER
+fi
+if [ -s "$work/sessions.now" ]; then
+  session_state=present
   unexpected=1
   inspection_only=0
+else
+  session_state=clear
+  unexpected=0
+  inspection_only=1
 fi
-note_processes || finish after-stop STOP_WRITER
+if ! note_processes; then
+  process_check_ok=0
+  finish after-stop STOP_WRITER
+fi
+process_check_ok=1
 cat > "$work/writers.env" <<EOF
 appStopped=1
 inspectionOnly=$inspection_only
@@ -720,17 +1126,16 @@ backupRunning=$backup_running
 importRunning=$import_running
 migrateProcess=$migrate_process
 conflictingDeploy=$conflicting
+sessionProbe=ok
 EOF
+if [ "$session_state" != "clear" ]; then
+  finish after-stop STOP_WRITER
+fi
 if ! decide_ok writers "$work/writers.env" "$work/writers.out"; then
-  write_history "$work/history.writers"
-  if cmp -s "$work/history.before" "$work/history.writers"; then
-    history_unchanged=1
-    schema_unchanged=1
-  fi
   finish after-stop STOP_WRITER
 fi
 
-if [ "$phase" = "fixture" ]; then
+if [ "$phase" = "fixture" ] || [ "$phase" = "gated" ]; then
   backup_status=0
   "$STELL22_AC_BACKUP_BIN" > "$work/backup.out" 2>&1 || backup_status=$?
   backup_ok=0
@@ -743,14 +1148,20 @@ if [ "$phase" = "fixture" ]; then
   fi
 else
   backup_status=0
+  backup_root="${STELL22_AC_BACKUP_ROOT:-backups}"
+  : > "$work/backups.before"
+  if [ -d "$backup_root" ]; then
+    if ! find "$backup_root" -maxdepth 1 -type f -name 'stell22_*.sql.gz' > "$work/backups.before"; then
+      finish after-stop STOP_BACKUP
+    fi
+  fi
   sh scripts/backup-db.sh > "$work/backup.out" 2>&1 || backup_status=$?
   backup_ok=0
   checksum_ok=0
-  if [ "$backup_status" = 0 ] && grep -q 'BACKUP SUCCESS' "$work/backup.out"; then
+  if [ "$backup_status" = 0 ] && grep -q 'BACKUP SUCCESS:' "$work/backup.out"; then
     backup_ok=1
   fi
-  newest=$(ls -1t backups/stell22_*.sql.gz 2>/dev/null | awk 'NR == 1 { print; exit }')
-  if [ -n "$newest" ] && [ -f "${newest}.sha256" ] && sha256sum -c "${newest}.sha256" >/dev/null 2>&1; then
+  if [ "$backup_ok" = 1 ] && verify_published_backup "$work/backup.out" "$work/backups.before"; then
     checksum_ok=1
   fi
 fi
@@ -759,27 +1170,36 @@ backupOk=$backup_ok
 checksumOk=$checksum_ok
 EOF
 if ! decide_ok backup "$work/backup.env" "$work/backup.decision"; then
-  write_history "$work/history.backup"
-  if cmp -s "$work/history.before" "$work/history.backup"; then
-    history_unchanged=1
-    schema_unchanged=1
-  fi
   finish after-stop STOP_BACKUP
 fi
 
-write_history "$work/history.ready"
+write_history "$work/history.ready" || finish after-stop STOP_HISTORY
+write_schema "$work/schema.ready" recheck || finish after-stop STOP_SCHEMA
+history_unchanged=0
+schema_unchanged=0
+target_objects_absent=0
 if cmp -s "$work/history.before" "$work/history.ready"; then
   history_unchanged=1
-  schema_unchanged=1
 fi
-compare_inventory "$work/history.ready" "$work/history.ready.env"
-write_privilege_facts "$work/privileges.ready"
-sessions=$(unexpected_sessions || true)
+if cmp -s "$work/schema.before" "$work/schema.ready" && schema_objects_absent "$work/schema.before" && schema_objects_absent "$work/schema.ready"; then
+  schema_unchanged=1
+  target_objects_absent=1
+fi
+compare_inventory "$work/history.ready" "$work/history.ready.env" || finish after-stop STOP_HISTORY
+write_privilege_facts "$work/privileges.ready" || finish after-stop STOP_SCHEMA
+if ! read_sessions "$work/sessions.ready"; then
+  session_state=failed
+  finish after-stop STOP_WRITER
+fi
 unexpected=0
-if [ -n "$sessions" ]; then
+if [ -s "$work/sessions.ready" ]; then
   unexpected=1
 fi
-note_processes || finish after-stop STOP_WRITER
+if ! note_processes; then
+  process_check_ok=0
+  finish after-stop STOP_WRITER
+fi
+process_check_ok=1
 migrator_ready=0
 migrate_login=refused
 if [ "$phase" = "fixture" ]; then
@@ -808,9 +1228,17 @@ if ! decide_ok premigrate "$work/premigrate.env" "$work/premigrate.out"; then
   finish after-stop "$code"
 fi
 
-write_object_facts "$work/sentinels.before"
+write_object_facts "$work/sentinels.before" || finish after-stop STOP_SCHEMA
 sentinel_before_operation=$(awk -F= '$1 == "sentinelProductionOperation" { print $2; exit }' "$work/sentinels.before")
 sentinel_before_movement=$(awk -F= '$1 == "sentinelInventoryMovement" { print $2; exit }' "$work/sentinels.before")
+if [ "$disposable" = 1 ] && [ "${STELL22_AC_SIGNAL_AT:-}" = "during-migrate" ]; then
+  migration_attempted=1
+  on_signal
+fi
+if [ "$disposable" = 1 ] && [ "${STELL22_AC_FAIL_AFTER_MIGRATE:-}" = "1" ]; then
+  migration_attempted=1
+  false
+fi
 migration_attempted=1
 history_unchanged=0
 migrate_status=0
@@ -893,6 +1321,7 @@ if [ "$app_status" != 0 ]; then
 fi
 
 docker image rm "$hold_tag" >/dev/null 2>&1 || true
+handled_exit=1
 echo "RESULT=RELEASE_APPLIED"
 echo "MIGRATION_APPLY=MIGRATOR"
 echo "MIGRATE_LOGIN=stell22_migrator"

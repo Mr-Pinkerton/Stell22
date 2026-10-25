@@ -257,14 +257,19 @@ export function disposableIdentityAllowed(facts) {
 }
 
 export function recoveryAction(facts) {
+  if (facts.stage === "before-stop") return "none";
+  if (facts.stage === "signal") return "stop";
   if (yes(facts, "migrationAttempted") || facts.stage === "migration-uncertain" || facts.stage === "app-start-failed") {
     return "forward-recovery";
   }
-  if (facts.stage === "before-stop") return "none";
   if (
     facts.stage === "after-stop" &&
     yes(facts, "historyUnchanged") &&
     yes(facts, "schemaUnchanged") &&
+    yes(facts, "targetObjectsAbsent") &&
+    yes(facts, "schemaCompared") &&
+    yes(facts, "oldImageIdentity") &&
+    no(facts, "unexpectedWrites") &&
     no(facts, "migrationAttempted") &&
     yes(facts, "oldImageAppOnly")
   ) {
@@ -284,10 +289,11 @@ export function decide(event, facts) {
     if ((facts.ci ?? "") !== "1") return decision(false, "STOP_CHECKOUT", "none");
     return decision(true, "LOCK_OPEN", "none");
   }
-  if (event === "sha") {
-    if (!SHA.test(facts.sha ?? "") || facts.sha !== facts.originMain || facts.sha !== facts.head) {
+  if (event === "remote-sha" || event === "sha") {
+    if (!SHA.test(facts.sha ?? "") || facts.sha !== facts.originMain) {
       return decision(false, "STOP_CHECKOUT", "none");
     }
+    if (event === "sha" && facts.sha !== facts.head) return decision(false, "STOP_CHECKOUT", "none");
     if ((facts.ci ?? "") !== "1") return decision(false, "STOP_CHECKOUT", "none");
     return decision(true, "SHA_APPROVED", "none");
   }

@@ -70,10 +70,27 @@ describe("admin corrections release decisions", () => {
   });
 
   it("restarts the old image only before an unattempted migration", () => {
-    expect(recoveryAction({ stage: "before-stop", migrationAttempted: "0", historyUnchanged: "1", schemaUnchanged: "1", oldImageAppOnly: "1" })).toBe("none");
-    expect(recoveryAction({ stage: "after-stop", migrationAttempted: "0", historyUnchanged: "1", schemaUnchanged: "1", oldImageAppOnly: "1" })).toBe("restart-old");
-    expect(recoveryAction({ stage: "after-stop", migrationAttempted: "0", historyUnchanged: "0", schemaUnchanged: "1", oldImageAppOnly: "1" })).toBe("stop");
-    expect(recoveryAction({ stage: "after-stop", migrationAttempted: "0", historyUnchanged: "1", schemaUnchanged: "1", oldImageAppOnly: "0" })).toBe("stop");
+    const proved = {
+      stage: "after-stop",
+      migrationAttempted: "0",
+      historyUnchanged: "1",
+      schemaUnchanged: "1",
+      oldImageAppOnly: "1",
+      targetObjectsAbsent: "1",
+      schemaCompared: "1",
+      oldImageIdentity: "1",
+      unexpectedWrites: "0",
+    };
+    expect(recoveryAction({ ...proved, stage: "before-stop" })).toBe("none");
+    expect(recoveryAction(proved)).toBe("restart-old");
+    expect(recoveryAction({ stage: "after-stop", migrationAttempted: "0", historyUnchanged: "1", schemaUnchanged: "1", oldImageAppOnly: "1" })).toBe("stop");
+    expect(recoveryAction({ ...proved, targetObjectsAbsent: "0" })).toBe("stop");
+    expect(recoveryAction({ ...proved, schemaCompared: "0" })).toBe("stop");
+    expect(recoveryAction({ ...proved, oldImageIdentity: "0" })).toBe("stop");
+    expect(recoveryAction({ ...proved, unexpectedWrites: "1" })).toBe("stop");
+    expect(recoveryAction({ ...proved, stage: "signal" })).toBe("stop");
+    expect(recoveryAction({ ...proved, historyUnchanged: "0" })).toBe("stop");
+    expect(recoveryAction({ ...proved, oldImageAppOnly: "0" })).toBe("stop");
     expect(recoveryAction({ stage: "migration-uncertain", migrationAttempted: "1", historyUnchanged: "1", schemaUnchanged: "1", oldImageAppOnly: "1" })).toBe("forward-recovery");
     expect(recoveryAction({ stage: "app-start-failed", migrationAttempted: "1", historyUnchanged: "1", schemaUnchanged: "1", oldImageAppOnly: "1" })).toBe("forward-recovery");
     expect(decide("recovery", { stage: "after-stop", migrationAttempted: "1", historyUnchanged: "1", schemaUnchanged: "1", oldImageAppOnly: "1" }).action).not.toBe("restore");
