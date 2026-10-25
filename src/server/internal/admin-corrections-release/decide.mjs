@@ -269,6 +269,8 @@ export function recoveryAction(facts) {
     yes(facts, "targetObjectsAbsent") &&
     yes(facts, "schemaCompared") &&
     yes(facts, "oldImageIdentity") &&
+    yes(facts, "sessionClear") &&
+    yes(facts, "processesClear") &&
     no(facts, "unexpectedWrites") &&
     no(facts, "migrationAttempted") &&
     yes(facts, "oldImageAppOnly")

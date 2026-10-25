@@ -87,6 +87,7 @@ function fixture(options: {
   sessions?: string;
   schema?: string;
   schemaNow?: string;
+  processesNow?: string;
   backupExit?: number;
   checksumOk?: string;
   buildExit?: string;
@@ -123,6 +124,7 @@ function fixture(options: {
   fs.writeFileSync(path.join(facts, "sessions.txt"), options.sessions ?? "");
   fs.writeFileSync(path.join(facts, "schema.env"), options.schema ?? absentSchema());
   if (options.schemaNow) fs.writeFileSync(path.join(facts, "schema.now"), options.schemaNow);
+  if (options.processesNow) fs.writeFileSync(path.join(facts, "processes.now"), options.processesNow);
   fs.writeFileSync(path.join(facts, "objects.env"), "sentinelProductionOperation=0\nsentinelInventoryMovement=0\n");
   fs.writeFileSync(path.join(facts, "runtime.env"), options.runtime ?? "old_image_app_only=1\n");
   fs.writeFileSync(
@@ -268,7 +270,7 @@ describe("admin corrections release operator", () => {
     const writer = fixture({ sessions: "intruder|psql|client backend\n" });
     const writers = run(writer.env);
     expect(writers.out).toContain("RESULT=STOP_WRITER");
-    expect(writers.out).toContain("OLD_IMAGE_RESTART=YES");
+    expect(writers.out).toContain("OLD_IMAGE_RESTART=NO");
     expect(fs.readFileSync(writer.log, "utf8")).not.toContain("up -d");
     const applied = `${image.map((row) => `${row.name}|${row.sha256}|true|false|1`).join("\n")}\n`;
     const repeat = run(fixture({ history: applied }).env);
@@ -374,6 +376,78 @@ describe("admin corrections release operator", () => {
     expect(stopped.out).toContain("RESULT=STOP_BACKUP");
     expect(stopped.out).toContain("OLD_IMAGE_RESTART=NO");
     expect(fs.readFileSync(bad.log, "utf8")).not.toContain("start acrel-app-abcd1234");
+  }, 30_000);
+
+  it("does not restart when recovery confirms a competing process", () => {
+    for (const line of ["sh scripts/backup-db.sh", "node fetch-statements.js", "npx prisma migrate deploy", "sh scripts/release-role-split.sh"]) {
+      const spec = fixture({ backupExit: 1, processesNow: `${line}\n` });
+      const result = run(spec.env);
+      expect(result.out, line).toContain("OLD_IMAGE_RESTART=NO");
+      expect(result.out, line).not.toContain("RELEASE_APPLIED");
+      expect(fs.readFileSync(spec.log, "utf8")).not.toContain("start acrel-app-abcd1234");
+    }
+    const clear = fixture({ backupExit: 1 });
+    const restarted = run(clear.env);
+    expect(restarted.out).toContain("RESULT=STOP_BACKUP");
+    expect(restarted.out).toContain("OLD_IMAGE_RESTART=YES");
+  }, 60_000);
+
+  it("rejects an old archive addressed by a relative path and accepts a new absolute archive", () => {
+    const directory = fs.mkdtempSync(path.join(process.cwd(), ".ac-r2-backup-"));
+    directories.push(directory);
+    const oldName = "stell22_2020-01-01_00-00-00.sql.gz";
+    const newName = "stell22_2026-10-25_12-00-00.sql.gz";
+    fs.writeFileSync(path.join(directory, oldName), "old\n");
+    fs.writeFileSync(path.join(directory, newName), "new\n");
+    const unix = directory.replace(/\\/g, "/");
+    const relativeOld = `${path.relative(process.cwd(), directory).replace(/\\/g, "/")}/${oldName}`;
+    const absoluteOld = path.resolve(directory, oldName).replace(/\\/g, "/");
+    const absoluteNew = path.resolve(directory, newName).replace(/\\/g, "/");
+    const summed = spawnSync("sh", ["-c", 'cd "$1" && sha256sum "$2" > "$2.sha256" && sha256sum "$3" > "$3.sha256"', "sh", unix, newName, oldName], { encoding: "utf8" });
+    expect(summed.status, summed.stderr).toBe(0);
+    fs.writeFileSync(path.join(directory, "before"), `${relativeOld}\n`);
+    fs.writeFileSync(path.join(directory, "old-success"), `[backup] BACKUP SUCCESS: ${absoluteOld}\n`);
+    fs.writeFileSync(path.join(directory, "new-success"), `[backup] BACKUP SUCCESS: ${absoluteNew}\n`);
+    const rejected = run(disposable({
+      STELL22_AC_PHASE: "backup-gate",
+      STELL22_AC_BACKUP_STDOUT: `${unix}/old-success`,
+      STELL22_AC_BACKUP_BEFORE: `${unix}/before`,
+    }));
+    expect(rejected.status, rejected.out).not.toBe(0);
+    expect(rejected.out).toContain("RESULT=STOP_BACKUP");
+    const accepted = run(disposable({
+      STELL22_AC_PHASE: "backup-gate",
+      STELL22_AC_BACKUP_STDOUT: `${unix}/new-success`,
+      STELL22_AC_BACKUP_BEFORE: `${unix}/before`,
+    }));
+    expect(accepted.status, accepted.out).toBe(0);
+    expect(accepted.out).toContain("RESULT=BACKUP_OK");
+  }, 30_000);
+
+  it("stops before checkout and app stop when the target schema is present or unreadable", () => {
+    const checkoutRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ac-schema-gate-"));
+    directories.push(checkoutRoot);
+    const checkoutFor = (name: string) => `${checkoutRoot.replace(/\\/g, "/")}/${name}.log`;
+    const table = fixture({ schema: absentSchema().replace("batchPackageEdit=false", "batchPackageEdit=true") });
+    const tableLog = checkoutFor("table");
+    const tableResult = run({ ...table.env, STELL22_AC_PHASE: "gated", STELL22_AC_CHECKOUT_LOG: tableLog, STELL22_AC_GATE_ONLY: "1" });
+    expect(tableResult.out).toContain("RESULT=STOP_SCHEMA");
+    expect(tableResult.out).toContain("APP_UNCHANGED=YES");
+    expect(fs.existsSync(tableLog)).toBe(false);
+    expect(fs.existsSync(table.log)).toBe(false);
+    const column = fixture({ schema: absentSchema().replace("cancelledAtPresent=false", "cancelledAtPresent=true") });
+    const columnLog = checkoutFor("column");
+    const columnResult = run({ ...column.env, STELL22_AC_PHASE: "gated", STELL22_AC_CHECKOUT_LOG: columnLog, STELL22_AC_GATE_ONLY: "1" });
+    expect(columnResult.out).toContain("RESULT=STOP_SCHEMA");
+    expect(fs.existsSync(columnLog)).toBe(false);
+    expect(fs.existsSync(column.log)).toBe(false);
+    const probe = fixture({});
+    const probeLog = checkoutFor("probe");
+    const probeResult = run({ ...probe.env, STELL22_AC_PHASE: "gated", STELL22_AC_CHECKOUT_LOG: probeLog, STELL22_AC_GATE_ONLY: "1", STELL22_AC_SQL_FAIL: "preflight" });
+    expect(probeResult.out).toContain("RESULT=STOP_SCHEMA");
+    expect(probeResult.out).toContain("APP_UNCHANGED=YES");
+    expect(fs.existsSync(probeLog)).toBe(false);
+    expect(fs.existsSync(probe.log)).toBe(false);
   }, 30_000);
 
   it("does not restart the old image after a migration attempt", () => {

@@ -79,10 +79,14 @@ describe("admin corrections release decisions", () => {
       targetObjectsAbsent: "1",
       schemaCompared: "1",
       oldImageIdentity: "1",
+      sessionClear: "1",
+      processesClear: "1",
       unexpectedWrites: "0",
     };
     expect(recoveryAction({ ...proved, stage: "before-stop" })).toBe("none");
     expect(recoveryAction(proved)).toBe("restart-old");
+    expect(recoveryAction({ ...proved, sessionClear: "0" })).toBe("stop");
+    expect(recoveryAction({ ...proved, processesClear: "0" })).toBe("stop");
     expect(recoveryAction({ stage: "after-stop", migrationAttempted: "0", historyUnchanged: "1", schemaUnchanged: "1", oldImageAppOnly: "1" })).toBe("stop");
     expect(recoveryAction({ ...proved, targetObjectsAbsent: "0" })).toBe("stop");
     expect(recoveryAction({ ...proved, schemaCompared: "0" })).toBe("stop");

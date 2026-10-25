@@ -45,6 +45,8 @@ target_objects_absent=0
 schema_compared=0
 old_image_identity=0
 unexpected_writes=1
+session_clear=0
+processes_clear=0
 facts_mode=0
 db_id_before=""
 caddy_id_before=""
@@ -276,6 +278,23 @@ sentinels_match() {
   return 0
 }
 
+normalize_archive() {
+  target=$1
+  parent=$(dirname "$target")
+  name=$(basename "$target")
+  if [ ! -d "$parent" ]; then
+    return 1
+  fi
+  (CDPATH= cd "$parent" && printf '%s/%s\n' "$(pwd -P)" "$name")
+}
+
+require_schema_absent() {
+  out=$1
+  when=$2
+  write_schema "$out" "$when" || return 1
+  schema_objects_absent "$out"
+}
+
 verify_published_backup() {
   success_file=$1
   before_file=$2
@@ -302,13 +321,15 @@ verify_published_backup() {
     *stell22_[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_[0-9][0-9]-[0-9][0-9]-[0-9][0-9].sql.gz) ;;
     *) return 1 ;;
   esac
-  if grep -Fxq "$archive" "$before_file"; then
-    return 1
-  fi
+  published_norm=$(normalize_archive "$archive") || return 1
+  while IFS= read -r prior || [ -n "$prior" ]; do
+    [ -n "$prior" ] || continue
+    prior_norm=$(normalize_archive "$prior") || return 1
+    if [ "$prior_norm" = "$published_norm" ]; then
+      return 1
+    fi
+  done < "$before_file"
   base=$(basename "$archive")
-  if grep -Fxq "$base" "$before_file"; then
-    return 1
-  fi
   sumfile="${archive}.sha256"
   if [ ! -f "$archive" ] || [ ! -f "$sumfile" ]; then
     return 1
@@ -355,6 +376,8 @@ targetObjectsAbsent=$target_objects_absent
 schemaCompared=$schema_compared
 oldImageIdentity=$old_image_identity
 unexpectedWrites=$unexpected_writes
+sessionClear=$session_clear
+processesClear=$processes_clear
 migrationAttempted=$migration_attempted
 oldImageAppOnly=$old_image_app_only
 EOF
@@ -403,6 +426,8 @@ prove_old_restart() {
   schema_compared=0
   old_image_identity=0
   unexpected_writes=1
+  session_clear=0
+  processes_clear=0
   if [ "$migration_attempted" = 1 ] || [ "$app_stopped" != 1 ] || [ "$old_image_app_only" != 1 ]; then
     return 1
   fi
@@ -426,6 +451,14 @@ prove_old_restart() {
   else
     session_state=clear
   fi
+  if [ "$session_state" != "clear" ]; then
+    return 1
+  fi
+  if [ "$backup_running" != 0 ] || [ "$import_running" != 0 ] || [ "$migrate_process" != 0 ] || [ "$conflicting" != 0 ]; then
+    return 1
+  fi
+  session_clear=1
+  processes_clear=1
   if ! write_history "$work/history.prove"; then
     return 1
   fi
@@ -445,7 +478,7 @@ prove_old_restart() {
   if sentinels_match "$work/schema.before" "$work/schema.prove"; then
     unexpected_writes=0
   fi
-  [ "$history_unchanged" = 1 ] && [ "$schema_unchanged" = 1 ] && [ "$target_objects_absent" = 1 ] && [ "$unexpected_writes" = 0 ] && [ "$old_image_identity" = 1 ]
+  [ "$history_unchanged" = 1 ] && [ "$schema_unchanged" = 1 ] && [ "$target_objects_absent" = 1 ] && [ "$unexpected_writes" = 0 ] && [ "$old_image_identity" = 1 ] && [ "$session_clear" = 1 ] && [ "$processes_clear" = 1 ]
 }
 
 confirm_old_image() {
@@ -482,7 +515,17 @@ note_processes() {
   if [ "${STELL22_AC_PS_FAIL:-}" = "after-stop" ] && [ "$app_stopped" = 1 ]; then
     return 1
   fi
-  ps -eo args > "$work/processes.txt" 2>/dev/null || ps > "$work/processes.txt" || return 1
+  if [ "$facts_mode" = 1 ]; then
+    if [ "$app_stopped" = 1 ] && [ -f "${STELL22_AC_FACTS_DIR:-}/processes.now" ]; then
+      cp "$STELL22_AC_FACTS_DIR/processes.now" "$work/processes.txt"
+    elif [ -f "${STELL22_AC_FACTS_DIR:-}/processes.txt" ]; then
+      cp "$STELL22_AC_FACTS_DIR/processes.txt" "$work/processes.txt"
+    else
+      : > "$work/processes.txt"
+    fi
+  else
+    ps -eo args > "$work/processes.txt" 2>/dev/null || ps > "$work/processes.txt" || return 1
+  fi
   while IFS= read -r line; do
     case "$line" in
       *grep*|*admin-corrections-release-decide*|*decide.mjs*) continue ;;
@@ -675,6 +718,9 @@ write_schema() {
   out=$1
   when=$2
   if [ "$facts_mode" = 1 ]; then
+    if [ "${STELL22_AC_SQL_FAIL:-}" = "preflight" ] && [ "$app_stopped" != 1 ]; then
+      return 1
+    fi
     if [ "${STELL22_AC_SQL_FAIL:-}" = "after-stop" ] && [ "$app_stopped" = 1 ]; then
       return 1
     fi
@@ -900,6 +946,7 @@ if ! decide_ok preflight "$work/preflight.env" "$work/preflight.out"; then
   code=$(awk -F= '$1 == "CODE" { print $2; exit }' "$work/preflight.out")
   finish before-stop "$code"
 fi
+schema_objects_absent "$work/schema.before" || finish before-stop STOP_SCHEMA
 
 checkout_after_gate() {
   backup_hash=""
@@ -1069,6 +1116,8 @@ if [ "$phase" = "production" ]; then
     finish before-stop STOP_MIGRATOR
   fi
 fi
+
+require_schema_absent "$work/schema.prestop" baseline || finish before-stop STOP_SCHEMA
 
 if [ "$phase" = "production" ]; then
   if ! docker stop "$app_container" >/dev/null; then
