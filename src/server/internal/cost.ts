@@ -178,7 +178,10 @@ async function loadCostContext(period: Period | null): Promise<CostContext> {
       prisma.employee.findMany(),
       prisma.nomenclatureItem.findMany(),
       prisma.product.findMany({ include: { details: true, fasteners: true, extras: true } }),
-      prisma.productionOperation.findMany({ include: { lines: true } }),
+      prisma.productionOperation.findMany({
+        where: { cancelledAt: null },
+        include: { lines: true },
+      }),
       getPeriodOverhead(period),
       prisma.batchCost.findMany({ where: { status: "FINAL" } }),
     ]);
@@ -351,7 +354,7 @@ export async function recalcBatchCosts(
         return;
       }
       const ops = await tx.productionOperation.findMany({
-        where: { type: "TORCOVKA", batchId },
+        where: { type: "TORCOVKA", batchId, cancelledAt: null },
         include: { lines: true },
       });
       const lines = producedLinesFromOperations(ops.map(toOperationForCost));
@@ -370,7 +373,7 @@ async function freezeBatch(tx: Prisma.TransactionClient, batchId: string): Promi
   const batch = await tx.batch.findUnique({ where: { id: batchId } });
   if (!batch) return;
   const ops = await tx.productionOperation.findMany({
-    where: { type: "TORCOVKA", batchId },
+    where: { type: "TORCOVKA", batchId, cancelledAt: null },
     include: { lines: true },
   });
   const lines = producedLinesFromOperations(ops.map(toOperationForCost));
@@ -412,7 +415,7 @@ export async function maybeFreezeBatch(
   const batch = await tx.batch.findUnique({ where: { id: batchId } });
   if (!batch || batch.frozenAt || !batch.closedAt) return false;
   const unpaidTorcovkaCount = await tx.productionOperation.count({
-    where: { batchId, type: "TORCOVKA", isPaid: false },
+    where: { batchId, type: "TORCOVKA", isPaid: false, cancelledAt: null },
   });
   if (!canFreezeBatch({ frozenAt: batch.frozenAt, closedAt: batch.closedAt, unpaidTorcovkaCount })) {
     return false;

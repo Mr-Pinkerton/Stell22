@@ -34,6 +34,12 @@ import {
   type QuantityEditResult,
 } from "@/server/internal/production-quantity-edit";
 import { editProductionOperationQuantityInTransaction } from "@/server/internal/production-quantity-edit-tx";
+import { cancelProductionOperationInTransaction } from "@/server/internal/cancel-production-operation-tx";
+import {
+  CANCEL_EDIT_BLOCKED,
+  canonicalCancelReason,
+  productionCancelFingerprint,
+} from "@/lib/production-operation-cancel";
 import {
   assertCorrectionCommandIntegers,
   canonicalCorrectionReason,
@@ -92,6 +98,7 @@ interface RefMaps {
   productName: Map<string, string>;
   detail: Map<string, { name: string; sort: "SORT1" | "SORT2" }>;
   logs: Map<string, ProductionChangeLogEntry[]>;
+  cancelReason: Map<string, string>;
 }
 
 function computeAmount(op: OpFull, maps: RefMaps): { quantity: number; amount: number } {
@@ -145,6 +152,18 @@ function serializeRow(op: OpFull, maps: RefMaps): ProductionEntryRow {
     amount,
     unitRate: quantity > 0 ? round2(amount / quantity) : 0,
     isPaid: op.isPaid,
+    cancelledAt: op.cancelledAt ? op.cancelledAt.toISOString() : null,
+    cancelReason: maps.cancelReason.get(op.id) ?? null,
+    cancelStateFingerprint: productionCancelFingerprint({
+      operationId: op.id,
+      type: op.type,
+      isPaid: op.isPaid,
+      cancelledAt: op.cancelledAt ? op.cancelledAt.toISOString() : null,
+      railsTaken: op.railsTaken,
+      hours: op.hours == null ? null : op.hours.toString(),
+      productQty: op.productQty,
+      lines: op.lines.map((line) => ({ id: line.id, quantity: line.quantity })),
+    }),
     batchName: op.batchId ? maps.batchName.get(op.batchId) : undefined,
     railsTaken: op.railsTaken ?? undefined,
     railLengthM: op.railLotId ? maps.lotLength.get(op.railLotId) : undefined,
@@ -173,7 +192,7 @@ function serializeRow(op: OpFull, maps: RefMaps): ProductionEntryRow {
 }
 
 async function buildMaps(ops: OpFull[]): Promise<RefMaps> {
-  const [employees, batches, lots, products, details, logs] = await Promise.all([
+  const [employees, batches, lots, products, details, logs, cancellations] = await Promise.all([
     prisma.employee.findMany(),
     prisma.batch.findMany({ select: { id: true, name: true, frozenAt: true } }),
     prisma.railLot.findMany({ select: { id: true, lengthM: true, remainingQuantity: true } }),
@@ -182,6 +201,10 @@ async function buildMaps(ops: OpFull[]): Promise<RefMaps> {
     prisma.changeLog.findMany({
       where: { entity: "ProductionOperation", entityId: { in: ops.map((o) => o.id) } },
       orderBy: { changedAt: "desc" },
+    }),
+    prisma.productionOperationCancellation.findMany({
+      where: { operationId: { in: ops.map((o) => o.id) } },
+      select: { operationId: true, reason: true },
     }),
   ]);
 
@@ -214,6 +237,7 @@ async function buildMaps(ops: OpFull[]): Promise<RefMaps> {
     productName: new Map(products.map((p) => [p.id, p.name])),
     detail: new Map(details.map((d) => [d.id, { name: d.name, sort: d.sort }])),
     logs: logMap,
+    cancelReason: new Map(cancellations.map((row) => [row.operationId, row.reason])),
   };
 }
 
@@ -262,6 +286,7 @@ export async function updateProductionLineQuantity(
     const op = await tx.productionOperation.findUnique({ where: { id } });
     if (!op) throw new Error("Операция не найдена");
     if (op.isPaid) throw new Error("Нельзя изменить — операция уже выплачена");
+    if (op.cancelledAt) throw new Error(CANCEL_EDIT_BLOCKED);
     if (op.type !== "HOURS") {
       throw new Error(PHYSICAL_QUANTITY_EDIT_REQUIRES_RETAINED_COMMAND);
     }
@@ -347,6 +372,7 @@ export async function deleteProductionOperation(id: string): Promise<void> {
     });
     if (!op) throw new Error("Операция не найдена");
     if (op.isPaid) throw new Error("Нельзя удалить — операция уже выплачена");
+    if (op.cancelledAt) throw new Error(CANCEL_EDIT_BLOCKED);
     assertPhysicalProductionDeleteAllowed(op.type);
 
     if (op.type === "TORCOVKA") {
@@ -506,4 +532,48 @@ export async function correctTorcovkaRailsTaken(input: {
   revalidatePath("/purchases");
   revalidatePath("/", "layout");
   return { ...outcome.value, entry: await reloadRow(operationId) };
+}
+
+export async function cancelProductionOperation(input: {
+  operationId: string;
+  requestId: string;
+  reason: string;
+  expectedStateFingerprint: string;
+}): Promise<{ replayed: boolean; entry: ProductionEntryRow }> {
+  const admin = await requireAdmin();
+  const actor = userMovementActorFromAdmin(admin);
+  const requestId = requireClientRequestId(input.requestId);
+  const reason = canonicalCancelReason(input.reason);
+  const expectedStateFingerprint = input.expectedStateFingerprint.trim();
+  if (!expectedStateFingerprint) throw new Error("Запись уже изменилась. Обновите страницу и повторите аннулирование.");
+
+  let enqueueBatchId: string | null = null;
+  const outcome: { replayed: boolean } = { replayed: false };
+
+  await prisma.$transaction(
+    async (tx) => {
+      const inner = await cancelProductionOperationInTransaction(tx, {
+        actor,
+        adminUserId: admin.id,
+        operationId: input.operationId,
+        requestId,
+        reason,
+        expectedStateFingerprint,
+      });
+      outcome.replayed = inner.replayed;
+      enqueueBatchId = inner.enqueueBatchId;
+    },
+    {
+      isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+      maxWait: 20_000,
+      timeout: 20_000,
+    },
+  );
+
+  if (enqueueBatchId) await enqueueRecalcBatchCosts(enqueueBatchId);
+  revalidatePath(PATH);
+  revalidatePath("/reports");
+  revalidatePath("/purchases");
+  revalidatePath("/", "layout");
+  return { replayed: outcome.replayed, entry: await reloadRow(input.operationId) };
 }

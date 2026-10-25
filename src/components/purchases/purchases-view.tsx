@@ -8,9 +8,11 @@ import {
   createSimplePurchase,
   deleteBatch,
   getBatchLabels,
+  getBatchPackageEditor,
   updateBatch,
   writeOffBatchRemainder,
   type BatchFormValues,
+  type BatchPackageEditor,
   type SimplePurchaseFormValues,
 } from "@/server/purchases";
 import { printPackageLabels } from "@/lib/print-labels";
@@ -57,10 +59,12 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
   const [showArchive, setShowArchive] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<PurchaseBatchRow | null>(null);
+  const [packages, setPackages] = useState<BatchPackageEditor | null>(null);
   const [batches, setBatches] = useState<PurchaseBatchRow[]>(initialRows);
   const [pending, startTransition] = useTransition();
   const [exporting, startExport] = useTransition();
   const batchCreateIdentityRef = useRef(createPurchaseRequestIdentityOwner());
+  const batchEditIdentityRef = useRef(createPurchaseRequestIdentityOwner());
   const simplePurchaseIdentityRef = useRef(createPurchaseRequestIdentityOwner());
   const writeOffIdentityRef = useRef(createKeyedPurchaseRequestIdentityOwner());
 
@@ -109,23 +113,37 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
 
   const clearCreateIdentities = () => {
     batchCreateIdentityRef.current.clear();
+    batchEditIdentityRef.current.clear();
     simplePurchaseIdentityRef.current.clear();
   };
 
   const openCreate = () => {
     clearCreateIdentities();
     setEditing(null);
+    setPackages(null);
     setDialogOpen(true);
   };
 
   const handleDialogOpenChange = (open: boolean) => {
-    if (!open) clearCreateIdentities();
+    if (!open) {
+      clearCreateIdentities();
+      setPackages(null);
+    }
     setDialogOpen(open);
   };
 
   const openEdit = (batch: PurchaseBatchRow) => {
-    setEditing(batch);
-    setDialogOpen(true);
+    startTransition(async () => {
+      try {
+        const editor = await getBatchPackageEditor(batch.id);
+        batchEditIdentityRef.current.clear();
+        setPackages(editor);
+        setEditing(batch);
+        setDialogOpen(true);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Не удалось открыть партию");
+      }
+    });
   };
 
   const upsert = (b: PurchaseBatchRow) =>
@@ -165,13 +183,14 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
 
   const handleBatchSubmit = (values: BatchFormValues) => {
     const requestId = editing
-      ? null
+      ? batchEditIdentityRef.current.acquire(JSON.stringify(values))
       : batchCreateIdentityRef.current.acquire(batchCreateCommandKey(values));
     return new Promise<void>((resolve) => {
       startTransition(async () => {
         try {
           if (editing) {
-            upsert(await updateBatch(editing.id, values));
+            upsert(await updateBatch(editing.id, values, requestId));
+            batchEditIdentityRef.current.clear();
           } else {
             upsert(await createBatch(values, requestId as string));
             batchCreateIdentityRef.current.clear();
@@ -180,8 +199,9 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
           setDialogOpen(false);
         } catch (err) {
           const message = err instanceof Error ? err.message : "Ошибка сохранения";
-          if (!editing && shouldRotatePurchaseRequestId(message)) {
-            batchCreateIdentityRef.current.clear();
+          if (shouldRotatePurchaseRequestId(message)) {
+            if (editing) batchEditIdentityRef.current.clear();
+            else batchCreateIdentityRef.current.clear();
           }
           toast.error(message);
         } finally {
@@ -445,6 +465,7 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
         batch={editing}
         items={items}
         materials={materials}
+        packages={packages}
         onOpenChange={handleDialogOpenChange}
         onSubmitBatch={handleBatchSubmit}
         onSubmitSimple={handleSimpleSubmit}

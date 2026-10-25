@@ -170,6 +170,7 @@ export async function lockDealsThenBatches(
   db: FinanceDb,
   dealIds: Iterable<string | null | undefined>,
   extraBatchIds: Iterable<string | null | undefined> = [],
+  options?: { lockLots?: boolean },
 ): Promise<void> {
   const deals = sortedUniqueIds(dealIds);
   await lockTableIds(db, "Deal", deals);
@@ -181,7 +182,7 @@ export async function lockDealsThenBatches(
         })
       : [];
   const batchIds = [...items.map((i) => i.batchId), ...extraBatchIds];
-  if (await isCostFlowActive(db)) {
+  if (options?.lockLots || (await isCostFlowActive(db))) {
     await lockRailLotsForBatches(db, batchIds);
   }
   await lockBatches(db, batchIds);

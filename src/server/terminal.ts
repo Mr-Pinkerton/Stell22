@@ -1440,7 +1440,7 @@ export async function getEmployeeEntries(employeeId: string): Promise<TerminalEn
   const [emp, ops] = await Promise.all([
     prisma.employee.findUnique({ where: { id: employeeId } }),
     prisma.productionOperation.findMany({
-      where: { employeeId },
+      where: { employeeId, cancelledAt: null },
       include: { lines: true },
       orderBy: { createdAt: "desc" },
     }),

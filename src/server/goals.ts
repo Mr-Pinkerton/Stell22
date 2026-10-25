@@ -33,7 +33,7 @@ export async function getGoalsData(): Promise<GoalsData> {
     prisma.goal.findMany({ include: { product: true }, orderBy: { month: "desc" } }),
     prisma.product.findMany({ where: { status: "ACTIVE" }, orderBy: { name: "asc" } }),
     prisma.productionOperation.findMany({
-      where: { type: "UPAKOVKA" },
+      where: { type: "UPAKOVKA", cancelledAt: null },
       select: { productId: true, productQty: true, workDate: true },
     }),
   ]);

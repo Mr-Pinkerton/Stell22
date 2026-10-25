@@ -208,6 +208,7 @@ export async function editProductionOperationQuantityInTransaction(
   });
   if (!op) throw new Error("Операция не найдена");
   if (op.isPaid) throw new Error("Нельзя изменить — операция уже выплачена");
+  if (op.cancelledAt) throw new Error("Операция аннулирована — правка недоступна.");
   assertPhysicalType(op.type);
 
   if (op.type === "UPAKOVKA") {
