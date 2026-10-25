@@ -165,7 +165,7 @@ if [ "$disposable" != 1 ]; then
   fi
 else
   case "$phase" in
-    migrate-only|fixture|backup-gate|gated) ;;
+    migrate-only|fixture|backup-gate|gated|server-checkout) ;;
     *) refuse STOP_LOCKED ;;
   esac
 fi
@@ -202,7 +202,7 @@ EOF
 fi
 
 sha="${STELL22_ADMIN_CORRECTIONS_SHA:-}"
-if [ "$phase" = "production" ]; then
+if [ "$phase" = "production" ] || [ "$phase" = "server-checkout" ]; then
   if ! git fetch origin main; then
     refuse STOP_CHECKOUT
   fi
@@ -220,7 +220,11 @@ EOF
   if ! node "$DECIDE" remote-sha "$work/sha.env" > "$work/sha.out"; then
     refuse STOP_CHECKOUT
   fi
-  blob_sha=$(git show "${sha}:prisma/migrations/${MIGRATION_NAME}/migration.sql" | sha256sum | awk 'NR == 1 { print $1; exit }')
+  if git cat-file -e "${sha}:prisma/migrations/${MIGRATION_NAME}/migration.sql"; then
+    blob_sha=$(git cat-file blob "${sha}:prisma/migrations/${MIGRATION_NAME}/migration.sql" | sha256sum | awk 'NR == 1 { print $1; exit }')
+  else
+    blob_sha=""
+  fi
 else
   origin_main="${STELL22_AC_ORIGIN_MAIN:-$sha}"
   head="${STELL22_AC_HEAD:-$sha}"
@@ -235,7 +239,7 @@ EOF
   fi
   blob_sha=$(git cat-file blob "HEAD:prisma/migrations/${MIGRATION_NAME}/migration.sql" | sha256sum | awk 'NR == 1 { print $1; exit }')
 fi
-if [ "$blob_sha" != "$MIGRATION_SHA256" ]; then
+if [ -n "$blob_sha" ] && [ "$blob_sha" != "$MIGRATION_SHA256" ]; then
   refuse STOP_CHECKSUM
 fi
 
@@ -856,9 +860,57 @@ EOF
   unset DATABASE_URL || true
 }
 
+pin_target_inventory() {
+  pin="$work/pinned-tree"
+  resolved=""
+  target_sum=""
+  count=0
+  pin_status=unreadable
+  rm -rf "$pin"
+  mkdir -p "$pin"
+  chmod 700 "$pin" || return 1
+  resolved=$(git rev-parse --verify "${sha}^{commit}") || return 1
+  if [ "$resolved" != "$sha" ]; then
+    return 1
+  fi
+  if ! git archive --format=tar "$sha" prisma/migrations > "$work/pinned.tar"; then
+    return 1
+  fi
+  if ! tar -xf "$work/pinned.tar" -C "$pin"; then
+    return 1
+  fi
+  if [ ! -d "$pin/prisma/migrations" ]; then
+    return 1
+  fi
+  find "$pin" -type d -exec chmod 700 {} \; || return 1
+  find "$pin" -type f -exec chmod 600 {} \; || return 1
+  if ! node "$DECIDE" inventory "$pin/prisma/migrations" > "$work/pinned-inventory.txt"; then
+    return 1
+  fi
+  count=$(grep -c . "$work/pinned-inventory.txt" || true)
+  if [ "$count" != "47" ]; then
+    pin_status=pending
+    return 1
+  fi
+  target_sum=$(awk -v name="$MIGRATION_NAME" '$1 == name { print $2; exit }' "$work/pinned-inventory.txt")
+  if [ "$target_sum" != "$MIGRATION_SHA256" ]; then
+    pin_status=checksum
+    return 1
+  fi
+  pin_status=ready
+  return 0
+}
+
 compare_inventory() {
-  root=$(schema_root)
-  node "$DECIDE" inventory "$root/prisma/migrations" > "$work/inventory.txt"
+  if [ "$facts_mode" = 1 ]; then
+    root=$(schema_root)
+    node "$DECIDE" inventory "$root/prisma/migrations" > "$work/inventory.txt" || return 1
+  else
+    if [ ! -s "$work/pinned-inventory.txt" ]; then
+      return 1
+    fi
+    cp "$work/pinned-inventory.txt" "$work/inventory.txt"
+  fi
   node "$DECIDE" compare "$work/inventory.txt" "$1" > "$2"
 }
 
@@ -925,7 +977,19 @@ fi
 note_processes || finish before-stop STOP_WRITER
 write_history "$work/history.before" || finish before-stop STOP_HISTORY
 write_schema "$work/schema.before" baseline || finish before-stop STOP_SCHEMA
-compare_inventory "$work/history.before" "$work/history.env"
+if [ "$facts_mode" != 1 ]; then
+  pin_status=""
+  if ! pin_target_inventory; then
+    if [ "$pin_status" = "pending" ]; then
+      finish before-stop STOP_PENDING
+    fi
+    if [ "$pin_status" = "checksum" ]; then
+      finish before-stop STOP_CHECKSUM
+    fi
+    finish before-stop STOP_CHECKOUT
+  fi
+fi
+compare_inventory "$work/history.before" "$work/history.env" || finish before-stop STOP_HISTORY
 write_privilege_facts "$work/privileges.env"
 cat > "$work/runtime.facts" <<EOF
 appHealthy=$app_healthy
@@ -952,7 +1016,7 @@ checkout_after_gate() {
   backup_hash=""
   restore_hash=""
   blob_now=""
-  if [ "$disposable" = 1 ]; then
+  if [ "$disposable" = 1 ] && [ "$phase" != "server-checkout" ]; then
     if [ -z "${STELL22_AC_CHECKOUT_LOG:-}" ]; then
       return 1
     fi
@@ -973,17 +1037,25 @@ checkout_after_gate() {
   if [ "$backup_hash" != "$(cat "$work/backup.protected")" ] || [ "$restore_hash" != "$(cat "$work/restore.protected")" ]; then
     return 1
   fi
-  blob_now=$(git show "HEAD:prisma/migrations/${MIGRATION_NAME}/migration.sql" | sha256sum | awk 'NR == 1 { print $1; exit }')
+  blob_now=$(git cat-file blob "HEAD:prisma/migrations/${MIGRATION_NAME}/migration.sql" | sha256sum | awk 'NR == 1 { print $1; exit }')
   if [ "$blob_now" != "$MIGRATION_SHA256" ]; then
     return 1
   fi
   write_history "$work/history.recheck" || return 1
   cmp -s "$work/history.before" "$work/history.recheck" || return 1
   write_privilege_facts "$work/privileges.recheck" || return 1
-  cmp -s "$work/privileges.env" "$work/privileges.recheck"
+  cmp -s "$work/privileges.env" "$work/privileges.recheck" || return 1
+  if [ ! -s "$work/pinned-inventory.txt" ]; then
+    return 1
+  fi
+  node "$DECIDE" inventory "$PWD/prisma/migrations" > "$work/worktree-inventory.txt" || return 1
+  cmp -s "$work/pinned-inventory.txt" "$work/worktree-inventory.txt"
 }
 
-if [ "$phase" = "production" ] || [ "$phase" = "gated" ]; then
+if [ "$phase" = "production" ] || [ "$phase" = "gated" ] || [ "$phase" = "server-checkout" ]; then
+  if [ "$phase" = "server-checkout" ]; then
+    echo "CHECKOUT_BEFORE=$(git rev-parse HEAD)"
+  fi
   if ! checkout_after_gate; then
     finish before-stop STOP_CHECKOUT
   fi
@@ -991,6 +1063,14 @@ if [ "$phase" = "production" ] || [ "$phase" = "gated" ]; then
     handled_exit=1
     echo "RESULT=GATE_ACCEPTED"
     echo "CHECKOUT=YES"
+    exit 0
+  fi
+  if [ "$phase" = "server-checkout" ]; then
+    echo "CHECKOUT_AFTER=$(git rev-parse HEAD)"
+    echo "PINNED_MIGRATIONS=$(grep -c . "$work/pinned-inventory.txt")"
+    echo "RESULT=GATE_ACCEPTED"
+    echo "CHECKOUT=YES"
+    handled_exit=1
     exit 0
   fi
 fi
