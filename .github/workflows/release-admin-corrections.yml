@@ -1,0 +1,155 @@
+name: ADMIN-CORRECTIONS-01 release
+
+# Manual owner gate only. A push to main does not run this workflow.
+# This is not Production Deploy and it does not accept the role-split phrase.
+# The release SHA is the exact origin/main named by the Owner after this
+# workflow is on main. The baseline SHA is not permission to dispatch.
+on:
+  workflow_dispatch:
+    inputs:
+      authorization:
+        description: Release-specific Owner phrase. Empty stops before SSH.
+        required: false
+        default: ""
+      sha:
+        description: Exact 40-character release SHA
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  owner-gate:
+    name: Owner authorization
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Stop unless this release phrase and SHA match
+        env:
+          AUTHORIZATION: ${{ inputs.authorization }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          set -eu
+          if [ "$AUTHORIZATION" = "OWNER_AUTHORIZES_ROLE_SPLIT_RELEASE" ] || [ "$AUTHORIZATION" != "OWNER_AUTHORIZES_ADMIN_CORRECTIONS_01_RELEASE" ]; then
+            echo "RESULT=STOP_OWNER_GATE"
+            echo "PRODUCTION_RELEASE=NO-GO"
+            exit 1
+          fi
+          if ! printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "RESULT=STOP_CHECKOUT"
+            exit 1
+          fi
+
+  approve-sha:
+    name: Approve exact main SHA
+    needs: owner-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - name: Require origin/main, migration bytes, and successful CI
+        env:
+          SHA: ${{ inputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          main_sha="$(git rev-parse origin/main)"
+          if [ "$SHA" != "$main_sha" ]; then
+            echo "RESULT=STOP_CHECKOUT" >&2
+            exit 1
+          fi
+          sum="$(git show "${SHA}:prisma/migrations/20261025120000_admin_corrections_batch_and_cancel/migration.sql" | sha256sum | awk 'NR == 1 { print $1; exit }')"
+          if [ "$sum" != "d8d83b48d536bd42cb9f394958dc981003d43da5b5904bcecadd3899b179f834" ]; then
+            echo "RESULT=STOP_CHECKSUM" >&2
+            exit 1
+          fi
+          count="$(gh api --jq '[.workflow_runs[] | select(.head_sha == "'"$SHA"'" and .conclusion == "success" and .name == "CI")] | length' "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${SHA}&status=success&per_page=100")"
+          if [ "$count" -lt 1 ]; then
+            echo "RESULT=STOP_CHECKOUT" >&2
+            exit 1
+          fi
+          echo "RESULT=SHA_APPROVED"
+
+  release:
+    name: Admin corrections release on the production host
+    needs: [owner-gate, approve-sha]
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: production
+    steps:
+      - name: Check required secrets
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+        run: |
+          missing=0
+          for name in PROD_HOST PROD_USER PROD_SSH_KEY PROD_APP_DIR; do
+            if [ -z "${!name}" ]; then
+              echo "Missing required secret: ${name}" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Checkout, backup, one migrator migration, app-only start
+        uses: appleboy/ssh-action@v1.2.4
+        env:
+          EXPECTED_SHA: ${{ inputs.sha }}
+          APP_DIR: ${{ secrets.PROD_APP_DIR }}
+          STELL22_ADMIN_CORRECTIONS_EXECUTE: "1"
+          STELL22_ADMIN_CORRECTIONS_MAINTENANCE: "1"
+          STELL22_ADMIN_CORRECTIONS_CI: "1"
+          STELL22_ADMIN_CORRECTIONS_AUTHORIZATION: ${{ inputs.authorization }}
+          STELL22_ADMIN_CORRECTIONS_SHA: ${{ inputs.sha }}
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ${{ secrets.PROD_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          port: ${{ secrets.PROD_PORT || 22 }}
+          command_timeout: 35m
+          envs: EXPECTED_SHA,APP_DIR,STELL22_ADMIN_CORRECTIONS_EXECUTE,STELL22_ADMIN_CORRECTIONS_MAINTENANCE,STELL22_ADMIN_CORRECTIONS_CI,STELL22_ADMIN_CORRECTIONS_AUTHORIZATION,STELL22_ADMIN_CORRECTIONS_SHA
+          script: |
+            set -euo pipefail
+            cd "$APP_DIR"
+            git fetch origin main
+            origin_main="$(git rev-parse origin/main)"
+            if [ "$origin_main" != "$EXPECTED_SHA" ] || [ "$STELL22_ADMIN_CORRECTIONS_SHA" != "$EXPECTED_SHA" ]; then
+              echo "RESULT=STOP_CHECKOUT" >&2
+              exit 1
+            fi
+            if ! git cat-file -e "${EXPECTED_SHA}^{commit}"; then
+              echo "RESULT=STOP_CHECKOUT" >&2
+              exit 1
+            fi
+            TMP_DIR="$(mktemp -d)"
+            cleanup() { rm -rf "$TMP_DIR"; }
+            trap cleanup EXIT
+            git show "${EXPECTED_SHA}:scripts/admin-corrections-release.sh" > "$TMP_DIR/admin-corrections-release.sh"
+            git show "${EXPECTED_SHA}:scripts/release-diagnostics.sh" > "$TMP_DIR/release-diagnostics.sh"
+            git show "${EXPECTED_SHA}:scripts/release-checkout.sh" > "$TMP_DIR/release-checkout.sh"
+            mkdir -p "$TMP_DIR/decide"
+            git show "${EXPECTED_SHA}:src/server/internal/admin-corrections-release/decide.mjs" > "$TMP_DIR/decide/decide.mjs"
+            # Read-only gate runs from the pinned commit before release-checkout switches the tree.
+            STELL22_AC_APP_DIR="$APP_DIR" \
+              STELL22_AC_DECIDE="$TMP_DIR/decide/decide.mjs" \
+              STELL22_AC_DIAGNOSTICS="$TMP_DIR/release-diagnostics.sh" \
+              STELL22_AC_CHECKOUT="$TMP_DIR/release-checkout.sh" \
+              STELL22_ADMIN_CORRECTIONS_EXECUTE="$STELL22_ADMIN_CORRECTIONS_EXECUTE" \
+              STELL22_ADMIN_CORRECTIONS_MAINTENANCE="$STELL22_ADMIN_CORRECTIONS_MAINTENANCE" \
+              STELL22_ADMIN_CORRECTIONS_CI="$STELL22_ADMIN_CORRECTIONS_CI" \
+              STELL22_ADMIN_CORRECTIONS_AUTHORIZATION="$STELL22_ADMIN_CORRECTIONS_AUTHORIZATION" \
+              STELL22_ADMIN_CORRECTIONS_SHA="$STELL22_ADMIN_CORRECTIONS_SHA" \
+              sh "$TMP_DIR/admin-corrections-release.sh"
