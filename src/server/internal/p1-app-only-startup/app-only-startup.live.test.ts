@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 import { appOnlyCleanupAllowed, confirmOwnedContainer, formatReleaseReport, releaseAppOnly } from "@/server/internal/p1-app-only-startup/cleanup";
 import { realWorld } from "@/server/internal/p1-write-freeze-historical/runtime";
 import { resolveLocalDockerEndpoint, defaultOriginRuntime } from "@/server/internal/p1-isolated-runner/container-origin";
+import { copyMigrationsAfterPinnedP1, isMigrationAfterPinnedP1 } from "@/server/internal/p1-isolated-runner/later-migrations";
+import { P1_MIGRATION_NAME } from "@/server/internal/p1-isolated-runner/contract";
 
 const LIVE = process.env.P1_DISPOSABLE_LIVE === "1";
 const LABEL = "stell22.p1.app-only-startup";
@@ -137,6 +139,8 @@ describe.skipIf(!LIVE)("app-only startup candidate", () => {
         expect(gate(fullRoot, url("p1as_app", appPassword, port, "postgres"))).not.toBe(0);
         expect(gate(fullRoot, url("p1as_boot", bootPassword, port, databaseName))).not.toBe(0);
         expect(gate(fullRoot, url("p1as_other", otherPassword, port, databaseName))).not.toBe(0);
+        if (copyMigrationsAfterPinnedP1(fullRoot) > 0) deploy(fullRoot, bootUrl);
+        historyAfterP1 = inventory(names.db, databaseName);
         psql(names.db, databaseName, "p1as_app", "INSERT INTO public.p1as_probe (id) VALUES (1)");
         expect(psql(names.db, databaseName, "p1as_app", "SELECT id::text FROM public.p1as_probe")).toBe("1");
         docker(["build", "-f", "docker/app-only-startup/Dockerfile", "-t", names.image, "."]);
@@ -202,7 +206,9 @@ function materialize(destination: string, includeP1: boolean): void {
   const listed = spawnSync("git", ["ls-files", "prisma/schema.prisma", "prisma/migrations"], { encoding: "utf8" });
   if (listed.status !== 0) throw new Error("git ls-files failed");
   for (const relative of listed.stdout.split(/\r?\n/).filter(Boolean)) {
-    if (!includeP1 && relative.includes("20261010210000_psr_p3_s2_b_batch_receipt_provenance")) continue;
+    const migrationName = relative.split("/")[2] ?? "";
+    if (isMigrationAfterPinnedP1(migrationName)) continue;
+    if (!includeP1 && relative.includes(P1_MIGRATION_NAME)) continue;
     const shown = spawnSync("git", ["show", `HEAD:${relative}`], { encoding: "buffer" });
     if (shown.status !== 0) throw new Error(`git show failed for ${relative}`);
     const target = path.join(destination, relative);

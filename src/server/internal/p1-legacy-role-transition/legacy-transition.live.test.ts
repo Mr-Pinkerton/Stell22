@@ -8,6 +8,7 @@ import { realWorld } from "@/server/internal/p1-write-freeze-historical/runtime"
 import { defaultOriginRuntime, resolveLocalDockerEndpoint } from "@/server/internal/p1-isolated-runner/container-origin";
 import { P1_GIT_BLOB, P1_MIGRATION_NAME, P1_SHA256 } from "@/server/internal/p1-isolated-runner/contract";
 import { materializeHistorical } from "@/server/internal/p1-isolated-runner/disposable-migration-harness";
+import { copyMigrationsAfterPinnedP1 } from "@/server/internal/p1-isolated-runner/later-migrations";
 import { evaluateMigratorPrivileges, migratorPrivilegeSql, parseMigratorPrivilegeReport } from "@/server/internal/p1-production-adapter/migrator-privilege";
 import { DISPOSABLE_APP_ROLE, MIGRATOR_ROLE } from "@/server/internal/p1-role-split-disposable/topology";
 import {
@@ -129,6 +130,9 @@ describe.skipIf(!LIVE)("legacy stell22 ownership transition", () => {
         expect(p1Row.startsWith(`${P1_MIGRATION_NAME}|${P1_SHA256}|`)).toBe(true);
         expect(p1Row.endsWith("|1")).toBe(true);
         expect(historyMarker(names.db, databaseName, secrets)).not.toBe(historyBeforeP1);
+        if (copyMigrationsAfterPinnedP1(migrationRoot) > 0) {
+          migrate(names.network, names.image, `p1as-ltlater-${runId}`, runId, roleUrl(MIGRATOR_ROLE, migratorPassword, databaseName), migrationRoot, secrets);
+        }
         expect(psql(names.db, databaseName, LEGACY_ADMIN_ROLE, `SELECT pg_get_userbyid(p.proowner) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'batch_creation_command_provenance_guard'`, secrets)).toBe(MIGRATOR_ROLE);
         const appliedHistory = historyMarker(names.db, databaseName, secrets);
         const refusedId = startApp(names.network, names.image, `p1as-ltsuper-${runId}`, runId, roleUrl(LEGACY_ADMIN_ROLE, adminPassword, databaseName), randomBytes(24).toString("hex"), secrets);

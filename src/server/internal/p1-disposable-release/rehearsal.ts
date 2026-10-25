@@ -38,6 +38,7 @@ import {
   migrationHistoryPrivilegesSql,
   roleTopologySql,
 } from "@/server/internal/p1-role-split-disposable/topology";
+import { copyMigrationsAfterPinnedP1, isMigrationAfterPinnedP1 } from "@/server/internal/p1-isolated-runner/later-migrations";
 import { realWorld, redact } from "@/server/internal/p1-write-freeze-historical/runtime";
 import type { InvocationBinding } from "@/server/internal/p1-write-freeze-historical/lifecycle";
 import type { DockerWorld } from "@/server/internal/p1-write-freeze-proof/lifecycle";
@@ -274,6 +275,15 @@ export function runDisposableReleaseRehearsal(options: RehearsalOptions = {}): R
     evidence.passed.push("H");
 
     evidence.stage = "I";
+    if (copyMigrationsAfterPinnedP1(migrationRoot) > 0) {
+      runMigrate(
+        evidence,
+        resources,
+        `p1as-later-${runId}`,
+        migrationRoot,
+        migratorUrl(migratorPassword, databaseName),
+      );
+    }
     const sessionSecret = randomBytes(24).toString("hex");
     evidence.secrets.push(sessionSecret);
     startApplication(evidence, resources, appUrl(appPassword, databaseName), sessionSecret);
@@ -1300,6 +1310,8 @@ function materializeMigrations(): string {
   });
   if (listed.status !== 0) throw new Stop("C", "MIGRATION_SET_UNREADABLE");
   for (const relative of listed.stdout.split(/\r?\n/).filter(Boolean)) {
+    const migrationName = relative.split("/")[2] ?? "";
+    if (isMigrationAfterPinnedP1(migrationName)) continue;
     const shown = spawnSync("git", ["show", `HEAD:${relative}`], {
       encoding: "buffer",
       windowsHide: true,
