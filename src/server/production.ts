@@ -477,8 +477,9 @@ export async function deleteProductionOperation(id: string): Promise<void> {
   revalidatePath("/reports");
 }
 
-export type { CorrectTorcovkaRailsTakenResult };
-
+// Не реэкспортировать этот тип из "use server": Turbopack включает его
+// в runtime-импорт Server Actions и /production перестаёт собираться.
+// Тип остаётся в production-operation-correction.ts.
 export async function correctTorcovkaRailsTaken(input: {
   operationId: string;
   expectedOldRailsTaken: number;

@@ -123,6 +123,14 @@ describe("R-05 requestId advisory lock", () => {
     expect(action).not.toMatch(/PrismaClientKnownRequestError/);
   });
 
+  it("does not re-export CorrectTorcovkaRailsTakenResult from the use server module", () => {
+    const src = fs.readFileSync(path.join(process.cwd(), "src/server/production.ts"), "utf8");
+    expect(src.startsWith('"use server"')).toBe(true);
+    expect(src).not.toMatch(/export\s+type\s*\{\s*CorrectTorcovkaRailsTakenResult\s*\}\s*;/);
+    expect(src).toContain("type CorrectTorcovkaRailsTakenResult");
+    expect(src).toContain("export async function correctTorcovkaRailsTaken");
+  });
+
   it("pins TX body: SHARED gate before request lock, request lock before op FOR UPDATE and create; no P2002 recovery", () => {
     const src = fs.readFileSync(
       path.join(process.cwd(), "src/server/internal/correct-torcovka-rails-taken-tx.ts"),
