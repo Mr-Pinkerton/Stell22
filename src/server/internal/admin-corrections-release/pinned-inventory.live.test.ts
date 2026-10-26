@@ -75,6 +75,24 @@ function syntheticCheckout(seed: string, mutate?: (directory: string) => void) {
   return { root, server, oldHead, target };
 }
 
+function disposableHistoricalMain() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ac-r3-repo-"));
+  const bare = path.join(root, "origin.git");
+  const server = path.join(root, "server");
+  fs.mkdirSync(server);
+  must("git", ["init", "-b", "main"], server);
+  must("git", ["config", "--local", "core.autocrlf", "false"], server);
+  extract(OLD_SHA, server);
+  const oldHead = commitAll(server, "old checkout");
+  extract(TARGET_SHA, server);
+  const target = commitAll(server, "target checkout");
+  must("git", ["init", "--bare", bare], root);
+  must("git", ["remote", "add", "origin", bare], server);
+  must("git", ["push", "origin", "main"], server);
+  must("git", ["checkout", "--detach", oldHead], server);
+  return { root, server, oldHead, target };
+}
+
 describe.skipIf(!LIVE)("admin corrections pinned migration inventory", () => {
   it(
     "reads the 47-migration target tree before switching a 46-migration checkout",
@@ -86,7 +104,6 @@ describe.skipIf(!LIVE)("admin corrections pinned migration inventory", () => {
       const database = `acrel_${runId}`;
       const container = `acrel-db-${runId}`;
       const schemaDir = fs.mkdtempSync(path.join(os.tmpdir(), "ac-r3-schema-"));
-      const worktree = path.join(os.tmpdir(), `ac-r3-old-${runId}`);
       const cleanups: string[] = [schemaDir];
       let started = false;
       try {
@@ -131,19 +148,20 @@ describe.skipIf(!LIVE)("admin corrections pinned migration inventory", () => {
         expect(psql(container, database, bootPassword, 'SELECT count(*)::text FROM public."_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')).toBe("46");
         expect(readMigrationInventory(path.join(schemaDir, "prisma", "migrations"))).toHaveLength(46);
 
-        must("git", ["worktree", "add", "--detach", worktree, OLD_SHA]);
-        cleanups.push(worktree);
-        expect(must("git", ["rev-parse", "HEAD"], worktree)).toBe(OLD_SHA);
-        expect(readMigrationInventory(path.join(worktree, "prisma", "migrations"))).toHaveLength(46);
+        const acceptedCheckout = disposableHistoricalMain();
+        cleanups.push(acceptedCheckout.root);
+        expect(must("git", ["rev-parse", "HEAD"], acceptedCheckout.server)).toBe(acceptedCheckout.oldHead);
+        expect(must("git", ["rev-parse", "origin/main"], acceptedCheckout.server)).toBe(acceptedCheckout.target);
+        expect(readMigrationInventory(path.join(acceptedCheckout.server, "prisma", "migrations"))).toHaveLength(46);
 
-        const accepted = gate(worktree, database, container, bootPassword, TARGET_SHA);
+        const accepted = gate(acceptedCheckout.server, database, container, bootPassword, acceptedCheckout.target);
         expect(accepted.status, accepted.out).toBe(0);
-        expect(accepted.out).toContain(`CHECKOUT_BEFORE=${OLD_SHA}`);
-        expect(accepted.out).toContain(`CHECKOUT_AFTER=${TARGET_SHA}`);
+        expect(accepted.out).toContain(`CHECKOUT_BEFORE=${acceptedCheckout.oldHead}`);
+        expect(accepted.out).toContain(`CHECKOUT_AFTER=${acceptedCheckout.target}`);
         expect(accepted.out).toContain("PINNED_MIGRATIONS=47");
         expect(accepted.out).toContain("RESULT=GATE_ACCEPTED");
-        expect(must("git", ["rev-parse", "HEAD"], worktree)).toBe(TARGET_SHA);
-        const pinned = readMigrationInventory(path.join(worktree, "prisma", "migrations"));
+        expect(must("git", ["rev-parse", "HEAD"], acceptedCheckout.server)).toBe(acceptedCheckout.target);
+        const pinned = readMigrationInventory(path.join(acceptedCheckout.server, "prisma", "migrations"));
         expect(pinned).toHaveLength(47);
         expect(pinned.find((row) => row.name === MIGRATION_NAME)?.sha256).toBe(MIGRATION_SHA256);
         expect(psql(container, database, bootPassword, 'SELECT count(*)::text FROM public."_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')).toBe("46");
@@ -199,7 +217,6 @@ describe.skipIf(!LIVE)("admin corrections pinned migration inventory", () => {
         expect(must("git", ["rev-parse", "HEAD"], unreadable.server)).toBe(unreadable.oldHead);
       } finally {
         if (started) run("docker", ["rm", "-f", container]);
-        run("git", ["worktree", "remove", "--force", worktree]);
         for (const directory of cleanups) fs.rmSync(directory, { recursive: true, force: true });
       }
     },
