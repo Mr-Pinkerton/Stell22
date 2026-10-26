@@ -175,8 +175,10 @@ describe("admin corrections migrator credential", () => {
       `#!/bin/sh\nexec '${interpreter.replace(/'/g, `'\\''`)}' "$@"\n`,
     );
     fs.chmodSync(path.join(bin, "python3"), 0o755);
-    const shell = spawnSync("where", ["sh"], { encoding: "utf8" }).stdout.split(/\r?\n/).find(Boolean) ?? "";
-    const hostPath = [bin, path.dirname(shell), path.dirname(process.execPath)].join(path.delimiter);
+    const hostPath = process.platform === "win32"
+      ? [bin, path.dirname(String(spawnSync("where", ["sh"], { encoding: "utf8" }).stdout).split(/\r?\n/).find((line) => line.trim()) ?? ""), path.dirname(process.execPath)].join(path.delimiter)
+      : [bin, path.dirname(process.execPath)].join(path.delimiter);
+    if (process.platform !== "win32") fs.symlinkSync("/bin/sh", path.join(bin, "sh"));
     const probe = spawnSync("sh", ["-c", "command -v python || echo missing; command -v python3"], {
       encoding: "utf8",
       env: {
