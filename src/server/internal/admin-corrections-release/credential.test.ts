@@ -172,13 +172,13 @@ describe("admin corrections migrator credential", () => {
     const interpreter = real.stdout.trim();
     fs.writeFileSync(
       path.join(bin, "python3"),
-      `#!/bin/sh\nexec '${interpreter.replace(/'/g, `'\\''`)}' "$@"\n`,
+      `#!/bin/sh\necho PYTHON3_WRAPPER=1 >&2\nexec '${interpreter.replace(/'/g, `'\\''`)}' "$@"\n`,
     );
     fs.chmodSync(path.join(bin, "python3"), 0o755);
-    const hostPath = process.platform === "win32"
-      ? [bin, path.dirname(String(spawnSync("where", ["sh"], { encoding: "utf8" }).stdout).split(/\r?\n/).find((line) => line.trim()) ?? ""), path.dirname(process.execPath)].join(path.delimiter)
-      : [bin, path.dirname(process.execPath)].join(path.delimiter);
-    if (process.platform !== "win32") fs.symlinkSync("/bin/sh", path.join(bin, "sh"));
+    const shellDir = process.platform === "win32"
+      ? path.dirname(String(spawnSync("where", ["sh"], { encoding: "utf8" }).stdout).split(/\r?\n/).find((line) => line.trim()) ?? "")
+      : "/usr/bin";
+    const hostPath = [bin, shellDir, "/bin", path.dirname(process.execPath)].join(path.delimiter);
     const probe = spawnSync("sh", ["-c", "command -v python || echo missing; command -v python3"], {
       encoding: "utf8",
       env: {
@@ -190,10 +190,12 @@ describe("admin corrections migrator credential", () => {
         NODE_ENV: process.env.NODE_ENV ?? "test",
       },
     });
-    expect(`${probe.stdout ?? ""}`, `${probe.stderr ?? ""} ${probe.error ?? ""}`).toContain("missing");
     expect(probe.stdout).toContain("python3");
+    if (process.platform === "win32") expect(`${probe.stdout ?? ""}`).toContain("missing");
     const failed = run({ PATH: hostPath, STELL22_AC_ENV_FILE: env.file });
-    expect(failed.status).not.toBe(0);
+    expect(failed.status, failed.out).not.toBe(0);
+    expect(failed.out).toContain("PYTHON3_WRAPPER=1");
+    expect(failed.out.match(/PYTHON3_WRAPPER=1/g)).toHaveLength(1);
     expect(failed.out).toContain("FORMAT");
     expect(failed.out).toContain("RESULT=STOP_CREDENTIAL");
     expect(failed.out).not.toContain("python: not found");
