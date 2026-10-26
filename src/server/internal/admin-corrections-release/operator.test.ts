@@ -185,10 +185,24 @@ describe("admin corrections release operator", () => {
     for (const directory of directories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
   });
 
+  it("does not relabel a missing decision runtime as an owner refusal", () => {
+    const script = fs.readFileSync(SCRIPT, "utf8");
+    expect(script).toContain("STOP_RUNTIME");
+    expect(script).not.toContain("code=STOP_OWNER_GATE");
+    expect(script).toContain("--network none");
+    expect(script).toContain("--read-only");
+    expect(script).toContain("--entrypoint node");
+    expect(script).toContain("--pull never");
+    expect(script).not.toContain("--privileged");
+    expect(script).not.toContain("docker.sock");
+  });
+
   it("stops before any release when the owner phrase, CI, or SHA is missing", () => {
-    expect(run({}).out).toContain("RESULT=STOP_OWNER_GATE");
-    expect(run(auth({ STELL22_ADMIN_CORRECTIONS_AUTHORIZATION: REJECTED_AUTHORIZATION_PHRASE })).out).toContain("RESULT=STOP_OWNER_GATE");
-    expect(run(auth({ STELL22_ADMIN_CORRECTIONS_RESTORE: "1" })).out).toContain("RESULT=STOP_NO_RESTORE");
+    const missingRuntime = run({});
+    expect(missingRuntime.out).toContain("RESULT=STOP_RUNTIME");
+    expect(missingRuntime.out).not.toContain("RESULT=STOP_OWNER_GATE");
+    expect(run(disposable({ STELL22_ADMIN_CORRECTIONS_AUTHORIZATION: REJECTED_AUTHORIZATION_PHRASE })).out).toContain("RESULT=STOP_OWNER_GATE");
+    expect(run(disposable({ STELL22_ADMIN_CORRECTIONS_RESTORE: "1" })).out).toContain("RESULT=STOP_NO_RESTORE");
     const wrong = run(disposable({ STELL22_AC_ORIGIN_MAIN: "a".repeat(40) }));
     expect(wrong.status).not.toBe(0);
     expect(wrong.out).toContain("RESULT=STOP_CHECKOUT");
@@ -510,7 +524,7 @@ describe("admin corrections release operator", () => {
     expect(operator).not.toContain("prisma migrate resolve");
     expect(operator).not.toContain("unexpected_sessions || true");
     expect(operator).not.toContain('sha256sum -c "${newest}.sha256"');
-    expect(operator.indexOf("if ! checkout_after_gate")).toBeGreaterThan(operator.indexOf("decide_ok preflight"));
+    expect(operator.indexOf("checkout_after_gate || checkout_status")).toBeGreaterThan(operator.indexOf("decide_ok preflight"));
     const workflow = fs.readFileSync(".github/workflows/release-admin-corrections.yml", "utf8");
     expect(workflow).toContain("workflow_dispatch:");
     expect(workflow).not.toMatch(/\n\s*push:/);
