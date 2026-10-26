@@ -15,6 +15,7 @@ MIGRATION_SHA256="d8d83b48d536bd42cb9f394958dc981003d43da5b5904bcecadd3899b179f8
 DECIDE="${STELL22_AC_DECIDE:-src/server/internal/admin-corrections-release/decide.mjs}"
 COMPOSE_FILE="docker-compose.prod.yml"
 INSPECT_APP="stell22-ac-inspect"
+RELEASE_SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 
 cd "$(dirname "$0")/.."
 if [ -n "${STELL22_AC_APP_DIR:-}" ]; then
@@ -89,6 +90,8 @@ on_signal() {
   if [ -n "${diag:-}" ]; then
     release_redact_file "$diag/migrate.log"
   fi
+  unset MIGRATOR_DB_PASSWORD || true
+  unset DATABASE_URL || true
   exit 1
 }
 on_exit() {
@@ -124,6 +127,7 @@ on_exit() {
   if [ -n "${work:-}" ]; then
     rm -rf "$work"
   fi
+  unset MIGRATOR_DB_PASSWORD || true
   unset DATABASE_URL || true
 }
 trap on_signal HUP INT TERM
@@ -261,6 +265,93 @@ capture_decision() {
   fi
 }
 
+select_release_python() {
+  if python3 -c "import sys" >/dev/null 2>&1; then
+    release_python=python3
+    return 0
+  fi
+  if python -c "import sys" >/dev/null 2>&1; then
+    release_python=python
+    return 0
+  fi
+  echo "CREDENTIAL=NO_PYTHON" >&2
+  return 1
+}
+
+release_tool() {
+  name=$1
+  candidate=""
+  if [ -f "$RELEASE_SCRIPT_DIR/$name" ]; then
+    candidate="$RELEASE_SCRIPT_DIR/$name"
+  elif [ -f "scripts/$name" ]; then
+    candidate="scripts/$name"
+  else
+    echo "CREDENTIAL=NO_SCRIPT" >&2
+    return 1
+  fi
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$candidate"
+    return 0
+  fi
+  printf '%s\n' "$candidate"
+}
+
+load_migrator_credential() {
+  env_file=${STELL22_AC_ENV_FILE:-.env}
+  if ! select_release_python; then
+    return 1
+  fi
+  cred_py=$(release_tool release-credential.py) || {
+    unset MIGRATOR_DB_PASSWORD
+    return 1
+  }
+  MIGRATOR_DB_PASSWORD=$("$release_python" "$cred_py" "$env_file") || {
+    unset MIGRATOR_DB_PASSWORD
+    return 1
+  }
+  export MIGRATOR_DB_PASSWORD
+}
+
+write_migrator_url() {
+  url_out=$1
+  if [ -z "${MIGRATOR_DB_PASSWORD:-}" ] || [ -z "${release_python:-}" ]; then
+    unset MIGRATOR_DB_PASSWORD
+    return 1
+  fi
+  url_py=$(release_tool release-migrator-url.py) || {
+    unset MIGRATOR_DB_PASSWORD
+    return 1
+  }
+  if ! OUT="$url_out" ROLE=stell22_migrator "$release_python" "$url_py"; then
+    rm -f "$url_out"
+    unset MIGRATOR_DB_PASSWORD
+    return 1
+  fi
+  if ! chmod 600 "$url_out"; then
+    rm -f "$url_out"
+    unset MIGRATOR_DB_PASSWORD
+    return 1
+  fi
+  unset MIGRATOR_DB_PASSWORD
+}
+
+prepare_migrator_credential() {
+  if ! load_migrator_credential; then
+    return 1
+  fi
+  if ! write_migrator_url "$work/migrator.url"; then
+    unset MIGRATOR_DB_PASSWORD
+    return 1
+  fi
+  capture_decision "$work/url.early" assert-url "$work/migrator.url" production
+  if [ "$decision_status" = 127 ]; then
+    refuse STOP_RUNTIME
+  fi
+  if [ "$decision_status" != 0 ]; then
+    return 1
+  fi
+}
+
 if [ "$disposable" != 1 ]; then
   require_absent "${STELL22_AC_FACTS_DIR:-}"
   require_absent "${STELL22_AC_SCHEMA_DIR:-}"
@@ -286,12 +377,13 @@ if [ "$disposable" != 1 ]; then
   require_absent "${STELL22_AC_GATE_ONLY:-}"
   require_absent "${STELL22_AC_RUNTIME_CONTAINER:-}"
   require_absent "${STELL22_AC_INVENTORY_DIR:-}"
+  require_absent "${STELL22_AC_ENV_FILE:-}"
   if [ "$phase" != "production" ]; then
     refuse STOP_LOCKED
   fi
 else
   case "$phase" in
-    migrate-only|fixture|backup-gate|gated|server-checkout|runtime-proof) ;;
+    migrate-only|fixture|backup-gate|gated|server-checkout|runtime-proof|credential-gate) ;;
     *) refuse STOP_LOCKED ;;
   esac
 fi
@@ -350,6 +442,25 @@ if [ "$phase" = "runtime-proof" ]; then
   echo "RUNTIME_IMAGE=$runtime_image"
   echo "APP_STOPPED=1"
   echo "MIGRATION_ATTEMPTED=0"
+  handled_exit=1
+  exit 0
+fi
+
+if [ "$phase" = "production" ] || [ "$phase" = "credential-gate" ]; then
+  if ! prepare_migrator_credential; then
+    echo "APP_UNCHANGED=YES"
+    echo "MIGRATION_ATTEMPTED=0"
+    refuse STOP_CREDENTIAL
+  fi
+fi
+if [ "$phase" = "credential-gate" ]; then
+  echo "RESULT=CREDENTIAL_READY"
+  echo "APP_UNCHANGED=YES"
+  echo "APP_STOPPED=0"
+  echo "MIGRATION_ATTEMPTED=0"
+  echo "DATABASE_RESTORE=NO"
+  echo "RETRY_MIGRATION=NO"
+  echo "OLD_IMAGE_RESTART=NO"
   handled_exit=1
   exit 0
 fi
@@ -1427,12 +1538,9 @@ if ! decide_ok image "$work/image.env" "$work/image.out"; then
 fi
 
 if [ "$phase" = "production" ]; then
-  if ! OUT="$work/migrator.url" ROLE=stell22_migrator python3 scripts/release-migrator-url.py; then
-    if ! OUT="$work/migrator.url" ROLE=stell22_migrator python scripts/release-migrator-url.py; then
-      finish before-stop STOP_MIGRATOR
-    fi
+  if [ ! -s "$work/migrator.url" ]; then
+    finish before-stop STOP_CREDENTIAL
   fi
-  chmod 600 "$work/migrator.url"
   capture_decision "$work/url.out" assert-url "$work/migrator.url" production
   if [ "$decision_status" = 127 ]; then
     finish before-stop STOP_RUNTIME
