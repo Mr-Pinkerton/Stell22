@@ -8,7 +8,7 @@ import { AUTHORIZATION_PHRASE, MIGRATION_NAME, MIGRATION_SHA256, readMigrationIn
 
 const LIVE = process.env.P1_DISPOSABLE_LIVE === "1";
 const OLD_SHA = "4c2fe8e0c5746784e820a7a402a1fb4d2078e8d1";
-const TARGET_SHA = "30116213223b0a22a8cfc2cd3dd22629ac983960";
+const TARGET_SHA = "c25c21cfadcc1ce7ad49eb55bb407de0f4826810";
 
 function run(command: string, args: readonly string[], cwd = process.cwd(), input?: Buffer | string) {
   return spawnSync(command, args, {

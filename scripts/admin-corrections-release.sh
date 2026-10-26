@@ -52,6 +52,13 @@ db_id_before=""
 caddy_id_before=""
 legacy_image=""
 app_image=""
+runtime_docker=0
+runtime_image=""
+runtime_ready=0
+runtime_container=""
+decision_status=0
+decision_file=""
+pin_status=""
 
 if [ "${STELL22_ADMIN_CORRECTIONS_DISPOSABLE:-}" = "1" ]; then
   disposable=1
@@ -137,6 +144,123 @@ require_absent() {
   fi
 }
 
+prove_runtime() {
+  if [ "$phase" = "production" ]; then
+    runtime_container=$app_container
+  else
+    runtime_container=${STELL22_AC_RUNTIME_CONTAINER:-}
+  fi
+  if [ "$phase" = "runtime-proof" ]; then
+    case "$runtime_container" in
+      acrel-app-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+      *) return 1 ;;
+    esac
+  fi
+  if [ -z "$runtime_container" ]; then
+    return 1
+  fi
+  runtime_image=$(docker inspect -f '{{.Image}}' "$runtime_container" 2>/dev/null) || return 1
+  case "$runtime_image" in
+    sha256:*) ;;
+    *) return 1 ;;
+  esac
+  docker image inspect "$runtime_image" >/dev/null 2>&1 || return 1
+  if docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$runtime_image" | awk -F= '
+    $1 == "DATABASE_URL" || index($1, "PASSWORD") || index($1, "SECRET") {
+      if (length($2) > 0) found = 1
+    }
+    END { exit found ? 0 : 1 }
+  '; then
+    return 1
+  fi
+  MSYS_NO_PATHCONV=1 docker run --rm --network none --pull never --read-only --tmpfs /tmp \
+    --entrypoint node \
+    "$runtime_image" -e 'process.exit(0)' >/dev/null 2>&1 || return 1
+  runtime_ready=1
+}
+
+runtime_node() {
+  if [ "$runtime_ready" != 1 ] || [ -z "$runtime_image" ]; then
+    return 1
+  fi
+  runtime_stage="$work/runtime-stage"
+  rm -rf "$runtime_stage"
+  mkdir -p "$runtime_stage"
+  chmod 700 "$runtime_stage" || return 1
+  runtime_script=$1
+  shift
+  if [ ! -f "$runtime_script" ]; then
+    return 1
+  fi
+  cp "$runtime_script" "$runtime_stage/decide.mjs" || return 1
+  chmod 600 "$runtime_stage/decide.mjs" || return 1
+  : > "$work/runtime-argv"
+  printf '%s\n' /opt/stell22-ac/decide.mjs >> "$work/runtime-argv"
+  runtime_n=0
+  for runtime_arg in "$@"; do
+    if [ -f "$runtime_arg" ] || [ -d "$runtime_arg" ]; then
+      case "$runtime_arg" in
+        *" "*|*"'"*|*"$"*|*'\\'*) return 1 ;;
+      esac
+    fi
+    if [ -f "$runtime_arg" ]; then
+      runtime_n=$((runtime_n + 1))
+      cp "$runtime_arg" "$runtime_stage/f$runtime_n" || return 1
+      chmod 600 "$runtime_stage/f$runtime_n" || return 1
+      printf '%s\n' "/opt/stell22-ac/f$runtime_n" >> "$work/runtime-argv"
+    elif [ -d "$runtime_arg" ]; then
+      runtime_n=$((runtime_n + 1))
+      mkdir -p "$runtime_stage/d$runtime_n" || return 1
+      cp -a "$runtime_arg"/. "$runtime_stage/d$runtime_n"/ || return 1
+      find "$runtime_stage/d$runtime_n" -type d -exec chmod 700 {} \; || return 1
+      find "$runtime_stage/d$runtime_n" -type f -exec chmod 600 {} \; || return 1
+      printf '%s\n' "/opt/stell22-ac/d$runtime_n" >> "$work/runtime-argv"
+    else
+      case "$runtime_arg" in
+        *" "*|*"'"*) return 1 ;;
+      esac
+      printf '%s\n' "$runtime_arg" >> "$work/runtime-argv"
+    fi
+  done
+  set --
+  while IFS= read -r runtime_arg; do
+    set -- "$@" "$runtime_arg"
+  done < "$work/runtime-argv"
+  runtime_mount=$runtime_stage
+  case "$(uname -s 2>/dev/null || true)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if command -v cygpath >/dev/null 2>&1; then
+        runtime_mount=$(cygpath -w "$runtime_stage")
+      fi
+      ;;
+  esac
+  runtime_status=0
+  MSYS_NO_PATHCONV=1 docker run --rm --network none --pull never --read-only --tmpfs /tmp \
+    --entrypoint node \
+    -v "${runtime_mount}:/opt/stell22-ac:ro" \
+    "$runtime_image" "$@" || runtime_status=$?
+  rm -rf "$runtime_stage"
+  return "$runtime_status"
+}
+
+decide_exec() {
+  if [ "$runtime_docker" = 1 ]; then
+    runtime_node "$DECIDE" "$@"
+    return
+  fi
+  command node "$DECIDE" "$@"
+}
+
+capture_decision() {
+  decision_file=$1
+  shift
+  decision_status=0
+  decide_exec "$@" > "$decision_file" || decision_status=$?
+  if [ ! -s "$decision_file" ]; then
+    decision_status=127
+  fi
+}
+
 if [ "$disposable" != 1 ]; then
   require_absent "${STELL22_AC_FACTS_DIR:-}"
   require_absent "${STELL22_AC_SCHEMA_DIR:-}"
@@ -160,12 +284,14 @@ if [ "$disposable" != 1 ]; then
   require_absent "${STELL22_AC_FAIL_AFTER_STOP:-}"
   require_absent "${STELL22_AC_FAIL_AFTER_MIGRATE:-}"
   require_absent "${STELL22_AC_GATE_ONLY:-}"
+  require_absent "${STELL22_AC_RUNTIME_CONTAINER:-}"
+  require_absent "${STELL22_AC_INVENTORY_DIR:-}"
   if [ "$phase" != "production" ]; then
     refuse STOP_LOCKED
   fi
 else
   case "$phase" in
-    migrate-only|fixture|backup-gate|gated|server-checkout) ;;
+    migrate-only|fixture|backup-gate|gated|server-checkout|runtime-proof) ;;
     *) refuse STOP_LOCKED ;;
   esac
 fi
@@ -174,6 +300,12 @@ if [ "$phase" = "fixture" ] || [ "$phase" = "gated" ]; then
 fi
 
 work="$(mktemp -d)"
+if [ "$phase" = "production" ] || [ "$phase" = "runtime-proof" ]; then
+  runtime_docker=1
+  if ! prove_runtime; then
+    refuse STOP_RUNTIME
+  fi
+fi
 cat > "$work/lock.env" <<EOF
 execute=${STELL22_ADMIN_CORRECTIONS_EXECUTE:-}
 maintenance=${STELL22_ADMIN_CORRECTIONS_MAINTENANCE:-}
@@ -181,12 +313,45 @@ authorization=${STELL22_ADMIN_CORRECTIONS_AUTHORIZATION:-}
 restore=${STELL22_ADMIN_CORRECTIONS_RESTORE:-}
 ci=${STELL22_ADMIN_CORRECTIONS_CI:-}
 EOF
-if ! node "$DECIDE" lock "$work/lock.env" > "$work/lock.out"; then
+capture_decision "$work/lock.out" lock "$work/lock.env"
+if [ "$decision_status" = 127 ]; then
+  refuse STOP_RUNTIME
+fi
+if [ "$decision_status" != 0 ]; then
   code=$(awk -F= '$1 == "CODE" { print $2; exit }' "$work/lock.out" 2>/dev/null || true)
   if [ -z "$code" ]; then
-    code=STOP_OWNER_GATE
+    refuse STOP_RUNTIME
   fi
   refuse "$code"
+fi
+
+if [ "$phase" = "runtime-proof" ]; then
+  inventory="${STELL22_AC_INVENTORY_DIR:-}"
+  if [ -z "$inventory" ] || [ ! -d "$inventory" ]; then
+    refuse STOP_RUNTIME
+  fi
+  capture_decision "$work/pinned-inventory.txt" inventory "$inventory"
+  if [ "$decision_status" != 0 ]; then
+    refuse STOP_RUNTIME
+  fi
+  count=$(grep -c . "$work/pinned-inventory.txt" || true)
+  echo "PINNED_MIGRATIONS=$count"
+  if [ "$count" != "47" ]; then
+    refuse STOP_PENDING
+  fi
+  if ! docker stop "$runtime_container" >/dev/null; then
+    refuse STOP_RUNTIME
+  fi
+  capture_decision "$work/lock.after" lock "$work/lock.env"
+  if [ "$decision_status" != 0 ]; then
+    refuse STOP_RUNTIME
+  fi
+  echo "RESULT=RUNTIME_OK"
+  echo "RUNTIME_IMAGE=$runtime_image"
+  echo "APP_STOPPED=1"
+  echo "MIGRATION_ATTEMPTED=0"
+  handled_exit=1
+  exit 0
 fi
 
 if [ "$disposable" = 1 ]; then
@@ -196,7 +361,11 @@ dbContainer=$db_container
 appContainer=$app_container
 inspectUser=$inspect_user
 EOF
-  if ! node "$DECIDE" identity "$work/identity.env" >/dev/null; then
+  capture_decision "$work/identity.out" identity "$work/identity.env"
+  if [ "$decision_status" = 127 ]; then
+    refuse STOP_RUNTIME
+  fi
+  if [ "$decision_status" != 0 ]; then
     refuse STOP_LOCKED
   fi
 fi
@@ -217,7 +386,11 @@ originMain=$origin_main
 head=$head
 ci=${STELL22_ADMIN_CORRECTIONS_CI:-}
 EOF
-  if ! node "$DECIDE" remote-sha "$work/sha.env" > "$work/sha.out"; then
+  capture_decision "$work/sha.out" remote-sha "$work/sha.env"
+  if [ "$decision_status" = 127 ]; then
+    refuse STOP_RUNTIME
+  fi
+  if [ "$decision_status" != 0 ]; then
     refuse STOP_CHECKOUT
   fi
   if git cat-file -e "${sha}:prisma/migrations/${MIGRATION_NAME}/migration.sql"; then
@@ -234,7 +407,11 @@ originMain=$origin_main
 head=$head
 ci=${STELL22_ADMIN_CORRECTIONS_CI:-}
 EOF
-  if ! node "$DECIDE" sha "$work/sha.env" > "$work/sha.out"; then
+  capture_decision "$work/sha.out" sha "$work/sha.env"
+  if [ "$decision_status" = 127 ]; then
+    refuse STOP_RUNTIME
+  fi
+  if [ "$decision_status" != 0 ]; then
     refuse STOP_CHECKOUT
   fi
   blob_sha=$(git cat-file blob "HEAD:prisma/migrations/${MIGRATION_NAME}/migration.sql" | sha256sum | awk 'NR == 1 { print $1; exit }')
@@ -385,7 +562,16 @@ processesClear=$processes_clear
 migrationAttempted=$migration_attempted
 oldImageAppOnly=$old_image_app_only
 EOF
-  action=$(node "$DECIDE" recovery "$work/recovery.env" | awk -F= '$1 == "ACTION" { print $2; exit }')
+  capture_decision "$work/recovery.decision" recovery "$work/recovery.env"
+  if [ "$decision_status" = 127 ]; then
+    echo "RESULT=STOP_RUNTIME"
+    echo "DATABASE_RESTORE=NO"
+    echo "RETRY_MIGRATION=NO"
+    echo "OLD_IMAGE_RESTART=NO"
+    handled_exit=1
+    exit 1
+  fi
+  action=$(awk -F= '$1 == "ACTION" { print $2; exit }' "$work/recovery.decision")
   echo "RESULT=$code"
   echo "DATABASE_RESTORE=NO"
   echo "RETRY_MIGRATION=NO"
@@ -810,7 +996,11 @@ probe_login() {
   if [ ! -f "$url_file" ]; then
     return 1
   fi
-  if ! node "$DECIDE" assert-url "$url_file" "$mode" >/dev/null; then
+  capture_decision "$work/url-assert.out" assert-url "$url_file" "$mode"
+  if [ "$decision_status" = 127 ]; then
+    return 2
+  fi
+  if [ "$decision_status" != 0 ]; then
     echo "PROBE=URL_REJECTED"
     return 1
   fi
@@ -884,7 +1074,12 @@ pin_target_inventory() {
   fi
   find "$pin" -type d -exec chmod 700 {} \; || return 1
   find "$pin" -type f -exec chmod 600 {} \; || return 1
-  if ! node "$DECIDE" inventory "$pin/prisma/migrations" > "$work/pinned-inventory.txt"; then
+  capture_decision "$work/pinned-inventory.txt" inventory "$pin/prisma/migrations"
+  if [ "$decision_status" = 127 ]; then
+    pin_status=runtime
+    return 1
+  fi
+  if [ "$decision_status" != 0 ]; then
     return 1
   fi
   count=$(grep -c . "$work/pinned-inventory.txt" || true)
@@ -904,14 +1099,26 @@ pin_target_inventory() {
 compare_inventory() {
   if [ "$facts_mode" = 1 ]; then
     root=$(schema_root)
-    node "$DECIDE" inventory "$root/prisma/migrations" > "$work/inventory.txt" || return 1
+    capture_decision "$work/inventory.txt" inventory "$root/prisma/migrations"
+    if [ "$decision_status" = 127 ]; then
+      pin_status=runtime
+      return 1
+    fi
+    if [ "$decision_status" != 0 ]; then
+      return 1
+    fi
   else
     if [ ! -s "$work/pinned-inventory.txt" ]; then
       return 1
     fi
     cp "$work/pinned-inventory.txt" "$work/inventory.txt"
   fi
-  node "$DECIDE" compare "$work/inventory.txt" "$1" > "$2"
+  capture_decision "$2" compare "$work/inventory.txt" "$1"
+  if [ "$decision_status" = 127 ]; then
+    pin_status=runtime
+    return 1
+  fi
+  return "$decision_status"
 }
 
 merge_facts() {
@@ -919,7 +1126,12 @@ merge_facts() {
 }
 
 decide_ok() {
-  node "$DECIDE" "$1" "$2" > "$3"
+  capture_decision "$3" "$1" "$2"
+  if [ "$decision_status" = 127 ]; then
+    printf '%s\n' 'OK=NO' 'CODE=STOP_RUNTIME' > "$3"
+    return 1
+  fi
+  return "$decision_status"
 }
 
 if [ "$phase" != "fixture" ]; then
@@ -933,6 +1145,9 @@ if [ "$phase" = "production" ]; then
   db_health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$db_container" 2>/dev/null || printf '%s' missing)
   caddy_running=$(docker inspect -f '{{.State.Running}}' "$caddy_container" 2>/dev/null || printf '%s' missing)
   legacy_image=$(docker inspect -f '{{.Image}}' "$app_container")
+  if [ "$runtime_ready" != 1 ] || [ "$legacy_image" != "$runtime_image" ]; then
+    finish before-stop STOP_RUNTIME
+  fi
   running_entrypoint=$(docker image inspect --format '{{json .Config.Entrypoint}}' "$legacy_image" 2>/dev/null || true)
   db_mount=$(docker inspect -f '{{range .Mounts}}{{.Name}} {{.Destination}}{{"\n"}}{{end}}' "$db_container" 2>/dev/null || true)
   db_id_before=$(docker inspect -f '{{.Id}}' "$db_container")
@@ -980,6 +1195,9 @@ write_schema "$work/schema.before" baseline || finish before-stop STOP_SCHEMA
 if [ "$facts_mode" != 1 ]; then
   pin_status=""
   if ! pin_target_inventory; then
+    if [ "$pin_status" = "runtime" ]; then
+      finish before-stop STOP_RUNTIME
+    fi
     if [ "$pin_status" = "pending" ]; then
       finish before-stop STOP_PENDING
     fi
@@ -989,7 +1207,12 @@ if [ "$facts_mode" != 1 ]; then
     finish before-stop STOP_CHECKOUT
   fi
 fi
-compare_inventory "$work/history.before" "$work/history.env" || finish before-stop STOP_HISTORY
+compare_inventory "$work/history.before" "$work/history.env" || {
+  if [ "$pin_status" = "runtime" ]; then
+    finish before-stop STOP_RUNTIME
+  fi
+  finish before-stop STOP_HISTORY
+}
 write_privilege_facts "$work/privileges.env"
 cat > "$work/runtime.facts" <<EOF
 appHealthy=$app_healthy
@@ -1048,7 +1271,11 @@ checkout_after_gate() {
   if [ ! -s "$work/pinned-inventory.txt" ]; then
     return 1
   fi
-  node "$DECIDE" inventory "$PWD/prisma/migrations" > "$work/worktree-inventory.txt" || return 1
+  capture_decision "$work/worktree-inventory.txt" inventory "$PWD/prisma/migrations"
+  if [ "$decision_status" != 0 ]; then
+    pin_status=runtime
+    return 1
+  fi
   cmp -s "$work/pinned-inventory.txt" "$work/worktree-inventory.txt"
 }
 
@@ -1056,7 +1283,12 @@ if [ "$phase" = "production" ] || [ "$phase" = "gated" ] || [ "$phase" = "server
   if [ "$phase" = "server-checkout" ]; then
     echo "CHECKOUT_BEFORE=$(git rev-parse HEAD)"
   fi
-  if ! checkout_after_gate; then
+  checkout_status=0
+  checkout_after_gate || checkout_status=$?
+  if [ "$pin_status" = "runtime" ]; then
+    finish before-stop STOP_RUNTIME
+  fi
+  if [ "$checkout_status" != 0 ]; then
     finish before-stop STOP_CHECKOUT
   fi
   if [ "$phase" = "gated" ] && [ "${STELL22_AC_GATE_ONLY:-}" = "1" ]; then
@@ -1078,7 +1310,14 @@ fi
 if [ "$phase" = "migrate-only" ]; then
   history_unchanged=1
   schema_unchanged=1
-  probe_login disposable "$STELL22_AC_URL_FILE" || finish before-stop STOP_MIGRATOR
+  probe_status=0
+  probe_login disposable "$STELL22_AC_URL_FILE" || probe_status=$?
+  if [ "$probe_status" = 2 ]; then
+    finish before-stop STOP_RUNTIME
+  fi
+  if [ "$probe_status" != 0 ]; then
+    finish before-stop STOP_MIGRATOR
+  fi
   cat > "$work/premigrate.env" <<EOF
 migrateLogin=stell22_migrator
 migratorCredentialReady=1
@@ -1111,7 +1350,12 @@ EOF
     finish migration-uncertain STOP_MIGRATION_UNCERTAIN
   fi
   write_history "$work/history.after"
-  compare_inventory "$work/history.after" "$work/history.after.env"
+  if ! compare_inventory "$work/history.after" "$work/history.after.env"; then
+    if [ "$pin_status" = "runtime" ]; then
+      finish migration-uncertain STOP_RUNTIME
+    fi
+    finish migration-uncertain STOP_HISTORY
+  fi
   write_privilege_facts "$work/privileges.after"
   write_object_facts "$work/objects.after"
   cat > "$work/sentinels.env" <<EOF
@@ -1189,10 +1433,19 @@ if [ "$phase" = "production" ]; then
     fi
   fi
   chmod 600 "$work/migrator.url"
-  if ! node "$DECIDE" assert-url "$work/migrator.url" production > "$work/url.out"; then
+  capture_decision "$work/url.out" assert-url "$work/migrator.url" production
+  if [ "$decision_status" = 127 ]; then
+    finish before-stop STOP_RUNTIME
+  fi
+  if [ "$decision_status" != 0 ]; then
     finish before-stop STOP_MIGRATOR
   fi
-  if ! probe_login production "$work/migrator.url"; then
+  probe_status=0
+  probe_login production "$work/migrator.url" || probe_status=$?
+  if [ "$probe_status" = 2 ]; then
+    finish before-stop STOP_RUNTIME
+  fi
+  if [ "$probe_status" != 0 ]; then
     finish before-stop STOP_MIGRATOR
   fi
 fi
@@ -1314,7 +1567,12 @@ if cmp -s "$work/schema.before" "$work/schema.ready" && schema_objects_absent "$
   schema_unchanged=1
   target_objects_absent=1
 fi
-compare_inventory "$work/history.ready" "$work/history.ready.env" || finish after-stop STOP_HISTORY
+compare_inventory "$work/history.ready" "$work/history.ready.env" || {
+  if [ "$pin_status" = "runtime" ]; then
+    finish after-stop STOP_RUNTIME
+  fi
+  finish after-stop STOP_HISTORY
+}
 write_privilege_facts "$work/privileges.ready" || finish after-stop STOP_SCHEMA
 if ! read_sessions "$work/sessions.ready"; then
   session_state=failed
@@ -1335,7 +1593,11 @@ if [ "$phase" = "fixture" ]; then
   migrator_ready=1
   migrate_login=stell22_migrator
 else
-  if node "$DECIDE" assert-url "$work/migrator.url" production >/dev/null; then
+  capture_decision "$work/url.ready" assert-url "$work/migrator.url" production
+  if [ "$decision_status" = 127 ]; then
+    finish after-stop STOP_RUNTIME
+  fi
+  if [ "$decision_status" = 0 ]; then
     migrator_ready=1
     migrate_login=stell22_migrator
   fi
@@ -1388,7 +1650,12 @@ if [ "$phase" = "fixture" ]; then
   cp "$STELL22_AC_FACTS_DIR/post.env" "$work/post.env"
 else
   write_history "$work/history.after"
-  compare_inventory "$work/history.after" "$work/history.after.env"
+  if ! compare_inventory "$work/history.after" "$work/history.after.env"; then
+    if [ "$pin_status" = "runtime" ]; then
+      finish migration-uncertain STOP_RUNTIME
+    fi
+    finish migration-uncertain STOP_HISTORY
+  fi
   write_privilege_facts "$work/privileges.after"
   write_object_facts "$work/objects.after"
   cat > "$work/sentinels.env" <<EOF
