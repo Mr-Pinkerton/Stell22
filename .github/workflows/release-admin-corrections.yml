@@ -140,6 +140,9 @@ jobs:
             git show "${EXPECTED_SHA}:scripts/admin-corrections-release.sh" > "$TMP_DIR/admin-corrections-release.sh"
             git show "${EXPECTED_SHA}:scripts/release-diagnostics.sh" > "$TMP_DIR/release-diagnostics.sh"
             git show "${EXPECTED_SHA}:scripts/release-checkout.sh" > "$TMP_DIR/release-checkout.sh"
+            git show "${EXPECTED_SHA}:scripts/release-credential.py" > "$TMP_DIR/release-credential.py"
+            git show "${EXPECTED_SHA}:scripts/release-migrator-url.py" > "$TMP_DIR/release-migrator-url.py"
+            chmod 700 "$TMP_DIR/release-credential.py" "$TMP_DIR/release-migrator-url.py"
             mkdir -p "$TMP_DIR/decide"
             git show "${EXPECTED_SHA}:src/server/internal/admin-corrections-release/decide.mjs" > "$TMP_DIR/decide/decide.mjs"
             # Read-only gate runs from the pinned commit before release-checkout switches the tree.
