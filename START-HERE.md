@@ -24,25 +24,27 @@ Never import door-specific entities, routes, WIP assumptions, or business rules 
 
 ## Current checkpoint — 2026-10-27
 
-This block is the current command. The checkpoint below it, and any later `NEXT = PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01`, is a historical record. It is not a second current command. `audit/08.01` through `audit/08.62` are not rewritten.
+This block is the current command for production facts, closed tasks, and NEXT. The GitHub SHA below is the verified baseline at checkpoint preparation on 2026-10-27. It is not a permanent HEAD. The checkpoint below it, and any later `NEXT = PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01`, is a historical record. It is not a second current command. `audit/08.01` through `audit/08.62` are not rewritten.
 
-**CURRENT GITHUB MAIN** is not the production deployment.
+**GITHUB BASELINE != PRODUCTION SHA.** The baseline below was GitHub `main` when this checkpoint was prepared. It is not the production deployment.
 
 | | |
 | --- | --- |
-| GitHub `main` | `abfcf4d749349097b282d15ab9a37433a63e5243` |
-| Tree | `11de7ca2636f568b9d48b935c3441efacc61aa83` |
-| Post-merge CI | `40391533179` SUCCESS |
+| GitHub `main` at preparation | `abfcf4d749349097b282d15ab9a37433a63e5243` |
+| Tree of that baseline | `11de7ca2636f568b9d48b935c3441efacc61aa83` |
+| CI verified for that baseline | `40391533179` SUCCESS |
 | Production SHA | `c5771f8eca1c21d6111f3705cad94a6a73f37bfe` |
 | Production tree | `533ca3441acc7c7c2691f6c704b3830e604a06cb` |
 | Running image | `sha256:e09e82a84d2c5d0b40af32c409595d8c81d3def8c824dd4215e9012dd8c35d31` |
 | Production migrations | 47 completed / 0 incomplete |
 | Last production release | `40367558083` SUCCESS |
 
-`abfcf4d` adds only the Turbopack type-export fix on top of the production SHA. Production was not moved to that commit. The production image is the Webpack build, so the fix did not require a deploy.
+After PR #119 merges, live GitHub `main` will be a different commit. Before any new task, verify live GitHub `main`. Do not treat `abfcf4d` as the standing HEAD.
+
+PR #118, merged as this baseline, contains the Turbopack type-export fix, its regression test, and the disposable historical Git test isolation. That pull request is not a single type-export edit. Production was not moved to `abfcf4d`. The production image is the Webpack build, so the dev-bundler change did not require a deploy.
 
 - ADMIN-CORRECTIONS-01: **IMPLEMENTED / DEPLOYED / FUNCTIONAL UI ACCEPTED / CLOSED**.
-- DEV-BUNDLER-01: **IMPLEMENTED / MERGED PR #118 / POST-MERGE CI SUCCESS / CLOSED**. Not deployed separately.
+- DEV-BUNDLER-01: **IMPLEMENTED / MERGED PR #118 / POST-MERGE CI SUCCESS / CLOSED**. The merge contains the Turbopack type-export fix, its regression test, and the disposable historical Git test isolation. Not deployed separately.
 - SERVER-ACTION-LOG-01: **DIAGNOSTICS ACCEPTED / NO CONFIRMED SYSTEMIC DEFECT / NO FIX REQUIRED / CLOSED**.
 
 The PSR-P3 P1 migration is in the accepted production history. The batch-receipt provenance writer is in the production image's code. Provenance rows on this SHA were not measured. SHADOW-gate continuity on this SHA was not confirmed. Do not copy SOAK-04 `SHADOW_COUNT` = **195** onto the current runtime. Ledger **NOT AUTHORITATIVE**. `OPENING_BALANCE` **NOT CREATED** on the last accepted status. `production_cost_flow` **NOT ACTIVATED**. `ARCH-P1-001` remains **OPEN**. `INC-001` remains **OPEN**. Paper removal **NOT AUTHORIZED**. PSR-P3 is not **COMPLETE**.

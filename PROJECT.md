@@ -40,27 +40,29 @@ A Cursor/chat statement without a committed project artifact is not canonical.
 
 ## 3.1 Current checkpoint — 2026-10-27
 
-This section is the current command. Later sections that still say `CURRENT`, `ACTIVE MODE`, or `NEXT = PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01` are historical records. They are not a second current command. `audit/08.01` through `audit/08.62` are not rewritten.
+This section is the current command for production facts, closed tasks, and NEXT. The GitHub SHA below is the verified baseline at checkpoint preparation on 2026-10-27. It is not a permanent HEAD. Later sections that still say `CURRENT`, `ACTIVE MODE`, or `NEXT = PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01` are historical records. They are not a second current command. `audit/08.01` through `audit/08.62` are not rewritten.
 
-**CURRENT GITHUB MAIN** is not deployed on production.
+**GITHUB BASELINE != PRODUCTION SHA.** The baseline below was GitHub `main` when this checkpoint was prepared. It is not deployed on production.
 
 | | |
 | --- | --- |
-| GitHub `main` | `abfcf4d749349097b282d15ab9a37433a63e5243` |
-| Tree | `11de7ca2636f568b9d48b935c3441efacc61aa83` |
-| Post-merge CI | `40391533179` SUCCESS |
+| GitHub `main` at preparation | `abfcf4d749349097b282d15ab9a37433a63e5243` |
+| Tree of that baseline | `11de7ca2636f568b9d48b935c3441efacc61aa83` |
+| CI verified for that baseline | `40391533179` SUCCESS |
 | Production SHA | `c5771f8eca1c21d6111f3705cad94a6a73f37bfe` |
 | Production tree | `533ca3441acc7c7c2691f6c704b3830e604a06cb` |
 | Running image | `sha256:e09e82a84d2c5d0b40af32c409595d8c81d3def8c824dd4215e9012dd8c35d31` |
 | Production migrations | 47 completed / 0 incomplete |
 | Last production release | `40367558083` SUCCESS |
 
-`abfcf4d` is the merge of PR #118. It is ahead of the production checkout by the Turbopack type-export fix only. Production was not updated to that SHA. The production build path is Webpack (`npm run build`), so that fix did not require a production deploy.
+After PR #119 merges, live GitHub `main` will be a different commit. Before any new task, verify live GitHub `main`. Do not treat `abfcf4d` as the standing HEAD.
+
+PR #118, merged as this baseline, contains the Turbopack type-export fix, its regression test, and the disposable historical Git test isolation. That pull request is not a single type-export edit. Production was not updated to `abfcf4d`. The production build path is Webpack (`npm run build`), so the dev-bundler change did not require a production deploy.
 
 Closed tasks:
 
 - ADMIN-CORRECTIONS-01: **IMPLEMENTED / DEPLOYED / FUNCTIONAL UI ACCEPTED / CLOSED**.
-- DEV-BUNDLER-01: **IMPLEMENTED / MERGED PR #118 / POST-MERGE CI SUCCESS / CLOSED**. Not deployed separately. Production keeps the Webpack image above.
+- DEV-BUNDLER-01: **IMPLEMENTED / MERGED PR #118 / POST-MERGE CI SUCCESS / CLOSED**. The merge contains the Turbopack type-export fix, its regression test, and the disposable historical Git test isolation. Not deployed separately. Production keeps the Webpack image above.
 - SERVER-ACTION-LOG-01: **DIAGNOSTICS ACCEPTED / NO CONFIRMED SYSTEMIC DEFECT / NO FIX REQUIRED / CLOSED**.
 
 PSR status, kept in five separate layers:

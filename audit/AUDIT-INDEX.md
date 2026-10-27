@@ -11,21 +11,22 @@ Do not import Woodveri door-manufacturing entities or workflows.
 
 ## A. CURRENT CHECKPOINT
 
-Updated 2026-10-27. This block is the current command. The table and paragraphs below that still name production application `678cbc1d308ddfe568b901ebf53f7e05f9a8c014` or `NEXT = PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01` are historical closeout records. They are not a second current command. `audit/08.01` through `audit/08.62` are not rewritten, and their historical statuses are not backdated.
+Updated 2026-10-27. Production facts, closed tasks, and NEXT in this block are the current command. The GitHub SHA is the verified baseline at checkpoint preparation, not a permanent HEAD. The table and paragraphs below that still name production application `678cbc1d308ddfe568b901ebf53f7e05f9a8c014` or `NEXT = PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01` are historical closeout records. They are not a second current command. `audit/08.01` through `audit/08.62` are not rewritten, and their historical statuses are not backdated.
 
 | | |
 | --- | --- |
-| GitHub `main` | `abfcf4d749349097b282d15ab9a37433a63e5243` |
-| Tree | `11de7ca2636f568b9d48b935c3441efacc61aa83` |
-| Post-merge CI | `40391533179` SUCCESS |
+| GitHub `main` at preparation | `abfcf4d749349097b282d15ab9a37433a63e5243`. Verified baseline, not a standing HEAD. |
+| Tree of that baseline | `11de7ca2636f568b9d48b935c3441efacc61aa83` |
+| CI verified for that baseline | `40391533179` SUCCESS |
+| After PR #119 | Live GitHub `main` will be a different commit. Verify live GitHub `main` before any new task. |
 | Production SHA | `c5771f8eca1c21d6111f3705cad94a6a73f37bfe` |
 | Production tree | `533ca3441acc7c7c2691f6c704b3830e604a06cb` |
 | Running image | `sha256:e09e82a84d2c5d0b40af32c409595d8c81d3def8c824dd4215e9012dd8c35d31` |
 | Production migrations | 47 completed / 0 incomplete |
 | Last production release | `40367558083` SUCCESS |
-| GitHub vs production | `abfcf4d` is **not** deployed. It is PR #118 only. Production stays on the Webpack image of `c5771f8`. |
+| GitHub vs production | **GITHUB BASELINE != PRODUCTION SHA.** `abfcf4d` is **not** deployed. PR #118 contains the Turbopack type-export fix, its regression test, and the disposable historical Git test isolation. It is not a single type-export edit. Production stays on the Webpack image of `c5771f8`. |
 | ADMIN-CORRECTIONS-01 | **IMPLEMENTED / DEPLOYED / FUNCTIONAL UI ACCEPTED / CLOSED** |
-| DEV-BUNDLER-01 | **IMPLEMENTED / MERGED PR #118 / POST-MERGE CI SUCCESS / CLOSED**. Not deployed separately. |
+| DEV-BUNDLER-01 | **IMPLEMENTED / MERGED PR #118 / POST-MERGE CI SUCCESS / CLOSED**. The merge contains the Turbopack type-export fix, its regression test, and the disposable historical Git test isolation. Not deployed separately. |
 | SERVER-ACTION-LOG-01 | **DIAGNOSTICS ACCEPTED / NO CONFIRMED SYSTEMIC DEFECT / NO FIX REQUIRED / CLOSED** |
 | PSR-P3 P1 migration | Present in the accepted production history. |
 | Provenance writer | In the code of production SHA `c5771f8`. Production provenance rows on that SHA were **not measured**. |
