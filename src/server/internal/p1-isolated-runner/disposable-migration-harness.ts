@@ -1,5 +1,6 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { PrismaClient } from "@prisma/client";
 import { classifyP1State } from "@/server/internal/p1-isolated-runner/classify";
@@ -19,6 +20,7 @@ import { parseDisposableAttestation } from "@/server/internal/p1-isolated-runner
 import { buildChildEnv } from "@/server/internal/p1-isolated-runner/env";
 import {
   assertOutsideRepository,
+  DisposableMigrateRefusal,
   parseDisposableDatabaseUrl,
   probeCurrentDatabase,
 } from "@/server/internal/disposable-migrate/guard";
@@ -148,6 +150,29 @@ export function writeBlob(root: string, filePath: string, bytes: Buffer): void {
   fs.writeFileSync(target, bytes);
 }
 
+function schemaOutsideRepository(schemaPath: string, repositoryRoot: string): {
+  schemaPath: string;
+  cwd: string;
+  cleanup?: () => void;
+} {
+  const resolved = path.resolve(schemaPath);
+  const cwd = path.dirname(path.dirname(resolved));
+  try {
+    assertOutsideRepository(cwd, repositoryRoot);
+    assertOutsideRepository(resolved, repositoryRoot);
+    return { schemaPath: resolved, cwd };
+  } catch (error) {
+    if (!(error instanceof DisposableMigrateRefusal) || error.code !== "INSIDE_REPOSITORY") throw error;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "stell22-prisma-deploy-"));
+  fs.cpSync(path.dirname(resolved), path.join(root, "prisma"), { recursive: true });
+  return {
+    schemaPath: path.join(root, "prisma", "schema.prisma"),
+    cwd: root,
+    cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+  };
+}
+
 export function deployPrisma(
   schemaPath: string,
   url: string,
@@ -170,22 +195,30 @@ export function runPrisma(
     throw new Error("refusing prisma target");
   }
   const target = parseDisposableDatabaseUrl(databaseUrl);
-  assertOutsideRepository(cwd, process.cwd());
   const schemaIndex = args.indexOf("--schema");
   const schemaArg = schemaIndex >= 0 ? args[schemaIndex + 1] ?? "" : "";
-  if (schemaArg) assertOutsideRepository(schemaArg, process.cwd());
-  if (probeCurrentDatabase(databaseUrl, process.cwd()).toLowerCase() !== target.database) {
-    throw new Error("refusing prisma database");
-  }
+  const relocated = schemaArg ? schemaOutsideRepository(schemaArg, process.cwd()) : undefined;
+  const spawnCwd = relocated?.cwd ?? cwd;
+  const spawnArgs = [...args];
+  if (relocated) spawnArgs[schemaIndex + 1] = relocated.schemaPath;
+  else assertOutsideRepository(spawnCwd, process.cwd());
   const cli = path.join(process.cwd(), "node_modules", "prisma", "build", "index.js");
-  const child = spawnSync(process.execPath, [cli, ...args], {
-    cwd,
-    env: { ...env } as NodeJS.ProcessEnv,
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: 180_000,
-    maxBuffer: 8 * 1024 * 1024,
-  });
+  let child: SpawnSyncReturns<string>;
+  try {
+    if (probeCurrentDatabase(databaseUrl, process.cwd()).toLowerCase() !== target.database) {
+      throw new Error("refusing prisma database");
+    }
+    child = spawnSync(process.execPath, [cli, ...spawnArgs], {
+      cwd: spawnCwd,
+      env: { ...env } as NodeJS.ProcessEnv,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 180_000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+  } finally {
+    relocated?.cleanup?.();
+  }
   const detail = redactText(`${child.stdout ?? ""}\n${child.stderr ?? ""}`, databaseUrl)
     .split(/\r?\n/)
     .map((line) => line.trim())
