@@ -111,6 +111,11 @@ export interface BatchRemainderWriteOffSnapshotV1 {
   effects: BatchRemainderWriteOffEffectV1[];
 }
 
+function assertIntegerRailCount(value: number | null | undefined, message: string): void {
+  if (value == null) return;
+  if (!Number.isInteger(value)) throw new Error(message);
+}
+
 function assertPositiveRailCount(value: number | null | undefined, message: string): void {
   if (value == null) return;
   if (!Number.isInteger(value) || value <= 0) throw new Error(message);
@@ -118,7 +123,8 @@ function assertPositiveRailCount(value: number | null | undefined, message: stri
 
 export function canonicalBatchCreateSnapshot(values: BatchFormValues): BatchCreateRequestSnapshotV1 {
   for (const rail of values.rails) {
-    assertPositiveRailCount(rail.quantity, "Количество реек должно быть целым числом больше нуля");
+    // Zero is a legal receipt pair. A negative integer stays for the provenance check.
+    assertIntegerRailCount(rail.quantity, "Количество реек должно быть целым числом");
     assertPositiveRailCount(rail.rows, "Ряды должны быть целым числом больше нуля");
     assertPositiveRailCount(rail.layers, "Слои должны быть целым числом больше нуля");
   }

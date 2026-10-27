@@ -245,4 +245,18 @@ describe("canonicalBatchCreateSnapshot integers", () => {
       }),
     ).toThrow(/Ряды/);
   });
+
+  it("keeps a zero or negative integer quantity for the receipt provenance check", () => {
+    expect(() =>
+      canonicalBatchCreateSnapshot({
+        ...batchValues,
+        rails: [{ ...batchValues.rails[0]!, quantity: 0 }],
+      }),
+    ).not.toThrow();
+    const negative = canonicalBatchCreateSnapshot({
+      ...batchValues,
+      rails: [{ ...batchValues.rails[0]!, quantity: -3 }],
+    });
+    expect(negative.rails[0]?.quantity).toBe(-3);
+  });
 });
