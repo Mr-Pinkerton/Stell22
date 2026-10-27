@@ -357,6 +357,12 @@ function BatchFormBody({
 
   const removeEntry = (id: string) => {
     setEntries((prev) => prev.filter((e) => e.id !== id));
+    setDirtyLengths((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   };
 
   const canSubmitBatch =

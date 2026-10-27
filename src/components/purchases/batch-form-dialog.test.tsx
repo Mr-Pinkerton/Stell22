@@ -33,25 +33,32 @@ const batch: PurchaseBatchRow = {
   stats: { railCount: 10, totalLengthM: 24, volumeM3: 0.1, packageCount: 1 },
 };
 
+function rail(
+  id: string,
+  code: string,
+  consumed = 0,
+  operationCount = 0,
+): BatchPackageEditor["rails"][number] {
+  return {
+    id,
+    mode: "package",
+    lengthM: 2.4,
+    railType: "POLKA",
+    sort: "SORT1",
+    quantity: 10,
+    rows: 2,
+    layers: 5,
+    code,
+    consumed,
+    operationCount,
+    activeOperationCount: operationCount,
+  };
+}
+
 function editor(consumed: number, operationCount: number): BatchPackageEditor {
   return {
     fingerprint: "fp",
-    rails: [
-      {
-        id: "lot-1",
-        mode: "package",
-        lengthM: 2.4,
-        railType: "POLKA",
-        sort: "SORT1",
-        quantity: 10,
-        rows: 2,
-        layers: 5,
-        code: "P-01",
-        consumed,
-        operationCount,
-        activeOperationCount: operationCount,
-      },
-    ],
+    rails: [rail("lot-1", "P-01", consumed, operationCount)],
   };
 }
 
@@ -171,5 +178,48 @@ describe("batch form numeric input", () => {
     );
     expect(field("len-lot-1").disabled).toBe(true);
     expect(field("len-lot-1").value).toBe("2,4");
+    const lockedDelete = screen.getByRole("button", { name: "Удаление недоступно" });
+    expect((lockedDelete as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("drops the dirty flag of a removed package and submits the one that remains", async () => {
+    const user = userEvent.setup();
+    const onSubmitBatch = vi.fn();
+    render(
+      <BatchFormDialog
+        open
+        batch={batch}
+        materials={[material]}
+        items={[]}
+        packages={{
+          fingerprint: "fp-two",
+          rails: [rail("lot-keep", "P-01"), rail("lot-bad", "P-02")],
+        }}
+        onOpenChange={() => {}}
+        onSubmitBatch={onSubmitBatch}
+      />,
+    );
+
+    await user.type(field("batch-edit-reason"), "убрать пакет");
+    const badLength = field("len-lot-bad");
+    await user.clear(badLength);
+    await user.type(badLength, "1,23456");
+    await user.click(screen.getByRole("button", { name: "Сохранить партию" }));
+    expect(onSubmitBatch).not.toHaveBeenCalled();
+
+    const deleteButtons = screen.getAllByRole("button", { name: "Удалить" });
+    expect(deleteButtons).toHaveLength(2);
+    await user.click(deleteButtons[1]!);
+    expect(document.getElementById("len-lot-bad")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Сохранить партию" }));
+    expect(onSubmitBatch).toHaveBeenCalledTimes(1);
+    const values = onSubmitBatch.mock.calls[0]![0];
+    expect(values.expectedPackageFingerprint).toBe("fp-two");
+    expect(values.editPackages).toBe(true);
+    expect(values.packageEditReason).toBe("убрать пакет");
+    expect(values.rails.map((row: { id: string; lengthM: number }) => [row.id, row.lengthM])).toEqual([
+      ["lot-keep", 2.4],
+    ]);
   });
 });
