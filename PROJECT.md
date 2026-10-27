@@ -1,6 +1,6 @@
 # Stell22 — Project Journal / Source of Truth
 
-Updated: 2026-10-16
+Updated: 2026-10-27
 
 This file answers three questions:
 
@@ -38,15 +38,65 @@ If sources conflict, verify the actual GitHub `main` and record the divergence.
 
 A Cursor/chat statement without a committed project artifact is not canonical.
 
-Release checkpoint, 2026-10-24: PR #110 merged as `473c01175df4b334a65a104b3a519e3b34c06234` (tree `cad87d4c3ceeb9739e2106066a0b4b903c7fb0ff`). An independent audit revoked production release authorization. Checkout must keep the server bytes of `scripts/backup-db.sh` and `scripts/restore-db.sh` without `git stash`. Enum ownership is a post-release migration prerequisite, not a P1 blocker. The role transaction and pinned P1 checksum are unchanged. Corrective branch `fix/psr-p3-protected-checkout-r1`. Production release remains **NO-GO**. The sequence is `audit/08.62-psr-p3-release-integration.md`.
+## 3.1 Current checkpoint — 2026-10-27
 
-## 4. Current verified technical checkpoint
+This section is the current command for production facts, closed tasks, and NEXT. The GitHub SHA below is the verified baseline at checkpoint preparation on 2026-10-27. It is not a permanent HEAD. Later sections that still say `CURRENT`, `ACTIVE MODE`, or `NEXT = PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01` are historical records. They are not a second current command. `audit/08.01` through `audit/08.62` are not rewritten.
+
+**GITHUB BASELINE != PRODUCTION SHA.** The baseline below was GitHub `main` when this checkpoint was prepared. It is not deployed on production.
+
+| | |
+| --- | --- |
+| GitHub `main` at preparation | `abfcf4d749349097b282d15ab9a37433a63e5243` |
+| Tree of that baseline | `11de7ca2636f568b9d48b935c3441efacc61aa83` |
+| CI verified for that baseline | `40391533179` SUCCESS |
+| Production SHA | `c5771f8eca1c21d6111f3705cad94a6a73f37bfe` |
+| Production tree | `533ca3441acc7c7c2691f6c704b3830e604a06cb` |
+| Running image | `sha256:e09e82a84d2c5d0b40af32c409595d8c81d3def8c824dd4215e9012dd8c35d31` |
+| Production migrations | 47 completed / 0 incomplete |
+| Last production release | `40367558083` SUCCESS |
+
+After PR #119 merges, live GitHub `main` will be a different commit. Before any new task, verify live GitHub `main`. Do not treat `abfcf4d` as the standing HEAD.
+
+PR #118, merged as this baseline, contains the Turbopack type-export fix, its regression test, and the disposable historical Git test isolation. That pull request is not a single type-export edit. Production was not updated to `abfcf4d`. The production build path is Webpack (`npm run build`), so the dev-bundler change did not require a production deploy.
+
+Closed tasks:
+
+- ADMIN-CORRECTIONS-01: **IMPLEMENTED / DEPLOYED / FUNCTIONAL UI ACCEPTED / CLOSED**.
+- DEV-BUNDLER-01: **IMPLEMENTED / MERGED PR #118 / POST-MERGE CI SUCCESS / CLOSED**. The merge contains the Turbopack type-export fix, its regression test, and the disposable historical Git test isolation. Not deployed separately. Production keeps the Webpack image above.
+- SERVER-ACTION-LOG-01: **DIAGNOSTICS ACCEPTED / NO CONFIRMED SYSTEMIC DEFECT / NO FIX REQUIRED / CLOSED**.
+
+PSR status, kept in five separate layers:
+
+| Layer | Current record |
+| --- | --- |
+| A. Implemented in `main` | PSR-P2 writers, PSR-P3 Slice 1, and the batch-receipt provenance guard, writer, and checker are in `main`. |
+| B. Included in the production image | The batch-receipt provenance writer is in the code of production SHA `c5771f8`. |
+| C. Database migration applied | The PSR-P3 P1 migration is present in the accepted production history of 47 completed migrations. |
+| D. Runtime activation observed | Production provenance rows on `c5771f8` were **not measured**. Current SHADOW-gate continuity was **not confirmed**. Do not copy the historical SOAK-04 `SHADOW_COUNT` = **195** onto this runtime. |
+| E. Business invariant proven | Not proven for the current production SHA. PSR-P3 is **not COMPLETE**. |
+
+Still in force, and not granted by release `40367558083`:
+
+- Ledger **NOT AUTHORITATIVE**.
+- `OPENING_BALANCE` **NOT CREATED** on the last accepted status.
+- `production_cost_flow` **NOT ACTIVATED**.
+- `ARCH-P1-001` remains **OPEN**.
+- `INC-001` remains **OPEN**.
+- Paper removal **NOT AUTHORIZED**.
+
+**NEXT = STELL22-PRODUCTION-ACTIVATION-READONLY-01**. Status: **PROPOSED / NOT EXECUTED**. The future task is to check whether PSR-P2 and PSR-P3 are actually active on the current production SHA. Publishing this checkpoint does **not** authorize production access, a migration, a deployment, SHADOW activation, `production_cost_flow`, or paper removal.
+
+Historical release checkpoint, 2026-10-24, not a refusal of release `40367558083`: PR #110 merged as `473c01175df4b334a65a104b3a519e3b34c06234` (tree `cad87d4c3ceeb9739e2106066a0b4b903c7fb0ff`). An independent audit revoked production release authorization. Checkout must keep the server bytes of `scripts/backup-db.sh` and `scripts/restore-db.sh` without `git stash`. Enum ownership is a post-release migration prerequisite, not a P1 blocker. The role transaction and pinned P1 checksum are unchanged. Corrective branch `fix/psr-p3-protected-checkout-r1`. The decision recorded on that date was production release **NO-GO**. That sentence is not a standing refusal of release `40367558083`. The sequence document is `audit/08.62-psr-p3-release-integration.md`, and that file is not rewritten.
+
+## 4. Historical technical checkpoint through 2026-10-16
+
+**HISTORICAL. Not the current command.** The current checkpoint is §3.1. The SHA, deploy runs, and `NEXT` lines in this section keep the record of that date.
 
 Repository: `Mr-Pinkerton/Stell22`
 
 Branch: `main`
 
-Last verified production application SHA:
+Historical production application SHA recorded in this section:
 
 `678cbc1d308ddfe568b901ebf53f7e05f9a8c014`
 
@@ -125,9 +175,11 @@ Cost-flow / activation state at the current checkpoint:
 
 Always establish current HEAD before starting new work.
 
-## 5. Current work mode
+## 5. Historical work mode through 2026-10-20
 
-`ACTIVE MODE: PSR-P2 COMPLETE / PSR-P3 PARTIAL`. PSR-P2 artifact: `audit/08.27`. PSR-P3 Slice 1 artifact: `audit/08.29` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). Production application is `678cbc1d308ddfe568b901ebf53f7e05f9a8c014` (Production Deploy `37816537899`). Verified GitHub `main` baseline before the PSR-P3 Slice 1 documentation closeout (PR #61): `df21c3c2a8e943c509ad52c2f70e13066fefe6de`. That baseline is **not** a production application deploy. Ledger **NOT AUTHORITATIVE**. `AUTHORITATIVE_COUNT` = **0**. Final epoch **NOT CREATED**. `OPENING_BALANCE` **NOT CREATED**. `production_cost_flow` **INACTIVE / ABSENT**. Invariant A is implemented for R-05, batch remainder write-off, and SimplePurchase. Invariant B is **NOT_EVALUABLE**. PSR-P3 is **PARTIAL / NOT COMPLETE**. Paper removal **NOT AUTHORIZED**. `SOAK_COMPLETE` = **NO**. `INC-001` **OPEN**. `ARCH-P1-001` **OPEN**. Discovery `audit/08.30` is **COMPLETE / ACCEPTED**. Option B's writer is `audit/08.34` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). Architecture `audit/08.31` is **ACCEPTED / CANONICAL**. Readiness gate `audit/08.32` remains **ACCEPTED / CANONICAL**. P1 is `audit/08.33` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). P1 production schema migration is **NOT AUTHORIZED / NOT EXECUTED**. P2 production deploy is **NOT AUTHORIZED**. P3 is `audit/08.35` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). P3 production deploy is **NOT AUTHORIZED**. Production application is **UNCHANGED**. **NEXT = PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01 — Resolve the deployment blocker and the missing production evidence**. Rollout readiness is `audit/08.36` (**CANDIDATE / NOT READY / EVIDENCE INCOMPLETE**). It does not authorize a migration or a deploy. This NEXT is a package name only. It does not authorize a production migration, a deploy, production access, paper removal, or `production_cost_flow`.
+**HISTORICAL. Not the current command.** The current checkpoint and the only current NEXT are in §3.1.
+
+`ACTIVE MODE: PSR-P2 COMPLETE / PSR-P3 PARTIAL`. PSR-P2 artifact: `audit/08.27`. PSR-P3 Slice 1 artifact: `audit/08.29` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). Production application is `678cbc1d308ddfe568b901ebf53f7e05f9a8c014` (Production Deploy `37816537899`). Verified GitHub `main` baseline before the PSR-P3 Slice 1 documentation closeout (PR #61): `df21c3c2a8e943c509ad52c2f70e13066fefe6de`. That baseline is **not** a production application deploy. Ledger **NOT AUTHORITATIVE**. `AUTHORITATIVE_COUNT` = **0**. Final epoch **NOT CREATED**. `OPENING_BALANCE` **NOT CREATED**. `production_cost_flow` **INACTIVE / ABSENT**. Invariant A is implemented for R-05, batch remainder write-off, and SimplePurchase. Invariant B is **NOT_EVALUABLE**. PSR-P3 is **PARTIAL / NOT COMPLETE**. Paper removal **NOT AUTHORIZED**. `SOAK_COMPLETE` = **NO**. `INC-001` **OPEN**. `ARCH-P1-001` **OPEN**. Discovery `audit/08.30` is **COMPLETE / ACCEPTED**. Option B's writer is `audit/08.34` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). Architecture `audit/08.31` is **ACCEPTED / CANONICAL**. Readiness gate `audit/08.32` remains **ACCEPTED / CANONICAL**. P1 is `audit/08.33` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). P1 production schema migration is **NOT AUTHORIZED / NOT EXECUTED**. P2 production deploy is **NOT AUTHORIZED**. P3 is `audit/08.35` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). P3 production deploy is **NOT AUTHORIZED**. Production application is **UNCHANGED**. **HISTORICAL NEXT, not the current command = PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01 — Resolve the deployment blocker and the missing production evidence**. Rollout readiness is `audit/08.36` (**CANDIDATE / NOT READY / EVIDENCE INCOMPLETE**). It does not authorize a migration or a deploy. This NEXT is a package name only. It does not authorize a production migration, a deploy, production access, paper removal, or `production_cost_flow`.
 
 `audit/08.37` is **HEAD ACCEPTED AS BOUNDED PROTOTYPE / MERGED TO MAIN / POST-MERGE CI VERIFIED / NOT DEPLOYED / NO PRODUCTION AUTHORIZATION**. PR #77 merged at `2026-10-11T18:16:20Z`. Accepted head `7b3925621ff62dbbace56a3268d0bc044229db56`. Merge `3b9e9ac90f26a3eef4a381acc4d388deee5e0522`, tree `452e6fbf05dbf8df3027474b82920a6b65ff7638`, parents `741d6b221b791345c7653d53ef571addf22f5be3` then `7b3925621ff62dbbace56a3268d0bc044229db56`. Accepted PR CI `38162494962` **SUCCESS**. Post-merge CI `38163111879` **SUCCESS**: verify `114539987865`, disposable restore drill `114539987764`, unit tests **1207 PASS**, integrity tests **564 PASS**, and TypeScript, Lint, security checks, and Build **PASS**. The public CLI does not connect to PostgreSQL and does not spawn Prisma. The live identity probe is **NOT IMPLEMENTED**. The executor depends on injected callbacks. Real disposable runner operation is **NOT VERIFIED**. Old-application integration is **NOT EXECUTED**. The CI restore drill is not that old-application test. Discovery 01B-03-R1 is recorded as HEAD accepted, and Option A is the isolated Prisma runner direction. This merge does not authorize a production migration, a deploy, production access, paper removal, or `production_cost_flow`. Production history remains **UNVERIFIED**. `audit/08.36` is not rewritten and remains **NOT READY**. The NEXT in the paragraph above is unchanged.
 
@@ -172,7 +224,7 @@ PSR-P1 schema contract = **ACCEPTED DESIGN** (`audit/08.05`; historical contract
 
 `PSR-DESIGN-001` / `PSR-DESIGN-002` = **CLOSED / ACCEPTED**.
 
-NEXT = **PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01 — Resolve the deployment blocker and the missing production evidence**. Rollout readiness is `audit/08.36` (**CANDIDATE / NOT READY / EVIDENCE INCOMPLETE**). It does not authorize a migration or a deploy. This NEXT is a package name only. It does not authorize a production migration, a deploy, or production access. Architecture `audit/08.31` remains **ACCEPTED / CANONICAL**. Readiness gate `audit/08.32` remains **ACCEPTED / CANONICAL**. P1 is **IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED** (`audit/08.33`). P1 production schema migration is **NOT AUTHORIZED / NOT EXECUTED**. P2 is **IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED** (`audit/08.34`). P2 production deploy is **NOT AUTHORIZED**. P3 is `audit/08.35` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). P3 production deploy is **NOT AUTHORIZED**. Production application is **UNCHANGED**. Accepted architecture is not operational warehouse readiness. Discovery `audit/08.30` is **COMPLETE / ACCEPTED**. The writer is in `main` and is not deployed. The checker is in `main` and is not deployed (`audit/08.35`). P1 stored the nullable column and the database guard only. Historical reconstruction is **NO**. Production deployment is **NO**. Slice 1 remains `audit/08.29` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). It does not create a final epoch, create `OPENING_BALANCE`, make the ledger authoritative, activate `production_cost_flow`, authorize paper removal, or close `INC-001` or `ARCH-P1-001`. `SOAK_COMPLETE` stays **NO**. PSR-P3 stays **PARTIAL / NOT COMPLETE**. Package closeouts `audit/08.24`, `audit/08.25`, and `audit/08.26` keep their own historical status.
+HISTORICAL NEXT, not the current command = **PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01 — Resolve the deployment blocker and the missing production evidence**. Rollout readiness is `audit/08.36` (**CANDIDATE / NOT READY / EVIDENCE INCOMPLETE**). It does not authorize a migration or a deploy. This NEXT is a package name only. It does not authorize a production migration, a deploy, or production access. Architecture `audit/08.31` remains **ACCEPTED / CANONICAL**. Readiness gate `audit/08.32` remains **ACCEPTED / CANONICAL**. P1 is **IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED** (`audit/08.33`). P1 production schema migration is **NOT AUTHORIZED / NOT EXECUTED**. P2 is **IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED** (`audit/08.34`). P2 production deploy is **NOT AUTHORIZED**. P3 is `audit/08.35` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). P3 production deploy is **NOT AUTHORIZED**. Production application is **UNCHANGED**. Accepted architecture is not operational warehouse readiness. Discovery `audit/08.30` is **COMPLETE / ACCEPTED**. The writer is in `main` and is not deployed. The checker is in `main` and is not deployed (`audit/08.35`). P1 stored the nullable column and the database guard only. Historical reconstruction is **NO**. Production deployment is **NO**. Slice 1 remains `audit/08.29` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). It does not create a final epoch, create `OPENING_BALANCE`, make the ledger authoritative, activate `production_cost_flow`, authorize paper removal, or close `INC-001` or `ARCH-P1-001`. `SOAK_COMPLETE` stays **NO**. PSR-P3 stays **PARTIAL / NOT COMPLETE**. Package closeouts `audit/08.24`, `audit/08.25`, and `audit/08.26` keep their own historical status.
 
 ## 5.1 Temporary operational rule — TORCOVKA delete
 
@@ -342,15 +394,17 @@ Status: `ACCEPTED / REVIEWED` (Review #1 R1…R6 CLOSED/PASS; Review #2 R7…R8 
 
 Artifact (canonical on `main` after reviewed merge): `audit/08.02-primary-system-readiness-architecture.md`
 
-Application/main BASE at ARCH-2 acceptance: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` (**historical**; docs merge ≠ that-cycle production deploy). Current production application: see §4.
+Application/main BASE at ARCH-2 acceptance: `71a01b40008cf6da7cbc843b3b0dbaa31cf01853` (**historical**; docs merge ≠ that-cycle production deploy). The production SHA recorded for that era is in §4. The current production SHA is §3.1.
 
 Forward-looking architecture so Stell22 can become the only warehouse/production operational source of truth. PSR namespace. **Not** a reopen of AUDIT 1. Architecture contract accepted; **not** full PSR implementation complete.
 
 Correction-history production-correction slice of `PSR-DESIGN-001` / `PSR-Q-001`: **DECIDED / ACCEPTED** 2026-09-17 in `audit/08.03` (`ProductionOperationMutation`). Remainder + `PSR-Q-002` / `Q5` / `Q7` / `Q8` / `PSR-DESIGN-002`: **CLOSED / ACCEPTED** 2026-09-17 in `audit/08.04`. PSR-P0 = **COMPLETE / ACCEPTED** as architecture/design contract only. PSR-P1 schema contract: **ACCEPTED DESIGN** 2026-09-17 in `audit/08.05` (historical **NOT IMPLEMENTED** at contract creation preserved). PSR-P1 implementation/deploy: **COMPLETE / IMPLEMENTED / DEPLOYED / SHADOW SCHEMA EMPTY** 2026-09-17 in `audit/08.06`.
 
-## 13. Current next step
+## 13. Historical next step recorded through 2026-10-16
 
-NEXT = **PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01 — Resolve the deployment blocker and the missing production evidence**. Rollout readiness is `audit/08.36` (**CANDIDATE / NOT READY / EVIDENCE INCOMPLETE**). It does not authorize a migration or a deploy. This NEXT is a package name only. It does not authorize a production migration, a deploy, or production access. Architecture `audit/08.31` remains **ACCEPTED / CANONICAL**. Readiness gate `audit/08.32` remains **ACCEPTED / CANONICAL**. P1 is **IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED** (`audit/08.33`). P1 production schema migration is **NOT AUTHORIZED / NOT EXECUTED**. P2 is **IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED** (`audit/08.34`). P2 production deploy is **NOT AUTHORIZED**. P3 is `audit/08.35` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). P3 production deploy is **NOT AUTHORIZED**. Production application is **UNCHANGED**. Accepted architecture is not operational warehouse readiness. Discovery `audit/08.30` is **COMPLETE / ACCEPTED**. The writer is in `main` and is not deployed. The checker is in `main` and is not deployed (`audit/08.35`). P1 stored the nullable column and the database guard only. Historical reconstruction is **NO**. Production deployment is **NO**. Slice 1 remains `audit/08.29` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). It does not create a final epoch, create `OPENING_BALANCE`, make the ledger authoritative, activate `production_cost_flow`, authorize paper removal, or close `INC-001` or `ARCH-P1-001`. `SOAK_COMPLETE` stays **NO**. PSR-P3 stays **PARTIAL / NOT COMPLETE**. Package closeouts `audit/08.24`, `audit/08.25`, and `audit/08.26` keep their own historical status.
+**HISTORICAL. Not the current command.** See §3.1.
+
+HISTORICAL NEXT, not the current command = **PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01 — Resolve the deployment blocker and the missing production evidence**. Rollout readiness is `audit/08.36` (**CANDIDATE / NOT READY / EVIDENCE INCOMPLETE**). It does not authorize a migration or a deploy. This NEXT is a package name only. It does not authorize a production migration, a deploy, or production access. Architecture `audit/08.31` remains **ACCEPTED / CANONICAL**. Readiness gate `audit/08.32` remains **ACCEPTED / CANONICAL**. P1 is **IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED** (`audit/08.33`). P1 production schema migration is **NOT AUTHORIZED / NOT EXECUTED**. P2 is **IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED** (`audit/08.34`). P2 production deploy is **NOT AUTHORIZED**. P3 is `audit/08.35` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). P3 production deploy is **NOT AUTHORIZED**. Production application is **UNCHANGED**. Accepted architecture is not operational warehouse readiness. Discovery `audit/08.30` is **COMPLETE / ACCEPTED**. The writer is in `main` and is not deployed. The checker is in `main` and is not deployed (`audit/08.35`). P1 stored the nullable column and the database guard only. Historical reconstruction is **NO**. Production deployment is **NO**. Slice 1 remains `audit/08.29` (**IMPLEMENTED IN MAIN / POST-MERGE VERIFIED / NOT DEPLOYED**). It does not create a final epoch, create `OPENING_BALANCE`, make the ledger authoritative, activate `production_cost_flow`, authorize paper removal, or close `INC-001` or `ARCH-P1-001`. `SOAK_COMPLETE` stays **NO**. PSR-P3 stays **PARTIAL / NOT COMPLETE**. Package closeouts `audit/08.24`, `audit/08.25`, and `audit/08.26` keep their own historical status.
 
 PSR-P0 = **COMPLETE / ACCEPTED** as an architecture/design contract only (`08.03` + `08.04`). Not runtime.
 
@@ -366,7 +420,7 @@ R-06 = **ARCHITECTURE CLOSED / IMPLEMENTATION VERIFIED / MERGED TO main / DEPLOY
 
 Does **not** mean dual-write, SHADOW posting, authoritative ledger, `OPENING_BALANCE` data, paper removal, `production_cost_flow` activation, or Correction Center.
 
-This NEXT is **PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01 — Resolve the deployment blocker and the missing production evidence**. Rollout readiness is `audit/08.36` (**CANDIDATE / NOT READY / EVIDENCE INCOMPLETE**). It does not authorize a migration or a deploy. It does not authorize a production migration, a deploy, or production access. P1 is already in `main` and is not deployed (`audit/08.33`). P2 is already in `main` and is not deployed (`audit/08.34`). P3 is already in `main` and is not deployed (`audit/08.35`). The readiness assessment is `audit/08.36` and is not a go decision. Do not start the gate-resolution package from this file. Do not treat a Slice 1 `MATCH_OBSERVED` as proof that a warehouse projection changed, or as authority to remove paper.
+This historical NEXT, not the current command, was **PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01 — Resolve the deployment blocker and the missing production evidence**. Rollout readiness is `audit/08.36` (**CANDIDATE / NOT READY / EVIDENCE INCOMPLETE**). It does not authorize a migration or a deploy. It does not authorize a production migration, a deploy, or production access. P1 is already in `main` and is not deployed (`audit/08.33`). P2 is already in `main` and is not deployed (`audit/08.34`). P3 is already in `main` and is not deployed (`audit/08.35`). The readiness assessment is `audit/08.36` and is not a go decision. Do not start the gate-resolution package from this file. Do not treat a Slice 1 `MATCH_OBSERVED` as proof that a warehouse projection changed, or as authority to remove paper.
 
 Disposable release rehearsal `audit/08.60` is a test-owned command only. It does not change this NEXT. Production role split, production P1 apply, and production deploy remain **NOT AUTHORIZED**. `FREEZE_PASS_FORBIDDEN`. `PRODUCTION RELEASE NO-GO`. The rehearsal does not prove production-wide writer exclusion.
 
@@ -1418,7 +1472,7 @@ This journal does **not** rewrite the 08.25 closeout above. The `UNSAFE` record 
 
 `audit/08.36-psr-p3-s2-b-rollout-readiness.md` records a rollout readiness assessment as **CANDIDATE / NOT READY / EVIDENCE INCOMPLETE**. Canonical?: **YES** only after this assessment is accepted and merged. Verified GitHub `main` baseline before this assessment: `03121e730ca6afab7751adda10ba69af0ec3fc3e`. Tree `c226b4696d5fdf40102b691381b0dea259b2db4d`. Recorded production application `678cbc1d308ddfe568b901ebf53f7e05f9a8c014`, Deploy `37816537899`. Production was not queried. The current production workflow cannot apply the P1 migration without also starting the P2/P3 image. That is a deployment blocker, not a go decision. P1 production migration remains **NOT AUTHORIZED / NOT EXECUTED**. P2 and P3 production deployment remain **NOT AUTHORIZED**. This journal does not rewrite `audit/08.26` through `audit/08.35`.
 
-**NEXT = PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01 — Resolve the deployment blocker and the missing production evidence**. Package name only. Not a production migration. Not a deploy. Not production access.
+**HISTORICAL NEXT, not the current command = PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01 — Resolve the deployment blocker and the missing production evidence**. Package name only. Not a production migration. Not a deploy. Not production access.
 
 ## 08.42 checkpoint — P1-only release path (2026-10-15)
 
