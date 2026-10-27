@@ -6,6 +6,7 @@ import {
   PACKAGE_REALLOCATE_BLOCKED,
   PACKAGE_STRUCTURE_WHILE_FROZEN,
   STALE_PACKAGE_EDIT,
+  canonicalPackageLength,
   packageSetFingerprint,
   planBatchPackageEdit,
   type PackageLotSnapshot,
@@ -184,6 +185,20 @@ describe("planBatchPackageEdit", () => {
     });
     expect(plan.reallocate).toBe(false);
     expect(plan.updates[0]).toMatchObject({ rows: 1, layers: 1, quantity: 10, remainingQuantity: 4 });
+  });
+
+  it("rejects a length with more than 4 decimal places and keeps a used package locked", () => {
+    expect(canonicalPackageLength(0.35)).toBe("0.3500");
+    expect(canonicalPackageLength("2.475")).toBe("2.4750");
+    expect(() => canonicalPackageLength(1.23456)).toThrow(/4 знаков/);
+    expect(() =>
+      planBatchPackageEdit({
+        frozen: false,
+        costFlowActive: false,
+        lots: [lot({ operationCount: 1, activeOperationCount: 0, remainingQuantity: 10 })],
+        drafts: [{ ...draft, lengthM: 2.5 }],
+      }),
+    ).toThrow(PACKAGE_IDENTITY_AFTER_USE);
   });
 
   it("detects a stale fingerprint after a concurrent quantity change", () => {

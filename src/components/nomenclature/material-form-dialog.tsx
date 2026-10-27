@@ -15,6 +15,7 @@ import {
 import { Input } from "@/components/ui/input";
 import type { Material } from "@/types/domain";
 import type { MaterialFormValues } from "@/server/materials";
+import { formatMeasured, parseDecimalText, precisionMessage } from "@/lib/decimal-input";
 import { Field, FormSection, fieldClass } from "./form-shared";
 
 interface MaterialFormDialogProps {
@@ -61,12 +62,24 @@ function MaterialFormBody({
 }) {
   const isEdit = Boolean(material);
   const [name, setName] = useState(material?.name ?? "");
-  const [sectionW, setSectionW] = useState(String(material?.sectionWidthMm ?? ""));
-  const [sectionH, setSectionH] = useState(String(material?.sectionHeightMm ?? ""));
+  const [sectionW, setSectionW] = useState(
+    material?.sectionWidthMm != null ? formatMeasured(material.sectionWidthMm, 2) : "",
+  );
+  const [sectionH, setSectionH] = useState(
+    material?.sectionHeightMm != null ? formatMeasured(material.sectionHeightMm, 2) : "",
+  );
   const [showErrors, setShowErrors] = useState(false);
 
-  const wMm = Number(sectionW) || 0;
-  const hMm = Number(sectionH) || 0;
+  const widthDraft = parseDecimalText(sectionW, 2);
+  const heightDraft = parseDecimalText(sectionH, 2);
+  const wMm =
+    widthDraft.complete && widthDraft.error == null && widthDraft.value != null && widthDraft.value > 0
+      ? widthDraft.value
+      : 0;
+  const hMm =
+    heightDraft.complete && heightDraft.error == null && heightDraft.value != null && heightDraft.value > 0
+      ? heightDraft.value
+      : 0;
   const canSubmit = name.trim().length > 0 && wMm > 0 && hMm > 0 && !pending;
 
   const handleSubmit = async () => {
@@ -111,7 +124,7 @@ function MaterialFormBody({
               id="mat-sw"
               label="Сечение — ширина, мм"
               required
-              invalid={showErrors && !(wMm > 0)}
+              invalid={(showErrors && !(wMm > 0)) || widthDraft.error != null}
             >
               <Input
                 id="mat-sw"
@@ -119,14 +132,18 @@ function MaterialFormBody({
                 inputMode="decimal"
                 placeholder="40"
                 value={sectionW}
-                onChange={(e) => setSectionW(e.target.value)}
+                aria-invalid={widthDraft.error != null || undefined}
+                onChange={(e) => setSectionW(parseDecimalText(e.target.value, 2).text)}
               />
+              {widthDraft.error === "precision" ? (
+                <p className="text-destructive text-xs">{precisionMessage(2)}</p>
+              ) : null}
             </Field>
             <Field
               id="mat-sh"
               label="Сечение — высота, мм"
               required
-              invalid={showErrors && !(hMm > 0)}
+              invalid={(showErrors && !(hMm > 0)) || heightDraft.error != null}
             >
               <Input
                 id="mat-sh"
@@ -134,8 +151,12 @@ function MaterialFormBody({
                 inputMode="decimal"
                 placeholder="20"
                 value={sectionH}
-                onChange={(e) => setSectionH(e.target.value)}
+                aria-invalid={heightDraft.error != null || undefined}
+                onChange={(e) => setSectionH(parseDecimalText(e.target.value, 2).text)}
               />
+              {heightDraft.error === "precision" ? (
+                <p className="text-destructive text-xs">{precisionMessage(2)}</p>
+              ) : null}
             </Field>
           </div>
         </FormSection>

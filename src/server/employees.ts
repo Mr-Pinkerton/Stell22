@@ -7,6 +7,7 @@ import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
 import { pinErrorMessage, validateActivePin } from "@/lib/employee-pin";
 import type { Employee } from "@/types/domain";
+import { exactMoneyString } from "@/lib/decimal-input";
 
 // Значения формы сотрудника (приходят из клиентского диалога).
 export interface EmployeeFormValues {
@@ -89,17 +90,22 @@ export async function getEmployees(): Promise<Employee[]> {
   return rows.map(serializeEmployee);
 }
 
+function moneyOrNull(value: number | null): string | null {
+  if (value == null) return null;
+  return exactMoneyString(value);
+}
+
 function valuesToData(v: EmployeeFormValues) {
   return {
     fullName: v.fullName.trim(),
     birthDate: v.birthDate ? new Date(v.birthDate) : null,
     pin: v.pin.trim(),
-    hourlyRate: v.hourlyRate,
-    rateTorcovkaSort1: v.rateTorcovkaSort1,
-    rateTorcovkaSort2: v.rateTorcovkaSort2,
-    ratePrisadkaTorcev: v.ratePrisadka,
-    ratePrisadkaPloskt: v.ratePrisadka,
-    rateUpakovka: v.rateUpakovka,
+    hourlyRate: moneyOrNull(v.hourlyRate),
+    rateTorcovkaSort1: moneyOrNull(v.rateTorcovkaSort1),
+    rateTorcovkaSort2: moneyOrNull(v.rateTorcovkaSort2),
+    ratePrisadkaTorcev: moneyOrNull(v.ratePrisadka),
+    ratePrisadkaPloskt: moneyOrNull(v.ratePrisadka),
+    rateUpakovka: moneyOrNull(v.rateUpakovka),
   };
 }
 

@@ -25,6 +25,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import type { Detail, Material, RailType, Sort } from "@/types/domain";
 import type { DetailFormValues } from "@/server/nomenclature";
+import { formatMeasured, parseDecimalText, precisionMessage } from "@/lib/decimal-input";
 import {
   Field,
   FormSection,
@@ -84,7 +85,7 @@ function DetailFormBody({
     detail?.detailNumber != null ? String(detail.detailNumber) : "",
   );
   const [length, setLength] = useState(() =>
-    detail?.lengthM != null ? String(detail.lengthM).replace(".", ",") : "",
+    detail?.lengthM != null ? formatMeasured(detail.lengthM, 4) : "",
   );
   const [detailType, setDetailType] = useState<RailType>(detail?.detailType ?? "POLKA");
   const [sort, setSort] = useState<Sort>(detail?.sort ?? "SORT1");
@@ -92,7 +93,11 @@ function DetailFormBody({
   const [prisadkaPlosk, setPrisadkaPlosk] = useState(detail?.prisadkaPloskost ?? false);
   const [showErrors, setShowErrors] = useState(false);
 
-  const lengthNum = length ? Number(length.replace(",", ".")) : null;
+  const lengthDraft = parseDecimalText(length, 4);
+  const lengthNum =
+    lengthDraft.complete && lengthDraft.error == null && lengthDraft.value != null && lengthDraft.value > 0
+      ? lengthDraft.value
+      : null;
   const numberNum = number ? parseInt(number, 10) : null;
   const canSubmit =
     name.trim().length > 0 &&
@@ -201,17 +206,18 @@ function DetailFormBody({
                     id="det-length"
                     label="Длина детали"
                     required
-                    invalid={showErrors && !(lengthNum != null && lengthNum > 0)}
+                    invalid={(showErrors && lengthNum == null) || lengthDraft.error != null}
                   >
                     <div className="relative">
                       <Input
                         id="det-length"
                         type="text"
                         inputMode="decimal"
+                        aria-invalid={lengthDraft.error != null || undefined}
                         className={cn(narrowFieldClass, "pr-8 tabular-nums")}
                         placeholder="0,72"
                         value={length}
-                        onChange={(e) => setLength(e.target.value.replace(/[^\d,]/g, ""))}
+                        onChange={(e) => setLength(parseDecimalText(e.target.value, 4).text)}
                       />
                       <span
                         className="text-muted-foreground pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-sm"
@@ -220,6 +226,9 @@ function DetailFormBody({
                         м
                       </span>
                     </div>
+                    {lengthDraft.error === "precision" ? (
+                      <p className="text-destructive text-xs">{precisionMessage(4)}</p>
+                    ) : null}
                   </Field>
                   <Field id="det-type" label="Тип" required>
                     <Select

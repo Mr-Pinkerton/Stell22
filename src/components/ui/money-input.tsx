@@ -1,8 +1,9 @@
 "use client";
 
-import * as React from "react";
+import { useState, type ComponentProps } from "react";
 
 import { Input } from "@/components/ui/input";
+import { precisionMessage, type DecimalDraft } from "@/lib/decimal-input";
 import { formatGroupedDecimal, formatGroupedInteger, parseGroupedMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -14,20 +15,29 @@ function suffixPadding(suffix: string): string {
 }
 
 function formatMoneyFieldValue(value: number | null | undefined, decimals: number): string {
-  if (value == null || value === 0) return "";
+  if (value == null) return "";
   return decimals > 0 ? formatGroupedDecimal(value, decimals) : formatGroupedInteger(value);
 }
 
+function draftMatchesExternal(draft: DecimalDraft, external: number | null): boolean {
+  if (draft.empty) return external == null;
+  return draft.complete && draft.error == null && draft.value === external;
+}
+
 type MoneyInputProps = Omit<
-  React.ComponentProps<typeof Input>,
+  ComponentProps<typeof Input>,
   "value" | "onChange" | "defaultValue" | "type" | "inputMode"
 > & {
   defaultValue?: number | null;
   value?: number | null;
   onValueChange?: (value: number | null) => void;
+  onDraftChange?: (draft: DecimalDraft) => void;
   /** Суффикс справа: ₽, ₽/ч, ₽/м³ и т.п. */
   suffix?: string;
-  /** Знаков после запятой (копейки). 0 (по умолчанию) — целые рубли, как раньше. */
+  /**
+   * Знаков после запятой. По умолчанию 2: форма показывает точные копейки.
+   * 0 — только целые. Лишние знаки не обрезаются и не округляются.
+   */
   decimals?: number;
 };
 
@@ -35,35 +45,48 @@ function MoneyInput({
   defaultValue = null,
   value: valueProp,
   onValueChange,
+  onDraftChange,
   suffix = "₽",
-  decimals = 0,
+  decimals = 2,
   className,
   placeholder,
+  onBlur,
   ...props
 }: MoneyInputProps) {
   const controlled = valueProp !== undefined;
-  const [internal, setInternal] = React.useState<number | null>(defaultValue ?? null);
+  const [internal, setInternal] = useState<number | null>(defaultValue ?? null);
   const numeric = controlled ? (valueProp ?? null) : internal;
+  const externalValue = controlled ? numeric : (defaultValue ?? null);
 
-  const [text, setText] = React.useState(() =>
+  const [text, setText] = useState(() =>
     formatMoneyFieldValue(controlled ? (valueProp ?? null) : defaultValue, decimals),
   );
+  const [draftError, setDraftError] = useState<DecimalDraft["error"]>(null);
+  const [prevExternal, setPrevExternal] = useState(externalValue);
 
-  // Источник истины: для controlled — value, для uncontrolled — defaultValue.
-  // При его внешней смене переформатируем отображение (без set-state-in-effect).
-  const externalValue = controlled ? numeric : (defaultValue ?? null);
-  const [prevExternal, setPrevExternal] = React.useState(externalValue);
   if (externalValue !== prevExternal) {
     setPrevExternal(externalValue);
-    setText(formatMoneyFieldValue(externalValue, decimals));
+    const current = parseGroupedMoney(text, decimals);
+    if (!draftMatchesExternal(current, externalValue)) {
+      setText(formatMoneyFieldValue(externalValue, decimals));
+      setDraftError(null);
+    }
     if (!controlled) setInternal(externalValue);
   }
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { text: display, value: parsed } = parseGroupedMoney(e.target.value, decimals);
-    setText(display);
-    if (!controlled) setInternal(parsed);
-    onValueChange?.(parsed);
+  const publish = (draft: DecimalDraft) => {
+    setText(draft.text);
+    setDraftError(draft.error);
+    onDraftChange?.(draft);
+    if (draft.empty) {
+      if (!controlled) setInternal(null);
+      onValueChange?.(null);
+      return;
+    }
+    if (draft.complete && draft.error == null) {
+      if (!controlled) setInternal(draft.value);
+      onValueChange?.(draft.value);
+    }
   };
 
   return (
@@ -74,7 +97,15 @@ function MoneyInput({
         inputMode={decimals > 0 ? "decimal" : "numeric"}
         className={cn(suffixPadding(suffix), className)}
         value={text}
-        onChange={handleChange}
+        aria-invalid={draftError ? true : undefined}
+        onChange={(event) => publish(parseGroupedMoney(event.target.value, decimals))}
+        onBlur={(event) => {
+          const draft = parseGroupedMoney(text, decimals);
+          if (draft.complete && draft.value != null && draft.error == null) {
+            setText(formatMoneyFieldValue(draft.value, decimals));
+          }
+          onBlur?.(event);
+        }}
         placeholder={placeholder ?? suffix}
       />
       <span
@@ -83,6 +114,9 @@ function MoneyInput({
       >
         {suffix}
       </span>
+      {draftError === "precision" ? (
+        <p className="text-destructive mt-1 text-xs">{precisionMessage(decimals)}</p>
+      ) : null}
     </div>
   );
 }

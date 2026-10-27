@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
+import { exactMoneyString } from "@/lib/decimal-input";
 import { throwFriendlyAccountNumberConflict } from "@/lib/prisma-unique-conflict";
 import { requireAdmin } from "@/server/session";
 import { importStatementInternal } from "@/server/internal/statement-import";
@@ -335,9 +336,9 @@ export async function createAccount(values: AccountFormValues): Promise<FinanceA
     created = await prisma.account.create({
       data: {
         name,
-        openingBalance: values.openingBalance.toFixed(2),
+        openingBalance: exactMoneyString(values.openingBalance),
         balanceAsOf: values.openingDate ? dayToDate(values.openingDate) : null,
-        balance: values.openingBalance.toFixed(2),
+        balance: exactMoneyString(values.openingBalance),
       },
     });
   } catch (err) {
@@ -367,7 +368,7 @@ export async function updateAccount(
       where: { id },
       data: {
         name,
-        openingBalance: values.openingBalance.toFixed(2),
+        openingBalance: exactMoneyString(values.openingBalance),
         balanceAsOf: values.openingDate ? dayToDate(values.openingDate) : null,
         // Ручная смена точки отсчёта снимает бейдж расхождения по прошлой выписке.
         balanceMismatch: false,
@@ -879,6 +880,7 @@ async function loadCashFlow(id: string): Promise<FinanceCashFlowRow> {
 export async function createCashFlow(values: CashflowFormValues): Promise<FinanceCashFlowRow> {
   await requireAdmin();
   if (!(values.amount > 0)) throw new Error("Сумма должна быть положительной");
+  const amount = exactMoneyString(values.amount);
   if (!values.accountName) throw new Error("Выберите счёт");
 
   const [account, counterparty, article] = await Promise.all([
@@ -915,7 +917,7 @@ export async function createCashFlow(values: CashflowFormValues): Promise<Financ
     await lockAccountsThenDealsThenBatches(tx, [account.id], dealId ? [dealId] : []);
     const created = await tx.cashFlow.create({
       data: {
-        amount: values.amount,
+        amount,
         flowType: values.flowType,
         accountId: account.id,
         counterpartyId: counterparty?.id ?? null,
@@ -950,6 +952,7 @@ export async function createCashFlow(values: CashflowFormValues): Promise<Financ
 export async function createTransfer(values: TransferFormValues): Promise<FinanceCashFlowRow[]> {
   await requireAdmin();
   if (!(values.amount > 0)) throw new Error("Сумма должна быть положительной");
+  const amount = exactMoneyString(values.amount);
   if (!values.fromAccountId || !values.toAccountId) throw new Error("Выберите оба счёта");
   if (values.fromAccountId === values.toAccountId) {
     throw new Error("Счёт списания и зачисления должны отличаться");
@@ -965,7 +968,7 @@ export async function createTransfer(values: TransferFormValues): Promise<Financ
   const date = new Date(values.date);
   const transferId = randomUUID();
   const base = {
-    amount: values.amount,
+    amount,
     date,
     isTransfer: true,
     isAutoAssigned: true,

@@ -1,5 +1,7 @@
 // Форматирование денег, измерений и дат. Часовой пояс проекта — UTC+3.
 
+import { parseDecimalText, type DecimalDraft } from "@/lib/decimal-input";
+
 export const TIME_ZONE = "Europe/Moscow"; // UTC+3 без перехода на летнее время
 
 const moneyFormatter = new Intl.NumberFormat("ru-RU", {
@@ -21,7 +23,11 @@ const groupedIntegerFormatter = new Intl.NumberFormat("ru-RU", {
   useGrouping: true,
 });
 
-/** Сумма в ₽, напр. "1 234 ₽" (без копеек, пробел — разделитель тысяч). */
+/**
+ * Сумма в обычном интерфейсе: округление только на экране, до целого рубля.
+ * Форма ввода показывает точное сохранённое число и принимает до 2 знаков.
+ * Этот формат не использовать как значение поля редактирования.
+ */
 export function formatMoney(value: number): string {
   return moneyFormatter.format(value);
 }
@@ -71,8 +77,8 @@ export function parseGroupedInteger(raw: string): number | null {
 
 /**
  * Отображаемое значение денежного поля с копейками (для controlled MoneyInput).
- * 0/пусто → "", иначе целая часть с группировкой + до `decimals` знаков без
- * хвостовых нулей: 0.36→"0,36", 35→"35", 1234.5→"1 234,5".
+ * Пусто и ноль различаются: null не рисуется, 0 рисуется как «0».
+ * Хвостовые нули дробной части не добавляются: 0.36→"0,36", 35→"35", 1234.5→"1 234,5".
  */
 export function formatGroupedDecimal(value: number, decimals: number): string {
   return new Intl.NumberFormat("ru-RU", {
@@ -82,37 +88,25 @@ export function formatGroupedDecimal(value: number, decimals: number): string {
   }).format(value);
 }
 
+function groupDecimalText(text: string): string {
+  if (!text || /[^0-9.,]/.test(text)) return text;
+  const sepAt = text.search(/[.,]/);
+  const sep = sepAt === -1 ? "" : text[sepAt]!;
+  const intRaw = sepAt === -1 ? text : text.slice(0, sepAt);
+  const frac = sepAt === -1 ? "" : text.slice(sepAt + 1);
+  if (!/^\d*$/.test(intRaw)) return text;
+  const grouped = intRaw === "" ? "" : formatGroupedInteger(Number(intRaw));
+  return sep ? `${grouped}${sep}${frac}` : grouped;
+}
+
 /**
- * Разбор ввода денег с копейками (до `decimals` знаков). Возвращает и текст для
- * отображения (группировка целой части, сохранение введённого разделителя/нулей
- * во время набора), и числовое значение. Разделитель — запятая или точка.
- * Сохраняет промежуточные состояния набора: "0,", "1 234,5".
+ * Разбор ввода денег. Запятая и точка — один разделитель.
+ * "0," и "0." остаются незавершённым черновиком и не становятся нулём.
+ * Лишние знаки после запятой — ошибка, значение не обрезается.
  */
-export function parseGroupedMoney(
-  raw: string,
-  decimals: number,
-): { text: string; value: number | null } {
-  if (decimals <= 0) {
-    const v = parseGroupedInteger(raw);
-    return { text: v != null ? formatGroupedInteger(v) : "", value: v };
-  }
-
-  const cleaned = raw.replace(/[^\d.,]/g, "");
-  const sepIdx = cleaned.search(/[.,]/);
-  const hasSep = sepIdx !== -1;
-  const intRaw = (hasSep ? cleaned.slice(0, sepIdx) : cleaned).replace(/[.,]/g, "");
-  const fracRaw = hasSep
-    ? cleaned.slice(sepIdx + 1).replace(/[.,]/g, "").slice(0, decimals)
-    : "";
-
-  if (intRaw === "" && !hasSep) return { text: "", value: null };
-
-  const intDigits = intRaw.replace(/^0+(?=\d)/, ""); // убрать ведущие нули, оставив один
-  const intNum = intDigits === "" ? 0 : Number(intDigits);
-  const grouped = groupedIntegerFormatter.format(intNum);
-  const text = hasSep ? `${grouped},${fracRaw}` : grouped;
-  const value = Number(`${intDigits === "" ? "0" : intDigits}.${fracRaw || "0"}`);
-  return { text, value };
+export function parseGroupedMoney(raw: string, decimals: number): DecimalDraft {
+  const draft = parseDecimalText(raw, decimals);
+  return { ...draft, text: groupDecimalText(draft.text) };
 }
 
 /** Длина в метрах, напр. "2,4 м". */

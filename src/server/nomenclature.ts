@@ -13,6 +13,7 @@ import { COST_FLOW_QTY_ONLY_WRITER } from "@/server/internal/cost-flow-pools";
 import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import { lockDetails, lockDetailStocks } from "@/server/internal/inventory-integrity";
 import { DETAIL_NONZERO_STOCK_DELETE_BLOCKED } from "@/lib/destructive-delete-guards";
+import { assertMaxFractionDigits, exactMoneyString } from "@/lib/decimal-input";
 import {
   assertUniqueActiveSkus,
   throwFriendlyActiveSkuConflict,
@@ -171,6 +172,7 @@ export async function createDetail(values: DetailFormValues): Promise<Detail> {
   if (!values.name.trim()) throw new Error("Название детали обязательно");
   if (!values.materialId) throw new Error("Укажите материал детали");
   if (!values.lengthM || values.lengthM <= 0) throw new Error("Укажите длину детали");
+  assertMaxFractionDigits(values.lengthM, 4, "Длина детали — не больше 4 знаков после запятой");
   assertDetailNumberValid(values);
 
   const created = await prisma.detail.create({ data: detailData(values) });
@@ -184,6 +186,7 @@ export async function updateDetail(id: string, values: DetailFormValues): Promis
   if (!values.name.trim()) throw new Error("Название детали обязательно");
   if (!values.materialId) throw new Error("Укажите материал детали");
   if (!values.lengthM || values.lengthM <= 0) throw new Error("Укажите длину детали");
+  assertMaxFractionDigits(values.lengthM, 4, "Длина детали — не больше 4 знаков после запятой");
   assertDetailNumberValid(values);
 
   const before = await prisma.detail.findUnique({ where: { id } });
@@ -278,7 +281,7 @@ export async function createNomenclatureItem(
   if (!values.name.trim()) throw new Error("Наименование обязательно");
 
   const created = await prisma.nomenclatureItem.create({
-    data: { name: values.name.trim(), unitPrice: values.unitPrice ?? 0, type: values.type },
+    data: { name: values.name.trim(), unitPrice: exactMoneyString(values.unitPrice ?? 0), type: values.type },
   });
   await writeChangeLog({
     entity: "NomenclatureItem",
@@ -301,7 +304,7 @@ export async function updateNomenclatureItem(
 
   const updated = await prisma.nomenclatureItem.update({
     where: { id },
-    data: { name: values.name.trim(), unitPrice: values.unitPrice ?? 0 },
+    data: { name: values.name.trim(), unitPrice: exactMoneyString(values.unitPrice ?? 0) },
   });
   await writeChangeLog({
     entity: "NomenclatureItem",

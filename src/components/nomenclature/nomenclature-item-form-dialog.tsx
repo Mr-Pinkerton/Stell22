@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { MoneyInput } from "@/components/ui/money-input";
+import { decimalDraftBlocksCommit } from "@/lib/decimal-input";
 import type { NomenclatureItem, NomenclatureType } from "@/types/domain";
 import type { NomenclatureItemFormValues } from "@/server/nomenclature";
 import { Field, FormSection, fieldClass, narrowFieldClass } from "./form-shared";
@@ -88,8 +89,9 @@ function NomenclatureItemFormBody({
   const [name, setName] = useState(item?.name ?? "");
   const [price, setPrice] = useState<number | null>(item?.unitPrice ?? null);
   const [showErrors, setShowErrors] = useState(false);
+  const [priceBlocked, setPriceBlocked] = useState(false);
 
-  const canSubmit = name.trim().length > 0 && !pending;
+  const canSubmit = name.trim().length > 0 && !priceBlocked && !pending;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -141,6 +143,7 @@ function NomenclatureItemFormBody({
                     decimals={2}
                     value={price}
                     onValueChange={setPrice}
+                    onDraftChange={(draft) => setPriceBlocked(decimalDraftBlocksCommit(draft))}
                   />
                 </Field>
               </FormSection>
