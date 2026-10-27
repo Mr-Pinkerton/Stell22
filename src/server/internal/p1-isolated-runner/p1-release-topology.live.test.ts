@@ -270,7 +270,7 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("isolated P1-only release topolo
         expect(
           assessWriterDeployPrerequisite({ history: after.history, schema: after.schema }),
         ).toEqual({ allow: true, code: "P1_APPLIED" });
-        expect(writerVerdict(owned.containerName, owned.databaseName)).toBe("P1_APPLIED");
+        expect(writerVerdict(owned.containerName, owned.databaseName)).toBe("P1_BLOCKED");
 
         const appRoot = path.join(runtime, "app");
         extractHistorical(appRoot);
@@ -347,6 +347,9 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("isolated P1-only release topolo
         const sealedSchema = path.join(runtime, "sealed", "prisma", "schema.prisma");
         const restoredDeploy = deployPrisma(sealedSchema, restoredUrl);
         expect(restoredDeploy.status, restoredDeploy.detail).toBe(0);
+        // Historical sealed schema stops at 46 migrations. The guard proof needs the
+        // production inventory row; the applied 47-migration database is tested separately.
+        recordAdminCorrectionsChecksum(restored.containerName, restored.databaseName);
         expect(writerVerdict(restored.containerName, restored.databaseName)).toBe("P1_APPLIED");
         proveWriterRefusals(restored.containerName, restored.databaseName, queryScript, restoredUrl);
 
@@ -651,6 +654,15 @@ function oneRow(value: unknown[] | undefined, label: string): Record<string, unk
 function recordOf(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("row is missing");
   return value as Record<string, unknown>;
+}
+
+function recordAdminCorrectionsChecksum(containerName: string, databaseName: string): void {
+  psql(
+    containerName,
+    databaseName,
+    `INSERT INTO public."_prisma_migrations" (id, checksum, finished_at, migration_name, started_at, applied_steps_count)
+     VALUES ('p1-writer-gate-47', 'd8d83b48d536bd42cb9f394958dc981003d43da5b5904bcecadd3899b179f834', NOW(), '20261025120000_admin_corrections_batch_and_cancel', NOW(), 1);`,
+  );
 }
 
 function writerVerdict(containerName: string, databaseName: string): string {
