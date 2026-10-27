@@ -21,29 +21,38 @@
 
 ## Обновление до новой версии
 
-Предпочтительный путь — ручной workflow **Production Deploy** в GitHub Actions
-(push в `main` сам по себе прод не выкатывает). См. `docs/deployment.md`.
+Этот файл не разрешает deployment. Push в `main` production не обновляет.
+Текущий checkout production — `c5771f8eca1c21d6111f3705cad94a6a73f37bfe`.
+GitHub `main` `abfcf4d749349097b282d15ab9a37433a63e5243` на production не развёрнут.
 
-Запасной путь по SSH (бэкап → pull → сборка → health-check → подсказка отката):
+Приложение стартует через `docker-entrypoint-app-only.sh`. Обычный старт
+не выполняет `prisma migrate deploy`. Миграцию запускает только отдельный
+проверенный release operator, и только после отдельного решения Owner
+на точный SHA.
 
-```bash
-cd /root/Stell22
-bash scripts/preflight-prod.sh
-sh scripts/deploy.sh
-```
+Уже существующие ручные workflow, каждый со своим ограничением:
 
-Вручную то же самое:
+- `Production Deploy` (`.github/workflows/deploy-production.yml`) — только
+  `workflow_dispatch`. Пустая или чужая фраза останавливает его до SSH.
+- `Production role split release` (`.github/workflows/release-role-split.yml`) —
+  только `workflow_dispatch`, фраза Owner и точный SHA из 40 символов.
+- `ADMIN-CORRECTIONS-01 release` (`.github/workflows/release-admin-corrections.yml`) —
+  только `workflow_dispatch`, своя фраза и точный SHA. Принятый запуск
+  `40367558083` уже завершён. Этот файл не разрешает запустить его снова.
 
-```bash
-cd /root/Stell22
-sh scripts/backup-db.sh                                   # бэкап ПЕРЕД обновлением
-git pull
-docker compose -f docker-compose.prod.yml up -d --build   # миграции применит entrypoint
-docker compose -f docker-compose.prod.yml logs -f app     # смотрим старт
-```
+Не выполнять без отдельной авторизации Owner на точный SHA:
 
-> Код вшивается в образ при сборке — после `git pull` ОБЯЗАТЕЛЬНА пересборка
-> (`--build`). Просто `git pull` без пересборки прод не обновит.
+- `git pull` на сервере как обновление приложения;
+- `docker compose -f docker-compose.prod.yml up -d --build`;
+- миграцию при старте application entrypoint;
+- автоматический откат приложения после уже применённой миграции.
+
+`scripts/restore-db.sh` не является способом отката схемы. Откат приложения
+не откатывает схему. Если миграция уже применена, а новый процесс не
+поднялся, восстановление идёт вперёд (forward recovery), а не возвратом
+старого образа поверх новой схемы.
+
+Новой универсальной команды deployment здесь нет.
 
 ## Бэкапы БД
 
@@ -68,7 +77,9 @@ Cron-эндпойнт `/api/cron/fetch-statements` раз в час забира
 письма, распаковывает вложения и импортирует их той же логикой, что и ручная
 загрузка (дедупликация, якорь остатка, карантин новых счетов).
 
-Настройка (в `/root/Stell22/.env`, затем пересборка — см. «Обновление»):
+Настройка живёт в `/root/Stell22/.env`. Смена этих значений сама по себе
+не разрешает пересборку образа. Новый образ по-прежнему требует решения
+Owner на точный SHA (см. «Обновление»).
 
 ```env
 CRON_SECRET=<openssl rand -hex 24>
@@ -98,8 +109,8 @@ Host-cron (раз в час). Через Caddy наружу; `-m 300` — тай
 |---|---|
 | Статус | `docker compose -f docker-compose.prod.yml ps` |
 | Логи приложения | `docker compose -f docker-compose.prod.yml logs -f app` |
-| Перезапуск app | `docker compose -f docker-compose.prod.yml restart app` |
-| Остановить всё | `docker compose -f docker-compose.prod.yml down` |
+| Перезапуск app | `docker compose -f docker-compose.prod.yml restart app` — это не deployment и не миграция |
+| Остановить всё | `docker compose -f docker-compose.prod.yml down` — не команда обновления |
 | Health-check | `curl -s https://stell22.ru/api/health` → `{"status":"ok",...}` |
 
 ## Важные ограничения
