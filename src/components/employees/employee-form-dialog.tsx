@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { MoneyInput } from "@/components/ui/money-input";
+import { decimalDraftBlocksCommit } from "@/lib/decimal-input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { isValidPin } from "@/lib/employee-pin";
@@ -145,6 +146,13 @@ function EmployeeFormBody({
   );
   const [rateUp, setRateUp] = useState<number | null>(employee?.rateUpakovka ?? null);
   const [showErrors, setShowErrors] = useState(false);
+  const [rateBlocked, setRateBlocked] = useState({
+    hourly: false,
+    t1: false,
+    t2: false,
+    prisadka: false,
+    up: false,
+  });
 
   // PIN — единственный идентификатор при входе в терминал, поэтому у активного
   // сотрудника он обязателен и строго 4 цифры. Для архивного не требуем: он не
@@ -152,7 +160,11 @@ function EmployeeFormBody({
   // источник истины и проверка уникальности на сервере.
   const pinRequired = !employee || employee.status === "ACTIVE";
   const pinValid = isValidPin(pin);
-  const canSubmit = fullName.trim().length > 0 && (!pinRequired || pinValid) && !pending;
+  const canSubmit =
+    fullName.trim().length > 0 &&
+    (!pinRequired || pinValid) &&
+    !Object.values(rateBlocked).some(Boolean) &&
+    !pending;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -261,6 +273,9 @@ function EmployeeFormBody({
                   decimals={2}
                   value={hourlyRate}
                   onValueChange={setHourlyRate}
+                  onDraftChange={(draft) =>
+                    setRateBlocked((prev) => ({ ...prev, hourly: decimalDraftBlocksCommit(draft) }))
+                  }
                 />
               </Field>
             </div>
@@ -277,6 +292,9 @@ function EmployeeFormBody({
                   decimals={2}
                   value={rateT1}
                   onValueChange={setRateT1}
+                  onDraftChange={(draft) =>
+                    setRateBlocked((prev) => ({ ...prev, t1: decimalDraftBlocksCommit(draft) }))
+                  }
                 />
               </Field>
               <Field id="emp-t2" label="Торцовка 2 сорт">
@@ -287,6 +305,9 @@ function EmployeeFormBody({
                   decimals={2}
                   value={rateT2}
                   onValueChange={setRateT2}
+                  onDraftChange={(draft) =>
+                    setRateBlocked((prev) => ({ ...prev, t2: decimalDraftBlocksCommit(draft) }))
+                  }
                 />
               </Field>
               <Field id="emp-prisadka" label="Присадка">
@@ -297,6 +318,9 @@ function EmployeeFormBody({
                   decimals={2}
                   value={ratePrisadka}
                   onValueChange={setRatePrisadka}
+                  onDraftChange={(draft) =>
+                    setRateBlocked((prev) => ({ ...prev, prisadka: decimalDraftBlocksCommit(draft) }))
+                  }
                 />
               </Field>
               <Field id="emp-up" label="Упаковка">
@@ -307,6 +331,9 @@ function EmployeeFormBody({
                   decimals={2}
                   value={rateUp}
                   onValueChange={setRateUp}
+                  onDraftChange={(draft) =>
+                    setRateBlocked((prev) => ({ ...prev, up: decimalDraftBlocksCommit(draft) }))
+                  }
                 />
               </Field>
             </div>

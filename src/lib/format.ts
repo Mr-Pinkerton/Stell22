@@ -23,7 +23,11 @@ const groupedIntegerFormatter = new Intl.NumberFormat("ru-RU", {
   useGrouping: true,
 });
 
-/** Сумма в ₽, напр. "1 234 ₽" (без копеек, пробел — разделитель тысяч). */
+/**
+ * Сумма в обычном интерфейсе: округление только на экране, до целого рубля.
+ * Форма ввода показывает точное сохранённое число и принимает до 2 знаков.
+ * Этот формат не использовать как значение поля редактирования.
+ */
 export function formatMoney(value: number): string {
   return moneyFormatter.format(value);
 }

@@ -14,6 +14,7 @@ import {
 } from "@/components/finance/finance-form-shared";
 import { Input } from "@/components/ui/input";
 import { MoneyInput } from "@/components/ui/money-input";
+import { decimalDraftBlocksCommit } from "@/lib/decimal-input";
 import type { AccountFormValues } from "@/server/finance";
 import type { FinanceAccount } from "@/mocks/finance-fixtures";
 
@@ -38,16 +39,18 @@ export function AccountFormDialog({
   const [openingBalance, setOpeningBalance] = useState(0);
   const [openingDate, setOpeningDate] = useState("");
   const [showErrors, setShowErrors] = useState(false);
+  const [balanceBlocked, setBalanceBlocked] = useState(false);
 
   if (useJustOpened(open)) {
     setName(account?.name ?? "");
     setOpeningBalance(account?.openingBalance ?? account?.balance ?? 0);
     setOpeningDate(isoToDisplayDate(account?.openingDate) || todayDisplay());
+    setBalanceBlocked(false);
     setShowErrors(false);
   }
 
   const isoDate = parseDisplayDate(openingDate);
-  const canSubmit = name.trim().length > 0 && Boolean(isoDate);
+  const canSubmit = name.trim().length > 0 && Boolean(isoDate) && !balanceBlocked;
 
   return (
     <FormDialog
@@ -83,8 +86,10 @@ export function AccountFormDialog({
         <Field id="acc-opening" label="Остаток на дату, ₽" required>
           <MoneyInput
             id="acc-opening"
+            decimals={2}
             value={openingBalance}
             onValueChange={(v) => setOpeningBalance(v ?? 0)}
+            onDraftChange={(draft) => setBalanceBlocked(decimalDraftBlocksCommit(draft))}
             className={narrowFieldClass}
             placeholder="0"
           />

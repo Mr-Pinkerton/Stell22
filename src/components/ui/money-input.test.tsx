@@ -115,6 +115,12 @@ describe("MoneyInput", () => {
     expect(screen.getByLabelText("значение").textContent).toBe("null");
   });
 
+  it("shows the exact saved kopecks when the form opens, not a rounded ruble", () => {
+    render(<MoneyInput aria-label="сумма" value={1999.5} onValueChange={() => {}} />);
+    const input = screen.getByLabelText("сумма");
+    expect(plain((input as HTMLInputElement).value)).toBe("1999,5");
+  });
+
   it("does not turn a fractional integer-money draft into a stripped integer", async () => {
     const user = userEvent.setup();
     render(<Controlled decimals={0} />);

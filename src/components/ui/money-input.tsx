@@ -34,7 +34,10 @@ type MoneyInputProps = Omit<
   onDraftChange?: (draft: DecimalDraft) => void;
   /** Суффикс справа: ₽, ₽/ч, ₽/м³ и т.п. */
   suffix?: string;
-  /** Знаков после запятой. 0 — только целые. Лишние знаки не обрезаются. */
+  /**
+   * Знаков после запятой. По умолчанию 2: форма показывает точные копейки.
+   * 0 — только целые. Лишние знаки не обрезаются и не округляются.
+   */
   decimals?: number;
 };
 
@@ -44,7 +47,7 @@ function MoneyInput({
   onValueChange,
   onDraftChange,
   suffix = "₽",
-  decimals = 0,
+  decimals = 2,
   className,
   placeholder,
   onBlur,

@@ -13,7 +13,7 @@ import { COST_FLOW_QTY_ONLY_WRITER } from "@/server/internal/cost-flow-pools";
 import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import { lockDetails, lockDetailStocks } from "@/server/internal/inventory-integrity";
 import { DETAIL_NONZERO_STOCK_DELETE_BLOCKED } from "@/lib/destructive-delete-guards";
-import { assertMaxFractionDigits } from "@/lib/decimal-input";
+import { assertMaxFractionDigits, exactMoneyString } from "@/lib/decimal-input";
 import {
   assertUniqueActiveSkus,
   throwFriendlyActiveSkuConflict,
@@ -281,7 +281,7 @@ export async function createNomenclatureItem(
   if (!values.name.trim()) throw new Error("Наименование обязательно");
 
   const created = await prisma.nomenclatureItem.create({
-    data: { name: values.name.trim(), unitPrice: values.unitPrice ?? 0, type: values.type },
+    data: { name: values.name.trim(), unitPrice: exactMoneyString(values.unitPrice ?? 0), type: values.type },
   });
   await writeChangeLog({
     entity: "NomenclatureItem",
@@ -304,7 +304,7 @@ export async function updateNomenclatureItem(
 
   const updated = await prisma.nomenclatureItem.update({
     where: { id },
-    data: { name: values.name.trim(), unitPrice: values.unitPrice ?? 0 },
+    data: { name: values.name.trim(), unitPrice: exactMoneyString(values.unitPrice ?? 0) },
   });
   await writeChangeLog({
     entity: "NomenclatureItem",

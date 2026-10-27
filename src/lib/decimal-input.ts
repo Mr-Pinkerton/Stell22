@@ -82,6 +82,15 @@ export function assertMaxFractionDigits(value: number, scale: number, message: s
   if (!dec.isFinite() || dec.decimalPlaces() > scale) throw new Error(message);
 }
 
+/**
+ * Money at scale 2 for storage. Pads to two places.
+ * A third decimal digit throws. This does not round to a whole ruble.
+ */
+export function exactMoneyString(value: number): string {
+  assertMaxFractionDigits(value, 2, precisionMessage(2));
+  return new Decimal(value).toFixed(2);
+}
+
 /** Positive integer draft. A comma or dot is a fraction error, not a stripped digit. */
 export function parsePositiveIntDraft(raw: string): IntegerDraft {
   const text = raw.replace(WHITESPACE, "");
@@ -103,6 +112,11 @@ export function parsePositiveIntDraft(raw: string): IntegerDraft {
     empty: false,
     error: null,
   };
+}
+
+/** Incomplete text or an error must not be committed over a saved number. */
+export function decimalDraftBlocksCommit(draft: DecimalDraft): boolean {
+  return draft.error != null || (!draft.empty && !draft.complete);
 }
 
 export function precisionMessage(scale: number): string {

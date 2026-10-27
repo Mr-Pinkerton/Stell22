@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertMaxFractionDigits,
+  exactMoneyString,
   formatMeasured,
   parseDecimalText,
   parsePositiveIntDraft,
@@ -47,6 +48,20 @@ describe("parseDecimalText", () => {
     expect(() => assertMaxFractionDigits(0.72, 4, "too fine")).not.toThrow();
     expect(() => assertMaxFractionDigits(40.55, 2, "section")).not.toThrow();
     expect(() => assertMaxFractionDigits(40.555, 2, "section")).toThrow("section");
+  });
+});
+
+describe("exactMoneyString", () => {
+  it("keeps kopecks and pads to two places without rounding to a ruble", () => {
+    expect(exactMoneyString(0.35)).toBe("0.35");
+    expect(exactMoneyString(10.5)).toBe("10.50");
+    expect(exactMoneyString(1999.5)).toBe("1999.50");
+    expect(exactMoneyString(0)).toBe("0.00");
+  });
+
+  it("rejects a third decimal digit instead of rounding it", () => {
+    expect(() => exactMoneyString(10.556)).toThrow(/2 знаков/);
+    expect(() => exactMoneyString(0.369)).toThrow(/2 знаков/);
   });
 });
 

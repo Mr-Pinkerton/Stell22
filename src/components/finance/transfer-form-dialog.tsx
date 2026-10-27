@@ -17,6 +17,7 @@ import {
   narrowFieldClass,
 } from "@/components/finance/finance-form-shared";
 import { MoneyInput } from "@/components/ui/money-input";
+import { decimalDraftBlocksCommit } from "@/lib/decimal-input";
 import {
   Select,
   SelectContent,
@@ -96,10 +97,12 @@ export function TransferFormDialog({
   const [toId, setToId] = useState("");
   const [description, setDescription] = useState("");
   const [showErrors, setShowErrors] = useState(false);
+  const [amountBlocked, setAmountBlocked] = useState(false);
 
   if (useJustOpened(open)) {
     setDateText(isoToDisplayDate(todayIso()));
     setAmount(null);
+    setAmountBlocked(false);
     setFromId(accounts[0]?.id ?? "");
     setToId(accounts[1]?.id ?? "");
     setDescription("");
@@ -110,6 +113,7 @@ export function TransferFormDialog({
     parseDisplayDate(dateText) != null &&
     amount != null &&
     amount > 0 &&
+    !amountBlocked &&
     fromId.length > 0 &&
     toId.length > 0 &&
     fromId !== toId;
@@ -157,8 +161,10 @@ export function TransferFormDialog({
         >
           <MoneyInput
             id="tr-amount"
+            decimals={2}
             value={amount}
             onValueChange={setAmount}
+            onDraftChange={(draft) => setAmountBlocked(decimalDraftBlocksCommit(draft))}
             className={amountFieldClass}
           />
         </Field>

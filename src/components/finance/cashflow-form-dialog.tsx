@@ -22,6 +22,7 @@ import {
   narrowFieldClass,
 } from "@/components/finance/finance-form-shared";
 import { MoneyInput } from "@/components/ui/money-input";
+import { decimalDraftBlocksCommit } from "@/lib/decimal-input";
 import {
   Select,
   SelectContent,
@@ -78,10 +79,12 @@ export function CashflowFormDialog({
   const [articleId, setArticleId] = useState("");
   const [dealId, setDealId] = useState("");
   const [showErrors, setShowErrors] = useState(false);
+  const [amountBlocked, setAmountBlocked] = useState(false);
 
   if (useJustOpened(open)) {
     setDateText(isoToDisplayDate(todayIso()));
     setAmount(null);
+    setAmountBlocked(false);
     setFlowType("EXPENSE");
     setAccountId(accounts[0]?.id ?? "");
     setCounterpartyId("");
@@ -100,6 +103,7 @@ export function CashflowFormDialog({
     parseDisplayDate(dateText) != null &&
     amount != null &&
     amount > 0 &&
+    !amountBlocked &&
     accountId.length > 0 &&
     description.trim().length > 0;
 
@@ -183,8 +187,10 @@ export function CashflowFormDialog({
         >
           <MoneyInput
             id="cf-amount"
+            decimals={2}
             value={amount}
             onValueChange={setAmount}
+            onDraftChange={(draft) => setAmountBlocked(decimalDraftBlocksCommit(draft))}
             className={amountFieldClass}
           />
         </Field>
