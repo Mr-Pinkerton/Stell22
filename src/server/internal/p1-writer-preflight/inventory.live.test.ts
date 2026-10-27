@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { MIGRATION_NAME, MIGRATION_SHA256 } from "../admin-corrections-release/decide.mjs";
+import { runDisposableMigrate } from "@/server/internal/disposable-migrate/guard";
 
 const LIVE = process.env.P1_DISPOSABLE_LIVE === "1";
 const PREVIOUS_SHA = "c5771f8eca1c21d6111f3705cad94a6a73f37bfe";
@@ -105,18 +106,13 @@ describe.skipIf(!LIVE)("p1 writer preflight 47-migration inventory", () => {
           fs.mkdirSync(path.dirname(target), { recursive: true });
           fs.writeFileSync(target, shown.stdout);
         }
-        const deploy = spawnSync(process.execPath, [path.join(process.cwd(), "node_modules", "prisma", "build", "index.js"), "migrate", "deploy", "--schema", path.join(schemaDir, "prisma", "schema.prisma")], {
+        runDisposableMigrate({
+          databaseUrl: `postgresql://p1gate:${password}@127.0.0.1:${port}/${database}?schema=public`,
           cwd: schemaDir,
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            DATABASE_URL: `postgresql://p1gate:${password}@127.0.0.1:${port}/${database}?schema=public`,
-          },
-          windowsHide: true,
-          timeout: 180_000,
-          maxBuffer: 8 * 1024 * 1024,
+          schemaPath: path.join(schemaDir, "prisma", "schema.prisma"),
+          repositoryRoot: process.cwd(),
+          probe: () => ({ currentDatabase: psql(container, database, password, "SELECT current_database()") }),
         });
-        if (deploy.status !== 0) throw new Error(`${deploy.stdout}\n${deploy.stderr}`.slice(0, 1200));
 
         const corrected = gateSql();
         expect(corrected).toContain(ADMIN_TUPLE);

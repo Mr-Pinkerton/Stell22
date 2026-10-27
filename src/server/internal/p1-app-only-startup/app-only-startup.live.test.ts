@@ -1,7 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { runDisposableMigrate } from "@/server/internal/disposable-migrate/guard";
 import { describe, expect, it } from "vitest";
 import { appOnlyCleanupAllowed, confirmOwnedContainer, formatReleaseReport, releaseAppOnly } from "@/server/internal/p1-app-only-startup/cleanup";
 import { realWorld } from "@/server/internal/p1-write-freeze-historical/runtime";
@@ -33,7 +35,7 @@ describe.skipIf(!LIVE)("app-only startup candidate", () => {
       for (const name of Object.values(names)) {
         expect(name).not.toMatch(/stell22-db-prod|stell22-app|stell22-caddy|stell22-db$/);
       }
-      const root = fs.mkdtempSync(path.join(process.cwd(), ".p1as-startup-"));
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "p1as-startup-"));
       const historicalRoot = path.join(root, "historical");
       const fullRoot = path.join(root, "full");
       const daemonAtStart = daemonId();
@@ -217,13 +219,13 @@ function materialize(destination: string, includeP1: boolean): void {
   }
 }
 
-function deploy(repositoryRoot: string, databaseUrl: string): void {
-  const child = spawnSync("npx", ["prisma", "migrate", "deploy", "--schema", path.join(repositoryRoot, "prisma", "schema.prisma")], {
-    encoding: "utf8",
-    shell: process.platform === "win32",
-    env: { ...process.env, DATABASE_URL: databaseUrl },
+function deploy(schemaRoot: string, databaseUrl: string): void {
+  runDisposableMigrate({
+    databaseUrl,
+    cwd: schemaRoot,
+    schemaPath: path.join(schemaRoot, "prisma", "schema.prisma"),
+    repositoryRoot: process.cwd(),
   });
-  if (child.status !== 0) throw new Error(`migrate deploy failed: ${(child.stderr || child.stdout).slice(0, 500)}`);
 }
 
 function gate(repositoryRoot: string, databaseUrl: string): number | null {

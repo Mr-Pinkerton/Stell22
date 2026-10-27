@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AUTHORIZATION_PHRASE, MIGRATION_NAME, MIGRATION_SHA256, readMigrationInventory } from "./decide.mjs";
+import { runDisposableMigrate } from "@/server/internal/disposable-migrate/guard";
 
 const LIVE = process.env.P1_DISPOSABLE_LIVE === "1";
 const OLD_SHA = "4c2fe8e0c5746784e820a7a402a1fb4d2078e8d1";
@@ -139,7 +140,7 @@ describe.skipIf(!LIVE)("admin corrections pinned migration inventory", () => {
           "ALTER DEFAULT PRIVILEGES FOR ROLE stell22_migrator IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO stell22_app",
         ].join(";\n"));
         const migratorUrl = `postgresql://stell22_migrator:${migratorPassword}@127.0.0.1:${port}/${database}?schema=public`;
-        deploy(schemaDir, migratorUrl);
+        deploy(schemaDir, migratorUrl, container, database, bootPassword);
         psql(container, database, bootPassword, [
           'ALTER TYPE public."OperationType" OWNER TO stell22_migrator',
           'GRANT USAGE ON TYPE public."OperationType" TO stell22_app',
@@ -230,16 +231,14 @@ function psql(container: string, database: string, password: string, sql: string
   return String(child.stdout).trim();
 }
 
-function deploy(schemaDir: string, url: string) {
-  const child = spawnSync(process.execPath, [path.join("node_modules", "prisma", "build", "index.js"), "migrate", "deploy", "--schema", path.join(schemaDir, "prisma", "schema.prisma")], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_URL: url },
-    windowsHide: true,
-    timeout: 180_000,
-    maxBuffer: 8 * 1024 * 1024,
+function deploy(schemaDir: string, url: string, container: string, database: string, password: string) {
+  runDisposableMigrate({
+    databaseUrl: url,
+    cwd: schemaDir,
+    schemaPath: path.join(schemaDir, "prisma", "schema.prisma"),
+    repositoryRoot: process.cwd(),
+    probe: () => ({ currentDatabase: psql(container, database, password, "SELECT current_database()") }),
   });
-  if (child.status !== 0) throw new Error(`${child.stdout}\n${child.stderr}`.slice(0, 800));
 }
 
 function gate(server: string, database: string, container: string, inspectPassword: string, sha: string) {

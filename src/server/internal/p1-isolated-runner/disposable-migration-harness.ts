@@ -17,6 +17,11 @@ import {
 } from "@/server/internal/p1-isolated-runner/contract";
 import { parseDisposableAttestation } from "@/server/internal/p1-isolated-runner/disposable-target";
 import { buildChildEnv } from "@/server/internal/p1-isolated-runner/env";
+import {
+  assertOutsideRepository,
+  parseDisposableDatabaseUrl,
+  probeCurrentDatabase,
+} from "@/server/internal/disposable-migrate/guard";
 import { createRepoGitSource } from "@/server/internal/p1-isolated-runner/git-source";
 import { PINNED_MIGRATION_FILES } from "@/server/internal/p1-isolated-runner/inventory";
 import {
@@ -164,11 +169,12 @@ export function runPrisma(
   if (parsed.hostname !== "127.0.0.1" || parsed.username !== "p1disp") {
     throw new Error("refusing prisma target");
   }
-  const database = decodeURIComponent(parsed.pathname.replace(/^\//, ""));
-  if (
-    FORBIDDEN_DATABASE_NAMES.some((name) => name === database.toLowerCase()) ||
-    !database.startsWith("p1disp_")
-  ) {
+  const target = parseDisposableDatabaseUrl(databaseUrl);
+  assertOutsideRepository(cwd, process.cwd());
+  const schemaIndex = args.indexOf("--schema");
+  const schemaArg = schemaIndex >= 0 ? args[schemaIndex + 1] ?? "" : "";
+  if (schemaArg) assertOutsideRepository(schemaArg, process.cwd());
+  if (probeCurrentDatabase(databaseUrl, process.cwd()).toLowerCase() !== target.database) {
     throw new Error("refusing prisma database");
   }
   const cli = path.join(process.cwd(), "node_modules", "prisma", "build", "index.js");
