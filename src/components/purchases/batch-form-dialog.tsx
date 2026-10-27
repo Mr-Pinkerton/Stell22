@@ -5,7 +5,9 @@ import { Plus, Trash2, XIcon } from "lucide-react";
 import { capitalizeFirst, cn } from "@/lib/utils";
 import { FormSubmitButton } from "@/components/form-dialog-shared";
 import { fieldInvalidClass } from "@/components/nomenclature/form-shared";
-import { sectionAreaM2, resolveRailQuantity } from "@/lib/batch-stats";
+import { sectionAreaM2 } from "@/lib/batch-stats";
+import { evaluateRailAdd } from "@/lib/rail-draft";
+import { parseDecimalText, parsePositiveIntDraft, type DecimalDraft } from "@/lib/decimal-input";
 import { allocatePackageCode } from "@/lib/package-code";
 import { materialLabel } from "@/lib/material";
 import type { PurchaseBatchRow } from "@/lib/batch-stats";
@@ -19,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { MeasuredCommitInput } from "@/components/ui/decimal-draft-input";
 import { MoneyInput } from "@/components/ui/money-input";
 import { Label } from "@/components/ui/label";
 import {
@@ -36,6 +39,10 @@ const fieldClass =
   "border-border bg-card hover:border-[#98a2b3] focus-visible:border-ring focus-visible:bg-card h-10 rounded-xl border px-4";
 
 const narrowFieldClass = cn(fieldClass, "w-full sm:max-w-none");
+
+function moneyDraftBlocked(draft: DecimalDraft): boolean {
+  return draft.error != null || (!draft.empty && !draft.complete);
+}
 
 const selectTriggerClass = cn(
   fieldClass,
@@ -266,6 +273,9 @@ function BatchFormBody({
   const [draftLayers, setDraftLayers] = useState("");
   const [showErrors, setShowErrors] = useState(false);
   const [railShowErrors, setRailShowErrors] = useState(false);
+  const [moneyBlocked, setMoneyBlocked] = useState({ cost: false, sort1: false, sort2: false });
+  const [simplePriceBlocked, setSimplePriceBlocked] = useState(false);
+  const [dirtyLengths, setDirtyLengths] = useState<Record<string, boolean>>({});
 
   // Сечение — часть идентичности материала, берём из него (не вводим руками).
   const selectedMaterial = activeMaterials.find((m) => m.id === materialId) ?? null;
@@ -296,29 +306,24 @@ function BatchFormBody({
     return { railCount, totalLengthM, volumeM3, packageCount: entries.filter((e) => e.mode === "package").length, sort1Pct, sort2Pct };
   })();
 
-  const draftRowsNum = Number(draftRows) || 0;
-  const draftLayersNum = Number(draftLayers) || 0;
-  const computedFromGrid =
-    draftRowsNum > 0 && draftLayersNum > 0 ? draftRowsNum * draftLayersNum : null;
-
-  const resolvedDraftQty = resolveRailQuantity({
-    quantity: Number(draftQty) || null,
-    rows: draftRowsNum || null,
-    layers: draftLayersNum || null,
+  const lengthDraft = parseDecimalText(draftLength, 4);
+  const qtyDraft = parsePositiveIntDraft(draftQty);
+  const rowsDraft = parsePositiveIntDraft(draftRows);
+  const layersDraft = parsePositiveIntDraft(draftLayers);
+  const railAdd = evaluateRailAdd({
+    lengthText: draftLength,
+    quantityText: draftQty,
+    rowsText: draftRows,
+    layersText: draftLayers,
   });
-
-  const canAddRail = (() => {
-    const len = Number(draftLength);
-    if (!len || len <= 0) return false;
-    return resolvedDraftQty !== null;
-  })();
+  const canAddRail = railAdd.ok;
 
   const addRail = () => {
-    if (!canAddRail || resolvedDraftQty === null) return;
-    const len = Number(draftLength);
-    const qty = resolvedDraftQty;
-    const rowsNum = draftRowsNum > 0 ? draftRowsNum : undefined;
-    const layersNum = draftLayersNum > 0 ? draftLayersNum : undefined;
+    if (!railAdd.ok) return;
+    const len = railAdd.lengthM;
+    const qty = railAdd.quantity;
+    const rowsNum = railAdd.rows;
+    const layersNum = railAdd.layers;
 
     setEntries((prev) => {
       const usedCodes = new Set(
@@ -360,12 +365,26 @@ function BatchFormBody({
     wMm > 0 &&
     hMm > 0 &&
     (purchaseCost ?? 0) > 0 &&
+    !moneyBlocked.cost &&
+    !moneyBlocked.sort1 &&
+    !moneyBlocked.sort2 &&
+    !Object.values(dirtyLengths).some(Boolean) &&
     entries.some((e) => e.mode === "package") &&
     (!isEdit || editReason.trim().length > 0) &&
     !pending;
-  const simpleQtyNum = Number(simpleQty) || 0;
+  const simpleQtyDraft = parsePositiveIntDraft(simpleQty);
+  const simpleQtyNum =
+    simpleQtyDraft.complete && simpleQtyDraft.error == null && simpleQtyDraft.value != null && simpleQtyDraft.value > 0
+      ? simpleQtyDraft.value
+      : 0;
   const canSubmitSimple =
-    simpleItemId !== "" && simpleQtyNum > 0 && simplePrice != null && simplePrice >= 0 && !pending;
+    simpleItemId !== "" &&
+    simpleQtyNum > 0 &&
+    simpleQtyDraft.error == null &&
+    simplePrice != null &&
+    simplePrice >= 0 &&
+    !simplePriceBlocked &&
+    !pending;
   const canSubmit = kind === "simple" ? canSubmitSimple : canSubmitBatch;
 
   const handleSubmit = async () => {
@@ -496,8 +515,11 @@ function BatchFormBody({
                   placeholder="шт"
                   inputMode="decimal"
                   value={simpleQty}
-                  onChange={(e) => setSimpleQty(e.target.value.replace(/[^\d]/g, ""))}
+                  onChange={(e) => setSimpleQty(parsePositiveIntDraft(e.target.value).text)}
                 />
+                {simpleQtyDraft.error === "fraction" ? (
+                  <p className="text-destructive text-xs">Количество — целое число</p>
+                ) : null}
               </Field>
               <Field
                 id="simple-price"
@@ -511,6 +533,7 @@ function BatchFormBody({
                   decimals={2}
                   value={simplePrice}
                   onValueChange={setSimplePrice}
+                  onDraftChange={(draft) => setSimplePriceBlocked(moneyDraftBlocked(draft))}
                 />
               </Field>
               <Field id="simple-date" label="Дата закупки">
@@ -640,7 +663,7 @@ function BatchFormBody({
                   id="rail-len"
                   label="Длина рейки, м"
                   required
-                  invalid={railShowErrors && !(Number(draftLength) > 0)}
+                  invalid={lengthDraft.error != null || (railShowErrors && (lengthDraft.value == null || lengthDraft.value <= 0))}
                 >
                   <Input
                     id="rail-len"
@@ -648,8 +671,12 @@ function BatchFormBody({
                     inputMode="decimal"
                     placeholder="2,4"
                     value={draftLength}
-                    onChange={(e) => setDraftLength(e.target.value)}
+                    aria-invalid={lengthDraft.error != null || undefined}
+                    onChange={(e) => setDraftLength(parseDecimalText(e.target.value, 4).text)}
                   />
+                  {lengthDraft.error === "precision" ? (
+                    <p className="text-destructive text-xs">Длина — не больше 4 знаков после запятой</p>
+                  ) : null}
                 </Field>
                 <Field id="rail-type" label="Тип рейки" required>
                   <RailTypeSelect id="rail-type" value={draftType} onChange={setDraftType} />
@@ -665,7 +692,7 @@ function BatchFormBody({
                     id="rail-qty"
                     label="Количество реек"
                     required
-                    invalid={railShowErrors && resolvedDraftQty === null}
+                    invalid={qtyDraft.error != null || (railShowErrors && !(qtyDraft.value != null && qtyDraft.value > 0))}
                     className="max-w-xs"
                   >
                     <Input
@@ -673,8 +700,12 @@ function BatchFormBody({
                       className={narrowFieldClass}
                       inputMode="numeric"
                       value={draftQty}
-                      onChange={(e) => setDraftQty(e.target.value)}
+                      aria-invalid={qtyDraft.error != null || undefined}
+                      onChange={(e) => setDraftQty(parsePositiveIntDraft(e.target.value).text)}
                     />
+                    {qtyDraft.error === "fraction" ? (
+                      <p className="text-destructive text-xs">Количество — целое число</p>
+                    ) : null}
                   </Field>
                   <p className="text-muted-foreground text-xs">
                     Рейки с одинаковой длиной, типом и сортом автоматически суммируются.
@@ -687,22 +718,27 @@ function BatchFormBody({
                       id="rail-qty-pkg"
                       label="Количество реек"
                       required
-                      invalid={railShowErrors && resolvedDraftQty === null}
+                      invalid={qtyDraft.error != null || rowsDraft.error != null || layersDraft.error != null || (railShowErrors && !railAdd.ok)}
                     >
                       <Input
                         id="rail-qty-pkg"
                         className={narrowFieldClass}
                         inputMode="numeric"
-                        value={computedFromGrid !== null ? String(computedFromGrid) : draftQty}
-                        readOnly={computedFromGrid !== null}
+                        value={railAdd.ok && railAdd.fromGrid ? String(railAdd.quantity) : draftQty}
+                        readOnly={railAdd.ok && railAdd.fromGrid}
+                        aria-invalid={qtyDraft.error != null || undefined}
                         onChange={(e) => {
-                          setDraftQty(e.target.value);
-                          if (e.target.value) {
+                          const next = parsePositiveIntDraft(e.target.value);
+                          setDraftQty(next.text);
+                          if (next.text) {
                             setDraftRows("");
                             setDraftLayers("");
                           }
                         }}
                       />
+                      {qtyDraft.error === "fraction" ? (
+                        <p className="text-destructive text-xs">Количество — целое число</p>
+                      ) : null}
                     </Field>
                     <Field id="rail-rows" label="Рядов">
                       <Input
@@ -710,8 +746,12 @@ function BatchFormBody({
                         className={narrowFieldClass}
                         inputMode="numeric"
                         value={draftRows}
-                        onChange={(e) => setDraftRows(e.target.value)}
+                        aria-invalid={rowsDraft.error != null || undefined}
+                        onChange={(e) => setDraftRows(parsePositiveIntDraft(e.target.value).text)}
                       />
+                      {rowsDraft.error === "fraction" ? (
+                        <p className="text-destructive text-xs">Ряды — целое число</p>
+                      ) : null}
                     </Field>
                     <Field id="rail-layers" label="Слоёв">
                       <Input
@@ -719,8 +759,12 @@ function BatchFormBody({
                         className={narrowFieldClass}
                         inputMode="numeric"
                         value={draftLayers}
-                        onChange={(e) => setDraftLayers(e.target.value)}
+                        aria-invalid={layersDraft.error != null || undefined}
+                        onChange={(e) => setDraftLayers(parsePositiveIntDraft(e.target.value).text)}
                       />
+                      {layersDraft.error === "fraction" ? (
+                        <p className="text-destructive text-xs">Слои — целое число</p>
+                      ) : null}
                     </Field>
                   </div>
                   <p className="text-muted-foreground text-xs">
@@ -788,19 +832,20 @@ function BatchFormBody({
                       {isEdit && (
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                           <Field id={`len-${e.id}`} label="Длина, м">
-                            <Input
+                            <MeasuredCommitInput
                               id={`len-${e.id}`}
                               className={narrowFieldClass}
-                              inputMode="decimal"
+                              scale={4}
                               disabled={lockedIdentity}
-                              value={String(e.lengthM)}
-                              onChange={(ev) => {
-                                const lengthM = Number(ev.target.value.replace(",", "."));
-                                if (!Number.isFinite(lengthM)) return;
+                              value={e.lengthM}
+                              onCommit={(lengthM) =>
                                 setEntries((prev) =>
                                   prev.map((row) => (row.id === e.id ? { ...row, lengthM } : row)),
-                                );
-                              }}
+                                )
+                              }
+                              onUncommittedChange={(uncommitted) =>
+                                setDirtyLengths((prev) => ({ ...prev, [e.id]: uncommitted }))
+                              }
                             />
                           </Field>
                           <Field id={`qty-${e.id}`} label="Количество">
@@ -937,8 +982,12 @@ function BatchFormBody({
                   <MoneyInput
                     id="batch-cost"
                     className={narrowFieldClass}
+                    decimals={2}
                     value={purchaseCost}
                     onValueChange={setPurchaseCost}
+                    onDraftChange={(draft) =>
+                      setMoneyBlocked((prev) => ({ ...prev, cost: moneyDraftBlocked(draft) }))
+                    }
                   />
                 </Field>
                 <Field id="batch-p1" label="Цена 1 сорт, ₽/м³">
@@ -946,8 +995,12 @@ function BatchFormBody({
                     id="batch-p1"
                     className={narrowFieldClass}
                     suffix="₽/м³"
+                    decimals={2}
                     value={priceSort1}
                     onValueChange={setPriceSort1}
+                    onDraftChange={(draft) =>
+                      setMoneyBlocked((prev) => ({ ...prev, sort1: moneyDraftBlocked(draft) }))
+                    }
                   />
                 </Field>
                 <Field id="batch-p2" label="Цена 2 сорт, ₽/м³">
@@ -955,8 +1008,12 @@ function BatchFormBody({
                     id="batch-p2"
                     className={narrowFieldClass}
                     suffix="₽/м³"
+                    decimals={2}
                     value={priceSort2}
                     onValueChange={setPriceSort2}
+                    onDraftChange={(draft) =>
+                      setMoneyBlocked((prev) => ({ ...prev, sort2: moneyDraftBlocked(draft) }))
+                    }
                   />
                 </Field>
               </div>

@@ -48,7 +48,12 @@ export async function acquirePurchaseCommandRequestLock(
 }
 
 export function exactFixedDecimal(value: number, places: number): string {
-  return new Decimal(value).toFixed(places);
+  const dec = new Decimal(value);
+  if (!dec.isFinite()) throw new Error("Некорректное число");
+  if (dec.decimalPlaces() > places) {
+    throw new Error(`Не больше ${places} знаков после запятой`);
+  }
+  return dec.toFixed(places);
 }
 
 export function moneySnapshotString(value: number): string {
@@ -56,6 +61,8 @@ export function moneySnapshotString(value: number): string {
 }
 
 export function lengthSnapshotString(value: number): string {
+  const dec = new Decimal(value);
+  if (!dec.isFinite() || dec.lte(0)) throw new Error("Укажите длину рейки больше нуля");
   return exactFixedDecimal(value, 4);
 }
 
@@ -104,7 +111,17 @@ export interface BatchRemainderWriteOffSnapshotV1 {
   effects: BatchRemainderWriteOffEffectV1[];
 }
 
+function assertPositiveRailCount(value: number | null | undefined, message: string): void {
+  if (value == null) return;
+  if (!Number.isInteger(value) || value <= 0) throw new Error(message);
+}
+
 export function canonicalBatchCreateSnapshot(values: BatchFormValues): BatchCreateRequestSnapshotV1 {
+  for (const rail of values.rails) {
+    assertPositiveRailCount(rail.quantity, "Количество реек должно быть целым числом больше нуля");
+    assertPositiveRailCount(rail.rows, "Ряды должны быть целым числом больше нуля");
+    assertPositiveRailCount(rail.layers, "Слои должны быть целым числом больше нуля");
+  }
   return {
     v: 1,
     d: "BATCH_CREATE",

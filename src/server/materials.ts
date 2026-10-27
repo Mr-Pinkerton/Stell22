@@ -6,6 +6,7 @@ import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
 import type { Material } from "@/types/domain";
+import { assertMaxFractionDigits } from "@/lib/decimal-input";
 
 const PATH = "/nomenclature";
 
@@ -32,6 +33,8 @@ function requireSection(v: MaterialFormValues): { w: number; h: number } {
   const w = v.sectionWidthMm ?? 0;
   const h = v.sectionHeightMm ?? 0;
   if (!(w > 0) || !(h > 0)) throw new Error("Укажите сечение материала (ширина и высота, мм)");
+  assertMaxFractionDigits(w, 2, "Сечение — не больше 2 знаков после запятой");
+  assertMaxFractionDigits(h, 2, "Сечение — не больше 2 знаков после запятой");
   return { w, h };
 }
 

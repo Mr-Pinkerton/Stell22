@@ -71,6 +71,9 @@ export function canonicalPackageLength(value: number | string): string {
   if (!dec.isFinite() || dec.lte(0)) {
     throw new Error("Укажите длину рейки больше нуля");
   }
+  if (dec.decimalPlaces() > 4) {
+    throw new Error("Длина рейки — не больше 4 знаков после запятой");
+  }
   return dec.toFixed(4);
 }
 

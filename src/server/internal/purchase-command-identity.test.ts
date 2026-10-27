@@ -218,7 +218,31 @@ describe("assertPurchaseCommandMatch", () => {
 describe("exact fixed decimal strings", () => {
   it("formats money to 2 and length to 4", () => {
     expect(moneySnapshotString(10)).toBe("10.00");
+    expect(moneySnapshotString(0.35)).toBe("0.35");
     expect(lengthSnapshotString(2)).toBe("2.0000");
+    expect(lengthSnapshotString(0.0001)).toBe("0.0001");
     expect(exactFixedDecimal(1.5, 4)).toBe("1.5000");
+  });
+
+  it("rejects extra fraction digits instead of rounding them", () => {
+    expect(() => moneySnapshotString(0.359)).toThrow(/2 знаков/);
+    expect(() => lengthSnapshotString(1.23456)).toThrow(/4 знаков/);
+  });
+});
+
+describe("canonicalBatchCreateSnapshot integers", () => {
+  it("rejects a fractional rail quantity, row, or layer", () => {
+    expect(() =>
+      canonicalBatchCreateSnapshot({
+        ...batchValues,
+        rails: [{ ...batchValues.rails[0]!, quantity: 1.5 }],
+      }),
+    ).toThrow(/целым числом/);
+    expect(() =>
+      canonicalBatchCreateSnapshot({
+        ...batchValues,
+        rails: [{ ...batchValues.rails[0]!, rows: 1.5, layers: 2 }],
+      }),
+    ).toThrow(/Ряды/);
   });
 });

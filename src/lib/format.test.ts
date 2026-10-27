@@ -123,25 +123,42 @@ describe("parseGroupedMoney (ввод с копейками)", () => {
     const r = parseGroupedMoney("1 234 ₽", 0);
     expect(clean(r.text)).toBe("1 234");
     expect(r.value).toBe(1234);
-    expect(parseGroupedMoney("", 0)).toEqual({ text: "", value: null });
+    expect(r.complete).toBe(true);
+    expect(parseGroupedMoney("", 0)).toMatchObject({ text: "", value: null, empty: true, complete: false });
   });
 
   it("принимает 0,36 (запятая)", () => {
     const r = parseGroupedMoney("0,36", 2);
     expect(r.value).toBe(0.36);
     expect(r.text).toBe("0,36");
+    expect(r.complete).toBe(true);
   });
 
   it("принимает точку как разделитель", () => {
     expect(parseGroupedMoney("0.36", 2).value).toBe(0.36);
   });
 
-  it("ограничивает копейки до decimals знаков", () => {
-    expect(parseGroupedMoney("0,369", 2).value).toBe(0.36);
+  it("не обрезает лишние знаки", () => {
+    const r = parseGroupedMoney("0,369", 2);
+    expect(r.value).toBeNull();
+    expect(r.error).toBe("precision");
+    expect(r.text).toBe("0,369");
   });
 
-  it("сохраняет промежуточный ввод «0,»", () => {
-    expect(parseGroupedMoney("0,", 2)).toEqual({ text: "0,", value: 0 });
+  it("сохраняет промежуточный ввод «0,» и не считает его нулём", () => {
+    expect(parseGroupedMoney("0,", 2)).toMatchObject({
+      text: "0,",
+      value: null,
+      complete: false,
+      empty: false,
+      error: null,
+    });
+    expect(parseGroupedMoney("0.", 2).text).toBe("0.");
+  });
+
+  it("ноль — завершённое значение, пусто — нет", () => {
+    expect(parseGroupedMoney("0", 2)).toMatchObject({ value: 0, complete: true, empty: false });
+    expect(parseGroupedMoney("", 2)).toMatchObject({ value: null, complete: false, empty: true });
   });
 
   it("группирует целую часть, сохраняя дробную", () => {
@@ -151,6 +168,6 @@ describe("parseGroupedMoney (ввод с копейками)", () => {
   });
 
   it("пусто → null", () => {
-    expect(parseGroupedMoney("", 2)).toEqual({ text: "", value: null });
+    expect(parseGroupedMoney("", 2)).toMatchObject({ text: "", value: null, empty: true });
   });
 });
