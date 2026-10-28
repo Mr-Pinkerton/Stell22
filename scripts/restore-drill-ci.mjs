@@ -6,8 +6,11 @@
  */
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseDisposableDatabaseUrl } from "./disposable-migrate-guard.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const runId = process.env.STELL22_RESTORE_DRILL_RUN ?? "";
@@ -33,7 +36,7 @@ function baseEnv(extra = {}) {
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, {
-    cwd: root,
+    cwd: options.cwd ?? root,
     encoding: "utf8",
     env: options.env ?? baseEnv(),
     input: options.input,
@@ -144,14 +147,29 @@ if ((init.stdout ?? "").includes("postgresql://") || (init.stderr ?? "").include
 
 assertSameContainer(identity.container, identity.nonce);
 
-const migrateEnv = baseEnv();
-migrateEnv.DATABASE_URL = `postgresql://stell22:stell22@127.0.0.1:${identity.hostPort}/stell22_restore_drill_src?schema=public`;
-const prismaCli = path.join(root, "node_modules", "prisma", "build", "index.js");
-const migrate = run(process.execPath, [prismaCli, "migrate", "deploy"], {
-  env: migrateEnv,
-  stdio: "inherit",
-});
-if (migrate.status !== 0) fail("prisma migrate deploy failed on the drill source");
+const migrateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "stell22-drill-migrate-"));
+let migrateError = "";
+try {
+  const migrateEnv = baseEnv();
+  migrateEnv.DATABASE_URL = `postgresql://stell22:stell22@127.0.0.1:${identity.hostPort}/stell22_restore_drill_src?schema=public`;
+  const target = parseDisposableDatabaseUrl(migrateEnv.DATABASE_URL);
+  if (target.database !== "stell22_restore_drill_src") migrateError = "drill database name was rewritten";
+  else if (psql(identity.container, target.database, "SELECT current_database()") !== target.database) {
+    migrateError = "drill database identity mismatch";
+  } else {
+    fs.cpSync(path.join(root, "prisma"), path.join(migrateRoot, "prisma"), { recursive: true });
+    const prismaCli = path.join(root, "node_modules", "prisma", "build", "index.js");
+    const migrate = run(process.execPath, [prismaCli, "migrate", "deploy", "--schema", path.join(migrateRoot, "prisma", "schema.prisma")], {
+      env: migrateEnv,
+      cwd: migrateRoot,
+      stdio: "inherit",
+    });
+    if (migrate.status !== 0) migrateError = "prisma migrate deploy failed on the drill source";
+  }
+} finally {
+  fs.rmSync(migrateRoot, { recursive: true, force: true });
+}
+if (migrateError) fail(migrateError);
 
 assertSameContainer(identity.container, identity.nonce);
 const witnessSql = [

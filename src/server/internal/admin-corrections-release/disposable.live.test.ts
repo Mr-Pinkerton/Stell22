@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AUTHORIZATION_PHRASE, MIGRATION_NAME, MIGRATION_SHA256 } from "./decide.mjs";
+import { runDisposableMigrate } from "@/server/internal/disposable-migrate/guard";
 import { evaluateAppOnlyStartup, type StartupRole } from "@/server/internal/p1-app-only-startup/gate";
 import { readImageMigrations } from "@/server/internal/p1-app-only-startup/inventory";
 
@@ -117,7 +118,7 @@ describe.skipIf(!LIVE)("admin corrections disposable postgresql 17", () => {
           secrets,
         );
         const migratorUrl = `postgresql://stell22_migrator:${migratorPassword}@127.0.0.1:${port}/${database}?schema=public`;
-        deploy(historical, migratorUrl, secrets);
+        deploy(historical, migratorUrl, secrets, container, database, bootPassword);
         const before = psql(container, database, bootPassword, 'SELECT count(*)::text FROM public."_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL', secrets);
         expect(before).toBe("46");
         psql(
@@ -264,16 +265,18 @@ function psql(container: string, database: string, password: string, sql: string
   return child.stdout.trim();
 }
 
-function deploy(schemaDir: string, url: string, secrets: readonly string[]) {
-  const child = spawnSync(process.execPath, [path.join("node_modules", "prisma", "build", "index.js"), "migrate", "deploy", "--schema", path.join(schemaDir, "prisma", "schema.prisma")], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    env: { ...process.env, DATABASE_URL: url },
-    windowsHide: true,
-    timeout: 180_000,
-    maxBuffer: 8 * 1024 * 1024,
-  });
-  if (child.status !== 0) throw new Error(redact(`${child.stdout}\n${child.stderr}`, secrets).slice(0, 800));
+function deploy(schemaDir: string, url: string, secrets: readonly string[], container: string, database: string, password: string) {
+  try {
+    runDisposableMigrate({
+      databaseUrl: url,
+      cwd: schemaDir,
+      schemaPath: path.join(schemaDir, "prisma", "schema.prisma"),
+      repositoryRoot: process.cwd(),
+      probe: () => ({ currentDatabase: psql(container, database, password, "SELECT current_database()", secrets) }),
+    });
+  } catch (error) {
+    throw new Error(redact(error instanceof Error ? error.message : "migrate failed", secrets).slice(0, 800));
+  }
 }
 
 function operatorEnv(database: string, container: string, inspectPassword: string, schemaDir: string, sha: string): NodeJS.ProcessEnv {
