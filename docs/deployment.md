@@ -186,6 +186,11 @@ Prisma-миграции автоматически назад не откаты�
 и не читает дамп. Production recovery **NOT AUTHORIZED** и требует отдельного
 разрешения. Disposable drill (`scripts/restore-drill.sh`) пишет только в
 изолированный PostgreSQL и не доказывает, что production-архив восстановится.
+Его контракт `stell22_drill_archive_provenance` остаётся синтетическим.
+Проверка явно выбранного архива в отдельном PostgreSQL 17 описана в
+`docs/production-backup-restore.md`. Sidecar SHA-256 там не считается
+происхождением. Эта проверка не является разрешением запускать её на
+production-архиве.
 
 ## Health
 
