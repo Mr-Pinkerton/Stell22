@@ -2,6 +2,9 @@
  * Fail closed before a disposable `prisma migrate deploy`.
  * Structural checks do not open a connection.
  */
+import fs from "node:fs";
+import path from "node:path";
+
 export class DisposableMigrateRefusal extends Error {
   /**
    * @param {string} code
@@ -22,6 +25,12 @@ export const PERSISTENT_DATABASE_NAMES = [
   "stell22_inc001_dry",
 ];
 
+/**
+ * These ports are refused because local Stell22 databases publish them.
+ * Refusing them does not prove that this process owns a disposable
+ * container: a persistent database can listen on an ephemeral port, and a
+ * disposable container can publish one of these fixed ports.
+ */
 export const PERSISTENT_HOST_PORTS = [5432, 5433, 5434];
 
 const APPROVED_DATABASE = /^(?:p1disp|p1gate|p1as|p1rec|p1iso|acrel|stell22_restore_drill)_[a-z0-9_]+$/;
@@ -64,12 +73,19 @@ export function parseDisposableDatabaseUrl(raw) {
 }
 
 /**
+ * The candidate must exist and its physical path, after `..` normalization
+ * and symbolic-link resolution, must lie outside the repository.
+ * A missing or unresolvable path is refused. It is not treated as external.
+ *
  * @param {string} candidate
  * @param {string} repositoryRoot
  */
 export function assertOutsideRepository(candidate, repositoryRoot) {
-  const relative = pathRelative(repositoryRoot, candidate);
-  if (relative === "" || (!relative.startsWith("..") && !absolutePath(relative))) {
+  const candidateReal = canonicalPath(candidate);
+  const rootReal = canonicalPath(repositoryRoot);
+  const relative = path.relative(rootReal, candidateReal);
+  const escaped = relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  if (!escaped) {
     throw new DisposableMigrateRefusal(
       "INSIDE_REPOSITORY",
       "Prisma working directory or schema is inside the repository",
@@ -78,32 +94,15 @@ export function assertOutsideRepository(candidate, repositoryRoot) {
 }
 
 /**
- * @param {string} from
- * @param {string} to
- */
-function pathRelative(from, to) {
-  const left = pathParts(from);
-  const right = pathParts(to);
-  if (left[0]?.toLowerCase() !== right[0]?.toLowerCase() && /^[a-z]:$/i.test(left[0] ?? "")) {
-    return right.join("/");
-  }
-  let index = 0;
-  while (index < left.length && index < right.length && left[index].toLowerCase() === right[index].toLowerCase()) {
-    index += 1;
-  }
-  return [...Array(left.length - index).fill(".."), ...right.slice(index)].join("/");
-}
-
-/**
  * @param {string} value
  */
-function pathParts(value) {
-  return value.replaceAll("\\", "/").replace(/\/+$/, "").split("/");
-}
-
-/**
- * @param {string} value
- */
-function absolutePath(value) {
-  return value.startsWith("/") || /^[a-z]:/i.test(value);
+function canonicalPath(value) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new DisposableMigrateRefusal("UNVERIFIABLE_PATH", "Prisma path is missing or malformed");
+  }
+  try {
+    return fs.realpathSync.native(path.resolve(value));
+  } catch {
+    throw new DisposableMigrateRefusal("UNVERIFIABLE_PATH", "Prisma path cannot be resolved");
+  }
 }

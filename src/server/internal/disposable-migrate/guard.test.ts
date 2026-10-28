@@ -1,7 +1,9 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
+  assertOutsideRepository,
   DisposableMigrateRefusal,
   parseDisposableDatabaseUrl,
   runDisposableMigrate,
@@ -22,6 +24,11 @@ function refusal(run: () => void): DisposableMigrateRefusal {
 }
 
 describe("disposable migrate guard", () => {
+  beforeAll(() => {
+    fs.mkdirSync(OUTSIDE, { recursive: true });
+    fs.writeFileSync(path.join(OUTSIDE, "schema.prisma"), "datasource db {\n  provider = \"postgresql\"\n}\n");
+  });
+
   it("stops on an absent URL before identity or migrate", () => {
     let probed = false;
     let spawned = false;
@@ -125,5 +132,65 @@ describe("disposable migrate guard", () => {
     });
     expect(result.status).toBe(0);
     expect(seen).toEqual({ cwd: OUTSIDE, databaseUrl: URL });
+  });
+});
+
+describe("repository path resolution", () => {
+  it("accepts a real directory outside the repository", () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "stell22-path-ok-"));
+    expect(() => assertOutsideRepository(outside, REPOSITORY)).not.toThrow();
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("rejects the repository root and a nested directory", () => {
+    expect(refusal(() => assertOutsideRepository(REPOSITORY, REPOSITORY)).code).toBe("INSIDE_REPOSITORY");
+    expect(refusal(() => assertOutsideRepository(path.join(REPOSITORY, "src"), REPOSITORY)).code).toBe("INSIDE_REPOSITORY");
+  });
+
+  it("rejects a .. path that resolves back into the repository", () => {
+    const disguised = path.join(REPOSITORY, "src", "..");
+    const returned = path.resolve(REPOSITORY, "..", path.basename(REPOSITORY), "prisma");
+    expect(refusal(() => assertOutsideRepository(disguised, REPOSITORY)).code).toBe("INSIDE_REPOSITORY");
+    expect(refusal(() => assertOutsideRepository(returned, REPOSITORY)).code).toBe("INSIDE_REPOSITORY");
+  });
+
+  it("rejects an external symlink that points into the repository", () => {
+    const link = path.join(os.tmpdir(), `stell22-path-link-${process.pid}`);
+    fs.rmSync(link, { force: true });
+    fs.symlinkSync(REPOSITORY, link, process.platform === "win32" ? "junction" : "dir");
+    try {
+      expect(refusal(() => assertOutsideRepository(link, REPOSITORY)).code).toBe("INSIDE_REPOSITORY");
+      expect(refusal(() => assertOutsideRepository(path.join(link, "src"), REPOSITORY)).code).toBe("INSIDE_REPOSITORY");
+    } finally {
+      fs.unlinkSync(link);
+    }
+  });
+
+  it("accepts an external working directory and schema, and refuses a missing path", () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "stell22-path-schema-"));
+    const schema = path.join(outside, "schema.prisma");
+    fs.writeFileSync(schema, "datasource db {\n  provider = \"postgresql\"\n}\n");
+    let spawned = false;
+    const result = runDisposableMigrate({
+      databaseUrl: URL,
+      cwd: outside,
+      schemaPath: schema,
+      repositoryRoot: REPOSITORY,
+      probe: () => ({ currentDatabase: "p1iso_abc123" }),
+      spawn: () => {
+        spawned = true;
+        return { status: 0 };
+      },
+    });
+    expect(result.status).toBe(0);
+    expect(spawned).toBe(true);
+    fs.rmSync(outside, { recursive: true, force: true });
+    expect(refusal(() => assertOutsideRepository(path.join(os.tmpdir(), "stell22-missing-path", "schema.prisma"), REPOSITORY)).code).toBe("UNVERIFIABLE_PATH");
+    expect(refusal(() => assertOutsideRepository("  ", REPOSITORY)).code).toBe("UNVERIFIABLE_PATH");
+  });
+
+  it.skipIf(process.platform !== "win32")("treats a differently cased drive path as the same repository", () => {
+    const flipped = REPOSITORY.replace(/^([A-Za-z]):/, (_, drive: string) => `${drive.toLowerCase() === drive ? drive.toUpperCase() : drive.toLowerCase()}:`).replaceAll("Stell22", "stell22");
+    expect(refusal(() => assertOutsideRepository(path.join(flipped, "src"), flipped)).code).toBe("INSIDE_REPOSITORY");
   });
 });
