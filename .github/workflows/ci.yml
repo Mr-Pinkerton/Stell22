@@ -1,7 +1,8 @@
 name: CI
 
 # Проверяем каждый PR и пуш в main: типы, линтер, тесты, security policy,
-# disposable PostgreSQL integrity suite, disposable restore drill, сборка.
+# disposable PostgreSQL integrity suite, disposable restore drill,
+# disposable production-backup restore, сборка.
 # Деплоя здесь нет — production вызывает этот же workflow через workflow_call.
 # Job restore-drill не получает production environment и секреты PROD_*.
 
@@ -193,3 +194,32 @@ jobs:
         env:
           STELL22_RESTORE_DRILL_RUN: ${{ github.run_id }}-${{ github.run_attempt }}
         run: node scripts/restore-drill-ci.mjs
+
+  production-backup-restore:
+    name: Disposable production backup restore
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_call' && inputs.ref || github.sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Pull the pinned PostgreSQL 17 image
+        run: docker pull postgres:17-alpine@sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb
+
+      - name: Fake Docker is invoked
+        run: node scripts/vitest-run.mjs run src/server/production-backup-restore.test.ts src/server/production-backup-restore-fingerprint.test.ts
+
+      - name: Synthetic disposable restore
+        run: node scripts/production-backup-restore-ci.mjs
