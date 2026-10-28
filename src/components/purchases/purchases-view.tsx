@@ -29,6 +29,7 @@ import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
 import { DataTable, type Column } from "@/components/data-table";
 import { Card, CardContent } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -435,18 +436,20 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
         onExport={handleExport}
       />
 
-      <FiltersBar
-        search
-        archive
-        searchPlaceholder="Название партии"
-        searchValue={search}
-        onSearchChange={setSearch}
-        archiveChecked={showArchive}
-        onArchiveChange={setShowArchive}
-      />
-
-      <Card className="surface-card ring-0">
+      <Card className="surface-card ring-0 !pt-0">
         <CardContent className="p-0">
+          <FiltersBar
+            embedded
+            search
+            hideSearchLabel
+            archive
+            searchPlaceholder="Название партии"
+            searchValue={search}
+            onSearchChange={setSearch}
+            archiveChecked={showArchive}
+            onArchiveChange={setShowArchive}
+          />
+          <Separator />
           <DataTable
             columns={columns}
             rows={rows}
