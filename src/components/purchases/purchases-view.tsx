@@ -456,6 +456,7 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
             empty="Партии не найдены"
             className="border-0"
             padded
+            headerClassName="h-[49px] bg-[#E4E7EC] dark:bg-[#344054]"
             rowClassName={(row, index) =>
               dataTableArchivedRowClass(row, index, (r) => r.status === "ARCHIVED")
             }
