@@ -23,6 +23,11 @@ interface DataTableProps<T extends { id: string }> {
   /** Горизонтальные отступы ячеек от краёв контейнера. */
   padded?: boolean;
   rowClassName?: (row: T, index: number) => string | undefined;
+  /**
+   * Замена высоты и фона заголовка. Текст, выравнивание и ширины столбцов те же.
+   * Без пропа остаётся прежний заголовок `h-11 bg-card`.
+   */
+  headerClassName?: string;
 }
 
 const cellPad = "px-4 first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
@@ -30,7 +35,8 @@ const cellPad = "px-4 first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
 /** Первый столбец — влево, остальные — по центру (заголовок и ячейки). */
 const colAlign = (index: number) => (index > 0 ? "text-center" : undefined);
 
-const headClass = "text-base font-semibold h-11 bg-card";
+const headTextClass = "text-base font-semibold";
+const defaultHeadClass = "h-11 bg-card";
 
 export function DataTable<T extends { id: string }>({
   columns,
@@ -39,6 +45,7 @@ export function DataTable<T extends { id: string }>({
   className,
   padded = false,
   rowClassName,
+  headerClassName,
 }: DataTableProps<T>) {
   return (
     <div className={cn("rounded-lg border", className)}>
@@ -48,7 +55,13 @@ export function DataTable<T extends { id: string }>({
             {columns.map((c, index) => (
               <TableHead
                 key={c.key}
-                className={cn(padded && cellPad, headClass, colAlign(index), c.className)}
+                className={cn(
+                  padded && cellPad,
+                  headTextClass,
+                  headerClassName ?? defaultHeadClass,
+                  colAlign(index),
+                  c.className,
+                )}
               >
                 {c.header}
               </TableHead>
