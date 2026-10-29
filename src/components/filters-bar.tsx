@@ -32,6 +32,11 @@ export interface FiltersBarProps extends SectionFilters {
   onWeekChange?: (value: string) => void;
   /** Placeholder поля поиска. */
   searchPlaceholder?: string;
+  /**
+   * Скрыть видимую подпись «Поиск». Имя поля для скринридеров остаётся.
+   * По умолчанию подпись видна, остальные разделы не меняются.
+   */
+  hideSearchLabel?: boolean;
   /** Подпись основной кнопки применения фильтров (по умолчанию «Показать»). */
   actionLabel?: string;
   /** Клик по кнопке применения (например, записать период в URL). Без колбэка кнопка не рендерится. */
@@ -58,6 +63,11 @@ export interface FiltersBarProps extends SectionFilters {
   extraFiltersDirty?: boolean;
   /** Сброс extra filters в default. Вызывается после встроенных, до onReset. */
   onResetExtraFilters?: () => void;
+  /**
+   * Верхняя секция чужой поверхности. Без собственной карточки, радиуса и тени.
+   * Раскладка и внутренние отступы те же, что у отдельной панели.
+   */
+  embedded?: boolean;
 }
 
 /** Видимые встроенные фильтры совпадают с дефолтом (для disabled «Сбросить»). */
@@ -98,6 +108,7 @@ export function FiltersBar({
   weekValue,
   onWeekChange,
   searchPlaceholder = "Поиск",
+  hideSearchLabel = false,
   actionLabel = "Показать",
   onApply,
   applyDisabled = false,
@@ -108,6 +119,7 @@ export function FiltersBar({
   dateDefaultValue,
   dateAllowRange = true,
   dateLabel = "Дата",
+  embedded = false,
 }: FiltersBarProps) {
   const hasAny = search || date || weeks || archive || extraFilters != null;
   const resolvedDateDefault = dateDefaultValue ?? getDefaultDateFilterValue();
@@ -189,10 +201,18 @@ export function FiltersBar({
   };
 
   return (
-    <div className="surface-card-elevated flex flex-wrap items-end gap-4 p-4 md:p-5">
+    <div
+      className={cn(
+        "flex flex-wrap items-end gap-4 p-4 md:p-5",
+        !embedded && "surface-card-elevated",
+      )}
+    >
       {search && (
         <div className="grid gap-1.5">
-          <Label htmlFor="f-search" className="cursor-default">
+          <Label
+            htmlFor="f-search"
+            className={cn("cursor-default", hideSearchLabel && "sr-only")}
+          >
             Поиск
           </Label>
           <Input
