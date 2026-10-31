@@ -46,7 +46,7 @@ import { exportXlsx } from "@/lib/export-xlsx";
 import { XLSX_FMT, type XlsxSheet } from "@/lib/xlsx-types";
 import { formatIsoDate } from "@/lib/format";
 import { PageHeader } from "@/components/page-header";
-import { FiltersBar } from "@/components/filters-bar";
+import { FinancePeriodFilters } from "@/components/finance/finance-period-filters";
 import { FILTER_SELECT_WIDTH, filterSelectTriggerClass } from "@/components/filter-fields";
 import { SegmentTabs } from "@/components/reports/report-shared";
 
@@ -127,8 +127,8 @@ function CashflowExtraFilters({
 
   return (
     <>
-      <div className="grid gap-1.5">
-        <Label htmlFor="f-flow-type" className="cursor-default">
+      <div>
+        <Label htmlFor="f-flow-type" className="sr-only">
           Тип
         </Label>
         <Select
@@ -152,7 +152,7 @@ function CashflowExtraFilters({
           </SelectContent>
         </Select>
       </div>
-      <label className="border-border bg-card hover:border-[#98a2b3] hover:bg-muted/40 flex h-10 cursor-pointer items-center gap-2.5 self-end rounded-xl border px-3.5 text-sm font-medium transition-colors">
+      <label className="border-border bg-card hover:border-[#98a2b3] hover:bg-muted/40 flex h-10 cursor-pointer items-center gap-2.5 rounded-xl border px-3.5 text-sm font-medium transition-colors">
         <Checkbox
           id="f-unassigned"
           className="border-[#98a2b3] bg-card size-[18px] cursor-pointer"
@@ -506,44 +506,12 @@ export function FinanceView({ data }: { data: FinanceData }) {
       />
 
       <div className="space-y-4">
-        <FiltersBar
-          date
-          dateAllTime
-          dateFilterValue={dateFilter}
-          onDateFilterChange={setDateFilter}
-          search={activeTab === "cashflow"}
-          searchPlaceholder="Описание или контрагент"
-          searchValue={activeTab === "cashflow" ? cashflowSearch : undefined}
-          onSearchChange={activeTab === "cashflow" ? setCashflowSearch : undefined}
-          extraFilters={
-            activeTab === "cashflow" ? (
-              <CashflowExtraFilters
-                flowType={cashflowFlowType}
-                onFlowTypeChange={setCashflowFlowType}
-                unassignedOnly={cashflowUnassignedOnly}
-                onUnassignedOnlyChange={setCashflowUnassignedOnly}
-              />
-            ) : undefined
-          }
-          extraFiltersDirty={
-            activeTab === "cashflow" &&
-            !isCashFlowExtraFiltersDefault({
-              flowType: cashflowFlowType,
-              unassignedOnly: cashflowUnassignedOnly,
-            })
-          }
-          onResetExtraFilters={
-            activeTab === "cashflow"
-              ? () => {
-                  const defaults = getDefaultCashFlowTableFilters();
-                  setCashflowFlowType(defaults.flowType);
-                  setCashflowUnassignedOnly(defaults.unassignedOnly);
-                }
-              : undefined
-          }
+        <FinanceKpiBlock
+          rows={periodCashFlows}
+          accounts={balanceTileAccounts}
+          articles={articles}
+          dateFilter={dateFilter}
         />
-
-        <FinanceKpiBlock rows={periodCashFlows} accounts={balanceTileAccounts} articles={articles} />
 
         <SegmentTabs
           ariaLabel="Финансы"
@@ -581,6 +549,35 @@ export function FinanceView({ data }: { data: FinanceData }) {
 
         {activeTab === "cashflow" && (
           <FinanceCashflowTab
+            filters={
+              <FinancePeriodFilters
+                idPrefix="cashflow-"
+                dateFilter={dateFilter}
+                onDateFilterChange={setDateFilter}
+                search
+                searchValue={cashflowSearch}
+                onSearchChange={setCashflowSearch}
+                extraFilters={
+                  <CashflowExtraFilters
+                    flowType={cashflowFlowType}
+                    onFlowTypeChange={setCashflowFlowType}
+                    unassignedOnly={cashflowUnassignedOnly}
+                    onUnassignedOnlyChange={setCashflowUnassignedOnly}
+                  />
+                }
+                extraFiltersDirty={
+                  !isCashFlowExtraFiltersDefault({
+                    flowType: cashflowFlowType,
+                    unassignedOnly: cashflowUnassignedOnly,
+                  })
+                }
+                onResetExtraFilters={() => {
+                  const defaults = getDefaultCashFlowTableFilters();
+                  setCashflowFlowType(defaults.flowType);
+                  setCashflowUnassignedOnly(defaults.unassignedOnly);
+                }}
+              />
+            }
             rows={visibleCashFlows}
             articles={articles}
             counterparties={counterparties}

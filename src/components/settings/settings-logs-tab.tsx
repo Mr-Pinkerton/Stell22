@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { DataTable, type Column } from "@/components/data-table";
-import { Card, CardContent } from "@/components/ui/card";
+import { TableSurface, tableHeaderClassName } from "@/components/table-surface";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { LOG_LEVEL_LABEL, type LogLevel, type SystemLogRow } from "@/mocks/settings-fixtures";
@@ -157,17 +157,16 @@ export function SettingsLogsTab({ rows }: SettingsLogsTabProps) {
           </Button>
         ))}
       </div>
-      <Card className="surface-card ring-0">
-        <CardContent className="p-0">
-          <DataTable
-            columns={columns}
-            rows={filtered}
-            empty="Логов нет"
-            padded
-            className="border-0"
-          />
-        </CardContent>
-      </Card>
+      <TableSurface>
+        <DataTable
+          columns={columns}
+          rows={filtered}
+          empty="Логов нет"
+          padded
+          className="border-0"
+          headerClassName={tableHeaderClassName}
+        />
+      </TableSurface>
     </div>
   );
 }

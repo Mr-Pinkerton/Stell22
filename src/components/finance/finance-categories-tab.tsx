@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import type { FinanceCategory } from "@/mocks/finance-fixtures";
 import { DataTable, type Column } from "@/components/data-table";
+import { TableFilterSlot, tableHeaderClassName, tableSurfaceCardClass } from "@/components/table-surface";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,6 +21,7 @@ const tableActionDestructiveClass =
   "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
 interface FinanceCategoriesTabProps {
+  filters?: React.ReactNode;
   categories: FinanceCategory[];
   onRegisterCreate?: (openCreate: () => void) => void;
   onCreate?: (values: CategoryFormValues) => void;
@@ -28,6 +30,7 @@ interface FinanceCategoriesTabProps {
 }
 
 export function FinanceCategoriesTab({
+  filters,
   categories,
   onRegisterCreate,
   onCreate,
@@ -115,14 +118,16 @@ export function FinanceCategoriesTab({
 
   return (
     <>
-      <Card className="surface-card ring-0">
+      <Card className={tableSurfaceCardClass}>
         <CardContent className="p-0">
+          <TableFilterSlot filters={filters} />
           <DataTable
             columns={columns}
             rows={categories}
             empty="Категорий нет"
             className="border-0"
             padded
+            headerClassName={tableHeaderClassName}
           />
         </CardContent>
       </Card>

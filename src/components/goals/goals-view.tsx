@@ -14,12 +14,12 @@ import {
   startOfWeekMonday,
   weeklyPlan,
 } from "@/lib/goals";
-import { goalMonthLabel, splitGoalsForView } from "@/lib/goals-view";
-import { dataTableArchivedRowClass } from "@/lib/table-archive";
+import { goalMonthLabel, goalMonthRelation, splitGoalsForView } from "@/lib/goals-view";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
 import { DataTable, type Column } from "@/components/data-table";
+import { TableSurface, tableHeaderClassName } from "@/components/table-surface";
 import { GoalFormDialog, type GoalFormValues } from "@/components/goals/goal-form-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
@@ -44,7 +44,6 @@ export function GoalsView({
     () => splitGoalsForView(initialGoals, dateFilter),
     [initialGoals, dateFilter],
   );
-  const monthSelected = !dateFilter.allTime;
 
   const handleCreate = (values: GoalFormValues) => {
     startTransition(async () => {
@@ -67,54 +66,42 @@ export function GoalsView({
         onAdd={() => setDialogOpen(true)}
       />
 
-      <FiltersBar
-        date
-        dateAllTime
-        dateAllowRange={false}
-        dateFilterValue={dateFilter}
-        onDateFilterChange={setDateFilter}
-      />
+      <section className="space-y-3">
+        <SectionHeading title="Активные цели" count={active.length} />
+        {active.length === 0 ? (
+          <p className="text-muted-foreground text-sm">Активных целей за выбранный период нет</p>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2">
+            {active.map((goal) => (
+              <GoalCard key={goal.id} goal={goal} />
+            ))}
+          </div>
+        )}
+      </section>
 
-      <div className="space-y-8">
-        <section className="space-y-4">
-          <h2 className="text-lg font-semibold tracking-tight">Активные цели</h2>
-          {active.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              {monthSelected ? "Активных целей за выбранный месяц нет" : "Активных целей нет"}
-            </p>
-          ) : (
-            <div className="grid gap-4 lg:grid-cols-2">
-              {active.map((goal) => (
-                <GoalCard key={goal.id} goal={goal} variant="active" />
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="space-y-4">
-          <h2 className="text-lg font-semibold tracking-tight">Архивные цели</h2>
-          {archived.length === 0 ? (
-            <p className="text-muted-foreground text-sm">
-              {monthSelected ? "Архивных целей за выбранный месяц нет" : "Архивных целей нет"}
-            </p>
-          ) : (
-            <Card className="surface-card ring-0">
-              <CardContent className="p-0">
-                <DataTable
-                  columns={pastColumns}
-                  rows={archived}
-                  empty="Нет целей"
-                  padded
-                  className="border-0"
-                  rowClassName={(row, index) =>
-                    dataTableArchivedRowClass(row, index, (r) => r.status === "ARCHIVED")
-                  }
-                />
-              </CardContent>
-            </Card>
-          )}
-        </section>
-      </div>
+      <section className="space-y-3">
+        <SectionHeading title="Архивные цели" count={archived.length} />
+        <TableSurface
+          filters={
+            <FiltersBar
+              embedded
+              date
+              dateAllTime
+              dateFilterValue={dateFilter}
+              onDateFilterChange={setDateFilter}
+            />
+          }
+        >
+          <DataTable
+            columns={pastColumns}
+            rows={archived}
+            empty="Архивных целей за выбранный период нет"
+            padded
+            className="border-0"
+            headerClassName={tableHeaderClassName}
+          />
+        </TableSurface>
+      </section>
 
       <GoalFormDialog
         open={dialogOpen}
@@ -127,53 +114,85 @@ export function GoalsView({
   );
 }
 
-function GoalCard({ goal, variant }: { goal: GoalRow; variant: "active" | "compact" }) {
+function SectionHeading({
+  title,
+  count,
+  className,
+}: {
+  title: string;
+  count: number;
+  className?: string;
+}) {
+  return (
+    <h2 className={cn("flex items-baseline gap-2 text-lg font-semibold tracking-tight", className)}>
+      {title}
+      <span className="text-muted-foreground text-sm font-medium tabular-nums">{count}</span>
+    </h2>
+  );
+}
+
+function GoalCard({ goal }: { goal: GoalRow }) {
+  const relation = goalMonthRelation(goal.month);
   const monthDate = parseGoalMonthIso(goal.month);
-  const now = new Date();
-  const workingDays = countWorkingDaysInMonth(monthDate);
-  const daily = dailyPlan(goal.quantity, workingDays);
-  const weekly = weeklyPlan(goal.quantity, monthDate, startOfWeekMonday(now));
   const pct = goalCompletionPercent(goal.producedQty, goal.quantity);
+  const showCurrentGuides = relation === "current";
+  const daily = showCurrentGuides
+    ? dailyPlan(goal.quantity, countWorkingDaysInMonth(monthDate))
+    : null;
+  const weekly = showCurrentGuides
+    ? weeklyPlan(goal.quantity, monthDate, startOfWeekMonday(new Date()))
+    : null;
+  const statusLabel = relation === "past" ? "Период завершён" : "Активна";
 
   return (
-    <Card className={cn("surface-card ring-0", variant === "active" && "border-primary/15")}>
+    <Card className="border-border bg-card min-w-0 shadow-sm ring-1 ring-border">
       <CardContent className="space-y-4 p-5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <h3 className="truncate font-semibold">{goal.name}</h3>
-            <p className="text-muted-foreground mt-0.5 text-sm">
+            <p className="text-muted-foreground mt-0.5 truncate text-sm">
               {goal.productName} · {goalMonthLabel(goal.month)}
             </p>
           </div>
-          <Badge variant={goal.status === "ACTIVE" ? "secondary" : "outline"}>
-            {goal.status === "ACTIVE" ? "Активна" : "Архив"}
+          <Badge variant={relation === "past" ? "outline" : "secondary"} className="shrink-0">
+            {statusLabel}
           </Badge>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
-          <Metric label="План" value={`${goal.quantity} шт`} />
-          <Metric label="Факт" value={`${goal.producedQty} шт`} />
-          <Metric label="Дневной план" value={`${formatPlanValue(daily)} шт`} />
-          <Metric label="Недельный план" value={`${formatPlanValue(weekly)} шт`} />
+        <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
+          <div className="min-w-0">
+            <p className="text-muted-foreground text-xs">Факт / план</p>
+            <p className="mt-1 text-2xl leading-none font-semibold tabular-nums">
+              {goal.producedQty}
+              <span className="text-muted-foreground text-base font-medium"> / {goal.quantity} шт</span>
+            </p>
+          </div>
+          <p
+            className={cn(
+              "text-2xl leading-none font-semibold tabular-nums",
+              pct >= 100 ? "text-emerald-700 dark:text-emerald-400" : "text-brand",
+            )}
+          >
+            {pct}%
+          </p>
         </div>
 
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Выполнение</span>
-            <span className={cn("font-semibold tabular-nums", pct >= 100 ? "text-emerald-700" : "text-brand")}>
-              {pct}%
-            </span>
-          </div>
-          <div className="bg-muted h-2.5 overflow-hidden rounded-full">
-            <div
-              className={cn(
-                "h-full rounded-full transition-all",
-                pct >= 100 ? "bg-emerald-600" : "bg-brand",
-              )}
-              style={{ width: `${Math.min(pct, 100)}%` }}
-            />
-          </div>
+        <div className="bg-muted h-2.5 overflow-hidden rounded-full">
+          <div
+            className={cn(
+              "h-full rounded-full transition-all",
+              pct >= 100 ? "bg-emerald-600" : "bg-brand",
+            )}
+            style={{ width: `${Math.min(pct, 100)}%` }}
+          />
         </div>
+
+        {showCurrentGuides && daily != null && weekly != null ? (
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <Metric label="Дневной ориентир" value={`${formatPlanValue(daily)} шт`} />
+            <Metric label="Недельный ориентир" value={`${formatPlanValue(weekly)} шт`} />
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -192,7 +211,14 @@ const pastColumns: Column<GoalRow>[] = [
   {
     key: "name",
     header: "Название",
-    render: (row) => <span className="font-medium">{row.name}</span>,
+    render: (row) => (
+      <span className="inline-flex min-w-0 items-center gap-2">
+        <span className="truncate font-medium">{row.name}</span>
+        <Badge variant="outline" className="shrink-0">
+          Архив
+        </Badge>
+      </span>
+    ),
   },
   {
     key: "product",

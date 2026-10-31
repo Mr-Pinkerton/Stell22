@@ -1,7 +1,8 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { DataTable, type Column } from "@/components/data-table";
-import { Card, CardContent } from "@/components/ui/card";
+import { TableSurface, tableHeaderClassName } from "@/components/table-surface";
 import { mpStockRows, MARKETPLACE_LABEL, type MpStockRow } from "@/mocks/warehouse-fixtures";
 
 const columns: Column<MpStockRow>[] = [
@@ -31,17 +32,24 @@ const columns: Column<MpStockRow>[] = [
 interface WarehouseMpTabProps {
   rows?: MpStockRow[];
   empty?: string;
+  filters?: ReactNode;
 }
 
 export function WarehouseMpTab({
   rows = mpStockRows,
   empty = "Нет данных с маркетплейсов",
+  filters,
 }: WarehouseMpTabProps) {
   return (
-    <Card className="surface-card ring-0">
-      <CardContent className="p-0">
-        <DataTable columns={columns} rows={rows} empty={empty} padded className="border-0" />
-      </CardContent>
-    </Card>
+    <TableSurface filters={filters}>
+      <DataTable
+        columns={columns}
+        rows={rows}
+        empty={empty}
+        padded
+        className="border-0"
+        headerClassName={tableHeaderClassName}
+      />
+    </TableSurface>
   );
 }

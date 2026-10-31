@@ -14,7 +14,7 @@ import {
   normalizeRange,
   startOfMonth,
 } from "@/lib/dates";
-import { formatFilterDateRange, formatFilterMonth } from "@/lib/format";
+import { formatFilterDateRange, formatFilterMonth, dayKeyInProjectTz } from "@/lib/format";
 import { dateFiltersEqual, type DateFilterValue } from "@/lib/date-filter-value";
 
 export type { DateFilterValue };
@@ -22,18 +22,32 @@ export { dateFiltersEqual };
 
 export const DATE_FILTER_WIDTH = "w-[280px]";
 
+/** Контур сегодняшнего дня. Один и тот же в светлой и тёмной теме. */
+export const calendarTodayRingClass = "ring-2 ring-[#F97316]";
+
+/** Календарный день сетки совпадает с сегодняшней датой в зоне проекта. */
+export function isProjectCalendarToday(date: Date, now: Date = new Date()): boolean {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}` === dayKeyInProjectTz(now);
+}
+
 const WEEKDAY_LABELS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 
 const triggerClass =
   "border-border bg-card hover:border-[#98a2b3] focus-visible:border-ring focus-visible:bg-card h-10 min-h-10 cursor-pointer rounded-xl border px-4 text-left text-sm font-normal";
 
 interface DateFilterProps {
+  id?: string;
+  /**
+   * Имя периода. По умолчанию только доступное имя кнопки.
+   * `showLabel` добавляет его в видимый текст: «Дата работы: Октябрь 2026».
+   */
+  label?: string;
+  showLabel?: boolean;
   value?: DateFilterValue;
   onChange?: (value: DateFilterValue) => void;
-  /**
-   * Выбор произвольного диапазона дней. Default `true` — прежнее поведение.
-   * Goals передаёт `false` (только календарный месяц).
-   */
+  /** Выбор произвольного диапазона дней. Default `true`. */
   allowRange?: boolean;
 }
 
@@ -58,7 +72,14 @@ export function formatDateFilterTriggerLabel(
   return formatFilterMonth(value.month);
 }
 
-export function DateFilter({ value, onChange, allowRange = true }: DateFilterProps) {
+export function DateFilter({
+  id,
+  label,
+  showLabel = false,
+  value,
+  onChange,
+  allowRange = true,
+}: DateFilterProps) {
   const [internalValue, setInternalValue] = useState<DateFilterValue>(getDefaultValue);
   const current = value ?? internalValue;
 
@@ -71,7 +92,8 @@ export function DateFilter({ value, onChange, allowRange = true }: DateFilterPro
   const [viewMonth, setViewMonth] = useState(() => current.month);
   const [hoverDay, setHoverDay] = useState<Date | null>(null);
 
-  const displayLabel = formatDateFilterTriggerLabel(current, allowRange);
+  const periodLabel = formatDateFilterTriggerLabel(current, allowRange);
+  const displayLabel = showLabel && label ? `${label}: ${periodLabel}` : periodLabel;
   const calendarDays = useMemo(() => buildCalendarMonth(viewMonth), [viewMonth]);
 
   const updateValue = (patch: Partial<DateFilterValue>) => {
@@ -147,9 +169,11 @@ export function DateFilter({ value, onChange, allowRange = true }: DateFilterPro
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger
+        id={id}
+        aria-label={label}
         className={cn(
           triggerClass,
-          DATE_FILTER_WIDTH,
+          showLabel ? "w-[22rem]" : DATE_FILTER_WIDTH,
           "flex items-center justify-between gap-2 font-medium",
         )}
       >
@@ -216,10 +240,13 @@ export function DateFilter({ value, onChange, allowRange = true }: DateFilterPro
             const isMultiDayPreview =
               isSelectingRange && hoverDay && rangeStart && !isSameDay(rangeStart, hoverDay);
 
+            const isToday = isProjectCalendarToday(date);
+
             return (
               <button
                 key={date.toISOString()}
                 type="button"
+                aria-current={isToday ? "date" : undefined}
                 onClick={() => handleDayClick(date)}
                 onMouseEnter={() => {
                   if (isSelectingRange) setHoverDay(date);
@@ -261,6 +288,7 @@ export function DateFilter({ value, onChange, allowRange = true }: DateFilterPro
                     !isSinglePending &&
                     !inPreviewRange &&
                     "hover:bg-muted rounded-full",
+                  isToday && cn(calendarTodayRingClass, "relative z-10"),
                 )}
               >
                 {date.getDate()}

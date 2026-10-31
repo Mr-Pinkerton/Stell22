@@ -34,9 +34,11 @@ export interface FiltersBarProps extends SectionFilters {
   searchPlaceholder?: string;
   /**
    * Скрыть видимую подпись «Поиск». Имя поля для скринридеров остаётся.
-   * По умолчанию подпись видна, остальные разделы не меняются.
+   * По умолчанию подпись скрыта.
    */
   hideSearchLabel?: boolean;
+  /** Префикс id, если на странице несколько панелей фильтров. */
+  idPrefix?: string;
   /** Подпись основной кнопки применения фильтров (по умолчанию «Показать»). */
   actionLabel?: string;
   /** Клик по кнопке применения (например, записать период в URL). Без колбэка кнопка не рендерится. */
@@ -46,17 +48,21 @@ export interface FiltersBarProps extends SectionFilters {
   /** После внутреннего сброса (controlled callbacks). Reports — синхронизация URL. */
   onReset?: () => void;
   /**
+   * Видимая кнопка «Сбросить». По умолчанию показана и отключается,
+   * когда фильтры уже в исходном состоянии.
+   */
+  showResetButton?: boolean;
+  /**
    * Дефолт DateFilter для dirty/Reset. Нет пропа — текущий месяц.
    * Sales передаёт ALL TIME.
    */
   dateDefaultValue?: DateFilterValue;
-  /**
-   * Диапазон дней в DateFilter. Default true.
-   * Goals передаёт false (только месяц).
-   */
+  /** Диапазон дней в DateFilter. Default true. */
   dateAllowRange?: boolean;
   /** Подпись встроенного DateFilter. Default «Дата», чтобы другие разделы не менялись. */
   dateLabel?: string;
+  /** Показать dateLabel внутри кнопки периода. По умолчанию подпись только для доступности. */
+  dateLabelVisible?: boolean;
   /** Предметные controls в той же строке (родитель задаёт семантику). */
   extraFilters?: ReactNode;
   /** Родитель: внешние extra filters отличаются от default. */
@@ -108,17 +114,20 @@ export function FiltersBar({
   weekValue,
   onWeekChange,
   searchPlaceholder = "Поиск",
-  hideSearchLabel = false,
+  hideSearchLabel = true,
+  idPrefix = "",
   actionLabel = "Показать",
   onApply,
   applyDisabled = false,
   onReset,
+  showResetButton = true,
   extraFilters,
   extraFiltersDirty = false,
   onResetExtraFilters,
   dateDefaultValue,
   dateAllowRange = true,
   dateLabel = "Дата",
+  dateLabelVisible = false,
   embedded = false,
 }: FiltersBarProps) {
   const hasAny = search || date || weeks || archive || extraFilters != null;
@@ -203,20 +212,20 @@ export function FiltersBar({
   return (
     <div
       className={cn(
-        "flex flex-wrap items-end gap-4 p-4 md:p-5",
+        "flex flex-wrap items-center gap-4 p-4 md:p-5",
         !embedded && "surface-card-elevated",
       )}
     >
       {search && (
-        <div className="grid gap-1.5">
+        <div>
           <Label
-            htmlFor="f-search"
+            htmlFor={`${idPrefix}f-search`}
             className={cn("cursor-default", hideSearchLabel && "sr-only")}
           >
             Поиск
           </Label>
           <Input
-            id="f-search"
+            id={`${idPrefix}f-search`}
             placeholder={searchPlaceholder}
             className={cn("w-56", filterInputClass)}
             value={query}
@@ -225,10 +234,15 @@ export function FiltersBar({
         </div>
       )}
       {date && (
-        <div className="grid gap-1.5">
-          <Label className="cursor-default">{dateLabel}</Label>
+        <div>
+          <Label htmlFor={`${idPrefix}f-date`} className="sr-only">
+            {dateLabel}
+          </Label>
           <div className="flex flex-wrap items-center gap-2">
             <DateFilter
+              id={`${idPrefix}f-date`}
+              label={dateLabel}
+              showLabel={dateLabelVisible}
               value={dateFilter}
               onChange={handleDateChange}
               allowRange={dateAllowRange}
@@ -253,9 +267,9 @@ export function FiltersBar({
         <WeekFilter month={dateFilter.month} value={weekFilter} onChange={setWeekFilter} />
       )}
       {archive && (
-        <label className="border-border bg-card hover:border-[#98a2b3] hover:bg-muted/40 flex h-10 cursor-pointer items-center gap-2.5 self-end rounded-xl border px-3.5 text-sm font-medium transition-colors">
+        <label className="border-border bg-card hover:border-[#98a2b3] hover:bg-muted/40 flex h-10 cursor-pointer items-center gap-2.5 rounded-xl border px-3.5 text-sm font-medium transition-colors">
           <Checkbox
-            id="f-archive"
+            id={`${idPrefix}f-archive`}
             className="border-[#98a2b3] bg-card size-[18px] cursor-pointer"
             checked={showArchive}
             onCheckedChange={(v) => setShowArchive(v === true)}
@@ -264,27 +278,31 @@ export function FiltersBar({
         </label>
       )}
       {extraFilters}
-      <div className="ml-auto flex shrink-0 gap-2">
-        <Button
-          type="button"
-          variant="ghost"
-          className={filterActionClass}
-          disabled={filtersAtDefault}
-          onClick={handleReset}
-        >
-          Сбросить
-        </Button>
-        {onApply ? (
-          <Button
-            type="button"
-            className={filterActionClass}
-            disabled={applyDisabled}
-            onClick={onApply}
-          >
-            {actionLabel}
-          </Button>
-        ) : null}
-      </div>
+      {showResetButton || onApply ? (
+        <div className="ml-auto flex shrink-0 gap-2">
+          {showResetButton ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className={filterActionClass}
+              disabled={filtersAtDefault}
+              onClick={handleReset}
+            >
+              Сбросить
+            </Button>
+          ) : null}
+          {onApply ? (
+            <Button
+              type="button"
+              className={filterActionClass}
+              disabled={applyDisabled}
+              onClick={onApply}
+            >
+              {actionLabel}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

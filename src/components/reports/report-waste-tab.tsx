@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { WasteBatchRow, WasteEmployeeRow } from "@/mocks/report-fixtures";
 import { formatLength } from "@/lib/format";
 import { partitionActiveArchived } from "@/lib/table-archive";
 import { SegmentTabs, wastePercentClass } from "@/components/reports/report-shared";
 import { DataTable, type Column } from "@/components/data-table";
+import { TableFilterSlot, tableHeaderClassName, tableSurfaceCardClass } from "@/components/table-surface";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -14,9 +15,10 @@ type WasteSubTab = "batches" | "employees";
 interface ReportWasteTabProps {
   batches: WasteBatchRow[];
   employees: WasteEmployeeRow[];
+  filters?: ReactNode;
 }
 
-export function ReportWasteTab({ batches, employees }: ReportWasteTabProps) {
+export function ReportWasteTab({ batches, employees, filters }: ReportWasteTabProps) {
   const [subTab, setSubTab] = useState<WasteSubTab>("batches");
 
   const batchRows = useMemo(
@@ -125,8 +127,9 @@ export function ReportWasteTab({ batches, employees }: ReportWasteTabProps) {
         onChange={setSubTab}
       />
 
-      <Card className="surface-card ring-0">
+      <Card className={tableSurfaceCardClass}>
         <CardContent className="p-0">
+          <TableFilterSlot filters={filters} />
           {subTab === "batches" ? (
             <DataTable
               columns={batchColumns}
@@ -134,6 +137,7 @@ export function ReportWasteTab({ batches, employees }: ReportWasteTabProps) {
               empty="Партии не найдены"
               className="border-0"
               padded
+              headerClassName={tableHeaderClassName}
             />
           ) : (
             <DataTable
@@ -142,6 +146,7 @@ export function ReportWasteTab({ batches, employees }: ReportWasteTabProps) {
               empty="Данные не найдены"
               className="border-0"
               padded
+              headerClassName={tableHeaderClassName}
             />
           )}
         </CardContent>

@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DataTable, type Column } from "@/components/data-table";
+import { TableSurface, tableHeaderClassName } from "@/components/table-surface";
 
 const fieldClass =
   "border-border bg-card hover:border-[#98a2b3] focus-visible:border-ring focus-visible:bg-card h-10 rounded-xl border px-4";
@@ -150,11 +151,15 @@ export function SettingsParamsTab({
             Сохранить
           </Button>
         </div>
-        <Card className="surface-card ring-0">
-          <CardContent className="p-0">
-            <DataTable columns={minStockColumns} rows={minStock} padded className="border-0" />
-          </CardContent>
-        </Card>
+        <TableSurface>
+          <DataTable
+            columns={minStockColumns}
+            rows={minStock}
+            padded
+            className="border-0"
+            headerClassName={tableHeaderClassName}
+          />
+        </TableSurface>
       </section>
     </div>
   );
