@@ -10,16 +10,20 @@ export async function AppHeader({ userName }: { userName: string }) {
   const notifications = await getNotifications();
 
   return (
-    <header className="surface-card bg-card sticky top-0 z-10 mx-4 mt-4 flex h-14 items-center gap-3 px-4 md:mx-6">
-      <SidebarTrigger className="rounded-full [&_svg]:stroke-[1.75]" />
+    <header className="surface-card bg-card sticky top-0 z-10 mx-4 mt-4 flex h-14 min-w-0 items-center gap-2 px-3 sm:gap-3 sm:px-4 md:mx-6">
+      <SidebarTrigger className="shrink-0 rounded-full [&_svg]:stroke-[1.75]" />
 
-      <div className="text-muted-foreground flex-1 text-base font-medium">{formatHeaderDate()}</div>
+      <div className="text-muted-foreground min-w-0 flex-1 truncate text-base font-medium">
+        {formatHeaderDate()}
+      </div>
 
-      <span className="text-sm font-semibold">{userName}</span>
+      <span className="hidden min-w-0 truncate text-sm font-semibold sm:inline sm:max-w-[12rem]">
+        {userName}
+      </span>
 
       <NotificationsPanel initialNotifications={notifications} />
 
-      <form action={signOut}>
+      <form action={signOut} className="shrink-0">
         <Button
           type="submit"
           variant="outline"

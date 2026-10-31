@@ -167,7 +167,7 @@ export function NotificationsPanel({
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger
-        className="icon-action-btn icon-action-btn--compact icon-action-btn--anchor relative inline-flex size-10 cursor-pointer items-center justify-center rounded-full p-0 [&_svg]:size-4 [&_svg]:stroke-[1.75]"
+        className="icon-action-btn icon-action-btn--compact icon-action-btn--anchor relative inline-flex size-10 shrink-0 cursor-pointer items-center justify-center rounded-full p-0 [&_svg]:size-4 [&_svg]:stroke-[1.75]"
         aria-label="Уведомления"
       >
         <Bell />

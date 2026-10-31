@@ -1,3 +1,4 @@
+import { tableHeaderClassName } from "@/components/table-surface";
 import { cn } from "@/lib/utils";
 import {
   Table,
@@ -9,14 +10,14 @@ import {
 } from "@/components/ui/table";
 
 /** Заголовок основной таблицы с раскрываемыми строками. */
-export const expandableMainHeadClass =
-  "bg-card text-base font-semibold h-11 px-4 py-0 align-middle first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
-
-export const expandableMainHeadRowClass = "[&_tr]:border-border/30";
+export const expandableMainHeadClass = cn(
+  tableHeaderClassName,
+  "text-base font-semibold px-4 py-0 align-middle first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6",
+);
 
 /** Ячейки строки-сводки — те же горизонтальные отступы, что у заголовка. */
 export const expandableSummaryCellClass =
-  "px-4 py-3 align-middle first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
+  "px-4 py-2 align-middle first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
 
 /** Отступы вложенной таблицы (иерархия, без своего акцента — он на строке детализации). */
 export const expandableNestedWrapClass = "py-3 pr-5 pl-5 md:pr-6 md:pl-6";
@@ -93,12 +94,16 @@ export function ExpandableMainHeader({
   centerFrom = 1,
 }: ExpandableMainHeaderProps) {
   return (
-    <TableHeader className={expandableMainHeadRowClass}>
-      <TableRow>
+    <TableHeader>
+      <TableRow className="border-b border-border hover:bg-transparent">
         {labels.map((label, i) => (
           <TableHead
             key={`${label}-${i}`}
-            className={cn(expandableMainHeadClass, i >= centerFrom && label && "text-center")}
+            className={cn(
+              expandableMainHeadClass,
+              i >= centerFrom && label && "text-center",
+              label === "Сорта закупка" && "whitespace-normal leading-none",
+            )}
           >
             {label}
           </TableHead>
@@ -139,6 +144,23 @@ interface NestedTableProps {
   lastColumnAlign?: "left" | "center" | "right";
 }
 
+/** Пустая основная таблица: заголовок остаётся, сообщение занимает все колонки. */
+export function ExpandableEmptyRow({
+  colSpan,
+  children,
+}: {
+  colSpan: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <TableRow className="hover:bg-transparent">
+      <TableCell colSpan={colSpan} className="text-muted-foreground h-24 px-4 text-center">
+        {children}
+      </TableCell>
+    </TableRow>
+  );
+}
+
 export function NestedTable({
   headers,
   children,
@@ -148,10 +170,6 @@ export function NestedTable({
   centerFrom = 1,
   lastColumnAlign = "center",
 }: NestedTableProps) {
-  if (isEmpty && empty) {
-    return <p className="text-muted-foreground pl-2 text-sm">{empty}</p>;
-  }
-
   return (
     <div className={expandableNestedTableShellClass}>
       <table
@@ -184,7 +202,23 @@ export function NestedTable({
             })}
           </TableRow>
         </TableHeader>
-        <TableBody className="bg-card">{children}</TableBody>
+        <TableBody className="bg-card">
+          {isEmpty && empty ? (
+            <TableRow className="hover:bg-transparent">
+              <TableCell
+                colSpan={headers.length}
+                className={cn(
+                  expandableNestedCellPad,
+                  "text-muted-foreground text-center text-sm",
+                )}
+              >
+                {empty}
+              </TableCell>
+            </TableRow>
+          ) : (
+            children
+          )}
+        </TableBody>
       </table>
     </div>
   );

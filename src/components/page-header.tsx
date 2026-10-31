@@ -25,9 +25,9 @@ export function PageHeader({
   onExport,
 }: PageHeaderProps) {
   return (
-    <div className="flex items-center justify-between gap-4">
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
       <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
-      <div className="flex gap-2">
+      <div className="flex max-w-full flex-wrap gap-2">
         {canExport && (
           <Button
             variant="outline"

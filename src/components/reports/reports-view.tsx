@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
-import { isReportsDraftApplied, reportsAppliedKey, reportsDraftFromParams, reportsHrefFromDraft, syncReportsDraftIfAppliedChanged } from "@/lib/report-period";
-import { getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
-import { getDefaultWeekFilterValue } from "@/components/week-filter";
+import { useAutoApplyPeriod } from "@/components/use-auto-apply-period";
+import { reportsAppliedKey, reportsDraftFromParams, reportsHrefFromDraft, syncReportsDraftIfAppliedChanged } from "@/lib/report-period";
+import { classifyDateFilterCommit, weekAfterDateChange } from "@/lib/period-auto-apply";
+import { type DateFilterValue } from "@/components/date-filter";
 import { SegmentTabs } from "@/components/reports/report-shared";
 import { ReportPurchasesTab } from "@/components/reports/report-purchases-tab";
 import { ReportCostTab } from "@/components/reports/report-cost-tab";
@@ -53,7 +54,6 @@ export function ReportsView({
   const [activeTab, setActiveTab] = useState<ReportTab>("purchases");
   const [exporting, startExport] = useTransition();
 
-  const router = useRouter();
   const searchParams = useSearchParams();
   const appliedParams = new URLSearchParams(searchParams.toString());
   const appliedKey = reportsAppliedKey(appliedParams);
@@ -74,25 +74,37 @@ export function ReportsView({
     setWeek(next.week);
   }
 
-  // Смена месяца делает выбранную неделю невалидной — сбрасываем.
   const handleDateFilterChange = (value: DateFilterValue) => {
-    if (value.month.getTime() !== dateFilter.month.getTime()) setWeek("");
+    setWeek((current) => weekAfterDateChange(dateFilter.month, value.month, current));
     setDateFilter(value);
   };
 
-  // «Показать» → период (и неделя для ЗП) в URL. Страница (server)
-  // перечитает searchParams и пересоберёт отчёты за выбранный охват (A11/A12).
-  const applyPeriod = () => {
-    router.push(reportsHrefFromDraft(dateFilter, week));
-  };
-
-  const resetPeriod = () => {
-    router.push(reportsHrefFromDraft(getDefaultDateFilterValue(), getDefaultWeekFilterValue()));
-  };
-
-  const draftApplied = isReportsDraftApplied(dateFilter, week, appliedParams);
+  const commitKind = classifyDateFilterCommit(dateFilter);
+  const draftHref =
+    commitKind === "incomplete" ? null : reportsHrefFromDraft(dateFilter, week);
+  const periodPending = useAutoApplyPeriod(draftHref, appliedKey, commitKind);
 
   const filters = TAB_FILTERS[activeTab];
+  const periodFilters = (
+    <>
+      <FiltersBar
+        embedded
+        idPrefix={`${activeTab}-`}
+        date={filters.date}
+        dateAllTime={filters.date}
+        weeks={filters.weeks}
+        dateFilterValue={dateFilter}
+        onDateFilterChange={handleDateFilterChange}
+        weekValue={week}
+        onWeekChange={setWeek}
+      />
+      {periodPending ? (
+        <p role="status" className="text-muted-foreground px-4 pb-3 text-sm md:px-5">
+          Обновление периода…
+        </p>
+      ) : null}
+    </>
+  );
 
   const handleExport = () =>
     startExport(async () => {
@@ -233,20 +245,6 @@ export function ReportsView({
       <PageHeader title="Отчёты" canExport exporting={exporting} onExport={handleExport} />
 
       <div className="space-y-4">
-        <FiltersBar
-          date={filters.date}
-          dateAllTime={filters.date}
-          weeks={filters.weeks}
-          dateFilterValue={dateFilter}
-          onDateFilterChange={handleDateFilterChange}
-          weekValue={week}
-          onWeekChange={setWeek}
-          onApply={applyPeriod}
-          applyDisabled={draftApplied}
-          onReset={resetPeriod}
-          actionLabel="Показать"
-        />
-
         <SegmentTabs
           ariaLabel="Раздел отчётов"
           tabs={TABS}
@@ -254,15 +252,27 @@ export function ReportsView({
           onChange={setActiveTab}
         />
 
-        {activeTab === "purchases" && <ReportPurchasesTab initialRows={purchases} />}
-        {activeTab === "cost" && <ReportCostTab details={cost.details} products={cost.products} />}
+        {activeTab === "purchases" && (
+          <ReportPurchasesTab initialRows={purchases} filters={periodFilters} />
+        )}
+        {activeTab === "cost" && (
+          <ReportCostTab details={cost.details} products={cost.products} filters={periodFilters} />
+        )}
         {activeTab === "salaries" && (
           // key от URL: при смене периода/недели таб пересобирает локальный
           // стейт из свежих серверных данных (иначе useState «залипает»).
-          <ReportSalariesTab key={searchParams.toString()} initialRows={salary} />
+          <ReportSalariesTab
+            key={searchParams.toString()}
+            initialRows={salary}
+            filters={periodFilters}
+          />
         )}
         {activeTab === "waste" && (
-          <ReportWasteTab batches={waste.batches} employees={waste.employees} />
+          <ReportWasteTab
+            batches={waste.batches}
+            employees={waste.employees}
+            filters={periodFilters}
+          />
         )}
       </div>
     </>

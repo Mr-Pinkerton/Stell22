@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Eye, Trash2, Upload } from "lucide-react";
 import { formatIsoDate, formatMoney } from "@/lib/format";
 import { DataTable, type Column } from "@/components/data-table";
+import { TableFilterSlot, tableHeaderClassName, tableSurfaceCardClass } from "@/components/table-surface";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -21,6 +22,7 @@ const iconDestructiveClass =
   "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
 interface FinanceStatementsTabProps {
+  filters?: React.ReactNode;
   statements: FinanceStatementRow[];
   onUploadRequest?: () => void;
   onLoadDetail?: (id: string) => Promise<FinanceCashFlowRow[]>;
@@ -28,6 +30,7 @@ interface FinanceStatementsTabProps {
 }
 
 export function FinanceStatementsTab({
+  filters,
   statements,
   onUploadRequest,
   onLoadDetail,
@@ -155,14 +158,16 @@ export function FinanceStatementsTab({
 
   return (
     <>
-      <Card className="surface-card ring-0">
+      <Card className={tableSurfaceCardClass}>
         <CardContent className="p-0">
+          <TableFilterSlot filters={filters} />
           <DataTable
             columns={columns}
             rows={statements}
             empty="Выписок нет"
             className="border-0"
             padded
+            headerClassName={tableHeaderClassName}
           />
         </CardContent>
       </Card>
@@ -181,6 +186,7 @@ export function FinanceStatementsTab({
           <NestedTable
             headers={["Дата", "Тип", "Контрагент", "Статья", "Сумма"]}
             isEmpty={detailRows.length === 0}
+            empty="Нет операций"
           >
             {detailRows.map((r) => (
               <TableRow key={r.id}>

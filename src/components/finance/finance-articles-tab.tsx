@@ -7,6 +7,7 @@ import type { FinanceArticle } from "@/mocks/finance-fixtures";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { tableBodyRowClass, tableHeadClass, tableSurfaceCardClass } from "@/components/table-surface";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   TableBody,
@@ -20,7 +21,7 @@ const COL_WIDTHS = ["26%", "22%", "10%", "30%", "12%"] as const;
 
 const cellPad = "px-4 first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
 
-const headClass = "bg-card text-base font-semibold h-11 align-middle";
+const headClass = tableHeadClass;
 
 const headLeftClass = cn(headClass, "text-left");
 
@@ -68,7 +69,7 @@ function ArticleSection({
   return (
     <section className="space-y-3">
       <h3 className="text-sm font-semibold">{title}</h3>
-      <Card className="surface-card ring-0">
+      <Card className={tableSurfaceCardClass}>
         <CardContent className="p-0">
           <table className="w-full table-fixed border-collapse text-sm">
             <colgroup>
@@ -100,6 +101,7 @@ function ArticleSection({
                   <TableRow
                     key={row.id}
                     className={cn(
+                      tableBodyRowClass,
                       !row.parentId && index % 2 === 1 && "bg-muted/40",
                       row.parentId && "bg-muted/35 text-muted-foreground hover:!bg-muted/45",
                     )}
@@ -182,7 +184,11 @@ interface FinanceArticlesTabProps {
   onDelete?: (article: FinanceArticle) => void;
 }
 
-export function FinanceArticlesTab({ articles, onEdit, onDelete }: FinanceArticlesTabProps) {
+export function FinanceArticlesTab({
+  articles,
+  onEdit,
+  onDelete,
+}: FinanceArticlesTabProps) {
   return (
     <div className="space-y-8">
       <ArticleSection

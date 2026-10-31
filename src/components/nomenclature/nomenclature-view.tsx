@@ -43,7 +43,7 @@ import { materialLabel } from "@/lib/material";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
 import { DataTable, type Column } from "@/components/data-table";
-import { Card, CardContent } from "@/components/ui/card";
+import { TableSurface, tableHeaderClassName } from "@/components/table-surface";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -686,16 +686,6 @@ export function NomenclatureView({
       />
 
       <div className="space-y-4">
-        <FiltersBar
-          search
-          archive
-          searchPlaceholder={SEARCH_PLACEHOLDERS[activeTab]}
-          searchValue={search}
-          onSearchChange={setSearch}
-          archiveChecked={showArchive}
-          onArchiveChange={setShowArchive}
-        />
-
         <div
           className="bg-muted inline-flex flex-wrap gap-1 rounded-2xl p-1"
           role="tablist"
@@ -723,8 +713,22 @@ export function NomenclatureView({
           })}
         </div>
 
-        <Card className="surface-card ring-0 overflow-hidden">
-          <CardContent className="p-0">
+        <TableSurface
+          className="overflow-hidden"
+          filters={
+            <FiltersBar
+              embedded
+              hideSearchLabel
+              search
+              archive
+              searchPlaceholder={SEARCH_PLACEHOLDERS[activeTab]}
+              searchValue={search}
+              onSearchChange={setSearch}
+              archiveChecked={showArchive}
+              onArchiveChange={setShowArchive}
+            />
+          }
+        >
             {activeTab === "products" && (
               <ProductsTable
                 rows={productRows}
@@ -741,6 +745,7 @@ export function NomenclatureView({
                 empty={emptyByTab.details}
                 className="border-0"
                 padded
+                headerClassName={tableHeaderClassName}
                 rowClassName={archivedRowClass}
               />
             )}
@@ -751,6 +756,7 @@ export function NomenclatureView({
                 empty={emptyByTab.materials}
                 className="border-0"
                 padded
+                headerClassName={tableHeaderClassName}
                 rowClassName={archivedRowClass}
               />
             )}
@@ -763,11 +769,11 @@ export function NomenclatureView({
                 empty={emptyByTab[activeTab]}
                 className="border-0"
                 padded
+                headerClassName={tableHeaderClassName}
                 rowClassName={archivedRowClass}
               />
             )}
-          </CardContent>
-        </Card>
+        </TableSurface>
       </div>
 
       <ProductFormDialog

@@ -9,9 +9,9 @@ export default async function AdminLayout({ children }: Readonly<{ children: Rea
   return (
     <SidebarProvider>
       <AppSidebar />
-      <SidebarInset>
+      <SidebarInset className="min-w-0">
         <AppHeader userName={user.name} />
-        <main className="flex-1 space-y-6 p-4 md:p-8">{children}</main>
+        <main className="min-w-0 flex-1 space-y-6 p-4 md:p-8">{children}</main>
       </SidebarInset>
     </SidebarProvider>
   );

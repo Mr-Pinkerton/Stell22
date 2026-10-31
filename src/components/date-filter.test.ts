@@ -4,6 +4,7 @@ import {
   isDefaultDateFilterValue,
   formatDateFilterTriggerLabel,
   selectDateFilterMonth,
+  isProjectCalendarToday,
 } from "@/components/date-filter";
 import { addMonths, createLocalDate } from "@/lib/dates";
 
@@ -84,5 +85,19 @@ describe("DateFilter month-only API", () => {
     expect(next.month.getFullYear()).toBe(2026);
     expect(next.month.getMonth()).toBe(6);
     expect(next.month.getDate()).toBe(1);
+  });
+});
+
+describe("isProjectCalendarToday", () => {
+  it("берёт сегодняшнюю дату в зоне проекта, не по UTC-суткам", () => {
+    const now = new Date("2026-06-30T21:30:00.000Z");
+    expect(isProjectCalendarToday(createLocalDate(2026, 6, 1), now)).toBe(true);
+    expect(isProjectCalendarToday(createLocalDate(2026, 5, 30), now)).toBe(false);
+  });
+
+  it("в другом месяце сегодняшнего числа нет", () => {
+    const now = new Date("2026-10-31T12:00:00+03:00");
+    expect(isProjectCalendarToday(createLocalDate(2026, 9, 31), now)).toBe(true);
+    expect(isProjectCalendarToday(createLocalDate(2026, 11, 31), now)).toBe(false);
   });
 });

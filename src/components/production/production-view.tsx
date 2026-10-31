@@ -3,7 +3,7 @@
 import { Fragment, useMemo, useRef, useState, useTransition } from "react";
 import { ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { DateFilter, getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
+import { getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
 import {
   type ProductionEntryRow,
 } from "@/mocks/production-fixtures";
@@ -16,13 +16,10 @@ import {
 } from "@/server/production";
 import {
   filterProductionEntries,
-  filterProductionEntriesByCreatedAt,
   filterProductionTableRows,
   formatChangeLogWhen,
   formatProductionQuantity,
-  getDefaultProductionCreatedAtFilter,
   getDefaultProductionTableFilters,
-  isProductionCreatedAtFilterDefault,
   isProductionExtraFiltersDefault,
   OPERATION_TYPE_LABEL,
   OPERATION_TYPE_UNIT,
@@ -57,7 +54,8 @@ import { scrollTableYClass } from "@/lib/scroll-classes";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
-import { filterSelectTriggerClass } from "@/components/filter-fields";
+import { TableSurface, tableBodyRowClass, tableHeadClass, tableStickyHeadRowClass } from "@/components/table-surface";
+import { FILTER_SELECT_WIDTH, filterSelectTriggerClass } from "@/components/filter-fields";
 import {
   ExpandableDetailRow,
   expandableChevronClass,
@@ -72,7 +70,6 @@ import {
 } from "@/components/reports/expandable-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -98,14 +95,13 @@ const COL_WIDTHS = ["13%", "16%", "18%", "12%", "14%", "15%", "12%"] as const;
 
 const cellPad = "px-3 first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
 
-const headClass = "bg-card text-base font-semibold h-11 align-middle";
+const headClass = tableHeadClass;
 
 const headLeftClass = cn(headClass, "text-left");
 
 const headCenterClass = cn(headClass, "text-center");
 
-const stickyHeadRowClass =
-  "sticky top-0 z-20 bg-card shadow-[0_1px_0_0_var(--border)] hover:bg-card";
+const stickyHeadRowClass = tableStickyHeadRowClass;
 
 const tableActionDestructiveClass =
   "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
@@ -128,20 +124,15 @@ const OPERATION_FILTER_OPTIONS: { value: ProductionOperationFilter; label: strin
 ];
 
 const PAYMENT_FILTER_OPTIONS: { value: ProductionPaymentFilter; label: string }[] = [
-  { value: PRODUCTION_FILTER_ALL, label: "Все" },
+  { value: PRODUCTION_FILTER_ALL, label: "Все выплаты" },
   { value: "UNPAID", label: "Не выплачено" },
   { value: "PAID", label: "Выплачено" },
 ];
 
 const filterSelectContentClass = "rounded-xl shadow-balanced ring-0 p-1.5";
-const employeeSelectTriggerClass = cn(filterSelectTriggerClass, "w-56");
-const operationSelectTriggerClass = cn(filterSelectTriggerClass, "w-44");
-const paymentSelectTriggerClass = cn(filterSelectTriggerClass, "w-44");
-const filterActionClass = "h-10 cursor-pointer rounded-xl px-4";
+const filterSelectTriggerWidthClass = cn(filterSelectTriggerClass, FILTER_SELECT_WIDTH);
 
 function ProductionExtraFilters({
-  createdAtFilter,
-  onCreatedAtFilterChange,
   employeeId,
   employeeOptions,
   onEmployeeChange,
@@ -150,8 +141,6 @@ function ProductionExtraFilters({
   payment,
   onPaymentChange,
 }: {
-  createdAtFilter: DateFilterValue;
-  onCreatedAtFilterChange: (value: DateFilterValue) => void;
   employeeId: string;
   employeeOptions: { id: string; label: string }[];
   onEmployeeChange: (value: string) => void;
@@ -160,55 +149,27 @@ function ProductionExtraFilters({
   payment: ProductionPaymentFilter;
   onPaymentChange: (value: ProductionPaymentFilter) => void;
 }) {
-  const employeeLabel =
+  const employeeValue =
     employeeId === PRODUCTION_FILTER_ALL
       ? "Все сотрудники"
       : (employeeOptions.find((o) => o.id === employeeId)?.label ?? "Все сотрудники");
-  const operationLabel =
+  const operationValue =
     OPERATION_FILTER_OPTIONS.find((o) => o.value === operation)?.label ?? "Все операции";
-  const paymentLabel =
-    PAYMENT_FILTER_OPTIONS.find((o) => o.value === payment)?.label ?? "Все";
+  const paymentValue =
+    PAYMENT_FILTER_OPTIONS.find((o) => o.value === payment)?.label ?? "Все выплаты";
 
   return (
     <>
-      <div className="grid gap-1.5">
-        <Label className="cursor-default">Дата внесения</Label>
-        <div className="flex flex-wrap items-center gap-2">
-          <DateFilter
-            value={createdAtFilter}
-            onChange={(value) => onCreatedAtFilterChange({ ...value, allTime: false })}
-          />
-          <Button
-            type="button"
-            variant={createdAtFilter.allTime ? "default" : "outline"}
-            className={cn(
-              filterActionClass,
-              !createdAtFilter.allTime &&
-                "border-[#D0D5DD] bg-card hover:border-[#98A2B3] hover:bg-muted border",
-            )}
-            onClick={() =>
-              onCreatedAtFilterChange({
-                month: createdAtFilter.month,
-                rangeStart: null,
-                rangeEnd: null,
-                allTime: true,
-              })
-            }
-          >
-            За всё время
-          </Button>
-        </div>
-      </div>
-      <div className="grid gap-1.5">
-        <Label htmlFor="f-employee" className="cursor-default">
+      <div>
+        <Label htmlFor="f-employee" className="sr-only">
           Сотрудник
         </Label>
         <Select
           value={employeeId}
           onValueChange={(v) => onEmployeeChange(v ?? PRODUCTION_FILTER_ALL)}
         >
-          <SelectTrigger id="f-employee" className={employeeSelectTriggerClass}>
-            <SelectValue placeholder="Все сотрудники">{employeeLabel}</SelectValue>
+          <SelectTrigger id="f-employee" className={filterSelectTriggerWidthClass}>
+            <SelectValue placeholder="Все сотрудники">{employeeValue}</SelectValue>
           </SelectTrigger>
           <SelectContent
             className={filterSelectContentClass}
@@ -227,8 +188,8 @@ function ProductionExtraFilters({
           </SelectContent>
         </Select>
       </div>
-      <div className="grid gap-1.5">
-        <Label htmlFor="f-operation" className="cursor-default">
+      <div>
+        <Label htmlFor="f-operation" className="sr-only">
           Операция
         </Label>
         <Select
@@ -241,8 +202,8 @@ function ProductionExtraFilters({
             )
           }
         >
-          <SelectTrigger id="f-operation" className={operationSelectTriggerClass}>
-            <SelectValue placeholder="Все операции">{operationLabel}</SelectValue>
+          <SelectTrigger id="f-operation" className={filterSelectTriggerWidthClass}>
+            <SelectValue placeholder="Все операции">{operationValue}</SelectValue>
           </SelectTrigger>
           <SelectContent
             className={filterSelectContentClass}
@@ -258,8 +219,8 @@ function ProductionExtraFilters({
           </SelectContent>
         </Select>
       </div>
-      <div className="grid gap-1.5">
-        <Label htmlFor="f-payment" className="cursor-default">
+      <div>
+        <Label htmlFor="f-payment" className="sr-only">
           Выплата
         </Label>
         <Select
@@ -272,8 +233,8 @@ function ProductionExtraFilters({
             )
           }
         >
-          <SelectTrigger id="f-payment" className={paymentSelectTriggerClass}>
-            <SelectValue placeholder="Все">{paymentLabel}</SelectValue>
+          <SelectTrigger id="f-payment" className={filterSelectTriggerWidthClass}>
+            <SelectValue placeholder="Все выплаты">{paymentValue}</SelectValue>
           </SelectTrigger>
           <SelectContent
             className={filterSelectContentClass}
@@ -304,9 +265,6 @@ interface DetailEditRow {
 
 export function ProductionView({ initialEntries }: { initialEntries: ProductionEntryRow[] }) {
   const [dateFilter, setDateFilter] = useState<DateFilterValue>(getDefaultDateFilterValue);
-  const [createdAtFilter, setCreatedAtFilter] = useState<DateFilterValue>(
-    getDefaultProductionCreatedAtFilter,
-  );
   const [employeeFilter, setEmployeeFilter] = useState<string>(PRODUCTION_FILTER_ALL);
   const [operationFilter, setOperationFilter] =
     useState<ProductionOperationFilter>(PRODUCTION_FILTER_ALL);
@@ -341,10 +299,9 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
 
   const rows = useMemo(() => {
     const byWorkDate = filterProductionEntries(entries, dateFilter);
-    const byCreatedAt = filterProductionEntriesByCreatedAt(byWorkDate, createdAtFilter);
-    const filtered = filterProductionTableRows(byCreatedAt, extraFilters);
+    const filtered = filterProductionTableRows(byWorkDate, extraFilters);
     return sortProductionEntries(filtered);
-  }, [entries, dateFilter, createdAtFilter, extraFilters]);
+  }, [entries, dateFilter, extraFilters]);
 
   const handleExport = () =>
     startExport(async () => {
@@ -600,7 +557,10 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
         onAdd={() => toast.message("Добавление операции — прототип")}
       />
 
+      <TableSurface
+        filters={
       <FiltersBar
+        embedded
         date
         dateAllTime
         dateLabel="Дата работы"
@@ -608,8 +568,6 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
         onDateFilterChange={setDateFilter}
         extraFilters={
           <ProductionExtraFilters
-            createdAtFilter={createdAtFilter}
-            onCreatedAtFilterChange={setCreatedAtFilter}
             employeeId={employeeFilter}
             employeeOptions={employeeOptions}
             onEmployeeChange={setEmployeeFilter}
@@ -619,21 +577,16 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
             onPaymentChange={setPaymentFilter}
           />
         }
-        extraFiltersDirty={
-          !isProductionExtraFiltersDefault(extraFilters) ||
-          !isProductionCreatedAtFilterDefault(createdAtFilter)
-        }
+        extraFiltersDirty={!isProductionExtraFiltersDefault(extraFilters)}
         onResetExtraFilters={() => {
           const defaults = getDefaultProductionTableFilters();
-          setCreatedAtFilter(getDefaultProductionCreatedAtFilter());
           setEmployeeFilter(defaults.employeeId);
           setOperationFilter(defaults.operation);
           setPaymentFilter(defaults.payment);
         }}
       />
-
-      <Card className="surface-card ring-0">
-        <CardContent className="p-0">
+        }
+      >
           <div className={scrollTableYClass}>
             <table className="w-full table-fixed border-collapse text-sm">
               <colgroup>
@@ -688,8 +641,7 @@ export function ProductionView({ initialEntries }: { initialEntries: ProductionE
               </TableBody>
             </table>
           </div>
-        </CardContent>
-      </Card>
+      </TableSurface>
 
       <FormDialog
         open={correctRow != null}
@@ -830,6 +782,7 @@ function ProductionRowGroup({
     <Fragment>
       <TableRow
         className={cn(
+          tableBodyRowClass,
           "cursor-pointer align-middle",
           striped && !expanded && "bg-muted/40",
           expanded && expandableExpandedSummaryClass,

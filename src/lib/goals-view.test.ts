@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createLocalDate } from "@/lib/dates";
 import { formatGoalMonthIso } from "@/lib/goals";
-import { filterGoalsByDate, splitGoalsForView } from "@/lib/goals-view";
+import { filterGoalsByDate, goalMonthRelation, splitGoalsForView } from "@/lib/goals-view";
 import type { GoalRow } from "@/mocks/goals-fixtures";
 import type { DateFilterValue } from "@/lib/date-filter-value";
 
@@ -79,5 +79,15 @@ describe("splitGoalsForView", () => {
     const { active, archived } = splitGoalsForView(allGoals, ranged);
     expect(active.map((g) => g.id)).toEqual(["july-active"]);
     expect(archived.map((g) => g.id)).toEqual(["july-archived"]);
+  });
+});
+
+describe("goalMonthRelation", () => {
+  const now = createLocalDate(2026, 9, 31);
+
+  it("отличает текущий, прошлый и будущий месяц, не меняя статус", () => {
+    expect(goalMonthRelation(formatGoalMonthIso(createLocalDate(2026, 9, 1)), now)).toBe("current");
+    expect(goalMonthRelation(formatGoalMonthIso(createLocalDate(2026, 8, 1)), now)).toBe("past");
+    expect(goalMonthRelation(formatGoalMonthIso(createLocalDate(2026, 10, 1)), now)).toBe("future");
   });
 });

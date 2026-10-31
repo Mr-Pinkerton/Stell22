@@ -19,7 +19,7 @@ import {
   partitionActiveArchived,
 } from "@/lib/table-archive";
 import { DataTable, type Column } from "@/components/data-table";
-import { Card, CardContent } from "@/components/ui/card";
+import { TableSurface, tableHeaderClassName } from "@/components/table-surface";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -250,30 +250,33 @@ export function EmployeesView({ initialEmployees }: { initialEmployees: Employee
         onExport={handleExport}
       />
 
-      <FiltersBar
-        search
-        archive
-        searchPlaceholder="ФИО сотрудника"
-        searchValue={search}
-        onSearchChange={setSearch}
-        archiveChecked={showArchive}
-        onArchiveChange={setShowArchive}
-      />
-
-      <Card className="surface-card ring-0">
-        <CardContent className="p-0">
-          <DataTable
-            columns={columns}
-            rows={rows}
-            empty="Сотрудники не найдены"
-            className="border-0"
-            padded
-            rowClassName={(row, index) =>
-              dataTableArchivedRowClass(row, index, (r) => r.status === "ARCHIVED")
-            }
+      <TableSurface
+        filters={
+          <FiltersBar
+            embedded
+            hideSearchLabel
+            search
+            archive
+            searchPlaceholder="ФИО сотрудника"
+            searchValue={search}
+            onSearchChange={setSearch}
+            archiveChecked={showArchive}
+            onArchiveChange={setShowArchive}
           />
-        </CardContent>
-      </Card>
+        }
+      >
+        <DataTable
+          columns={columns}
+          rows={rows}
+          empty="Сотрудники не найдены"
+          className="border-0"
+          padded
+          headerClassName={tableHeaderClassName}
+          rowClassName={(row, index) =>
+            dataTableArchivedRowClass(row, index, (r) => r.status === "ARCHIVED")
+          }
+        />
+      </TableSurface>
 
       <EmployeeFormDialog
         open={dialogOpen}

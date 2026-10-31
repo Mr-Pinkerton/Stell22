@@ -1,12 +1,13 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CostDetailRow, CostProductRow } from "@/lib/cost-report";
 import { formatLength, formatMoney } from "@/lib/format";
 import {
   ExpandableDetailRow,
+  ExpandableEmptyRow,
   ExpandableMainHeader,
   ExpandableReportTable,
   NestedTable,
@@ -21,6 +22,7 @@ import {
 } from "@/components/reports/expandable-table";
 import { SegmentTabs } from "@/components/reports/report-shared";
 import { DataTable, type Column } from "@/components/data-table";
+import { TableFilterSlot, tableBodyRowClass, tableHeaderClassName, tableSurfaceCardClass } from "@/components/table-surface";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { TableCell, TableRow } from "@/components/ui/table";
@@ -58,9 +60,11 @@ function moneyWithPct(value: number, pct: number) {
 export function ReportCostTab({
   details,
   products,
+  filters,
 }: {
   details: CostDetailRow[];
   products: CostProductRow[];
+  filters?: ReactNode;
 }) {
   const [subTab, setSubTab] = useState<CostSubTab>("details");
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -108,26 +112,34 @@ export function ReportCostTab({
       />
 
       {subTab === "details" ? (
-        <Card className="surface-card ring-0">
+        <Card className={tableSurfaceCardClass}>
           <CardContent className="p-0">
+            <TableFilterSlot filters={filters} />
             <DataTable
               columns={detailColumns}
               rows={details}
               empty="Детали за период не найдены"
               className="border-0"
               padded
+              headerClassName={tableHeaderClassName}
             />
           </CardContent>
         </Card>
       ) : (
-        <Card className="surface-card ring-0 overflow-hidden">
+        <Card className={cn(tableSurfaceCardClass, "overflow-hidden")}>
+          <CardContent className="p-0">
+          <TableFilterSlot filters={filters} />
           <ExpandableReportTable
             widths={expandableColWidths6}
             header={
               <ExpandableMainHeader labels={PRODUCT_HEADERS} />
             }
           >
-            {products.map((row, index) => {
+            {products.length === 0 ? (
+              <ExpandableEmptyRow colSpan={PRODUCT_HEADERS.length}>
+                Изделия за период не найдены
+              </ExpandableEmptyRow>
+            ) : products.map((row, index) => {
               const expanded = expandedId === row.id;
               return (
                 <ProductCostRowGroup
@@ -140,6 +152,7 @@ export function ReportCostTab({
               );
             })}
           </ExpandableReportTable>
+          </CardContent>
         </Card>
       )}
     </div>
@@ -161,6 +174,7 @@ function ProductCostRowGroup({
     <Fragment>
       <TableRow
         className={cn(
+          tableBodyRowClass,
           "cursor-pointer align-top",
           striped && !expanded && "bg-muted/40",
           expanded && expandableExpandedSummaryClass,
@@ -200,7 +214,11 @@ function ProductCostRowGroup({
       {expanded && (
         <ExpandableDetailRow colSpan={6}>
           <div className={expandableNestedWrapExpandedClass}>
-            <NestedTable headers={PRODUCT_DETAIL_HEADERS} isEmpty={row.details.length === 0}>
+            <NestedTable
+              headers={PRODUCT_DETAIL_HEADERS}
+              isEmpty={row.details.length === 0}
+              empty="Нет деталей"
+            >
               {row.details.map((d) => (
                 <TableRow key={`${row.id}-${d.detailName}`}>
                   <NestedTableCell className="font-medium">{d.detailName}</NestedTableCell>
