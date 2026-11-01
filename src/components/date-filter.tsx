@@ -49,6 +49,8 @@ interface DateFilterProps {
   onChange?: (value: DateFilterValue) => void;
   /** Выбор произвольного диапазона дней. Default `true`. */
   allowRange?: boolean;
+  /** Кнопка «За всё время» внутри календаря. По умолчанию выключена. */
+  allTimeChoice?: boolean;
 }
 
 function getDefaultValue(): DateFilterValue {
@@ -79,6 +81,7 @@ export function DateFilter({
   value,
   onChange,
   allowRange = true,
+  allTimeChoice = false,
 }: DateFilterProps) {
   const [internalValue, setInternalValue] = useState<DateFilterValue>(getDefaultValue);
   const current = value ?? internalValue;
@@ -297,6 +300,28 @@ export function DateFilter({
           })}
         </div>
           </>
+        ) : null}
+        {allTimeChoice ? (
+          <Button
+            type="button"
+            variant={current.allTime ? "default" : "outline"}
+            className={cn(
+              "mt-3 h-10 w-full rounded-xl",
+              !current.allTime &&
+                "border-[#D0D5DD] bg-card hover:border-[#98A2B3] hover:bg-muted border",
+            )}
+            onClick={() => {
+              setValue({
+                month: current.month,
+                rangeStart: null,
+                rangeEnd: null,
+                allTime: true,
+              });
+              setOpen(false);
+            }}
+          >
+            За всё время
+          </Button>
         ) : null}
       </PopoverContent>
     </Popover>

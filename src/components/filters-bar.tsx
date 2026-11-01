@@ -63,6 +63,8 @@ export interface FiltersBarProps extends SectionFilters {
   dateLabel?: string;
   /** Показать dateLabel внутри кнопки периода. По умолчанию подпись только для доступности. */
   dateLabelVisible?: boolean;
+  /** «За всё время» внутри календаря, без отдельной кнопки. Только «Цели». */
+  dateAllTimeInside?: boolean;
   /** Предметные controls в той же строке (родитель задаёт семантику). */
   extraFilters?: ReactNode;
   /** Родитель: внешние extra filters отличаются от default. */
@@ -128,6 +130,7 @@ export function FiltersBar({
   dateAllowRange = true,
   dateLabel = "Дата",
   dateLabelVisible = false,
+  dateAllTimeInside = false,
   embedded = false,
 }: FiltersBarProps) {
   const hasAny = search || date || weeks || archive || extraFilters != null;
@@ -206,6 +209,15 @@ export function FiltersBar({
   };
 
   const handleDateChange = (value: DateFilterValue) => {
+    if (dateAllTimeInside && value.allTime) {
+      setDateFilter({
+        month: value.month,
+        rangeStart: null,
+        rangeEnd: null,
+        allTime: true,
+      });
+      return;
+    }
     setDateFilter({ ...value, allTime: false });
   };
 
@@ -246,6 +258,7 @@ export function FiltersBar({
               value={dateFilter}
               onChange={handleDateChange}
               allowRange={dateAllowRange}
+              allTimeChoice={dateAllTimeInside}
             />
             {dateAllTime && (
               <Button

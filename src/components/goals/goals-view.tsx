@@ -23,6 +23,7 @@ import { TableSurface, tableHeaderClassName } from "@/components/table-surface";
 import { GoalFormDialog, type GoalFormValues } from "@/components/goals/goal-form-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 
 function formatPlanValue(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
@@ -66,42 +67,50 @@ export function GoalsView({
         onAdd={() => setDialogOpen(true)}
       />
 
-      <section className="space-y-3">
-        <SectionHeading title="Активные цели" count={active.length} />
-        {active.length === 0 ? (
-          <p className="text-muted-foreground text-sm">Активных целей за выбранный период нет</p>
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2">
-            {active.map((goal) => (
-              <GoalCard key={goal.id} goal={goal} />
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className="space-y-3">
-        <SectionHeading title="Архивные цели" count={archived.length} />
-        <TableSurface
-          filters={
-            <FiltersBar
-              embedded
-              date
-              dateAllTime
-              dateFilterValue={dateFilter}
-              onDateFilterChange={setDateFilter}
-            />
-          }
-        >
-          <DataTable
-            columns={pastColumns}
-            rows={archived}
-            empty="Архивных целей за выбранный период нет"
-            padded
-            className="border-0"
-            headerClassName={tableHeaderClassName}
+      <TableSurface
+        filters={
+          <FiltersBar
+            embedded
+            date
+            dateAllTimeInside
+            dateFilterValue={dateFilter}
+            onDateFilterChange={setDateFilter}
           />
-        </TableSurface>
-      </section>
+        }
+      >
+        <div className="space-y-6 py-5">
+          <section className="space-y-3 px-4 md:px-5">
+            <SectionHeading title="Активные цели" count={active.length} />
+            {active.length === 0 ? (
+              <p className="text-muted-foreground text-sm">Активных целей за выбранный период нет</p>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2">
+                {active.map((goal) => (
+                  <GoalCard key={goal.id} goal={goal} />
+                ))}
+              </div>
+            )}
+          </section>
+
+          <Separator />
+
+          <section className="space-y-3">
+            <SectionHeading
+              title="Архивные цели"
+              count={archived.length}
+              className="px-4 md:px-5"
+            />
+            <DataTable
+              columns={pastColumns}
+              rows={archived}
+              empty="Архивных целей за выбранный период нет"
+              padded
+              className="rounded-none border-0"
+              headerClassName={tableHeaderClassName}
+            />
+          </section>
+        </div>
+      </TableSurface>
 
       <GoalFormDialog
         open={dialogOpen}
