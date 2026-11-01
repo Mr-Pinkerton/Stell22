@@ -41,5 +41,16 @@ export function goalMonthLabel(iso: string): string {
 }
 
 export function isGoalMonthCurrent(iso: string, now: Date = new Date()): boolean {
-  return isSameMonth(parseGoalMonthIso(iso), now);
+  return goalMonthRelation(iso, now) === "current";
+}
+
+export type GoalMonthRelation = "past" | "current" | "future";
+
+/** Календарный месяц цели относительно «сейчас». Статус в базе не меняет. */
+export function goalMonthRelation(iso: string, now: Date = new Date()): GoalMonthRelation {
+  const month = parseGoalMonthIso(iso);
+  const goalIndex = month.getFullYear() * 12 + month.getMonth();
+  const nowIndex = now.getFullYear() * 12 + now.getMonth();
+  if (goalIndex === nowIndex) return "current";
+  return goalIndex < nowIndex ? "past" : "future";
 }

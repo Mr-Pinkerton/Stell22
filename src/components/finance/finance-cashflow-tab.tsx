@@ -2,6 +2,7 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { ArrowLeftRight, Trash2, Unlink } from "lucide-react";
+import { TableFilterSlot, tableBodyRowClass, tableHeadClass, tableStickyHeadRowClass, tableSurfaceCardClass } from "@/components/table-surface";
 import { cn } from "@/lib/utils";
 import {
   groupCashFlowsByDate,
@@ -42,7 +43,7 @@ const COL_WIDTHS = ["14%", "15%", "26%", "15%", "15%", "15%"] as const;
 
 const cellPad = "px-4 first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
 
-const headClass = "bg-card text-base font-semibold h-11 align-middle";
+const headClass = tableHeadClass;
 
 const headLeftClass = cn(headClass, "text-left");
 
@@ -50,11 +51,10 @@ const headCenterClass = cn(headClass, "text-center");
 
 const stickyTheadClass = "[&_tr]:border-b";
 
-const stickyHeadRowClass =
-  "sticky top-0 z-20 bg-card shadow-[0_1px_0_0_var(--border)] hover:bg-card";
+const stickyHeadRowClass = tableStickyHeadRowClass;
 
 const stickyDateRowClass =
-  "sticky top-11 z-10 bg-muted/95 hover:bg-muted/95 border-border/40 backdrop-blur-sm";
+  "sticky top-[49px] z-10 bg-muted/95 hover:bg-muted/95 border-border/40 backdrop-blur-sm";
 
 const tableActionClass =
   "text-muted-foreground hover:text-foreground hover:bg-muted/60 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
@@ -73,6 +73,7 @@ function rowHighlightClass(row: FinanceCashFlowRow) {
 const transferMutedCellClass = "text-muted-foreground/70 text-center text-sm";
 
 interface FinanceCashflowTabProps {
+  filters?: React.ReactNode;
   rows: FinanceCashFlowRow[];
   articles: FinanceArticle[];
   counterparties: FinanceCounterparty[];
@@ -87,6 +88,7 @@ interface FinanceCashflowTabProps {
 }
 
 export function FinanceCashflowTab({
+  filters,
   rows,
   articles,
   counterparties,
@@ -115,8 +117,9 @@ export function FinanceCashflowTab({
 
   return (
     <>
-      <Card className="surface-card ring-0">
+      <Card className={tableSurfaceCardClass}>
         <CardContent className="p-0">
+          <TableFilterSlot filters={filters} />
           <div className={scrollTableYClass}>
             <table className="w-full table-fixed border-collapse caption-bottom text-sm">
               <colgroup>
@@ -166,6 +169,7 @@ export function FinanceCashflowTab({
                         <TableRow
                           key={row.id}
                           className={cn(
+                            tableBodyRowClass,
                             index % 2 === 1 && "bg-muted/40",
                             rowHighlightClass(row),
                           )}

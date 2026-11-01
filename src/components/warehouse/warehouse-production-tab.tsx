@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { DataTable, type Column } from "@/components/data-table";
-import { Card, CardContent } from "@/components/ui/card";
+import { TableSurface, tableHeaderClassName } from "@/components/table-surface";
 import { SegmentTabs } from "@/components/reports/report-shared";
 import type { DetailStockRow, ProductionStockRow } from "@/lib/warehouse-stock";
 import type { WarehouseStock } from "@/server/warehouse";
@@ -107,9 +107,11 @@ function nomenclatureColumns(showMin: boolean): Column<ProductionStockRow>[] {
 export function WarehouseProductionTab({
   stock,
   sourceStock = stock,
+  filters,
 }: {
   stock: WarehouseStock;
   sourceStock?: WarehouseStock;
+  filters?: ReactNode;
 }) {
   const [activeTab, setActiveTab] = useState<ProductionTab>("products");
 
@@ -130,8 +132,7 @@ export function WarehouseProductionTab({
         onChange={setActiveTab}
       />
 
-      <Card className="surface-card ring-0">
-        <CardContent className="p-0">
+      <TableSurface filters={filters}>
           {activeTab === "products" && (
             <DataTable
               columns={productColumns}
@@ -139,6 +140,7 @@ export function WarehouseProductionTab({
               empty={sourceStock.products.length === 0 ? "Изделий нет" : filterEmpty}
               padded
               className="border-0"
+              headerClassName={tableHeaderClassName}
             />
           )}
           {activeTab === "details" && (
@@ -148,6 +150,7 @@ export function WarehouseProductionTab({
               empty={sourceStock.details.length === 0 ? "Деталей нет" : filterEmpty}
               padded
               className="border-0"
+              headerClassName={tableHeaderClassName}
             />
           )}
           {activeTab === "fasteners" && (
@@ -157,6 +160,7 @@ export function WarehouseProductionTab({
               empty={sourceStock.fasteners.length === 0 ? "Крепежа нет" : filterEmpty}
               padded
               className="border-0"
+              headerClassName={tableHeaderClassName}
             />
           )}
           {activeTab === "packaging" && (
@@ -166,6 +170,7 @@ export function WarehouseProductionTab({
               empty={sourceStock.packaging.length === 0 ? "Упаковки нет" : filterEmpty}
               padded
               className="border-0"
+              headerClassName={tableHeaderClassName}
             />
           )}
           {activeTab === "other" && (
@@ -175,10 +180,10 @@ export function WarehouseProductionTab({
               empty={sourceStock.other.length === 0 ? "Позиций нет" : filterEmpty}
               padded
               className="border-0"
+              headerClassName={tableHeaderClassName}
             />
           )}
-        </CardContent>
-      </Card>
+      </TableSurface>
     </div>
   );
 }

@@ -3,6 +3,7 @@
 import { formatMoney } from "@/lib/format";
 import { wastePercentClass } from "@/components/reports/report-shared";
 import { DataTable, type Column } from "@/components/data-table";
+import { tableHeaderClassName } from "@/components/table-surface";
 import type { DashboardWorkerRow, DashboardBatchRemainder } from "@/lib/dashboard-metrics";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -44,7 +45,13 @@ export function DashboardWorkersTable({ rows }: { rows: DashboardWorkerRow[] }) 
         <CardTitle className="text-base">Топ работников</CardTitle>
       </CardHeader>
       <CardContent className="p-0">
-        <DataTable columns={workerColumns} rows={rows} padded className="border-0" />
+        <DataTable
+          columns={workerColumns}
+          rows={rows}
+          padded
+          className="border-0"
+          headerClassName={tableHeaderClassName}
+        />
       </CardContent>
     </Card>
   );

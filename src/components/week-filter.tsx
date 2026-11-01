@@ -53,7 +53,7 @@ export function WeekFilter({ month, value, onChange }: WeekFilterProps) {
       value={selected || ALL_WEEKS}
       onValueChange={(v) => setSelected(v ?? ALL_WEEKS)}
     >
-      <SelectTrigger className={triggerClass}>
+      <SelectTrigger aria-label="Неделя" className={triggerClass}>
         <SelectValue placeholder="Все недели">{display}</SelectValue>
       </SelectTrigger>
       <SelectContent className={contentClass} side="bottom" sideOffset={8} alignItemWithTrigger={false}>

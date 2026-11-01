@@ -14,6 +14,7 @@ import type { FinanceAccount } from "@/mocks/finance-fixtures";
 import { isAccountConfirmed } from "@/lib/account-balance";
 import { formatIsoDate, formatMoney } from "@/lib/format";
 import { DataTable, type Column } from "@/components/data-table";
+import { TableFilterSlot, tableHeaderClassName, tableSurfaceCardClass } from "@/components/table-surface";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -27,12 +28,14 @@ const tableActionDestructiveClass =
   "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
 interface SettingsAccountsTabProps {
+  filters?: React.ReactNode;
   accounts: FinanceAccount[];
   onAccountsChange: (accounts: FinanceAccount[]) => void;
   onRegisterCreate?: (fn: () => void) => void;
 }
 
 export function SettingsAccountsTab({
+  filters,
   accounts,
   onAccountsChange,
   onRegisterCreate,
@@ -257,14 +260,16 @@ export function SettingsAccountsTab({
 
   return (
     <>
-      <Card className="surface-card ring-0">
+      <Card className={tableSurfaceCardClass}>
         <CardContent className="p-0">
+          <TableFilterSlot filters={filters} />
           <DataTable
             columns={columns}
             rows={sortedAccounts}
             empty="Счетов нет"
             padded
             className="border-0"
+            headerClassName={tableHeaderClassName}
           />
         </CardContent>
       </Card>

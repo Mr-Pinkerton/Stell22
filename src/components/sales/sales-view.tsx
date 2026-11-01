@@ -10,17 +10,18 @@ import { PageHeader } from "@/components/page-header";
 import { FiltersBar } from "@/components/filters-bar";
 import { KpiTile } from "@/components/kpi-tile";
 import { DataTable, type Column } from "@/components/data-table";
-import { Card, CardContent } from "@/components/ui/card";
+import { TableSurface, tableHeaderClassName } from "@/components/table-surface";
+import { useAutoApplyPeriod } from "@/components/use-auto-apply-period";
 import { filterSalesRows } from "@/lib/sales-table-filters";
 import {
   getDefaultSalesDateFilterValue,
-  isSalesDraftApplied,
   salesAppliedKey,
   salesDraftFromParams,
   salesHrefFromDraft,
   salesPeriodFromParams,
   syncSalesDraftIfAppliedChanged,
 } from "@/lib/sales-period";
+import { classifyDateFilterCommit } from "@/lib/period-auto-apply";
 import type { DateFilterValue } from "@/components/date-filter";
 
 const columns: Column<SalesReportRow>[] = [
@@ -81,16 +82,11 @@ export function SalesView({ data }: { data: SalesData }) {
     setDateFilter(next.dateFilter);
   }
 
-  const draftApplied = isSalesDraftApplied(dateFilter, appliedParams);
+  const commitKind = classifyDateFilterCommit(dateFilter);
+  const draftHref =
+    commitKind === "incomplete" ? null : salesHrefFromDraft(dateFilter, appliedParams);
+  const periodPending = useAutoApplyPeriod(draftHref, appliedKey, commitKind);
   const appliedAllTime = salesPeriodFromParams(appliedParams) === null;
-
-  const applyPeriod = () => {
-    router.push(salesHrefFromDraft(dateFilter, appliedParams));
-  };
-
-  const resetPeriod = () => {
-    router.push(salesHrefFromDraft(salesDateDefault, appliedParams));
-  };
 
   const handleSync = () => {
     startTransition(async () => {
@@ -129,38 +125,43 @@ export function SalesView({ data }: { data: SalesData }) {
           />
         </div>
 
-        <FiltersBar
-          search
-          date
-          dateAllTime
-          searchPlaceholder="SKU или изделие"
-          searchValue={search}
-          onSearchChange={setSearch}
-          dateFilterValue={dateFilter}
-          onDateFilterChange={setDateFilter}
-          dateDefaultValue={salesDateDefault}
-          onApply={applyPeriod}
-          applyDisabled={draftApplied}
-          onReset={resetPeriod}
-        />
-
-        <Card className="surface-card ring-0">
-          <CardContent className="p-0">
-            <DataTable
-              columns={columns}
-              rows={visibleRows}
-              empty={
-                data.rows.length === 0
-                  ? appliedAllTime
-                    ? "Продаж нет — нажмите «Синхронизировать с МП»"
-                    : "Нет продаж за выбранный период"
-                  : "Нет строк по выбранным фильтрам"
-              }
-              padded
-              className="border-0"
+        <TableSurface
+          filters={
+            <FiltersBar
+              embedded
+              hideSearchLabel
+              search
+              date
+              dateAllTime
+              searchPlaceholder="SKU или изделие"
+              searchValue={search}
+              onSearchChange={setSearch}
+              dateFilterValue={dateFilter}
+              onDateFilterChange={setDateFilter}
+              dateDefaultValue={salesDateDefault}
             />
-          </CardContent>
-        </Card>
+          }
+        >
+          {periodPending ? (
+            <p role="status" className="text-muted-foreground border-b px-4 py-2 text-sm md:px-5">
+              Обновление периода…
+            </p>
+          ) : null}
+          <DataTable
+            columns={columns}
+            rows={visibleRows}
+            empty={
+              data.rows.length === 0
+                ? appliedAllTime
+                  ? "Продаж нет — нажмите «Синхронизировать с МП»"
+                  : "Нет продаж за выбранный период"
+                : "Нет строк по выбранным фильтрам"
+            }
+            padded
+            className="border-0"
+            headerClassName={tableHeaderClassName}
+          />
+        </TableSurface>
       </div>
     </>
   );

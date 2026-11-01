@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import type { FinanceCounterparty } from "@/mocks/finance-fixtures";
 import { DataTable, type Column } from "@/components/data-table";
+import { TableFilterSlot, tableHeaderClassName, tableSurfaceCardClass } from "@/components/table-surface";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -16,6 +17,7 @@ const tableActionDestructiveClass =
   "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
 interface FinanceCounterpartiesTabProps {
+  filters?: React.ReactNode;
   counterparties: FinanceCounterparty[];
   onRegisterCreate?: (openCreate: () => void) => void;
   onCreate?: (name: string, inn: string) => void;
@@ -24,6 +26,7 @@ interface FinanceCounterpartiesTabProps {
 }
 
 export function FinanceCounterpartiesTab({
+  filters,
   counterparties,
   onRegisterCreate,
   onCreate,
@@ -111,14 +114,16 @@ export function FinanceCounterpartiesTab({
 
   return (
     <>
-      <Card className="surface-card ring-0">
+      <Card className={tableSurfaceCardClass}>
         <CardContent className="p-0">
+          <TableFilterSlot filters={filters} />
           <DataTable
             columns={columns}
             rows={counterparties}
             empty="Контрагентов нет"
             className="border-0"
             padded
+            headerClassName={tableHeaderClassName}
           />
         </CardContent>
       </Card>

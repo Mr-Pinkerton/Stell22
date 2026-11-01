@@ -11,6 +11,7 @@ import {
   expandableArchivedSummaryRowClass,
   partitionActiveArchived,
 } from "@/lib/table-archive";
+import { TableFilterSlot, tableBodyRowClass, tableHeadClass, tableSurfaceCardClass } from "@/components/table-surface";
 import { cn } from "@/lib/utils";
 import { scrollTableYClass } from "@/lib/scroll-classes";
 import {
@@ -43,7 +44,7 @@ const COL_WIDTHS = ["38%", "20%", "18%", "24%"] as const;
 
 const cellPad = "px-4 first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
 
-const headClass = "bg-card text-base font-semibold h-11 align-middle";
+const headClass = tableHeadClass;
 
 const headLeftClass = cn(headClass, "text-left");
 
@@ -115,14 +116,32 @@ export function FinanceDealsTab({
   }, [deals, showArchive]);
 
   return (
-    <div className="space-y-4">
-      <label className="border-border bg-card hover:border-[#98a2b3] hover:bg-muted/40 inline-flex h-10 cursor-pointer items-center gap-2.5 rounded-xl border px-3.5 text-sm font-medium transition-colors">
-        <Checkbox checked={showArchive} onCheckedChange={(v) => setShowArchive(v === true)} />
-        <Label className="cursor-pointer font-medium">Архив</Label>
-      </label>
-
-      <Card className="surface-card ring-0">
-        <CardContent className="p-0">
+    <Card className={tableSurfaceCardClass}>
+      <CardContent className="p-0">
+        <TableFilterSlot
+          filters={
+            <div className="flex flex-wrap items-center gap-4 p-4 md:p-5">
+              <label className="border-border bg-card hover:border-[#98a2b3] hover:bg-muted/40 inline-flex h-10 cursor-pointer items-center gap-2.5 rounded-xl border px-3.5 text-sm font-medium transition-colors">
+                <Checkbox
+                  checked={showArchive}
+                  onCheckedChange={(v) => setShowArchive(v === true)}
+                />
+                <Label className="cursor-pointer font-medium">Архив</Label>
+              </label>
+              <div className="ml-auto flex shrink-0 gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-10 cursor-pointer rounded-xl px-4"
+                  disabled={!showArchive}
+                  onClick={() => setShowArchive(false)}
+                >
+                  Сбросить
+                </Button>
+              </div>
+            </div>
+          }
+        />
           <div className={scrollTableYClass}>
             <table className="w-full table-fixed border-collapse text-sm">
               <colgroup>
@@ -170,7 +189,6 @@ export function FinanceDealsTab({
           </div>
         </CardContent>
       </Card>
-    </div>
   );
 }
 
@@ -201,6 +219,7 @@ function DealRowGroup({
     <Fragment>
       <TableRow
         className={cn(
+          tableBodyRowClass,
           "cursor-pointer align-middle",
           expandableArchivedSummaryRowClass({ archived, expanded, striped }),
         )}

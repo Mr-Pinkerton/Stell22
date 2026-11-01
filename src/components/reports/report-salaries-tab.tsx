@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState, useTransition } from "react";
+import { Fragment, useMemo, useState, useTransition, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,7 @@ import { aggregateBanknotes } from "@/lib/cash-bills";
 import { BanknoteTiles } from "@/components/reports/banknote-tiles";
 import {
   ExpandableDetailRow,
+  ExpandableEmptyRow,
   ExpandableMainHeader,
   ExpandableReportTable,
   NestedTable,
@@ -23,10 +24,11 @@ import {
   expandableNestedWrapExpandedClass,
   expandableSummaryCellClass,
 } from "@/components/reports/expandable-table";
+import { TableFilterSlot, tableBodyRowClass, tableSurfaceCardClass } from "@/components/table-surface";
 import { KpiTile } from "@/components/kpi-tile";
 import { filterSelectTriggerClass } from "@/components/filter-fields";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -55,7 +57,13 @@ const billSelectTriggerClass = cn(
   "h-10 w-full min-w-[17.6rem] sm:min-w-[20.8rem]",
 );
 
-export function ReportSalariesTab({ initialRows }: { initialRows: SalaryReportRow[] }) {
+export function ReportSalariesTab({
+  initialRows,
+  filters,
+}: {
+  initialRows: SalaryReportRow[];
+  filters?: ReactNode;
+}) {
   const [rows, setRows] = useState(initialRows);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [billEmployeeId, setBillEmployeeId] = useState(() =>
@@ -109,14 +117,20 @@ export function ReportSalariesTab({ initialRows }: { initialRows: SalaryReportRo
         <KpiTile title="Зарплата" value={formatMoney(kpis.totalSalary)} hint="к выплате" />
       </div>
 
-      <Card className="surface-card ring-0 overflow-hidden">
+      <Card className={cn(tableSurfaceCardClass, "overflow-hidden")}>
+        <CardContent className="p-0">
+        <TableFilterSlot filters={filters} />
         <ExpandableReportTable
           widths={expandableColWidths6}
           header={
             <ExpandableMainHeader labels={SALARY_HEADERS} />
           }
         >
-          {unpaid.map((row, index) => (
+          {unpaid.length === 0 && paid.length === 0 ? (
+            <ExpandableEmptyRow colSpan={SALARY_HEADERS.length}>
+              Нет данных за период
+            </ExpandableEmptyRow>
+          ) : unpaid.map((row, index) => (
             <SalaryRowGroup
               key={row.id}
               row={row}
@@ -148,14 +162,15 @@ export function ReportSalariesTab({ initialRows }: { initialRows: SalaryReportRo
             />
           ))}
         </ExpandableReportTable>
+        </CardContent>
       </Card>
 
       {billView && (
         <section className="space-y-4">
-          <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-sm font-semibold">Расчёт купюр</h3>
-            <div className="grid w-full max-w-[28.8rem] gap-1.5 sm:w-auto">
-              <label htmlFor="bill-emp" className="text-muted-foreground text-xs font-medium">
+            <div className="w-full max-w-[28.8rem] sm:w-auto">
+              <label htmlFor="bill-emp" className="sr-only">
                 Сотрудник
               </label>
               <Select value={billEmployeeId} onValueChange={(v) => setBillEmployeeId(v ?? "")}>
@@ -216,6 +231,7 @@ function SalaryRowGroup({
     <Fragment>
       <TableRow
         className={cn(
+          tableBodyRowClass,
           "cursor-pointer align-top",
           striped && !expanded && "bg-muted/40",
           expanded && expandableExpandedSummaryClass,
@@ -268,7 +284,11 @@ function SalaryRowGroup({
       {expanded && (
         <ExpandableDetailRow colSpan={6}>
           <div className={expandableNestedWrapExpandedClass}>
-            <NestedTable headers={SALARY_DAY_HEADERS} isEmpty={row.days.length === 0}>
+            <NestedTable
+              headers={SALARY_DAY_HEADERS}
+              isEmpty={row.days.length === 0}
+              empty="Нет дней"
+            >
               {row.days.map((d) => (
                 <TableRow key={d.date}>
                   <NestedTableCell>{formatIsoDate(d.date)}</NestedTableCell>

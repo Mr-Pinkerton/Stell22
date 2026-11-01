@@ -6,6 +6,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { tableBodyRowClass } from "@/components/table-surface";
 import { cn } from "@/lib/utils";
 
 export interface Column<T> {
@@ -83,6 +84,7 @@ export function DataTable<T extends { id: string }>({
               <TableRow
                 key={row.id}
                 className={cn(
+                  tableBodyRowClass,
                   index % 2 === 1 && "bg-muted/40 hover:bg-muted/55",
                   rowClassName?.(row, index),
                 )}

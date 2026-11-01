@@ -90,8 +90,8 @@ function MarketplaceFilterSelect({
   const label =
     MARKETPLACE_FILTER_OPTIONS.find((o) => o.value === value)?.label ?? "Все маркетплейсы";
   return (
-    <div className="grid gap-1.5">
-      <Label htmlFor={id} className="cursor-default">
+    <div>
+      <Label htmlFor={id} className="sr-only">
         Маркетплейс
       </Label>
       <Select
@@ -134,8 +134,8 @@ function ShipmentStatusFilterSelect({
   const label =
     SHIPMENT_STATUS_FILTER_OPTIONS.find((o) => o.value === value)?.label ?? "Все статусы";
   return (
-    <div className="grid gap-1.5">
-      <Label htmlFor="f-shipment-status" className="cursor-default">
+    <div>
+      <Label htmlFor="f-shipment-status" className="sr-only">
         Статус
       </Label>
       <Select
@@ -372,67 +372,6 @@ export function WarehouseView({ stock, initialDocs, mpStock, supplies }: Warehou
         />
 
         {activeTab === "mp" && (
-          <FiltersBar
-            search
-            searchPlaceholder="SKU или изделие"
-            searchValue={mpSearch}
-            onSearchChange={setMpSearch}
-            extraFilters={
-              <MarketplaceFilterSelect
-                id="f-mp-marketplace"
-                value={mpMarketplace}
-                onChange={setMpMarketplace}
-              />
-            }
-            extraFiltersDirty={!isMpExtraFiltersDefault({ search: mpSearch, marketplace: mpMarketplace })}
-            onResetExtraFilters={() => {
-              setMpMarketplace(getDefaultMpTableFilters().marketplace);
-            }}
-          />
-        )}
-        {activeTab === "shipments" && (
-          <FiltersBar
-            search
-            searchPlaceholder="SKU или изделие"
-            searchValue={shipmentSearch}
-            onSearchChange={setShipmentSearch}
-            extraFilters={
-              <>
-                <MarketplaceFilterSelect
-                  id="f-shipment-marketplace"
-                  value={shipmentMarketplace}
-                  onChange={setShipmentMarketplace}
-                />
-                <ShipmentStatusFilterSelect
-                  value={shipmentStatus}
-                  onChange={setShipmentStatus}
-                />
-              </>
-            }
-            extraFiltersDirty={
-              !isShipmentExtraFiltersDefault({
-                search: shipmentSearch,
-                marketplace: shipmentMarketplace,
-                status: shipmentStatus,
-              })
-            }
-            onResetExtraFilters={() => {
-              const defaults = getDefaultShipmentTableFilters();
-              setShipmentMarketplace(defaults.marketplace);
-              setShipmentStatus(defaults.status);
-            }}
-          />
-        )}
-        {activeTab === "production" && (
-          <FiltersBar
-            search
-            searchPlaceholder="Поиск по складу"
-            searchValue={productionSearch}
-            onSearchChange={setProductionSearch}
-          />
-        )}
-
-        {activeTab === "mp" && (
           <WarehouseMpTab
             rows={visibleMpRows}
             empty={
@@ -440,10 +379,44 @@ export function WarehouseView({ stock, initialDocs, mpStock, supplies }: Warehou
                 ? "Нет данных с маркетплейсов"
                 : "Нет строк по выбранным фильтрам"
             }
+            filters={
+              <FiltersBar
+                embedded
+                hideSearchLabel
+                search
+                searchPlaceholder="SKU или изделие"
+                searchValue={mpSearch}
+                onSearchChange={setMpSearch}
+                extraFilters={
+                  <MarketplaceFilterSelect
+                    id="f-mp-marketplace"
+                    value={mpMarketplace}
+                    onChange={setMpMarketplace}
+                  />
+                }
+                extraFiltersDirty={!isMpExtraFiltersDefault({ search: mpSearch, marketplace: mpMarketplace })}
+                onResetExtraFilters={() => {
+                  setMpMarketplace(getDefaultMpTableFilters().marketplace);
+                }}
+              />
+            }
           />
         )}
         {activeTab === "production" && (
-          <WarehouseProductionTab stock={filteredProductionStock} sourceStock={stock} />
+          <WarehouseProductionTab
+            stock={filteredProductionStock}
+            sourceStock={stock}
+            filters={
+              <FiltersBar
+                embedded
+                hideSearchLabel
+                search
+                searchPlaceholder="Поиск по складу"
+                searchValue={productionSearch}
+                onSearchChange={setProductionSearch}
+              />
+            }
+          />
         )}
         {activeTab === "shipments" && (
           <WarehouseShipmentsTab
@@ -452,6 +425,41 @@ export function WarehouseView({ stock, initialDocs, mpStock, supplies }: Warehou
               supplies.length === 0
                 ? "Поставок нет — нажмите «Синхронизировать с МП» в разделе Продажи"
                 : "Нет строк по выбранным фильтрам"
+            }
+            filters={
+              <FiltersBar
+                embedded
+                hideSearchLabel
+                search
+                searchPlaceholder="SKU или изделие"
+                searchValue={shipmentSearch}
+                onSearchChange={setShipmentSearch}
+                extraFilters={
+                  <>
+                    <MarketplaceFilterSelect
+                      id="f-shipment-marketplace"
+                      value={shipmentMarketplace}
+                      onChange={setShipmentMarketplace}
+                    />
+                    <ShipmentStatusFilterSelect
+                      value={shipmentStatus}
+                      onChange={setShipmentStatus}
+                    />
+                  </>
+                }
+                extraFiltersDirty={
+                  !isShipmentExtraFiltersDefault({
+                    search: shipmentSearch,
+                    marketplace: shipmentMarketplace,
+                    status: shipmentStatus,
+                  })
+                }
+                onResetExtraFilters={() => {
+                  const defaults = getDefaultShipmentTableFilters();
+                  setShipmentMarketplace(defaults.marketplace);
+                  setShipmentStatus(defaults.status);
+                }}
+              />
             }
           />
         )}

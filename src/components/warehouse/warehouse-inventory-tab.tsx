@@ -35,6 +35,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { tableBodyRowClass, tableHeadClass, tableSurfaceCardClass } from "@/components/table-surface";
 import { Input } from "@/components/ui/input";
 import { FormDialog } from "@/components/form-dialog-shared";
 import {
@@ -58,7 +59,7 @@ const HISTORY_COL_SPAN = 4;
 const HISTORY_COL_WIDTHS = ["22%", "22%", "28%", "28%"] as const;
 
 const cellPad = "px-3 first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
-const headClass = "bg-card text-base font-semibold h-11 align-middle";
+const headClass = tableHeadClass;
 const headLeftClass = cn(headClass, "text-left");
 const headCenterClass = cn(headClass, "text-center");
 
@@ -178,7 +179,7 @@ export function WarehouseInventoryTab({
             </div>
           </div>
 
-          <Card className="surface-card ring-0">
+          <Card className={tableSurfaceCardClass}>
             <CardContent className="p-0">
               <div className={scrollTableYClass}>
                 <table className="w-full table-fixed border-collapse text-sm">
@@ -198,14 +199,25 @@ export function WarehouseInventoryTab({
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {draft.lines.map((line, index) => (
-                      <DraftLineRow
-                        key={line.id}
-                        line={line}
-                        striped={index % 2 === 1}
-                        onActualChange={(qty) => updateDraftLine(line.id, qty)}
-                      />
-                    ))}
+                    {draft.lines.length === 0 ? (
+                      <TableRow>
+                        <TableCell
+                          colSpan={DRAFT_COL_WIDTHS.length}
+                          className={cn(cellPad, "text-muted-foreground h-24 text-center")}
+                        >
+                          Строк нет
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      draft.lines.map((line, index) => (
+                        <DraftLineRow
+                          key={line.id}
+                          line={line}
+                          striped={index % 2 === 1}
+                          onActualChange={(qty) => updateDraftLine(line.id, qty)}
+                        />
+                      ))
+                    )}
                   </TableBody>
                 </table>
               </div>
@@ -235,10 +247,9 @@ export function WarehouseInventoryTab({
         </div>
       )}
 
-      {history.length > 0 && (
-        <section className="space-y-3">
+      <section className="space-y-3">
           <h2 className="text-lg font-semibold tracking-tight">Проведённые инвентаризации</h2>
-          <Card className="surface-card ring-0">
+          <Card className={tableSurfaceCardClass}>
             <CardContent className="p-0">
               <div className={scrollTableYClass}>
                 <table className="w-full table-fixed border-collapse text-sm">
@@ -256,24 +267,34 @@ export function WarehouseInventoryTab({
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {history.map((doc, index) => (
-                      <HistoryRowGroup
-                        key={doc.id}
-                        doc={doc}
-                        expanded={expandedId === doc.id}
-                        striped={index % 2 === 1}
-                        onToggle={() =>
-                          setExpandedId((id) => (id === doc.id ? null : doc.id))
-                        }
-                      />
-                    ))}
+                    {history.length === 0 ? (
+                      <TableRow>
+                        <TableCell
+                          colSpan={HISTORY_COL_SPAN}
+                          className={cn(cellPad, "text-muted-foreground h-24 text-center")}
+                        >
+                          Проведённых инвентаризаций нет
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      history.map((doc, index) => (
+                        <HistoryRowGroup
+                          key={doc.id}
+                          doc={doc}
+                          expanded={expandedId === doc.id}
+                          striped={index % 2 === 1}
+                          onToggle={() =>
+                            setExpandedId((id) => (id === doc.id ? null : doc.id))
+                          }
+                        />
+                      ))
+                    )}
                   </TableBody>
                 </table>
               </div>
             </CardContent>
           </Card>
         </section>
-      )}
 
       <FormDialog
         open={confirmOpen}
@@ -305,7 +326,7 @@ function DraftLineRow({
   const deviationSum = inventoryDeviationSum(deviation, line.unitCost);
 
   return (
-    <TableRow className={cn(striped && "bg-muted/40")}>
+    <TableRow className={cn(tableBodyRowClass, striped && "bg-muted/40")}>
       <TableCell className={cn(cellPad, "font-medium")}>{line.name}</TableCell>
       <TableCell className={cn(cellPad, "text-center tabular-nums")}>{line.accountedQty}</TableCell>
       <TableCell className={cn(cellPad, "text-center")}>
@@ -362,6 +383,7 @@ function HistoryRowGroup({
     <Fragment>
       <TableRow
         className={cn(
+          tableBodyRowClass,
           "cursor-pointer align-middle",
           striped && !expanded && "bg-muted/40",
           expanded && expandableExpandedSummaryClass,

@@ -2,11 +2,13 @@
 
 import { Fragment, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { tableBodyRowClass } from "@/components/table-surface";
 import { cn } from "@/lib/utils";
 import { formatLength, formatMoneyDecimal } from "@/lib/format";
 import { expandableArchivedSummaryRowClass } from "@/lib/table-archive";
 import {
   ExpandableDetailRow,
+  ExpandableEmptyRow,
   ExpandableMainHeader,
   ExpandableReportTable,
   NestedTable,
@@ -75,24 +77,21 @@ export function ProductsTable({
   const detailById = useMemo(() => new Map(details.map((d) => [d.id, d])), [details]);
   const itemById = useMemo(() => new Map(items.map((n) => [n.id, n])), [items]);
 
-  if (rows.length === 0) {
-    return (
-      <p className="text-muted-foreground px-6 py-12 text-center">{empty}</p>
-    );
-  }
-
   return (
     <ExpandableReportTable
       widths={PRODUCT_COL_WIDTHS}
       header={<ExpandableMainHeader labels={PRODUCT_HEADERS} centerFrom={1} />}
     >
-      {rows.map((row, index) => {
+      {rows.length === 0 ? (
+        <ExpandableEmptyRow colSpan={COL_SPAN}>{empty}</ExpandableEmptyRow>
+      ) : rows.map((row, index) => {
         const expanded = expandedId === row.id;
         const archived = row.status === "ARCHIVED";
         return (
           <Fragment key={row.id}>
             <TableRow
               className={cn(
+                tableBodyRowClass,
                 "group cursor-pointer align-top",
                 expandableArchivedSummaryRowClass({ archived, expanded, striped: index % 2 === 1 }),
               )}

@@ -1,7 +1,8 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { DataTable, type Column } from "@/components/data-table";
-import { Card, CardContent } from "@/components/ui/card";
+import { TableSurface, tableHeaderClassName } from "@/components/table-surface";
 import { Badge } from "@/components/ui/badge";
 import {
   MARKETPLACE_LABEL,
@@ -59,23 +60,24 @@ const columns: Column<ShipmentRow>[] = [
 interface WarehouseShipmentsTabProps {
   rows: ShipmentRow[];
   empty?: string;
+  filters?: ReactNode;
 }
 
 export function WarehouseShipmentsTab({
   rows,
   empty = "Поставок нет — нажмите «Синхронизировать с МП» в разделе Продажи",
+  filters,
 }: WarehouseShipmentsTabProps) {
   return (
-    <Card className="surface-card ring-0">
-      <CardContent className="p-0">
-        <DataTable
-          columns={columns}
-          rows={rows}
-          empty={empty}
-          padded
-          className="border-0"
-        />
-      </CardContent>
-    </Card>
+    <TableSurface filters={filters}>
+      <DataTable
+        columns={columns}
+        rows={rows}
+        empty={empty}
+        padded
+        className="border-0"
+        headerClassName={tableHeaderClassName}
+      />
+    </TableSurface>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -12,6 +12,7 @@ import { formatIsoDate, formatLength, formatMoney, formatVolume } from "@/lib/fo
 import { partitionActiveArchived } from "@/lib/table-archive";
 import {
   ExpandableDetailRow,
+  ExpandableEmptyRow,
   ExpandableMainHeader,
   ExpandableReportTable,
   NestedTable,
@@ -26,12 +27,14 @@ import {
 } from "@/components/reports/expandable-table";
 import { KpiTile } from "@/components/kpi-tile";
 import { Badge } from "@/components/ui/badge";
-import { Card } from "@/components/ui/card";
+import { TableFilterSlot, tableBodyRowClass, tableSurfaceCardClass } from "@/components/table-surface";
+import { Card, CardContent } from "@/components/ui/card";
 import { TableCell, TableRow } from "@/components/ui/table";
 import type { RailType, Sort } from "@/types/domain";
 
 interface ReportPurchasesTabProps {
   initialRows: PurchaseReportRow[];
+  filters?: ReactNode;
 }
 
 const RAIL_TYPE_LABEL: Record<RailType, string> = {
@@ -75,7 +78,7 @@ function packageTitle(pkg: PurchasePackageLine) {
   return "Поштучно";
 }
 
-export function ReportPurchasesTab({ initialRows }: ReportPurchasesTabProps) {
+export function ReportPurchasesTab({ initialRows, filters }: ReportPurchasesTabProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const rows = useMemo(
@@ -94,19 +97,20 @@ export function ReportPurchasesTab({ initialRows }: ReportPurchasesTabProps) {
         <KpiTile title="Средняя стоимость за куб" value={formatMoney(kpis.avgCostPerM3)} />
       </div>
 
-      <Card className="surface-card ring-0 overflow-hidden">
-        {rows.length === 0 ? (
-          <p className="text-muted-foreground px-6 py-12 text-center">
-            Партии за период не найдены
-          </p>
-        ) : (
+      <Card className={cn(tableSurfaceCardClass, "overflow-hidden")}>
+        <CardContent className="p-0">
+        <TableFilterSlot filters={filters} />
           <ExpandableReportTable
             widths={expandableColWidths8}
             header={
               <ExpandableMainHeader labels={PURCHASE_HEADERS} />
             }
           >
-            {rows.map((row, index) => {
+            {rows.length === 0 ? (
+              <ExpandableEmptyRow colSpan={PURCHASE_HEADERS.length}>
+                Партии за период не найдены
+              </ExpandableEmptyRow>
+            ) : rows.map((row, index) => {
               const expanded = expandedId === row.id;
               return (
                 <Fragment key={row.id}>
@@ -160,7 +164,7 @@ export function ReportPurchasesTab({ initialRows }: ReportPurchasesTabProps) {
               );
             })}
           </ExpandableReportTable>
-        )}
+        </CardContent>
       </Card>
     </div>
   );
@@ -180,6 +184,7 @@ function BatchSummaryRow({
   return (
     <TableRow
       className={cn(
+        tableBodyRowClass,
         "group cursor-pointer align-top",
         striped && !expanded && "bg-muted/40",
         expanded && expandableExpandedSummaryClass,
