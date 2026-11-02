@@ -328,6 +328,7 @@ Does not reopen `03.01`, `03.02`, AUDIT 1, or AUDIT 2. Does not change section A
 | `audit/09.32-owner-decisions.md` | Closure | Open questions | same SHA | `COMPLETE / WORKTREE ONLY / NOT COMMITTED` | NO | BD-COST-01 … 08 not re-asked. |
 | `audit/09.33-release-safety-gates.md` | Closure | Gates | same SHA | `COMPLETE / WORKTREE ONLY / NOT COMMITTED` | NO | NO PRODUCTION MARKETPLACE SYNC. NO PRODUCTION COST FLOW ACTIVATION. `FREEZE_PASS_FORBIDDEN`. `BA-P06-001` is P1. |
 | `audit/09.34-final-audit-summary.md` | Closure | Summary | same SHA | `COMPLETE / WORKTREE ONLY / NOT COMMITTED` | NO | PHASE 12R totals. No implementation authorization. Not committed. |
+| `audit/09.35-remediation-checklist.md` | Closure | Owner remediation checklist | Parent `2a02c2c458463218b936b99d9d14df2ba39d1f88`; tree `dbae4f428f7b9d8102660074855f9918795056d2` | `OWNER TRACKER / NOT AN IMPLEMENTATION AUTHORIZATION / ALL ITEMS OPEN / NOT ON MAIN` | NO until HEAD accepts this tracker | Контрольный список владельца на русском: 36 открытых BA, исторические пункты и шесть вопросов. Не закрывает карточки. Не разрешает исправление, синхронизацию, миграцию или выкладку. |
 
 ---
 
