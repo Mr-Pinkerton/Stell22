@@ -1,0 +1,45 @@
+{
+  "database": "p1iso_0733f164",
+  "postgresql": "17",
+  "port": 60363,
+  "gate": "absent",
+  "recut": {
+    "firstCut": "CREATED",
+    "cancelReplayed": false,
+    "afterCancel": { "status": "ARCHIVED", "closed": true, "frozen": false, "remaining": 1 },
+    "recut": { "ok": true, "status": "CREATED" },
+    "afterRecut": { "status": "ARCHIVED", "closed": true, "frozen": false, "remaining": 0 },
+    "blankQty": 2
+  },
+  "inventory": {
+    "packed": "RECORDED",
+    "draftLines": [{ "type": "PRODUCT", "accounted": 1 }],
+    "conducted": "CONDUCTED",
+    "stockBefore": 1,
+    "cancelPack": "INVENTORY_BOUNDARY",
+    "cancelPrisadka": "blocked because the detail is still in the pack",
+    "qtyEdit": "INVENTORY_BOUNDARY",
+    "stockAfter": 1
+  },
+  "archivedProduct": { "status": "ARCHIVED", "stockQty": 1, "visibleNames": [] },
+  "transferAt200": {
+    "beforeConvert": { "totalCost": "1000", "overhead": "200", "isTransfer": false, "hasArticle": true, "hasDeal": true },
+    "afterConvert": { "totalCost": "1000", "overhead": "0", "expenseIsTransfer": true, "hasArticle": false, "hasDeal": false },
+    "reapplied": 1,
+    "afterReapply": { "totalCost": "1000", "overhead": "200", "expenseIsTransfer": true, "hasArticle": true, "hasDeal": true }
+  },
+  "excelWhileTransferWas200": {
+    "formulaCount": 0,
+    "cells": ["P12 Peg", 46.67, 25, 71.67, 200, 271.67],
+    "report": { "material": 46.67, "work": 25, "direct": 71.67, "overhead": 200, "full": 271.67 }
+  },
+  "raisedTransfer1500": {
+    "method": "amount updated on the already restamped transfer, then syncDealInternal",
+    "totalCost": "1500",
+    "purchaseCost": "1000",
+    "dealTotal": "1500",
+    "overhead": "1500",
+    "periodExpense": 0,
+    "dealExpense": 1500
+  }
+}
