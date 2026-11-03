@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
+import { marketplaceSyncFeedback } from "@/lib/marketplace-sync-feedback";
 import { syncMarketplaces, type SalesData } from "@/server/marketplace";
 import type { SalesReportRow } from "@/mocks/report-fixtures";
 import { formatMoney, formatIsoDateTime } from "@/lib/format";
@@ -91,18 +92,13 @@ export function SalesView({ data }: { data: SalesData }) {
   const handleSync = () => {
     startTransition(async () => {
       const res = await syncMarketplaces();
-      if (res.ok) {
-        const src = res.sources;
-        const mode = src
-          ? ` [${src.wb === "api" ? "WB: API" : "WB: демо"}, ${src.ozon === "api" ? "Ozon: API" : "Ozon: демо"}]`
-          : "";
-        toast.success(
-          `Синхронизация: +${res.salesAdded} продаж, +${res.suppliesAdded} поставок, остатки обновлены${mode}`,
-        );
-        if (res.warnings?.length) toast.warning(res.warnings.join("; "));
+      const feedback = marketplaceSyncFeedback(res);
+      if (feedback.kind === "success") {
+        toast.success(feedback.message);
+        if (feedback.warnings?.length) toast.warning(feedback.warnings.join("; "));
         router.refresh();
       } else {
-        toast.error(res.error ?? "Ошибка синхронизации");
+        toast.error(feedback.message);
       }
     });
   };
