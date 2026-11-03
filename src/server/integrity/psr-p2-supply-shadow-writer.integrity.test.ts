@@ -212,7 +212,8 @@ describe.skipIf(!enabled)("PSR-P2 Supply SHADOW writer", () => {
           (marketplace === "OZON" ? idByOzon.get(sku) : idByWb.get(sku)) ?? null,
         stockReplace: input.stockReplace ?? { wb: false, ozon: false },
         now: input.now ?? new Date("2026-09-19T12:00:00.000Z"),
-        sources: { wb: "stub", ozon: "stub" },
+        // Hand-built accounting rows. A stub source is refused before any write.
+        sources: { wb: "api", ozon: "api" },
       });
     }, txOpts);
   }
@@ -791,7 +792,8 @@ describe.skipIf(!enabled)("PSR-P2 Supply SHADOW writer", () => {
         productIdFor: (marketplace, sku) => (marketplace === "OZON" ? idByOzon.get(sku) ?? null : null),
         stockReplace: { wb: false, ozon: false },
         now: new Date("2026-01-01T00:00:00.000Z"),
-        sources: { wb: "stub", ozon: "stub" },
+        // Hand-built accounting rows. A stub source is refused before any write.
+        sources: { wb: "api", ozon: "api" },
       });
     }, txOpts);
     const after = new Date();

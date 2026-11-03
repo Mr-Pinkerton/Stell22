@@ -43,123 +43,12 @@ import {
   type NormalizedSale,
   type NormalizedStock,
   type NormalizedSupply,
-  type OzonPostingRaw,
-  type OzonStockRaw,
-  type OzonSupplyOrderRaw,
-  type WbIncomeRaw,
-  type WbSaleRaw,
-  type WbStockRaw,
 } from "@/lib/marketplace-map";
-
-// ================== ПОЛУЧЕНИЕ СЫРЫХ ДАННЫХ API (ЗАГЛУШКА) ==================
-// Реальные HTTP-вызовы подключаются здесь при появлении ключей
-// (см. docs/marketplace-api.md). До тех пор генерируем ответы в формате API,
-// чтобы контракт «сырой ответ → модели» (мапперы) был честным и рабочим.
 
 interface ActiveProduct {
   id: string;
   skuOzon: string;
   skuWb: string;
-}
-
-// Заглушка цены: детерминированная база из артикула (у изделий нет поля цены —
-// реальные цены придут из API маркетплейса).
-function mockBasePrice(sku: string): number {
-  let h = 0;
-  for (let i = 0; i < sku.length; i++) h = (h * 31 + sku.charCodeAt(i)) & 0xffff;
-  return 800 + (h % 1200); // 800..1999 ₽
-}
-
-function makeRand(seed: number) {
-  let s = seed % 0x7fffffff || 1;
-  return () => {
-    s = (s * 1103515245 + 12345) & 0x7fffffff;
-    return s / 0x7fffffff;
-  };
-}
-
-function fetchWbSalesRaw(products: ActiveProduct[], now: Date, rand: () => number): WbSaleRaw[] {
-  const stamp = now.getTime();
-  const out: WbSaleRaw[] = [];
-  for (const p of products) {
-    const count = 2 + Math.floor(rand() * 4); // 2..5 продаж
-    for (let i = 0; i < count; i++) {
-      const isReturn = rand() < 0.1; // ~10% возвраты
-      out.push({
-        date: now.toISOString(),
-        supplierArticle: p.skuWb,
-        saleID: `${isReturn ? "R" : "S"}-${stamp}-${p.skuWb}-${i}`,
-        finishedPrice: Math.round(mockBasePrice(p.skuWb) * (0.9 + rand() * 0.2)),
-      });
-    }
-  }
-  return out;
-}
-
-function fetchOzonPostingsRaw(
-  products: ActiveProduct[],
-  now: Date,
-  rand: () => number,
-): OzonPostingRaw[] {
-  const stamp = now.getTime();
-  return products.map((p) => ({
-    posting_number: `${stamp}-${p.skuOzon}`,
-    status: "delivered",
-    created_at: now.toISOString(),
-    products: [
-      {
-        offer_id: p.skuOzon,
-        quantity: 1 + Math.floor(rand() * 3), // 1..3
-        price: mockBasePrice(p.skuOzon).toFixed(2),
-      },
-    ],
-  }));
-}
-
-// Поставки — детерминированные (стабильный externalId), чтобы повторная
-// синхронизация была идемпотентна и не списывала склад производства повторно
-// (см. deductedQty). Реальные поставки придут из API с собственными id.
-function fetchWbIncomesRaw(products: ActiveProduct[], now: Date): WbIncomeRaw[] {
-  return products.map((p, idx) => {
-    const accepted = idx % 2 === 0; // часть принята, часть в пути (обе отгружены)
-    return {
-      incomeId: 900000 + idx,
-      number: `WB-INC-${900000 + idx}`,
-      date: now.toISOString(),
-      dateClose: accepted ? now.toISOString() : null,
-      supplierArticle: p.skuWb,
-      quantity: 5 + (idx % 4),
-      warehouseName: "Коледино",
-    };
-  });
-}
-
-function fetchOzonSupplyOrdersRaw(products: ActiveProduct[], now: Date): OzonSupplyOrderRaw[] {
-  const items = products.map((p, idx) => ({ offer_id: p.skuOzon, quantity: 3 + (idx % 3) }));
-  if (items.length === 0) return [];
-  return [
-    {
-      supply_order_id: 800001,
-      status: "shipped",
-      created_at: now.toISOString(),
-      warehouse_name: "Хоругвино",
-      items,
-    },
-  ];
-}
-
-function fetchWbStockRaw(products: ActiveProduct[], rand: () => number): WbStockRaw[] {
-  return products.map((p) => ({
-    supplierArticle: p.skuWb,
-    quantity: 10 + Math.floor(rand() * 25),
-  }));
-}
-
-function fetchOzonStockRaw(products: ActiveProduct[], rand: () => number): OzonStockRaw[] {
-  return products.map((p) => ({
-    offer_id: p.skuOzon,
-    present: 10 + Math.floor(rand() * 25),
-  }));
 }
 
 // ============================ СИНХРОНИЗАЦИЯ ================================
@@ -173,6 +62,12 @@ export interface SyncResult {
   warnings?: string[];
   sources?: { wb: "api" | "stub"; ozon: "api" | "stub" };
 }
+
+export const MARKETPLACE_SYNC_CREDENTIALS_REQUIRED =
+  "Синхронизация отклонена: нужны ключи и Ozon, и Wildberries. Демонстрационные данные не записываются.";
+
+export const MARKETPLACE_SYNC_STUB_REFUSED =
+  "Синхронизация отклонена: демонстрационные данные не записываются.";
 
 const SYNC_LOOKBACK_DAYS = 90;
 /** Окно поиска отменённых заявок Ozon для реверса списания (шире обычного). */
@@ -230,6 +125,9 @@ async function fetchMarketplaceData(
   to: Date,
 ): Promise<FetchedMarketplaceData> {
   const creds = await loadStoredApiCredentialsInternal();
+  if (!isWbConfigured(creds["wb.token"]) || !isOzonConfigured(ozonCredentialsFrom(creds) ?? {})) {
+    throw new Error(MARKETPLACE_SYNC_CREDENTIALS_REQUIRED);
+  }
   const warnings: string[] = [];
   const sources: { wb: "api" | "stub"; ozon: "api" | "stub" } = { wb: "stub", ozon: "stub" };
   const wb = emptySideReport("stub");
@@ -242,7 +140,6 @@ async function fetchMarketplaceData(
   const ozonSupplies: NormalizedSupply[] = [];
   const ozonStocks: NormalizedStock[] = [];
 
-  const rand = makeRand(to.getTime());
   const offerIds = products.map((p) => p.skuOzon).filter(Boolean);
   const stockReplace = { wb: false, ozon: false };
   const ozonCancelledExternalIds: string[] = [];
@@ -299,13 +196,7 @@ async function fetchMarketplaceData(
 
     wb.durationMs = Math.round(performance.now() - t0);
   } else {
-    wbSales.push(...fetchWbSalesRaw(products, to, rand).map(mapWbSale));
-    wbSupplies.push(...fetchWbIncomesRaw(products, to).map(mapWbIncome));
-    wbStocks.push(...fetchWbStockRaw(products, rand).map(mapWbStock));
-    wb.sales = wbSales.length;
-    wb.supplies = wbSupplies.length;
-    wb.stocks = wbStocks.length;
-    stockReplace.wb = true;
+    throw new Error(MARKETPLACE_SYNC_CREDENTIALS_REQUIRED);
   }
 
   const ozonCreds = ozonCredentialsFrom(creds);
@@ -361,13 +252,7 @@ async function fetchMarketplaceData(
 
     ozon.durationMs = Math.round(performance.now() - t0);
   } else {
-    ozonSales.push(...fetchOzonPostingsRaw(products, to, rand).flatMap(mapOzonPosting));
-    ozonSupplies.push(...fetchOzonSupplyOrdersRaw(products, to).flatMap(mapOzonSupplyOrder));
-    ozonStocks.push(...fetchOzonStockRaw(products, rand).map(mapOzonStock));
-    ozon.sales = ozonSales.length;
-    ozon.supplies = ozonSupplies.length;
-    ozon.stocks = ozonStocks.length;
-    stockReplace.ozon = true;
+    throw new Error(MARKETPLACE_SYNC_CREDENTIALS_REQUIRED);
   }
 
   return {
@@ -413,6 +298,9 @@ export async function persistMarketplaceSyncInTransaction(
   tx: Prisma.TransactionClient,
   input: PersistMarketplaceSyncInput,
 ): Promise<{ deductedTotal: number; shortfallTotal: number; restoredTotal: number }> {
+  if (input.sources.wb !== "api" || input.sources.ozon !== "api") {
+    throw new Error(MARKETPLACE_SYNC_STUB_REFUSED);
+  }
   const actor = requireSupplyUserActor(input.actor);
   const shadowWriteActive = await isInventoryMovementShadowWriteActiveForWriter(tx);
 
@@ -524,8 +412,8 @@ export async function persistMarketplaceSyncInTransaction(
 }
 
 /**
- * Синхронизация с маркетплейсами. При сохранённых ключах — реальные HTTP-вызовы
- * (см. src/lib/wb-api.ts, src/lib/ozon-api.ts); иначе — демо-заглушки.
+ * Синхронизация с маркетплейсами. Оба контура должны быть настроены.
+ * Иначе запуск отклоняется до HTTP и до записи продаж, поставок и остатков.
  * Current contour is authenticated USER only. Capture actor outside the TX.
  */
 export async function syncMarketplacesAsUserInternal(
@@ -534,6 +422,33 @@ export async function syncMarketplacesAsUserInternal(
   const userActor = requireSupplyUserActor(actor);
   const userId = userActor.userId;
   const syncStarted = performance.now();
+  const stored = await loadStoredApiCredentialsInternal();
+  const wbReady = isWbConfigured(stored["wb.token"]);
+  const ozonReady = isOzonConfigured(ozonCredentialsFrom(stored) ?? {});
+  if (!wbReady || !ozonReady) {
+    const now = new Date();
+    const report: MpSyncReport = {
+      since: now.toISOString(),
+      to: now.toISOString(),
+      ok: false,
+      durationMs: Math.round(performance.now() - syncStarted),
+      sources: { wb: wbReady ? "api" : "stub", ozon: ozonReady ? "api" : "stub" },
+      wb: emptySideReport(wbReady ? "api" : "stub"),
+      ozon: emptySideReport(ozonReady ? "api" : "stub"),
+      warnings: [],
+      totals: { sales: 0, supplies: 0, stocks: 0 },
+      error: MARKETPLACE_SYNC_CREDENTIALS_REQUIRED,
+    };
+    await persistMpSyncLog(report, userId);
+    return {
+      ok: false,
+      salesAdded: 0,
+      suppliesAdded: 0,
+      stockUpdated: 0,
+      error: report.error,
+      sources: report.sources,
+    };
+  }
   const now = new Date();
   const since = await getSyncSince();
 
@@ -544,9 +459,9 @@ export async function syncMarketplacesAsUserInternal(
       to: now.toISOString(),
       ok: false,
       durationMs: Math.round(performance.now() - syncStarted),
-      sources: { wb: "stub", ozon: "stub" },
-      wb: emptySideReport("stub"),
-      ozon: emptySideReport("stub"),
+      sources: { wb: "api", ozon: "api" },
+      wb: emptySideReport("api"),
+      ozon: emptySideReport("api"),
       warnings: [],
       totals: { sales: 0, supplies: 0, stocks: 0 },
       error: "Нет активных изделий",
@@ -579,10 +494,35 @@ export async function syncMarketplacesAsUserInternal(
     ozon,
   } = fetched;
 
-  const apiConfigured = sources.wb === "api" || sources.ozon === "api";
+  const bothLive = sources.wb === "api" && sources.ozon === "api";
   const noData = sales.length === 0 && supplies.length === 0 && stocks.length === 0;
 
-  if (apiConfigured && warnings.length > 0 && noData) {
+  if (!bothLive) {
+    const report: MpSyncReport = {
+      since: since.toISOString(),
+      to: now.toISOString(),
+      ok: false,
+      durationMs: Math.round(performance.now() - syncStarted),
+      sources,
+      wb,
+      ozon,
+      warnings,
+      totals: { sales: 0, supplies: 0, stocks: 0 },
+      error: MARKETPLACE_SYNC_STUB_REFUSED,
+    };
+    await persistMpSyncLog(report, userId);
+    return {
+      ok: false,
+      salesAdded: 0,
+      suppliesAdded: 0,
+      stockUpdated: 0,
+      error: report.error,
+      warnings: warnings.length > 0 ? warnings : undefined,
+      sources,
+    };
+  }
+
+  if (warnings.length > 0 && noData) {
     const report: MpSyncReport = {
       since: since.toISOString(),
       to: now.toISOString(),
