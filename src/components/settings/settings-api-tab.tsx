@@ -16,14 +16,11 @@ import { Label } from "@/components/ui/label";
 const fieldClass =
   "border-border bg-card hover:border-[#98a2b3] focus-visible:border-ring focus-visible:bg-card h-10 rounded-xl border px-4";
 
-interface SettingsApiTabProps {
-  initialValues: ApiCredentialValues;
-}
-
-export function SettingsApiTab({ initialValues }: SettingsApiTabProps) {
+export function SettingsApiTab() {
   const [unlocked, setUnlocked] = useState(false);
   const [password, setPassword] = useState("");
-  const [values, setValues] = useState<ApiCredentialValues>(initialValues);
+  const [heldPassword, setHeldPassword] = useState("");
+  const [values, setValues] = useState<ApiCredentialValues>({});
   const [visible, setVisible] = useState<Set<string>>(new Set());
   // Поля активируются (становятся редактируемыми) только по фокусу — до этого
   // они readOnly, чтобы браузер не подставлял сохранённые логин/пароль системы
@@ -39,17 +36,21 @@ export function SettingsApiTab({ initialValues }: SettingsApiTabProps) {
         toast.error(result.error);
         return;
       }
-      setUnlocked(true);
+      setHeldPassword(password);
+      setValues(result.values);
       setPassword("");
+      setUnlocked(true);
       toast.success("Доступ к ключам открыт");
     });
   };
 
   const lock = () => {
     setUnlocked(false);
+    setHeldPassword("");
+    setPassword("");
+    setValues({});
     setVisible(new Set());
     setActivated(new Set());
-    setValues(initialValues);
   };
 
   const activate = (key: string) => {
@@ -72,7 +73,11 @@ export function SettingsApiTab({ initialValues }: SettingsApiTabProps) {
   const handleSave = () => {
     startSave(async () => {
       try {
-        await saveApiCredentials(values);
+        const result = await saveApiCredentials(heldPassword, values);
+        if (!result.ok) {
+          toast.error(result.error);
+          return;
+        }
         toast.success("Ключи сохранены");
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Не удалось сохранить");
@@ -113,6 +118,14 @@ export function SettingsApiTab({ initialValues }: SettingsApiTabProps) {
           >
             {unlocking ? "Проверка…" : "Разблокировать"}
           </Button>
+          <div className="space-y-3">
+            {API_CREDENTIAL_GROUPS.map((group) => (
+              <div key={group.service}>
+                <p className="text-sm font-medium">{group.service}</p>
+                <p className="text-muted-foreground text-sm">{group.fields.map((field) => field.label).join(", ")}</p>
+              </div>
+            ))}
+          </div>
         </CardContent>
       </Card>
     );

@@ -6,7 +6,6 @@ import {
   type MinStockRow,
   type SystemLogRow,
 } from "@/mocks/settings-fixtures";
-import type { ApiCredentialValues } from "@/lib/api-credentials";
 import { PageHeader } from "@/components/page-header";
 import { SegmentTabs } from "@/components/reports/report-shared";
 import { SettingsApiTab } from "@/components/settings/settings-api-tab";
@@ -23,12 +22,10 @@ const TABS: { key: SettingsTab; label: string }[] = [
 
 export function SettingsView({
   logs,
-  apiCredentials,
   appSettings,
   minStock: initialMinStock,
 }: {
   logs: SystemLogRow[];
-  apiCredentials: ApiCredentialValues;
   appSettings: AppSettings;
   minStock: MinStockRow[];
 }) {
@@ -48,7 +45,7 @@ export function SettingsView({
           onChange={setActiveTab}
         />
 
-        {activeTab === "api" && <SettingsApiTab initialValues={apiCredentials} />}
+        {activeTab === "api" && <SettingsApiTab />}
         {activeTab === "logs" && <SettingsLogsTab rows={logs} />}
         {activeTab === "params" && (
           <SettingsParamsTab
