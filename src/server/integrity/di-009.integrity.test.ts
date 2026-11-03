@@ -1115,9 +1115,9 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
           create: [
             {
               refType: "DETAIL",
-              refId: dB.id,
-              accountedQty: 10,
-              actualQty: 10,
+              refId: dA.id,
+              accountedQty: 4,
+              actualQty: 4,
               deviation: 0,
               deviationSum: 0,
             },
@@ -1227,9 +1227,8 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     const opAfter = await prismaA.productionOperation.findUniqueOrThrow({ where: { id: op.id } });
 
     if (editOk && conductOk) {
-      // Conduct SET 1/10 then edit would BOUNDARY — both success means edit first then
-      // conduct must have seen matching live. Edit 1→2: P=2, B=8, A=5. Live ≠ draft 1/10
-      // so conduct cannot succeed after edit. Forbidden here.
+      // Conduct records product 1. Edit 1→2 keeps historical A and leaves B alone:
+      // P=2, A=3, B=10. Conduct after that edit sees a stale product snapshot.
       throw new Error("both edit and conduct succeeded — unexpected for this seed");
     }
     if (editOk && !conductOk) {
@@ -1237,8 +1236,8 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
       expect(inv.status).toBe("DRAFT");
       expect(opAfter.productQty).toBe(2);
       expect(pQty).toBe(2);
-      expect(bReady).toBe(8);
-      expect(aReady).toBe(5);
+      expect(bReady).toBe(10);
+      expect(aReady).toBe(3);
     } else if (!editOk && conductOk) {
       expect(errorMessage((results[0] as PromiseRejectedResult).reason)).toBe(INVENTORY_BOUNDARY);
       expect(inv.status).toBe("CONDUCTED");
@@ -1411,8 +1410,9 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
         p.id,
         detailLines,
         nomenclatureLines,
+        1,
       );
-      expect(prepared.details.map((d) => d.detailId)).toEqual([dB.id]);
+      expect(prepared.details.map((d) => d.detailId)).toEqual([dA.id]);
 
       await tx.productDetail.deleteMany({ where: { productId: p.id } });
       await tx.productDetail.create({ data: { productId: p.id, detailId: dC.id, quantity: 1 } });
@@ -1425,17 +1425,17 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     });
 
     const linesAfter = await prismaA.operationDetailLine.findMany({ where: { operationId: op.id } });
-    expect(linesAfter.map((l) => l.detailId).sort()).toEqual([dB.id]);
-    expect(linesAfter.some((l) => l.detailId === dC.id)).toBe(false);
+    expect(linesAfter.map((l) => l.detailId).sort()).toEqual([dA.id]);
+    expect(linesAfter.some((l) => l.detailId === dB.id || l.detailId === dC.id)).toBe(false);
     expect(linesAfter.reduce((s, l) => s + l.quantity, 0)).toBe(2);
     expect(await readySum(dC.id)).toBe(10);
-    expect(await readySum(dB.id)).toBe(8);
-    expect(await readySum(dA.id)).toBe(5);
+    expect(await readySum(dB.id)).toBe(10);
+    expect(await readySum(dA.id)).toBe(3);
     expect((await prismaA.productStock.findUnique({ where: { productId: p.id } }))?.quantity).toBe(2);
 
     await prismaA.productDetail.deleteMany({ where: { productId: p.id } });
     await prismaA.productDetail.create({ data: { productId: p.id, detailId: dB.id, quantity: 1 } });
-    const docB = await prismaA.inventory.create({
+    const docA = await prismaA.inventory.create({
       data: {
         date: new Date(),
         status: "DRAFT",
@@ -1443,9 +1443,9 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
           create: [
             {
               refType: "DETAIL",
-              refId: dB.id,
-              accountedQty: 8,
-              actualQty: 8,
+              refId: dA.id,
+              accountedQty: 3,
+              actualQty: 3,
               deviation: 0,
               deviationSum: 0,
             },
@@ -1453,21 +1453,22 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
         },
       },
     });
-    await conductInventory(docB.id);
+    await conductInventory(docA.id);
     const [linesB, nomsB] = await Promise.all([
       prismaA.operationDetailLine.findMany({ where: { operationId: op.id } }),
       prismaA.operationNomenclatureLine.findMany({ where: { operationId: op.id } }),
     ]);
     await expect(
       prismaA.$transaction(async (tx) => {
-        await prepareUpakovkaEdit(tx, op.createdAt, p.id, linesB, nomsB);
+        await prepareUpakovkaEdit(tx, op.createdAt, p.id, linesB, nomsB, 2);
         await tx.productDetail.deleteMany({ where: { productId: p.id } });
         await tx.productDetail.create({ data: { productId: p.id, detailId: dC.id, quantity: 1 } });
         await reverseUpakovkaOperation(tx, p.id, 2, linesB, nomsB, op.createdAt);
       }),
     ).rejects.toThrow(INVENTORY_BOUNDARY);
     expect(await readySum(dC.id)).toBe(10);
-    expect(await readySum(dB.id)).toBe(8);
+    expect(await readySum(dB.id)).toBe(10);
+    expect(await readySum(dA.id)).toBe(3);
     expect((await prismaA.productionOperation.findUniqueOrThrow({ where: { id: op.id } })).productQty).toBe(
       2,
     );

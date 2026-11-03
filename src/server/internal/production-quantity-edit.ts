@@ -27,6 +27,29 @@ export const QUANTITY_EDIT_SHADOW_WRITER_NOT_READY =
 export const QUANTITY_EDIT_UPAKOVKA_COST_FLOW_NOT_READY =
   "QUANTITY_EDIT_UPAKOVKA_COST_FLOW_NOT_READY: ARCH-P1-001 OPEN — правка количества УПАКОВКИ при ACTIVE cost-flow запрещена";
 
+export const QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS =
+  "QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS: сохранённые строки упаковки нельзя изменить на это количество без подмены состава";
+
+export function scaleRetainedUpakovkaQuantity(
+  lineQuantity: number,
+  oldProductQty: number,
+  newProductQty: number,
+): number {
+  if (
+    !Number.isSafeInteger(oldProductQty) ||
+    oldProductQty <= 0 ||
+    !Number.isSafeInteger(newProductQty) ||
+    newProductQty <= 0 ||
+    !Number.isSafeInteger(lineQuantity) ||
+    lineQuantity < 0 ||
+    !Number.isSafeInteger(lineQuantity * newProductQty) ||
+    (lineQuantity * newProductQty) % oldProductQty !== 0
+  ) {
+    throw new Error(QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS);
+  }
+  return (lineQuantity * newProductQty) / oldProductQty;
+}
+
 export const QUANTITY_EDIT_HOURS_NOT_PHYSICAL =
   "HOURS quantity edit is outside ProductionOperationQuantityEdit";
 

@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   QEDIT_STATE_FINGERPRINT_VERSION,
+  QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS,
   assertNoMoneyInQuantityEditContract,
   buildQuantityEditRequestSnapshot,
   buildTorcovkaStateCanonical,
@@ -9,6 +13,7 @@ import {
   QUANTITY_EDIT_BEFORE_SNAPSHOT_INCOMPLETE,
   collectPhysicalKeys,
   derivePhysicalAdjustments,
+  scaleRetainedUpakovkaQuantity,
   sortPhysicalAdjustments,
 } from "./production-quantity-edit";
 
@@ -196,5 +201,28 @@ describe("quantity-edit snapshots", () => {
         },
       ]),
     );
+  });
+});
+
+describe("retained upakovka quantity scale", () => {
+  it("scales a stored line by the product quantity ratio", () => {
+    expect(scaleRetainedUpakovkaQuantity(4, 2, 3)).toBe(6);
+    expect(scaleRetainedUpakovkaQuantity(1, 2, 4)).toBe(2);
+  });
+
+  it("fails closed when the stored line does not divide into the new quantity", () => {
+    expect(() => scaleRetainedUpakovkaQuantity(1, 2, 3)).toThrow(QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS);
+    expect(() => scaleRetainedUpakovkaQuantity(2, 0, 1)).toThrow(QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS);
+  });
+
+  it("does not read the current product card while preparing a quantity edit", () => {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+    const src = readFileSync(path.join(root, "src/server/internal/inventory-integrity.ts"), "utf8");
+    const start = src.indexOf("export async function prepareUpakovkaEdit");
+    const next = src.indexOf("\nexport ", start + 1);
+    const body = src.slice(start, next === -1 ? undefined : next);
+    expect(body).not.toContain("snapshotUpakovkaApply");
+    expect(body).not.toContain("product.findUnique");
+    expect(body).toContain("collectUpakovkaRefs");
   });
 });
