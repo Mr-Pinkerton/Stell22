@@ -23,7 +23,7 @@ import {
   canonicalizeTorcovkaPicks,
   torcovkaPicksForLog,
 } from "@/server/internal/blank-length";
-import { lockRailLots } from "@/server/internal/finance-operations";
+import { lockBatches, lockRailLots } from "@/server/internal/finance-operations";
 import type { MovementActorSnapshot } from "@/server/internal/inventory-movement-actor";
 import { isInventoryMovementShadowWriteActiveForWriter } from "@/server/internal/inventory-movement-shadow-write";
 import { planProductionShadowMovements } from "@/server/internal/production-movement-plan";
@@ -119,11 +119,15 @@ export async function submitTorcovkaInTransaction(
   };
   if (await replayMatched()) return { status: "IDEMPOTENT_REPLAY" as const };
 
+  await lockBatches(tx, [batchId]);
   await lockRailLots(tx, [railLotId]);
   if (await replayMatched()) return { status: "IDEMPOTENT_REPLAY" as const };
   const lot = await tx.railLot.findUnique({ where: { id: railLotId } });
   if (!lot || lot.batchId !== batchId) throw new Error("Пакет реек не найден");
   const batch = await tx.batch.findUniqueOrThrow({ where: { id: batchId } });
+  if (batch.status === "ARCHIVED") {
+    throw new Error("Партия в архиве — торцовка недоступна");
+  }
   const materialId = batch.materialId;
 
   for (const p of picks) {

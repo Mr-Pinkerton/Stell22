@@ -321,6 +321,41 @@ async function reversePhysical(
   );
 }
 
+/** Только партия отменённой торцовки. Старые архивы этим проходом не ищутся. */
+async function reopenBatchAfterRestoredRails(
+  tx: Prisma.TransactionClient,
+  op: OpFull,
+  adminUserId: string,
+): Promise<void> {
+  if (op.type !== "TORCOVKA" || op.batchId == null) return;
+  const lots = await tx.railLot.findMany({
+    where: { batchId: op.batchId },
+    select: { remainingQuantity: true },
+  });
+  const remaining = lots.reduce((sum, lot) => sum + lot.remainingQuantity, 0);
+  if (remaining <= 0) return;
+  const batch = await tx.batch.findUnique({ where: { id: op.batchId } });
+  if (!batch) throw new Error("Партия не найдена");
+  if (batch.status === "IN_WORK" && batch.closedAt == null) return;
+  await tx.batch.update({
+    where: { id: op.batchId },
+    data: { status: "IN_WORK", closedAt: null },
+  });
+  await writeChangeLog(
+    {
+      entity: "Batch",
+      entityId: op.batchId,
+      userId: adminUserId,
+      oldValues: {
+        status: batch.status,
+        closedAt: batch.closedAt ? batch.closedAt.toISOString() : null,
+      },
+      newValues: { reopened: true, viaOperationId: op.id, status: "IN_WORK", closedAt: null },
+    },
+    tx,
+  );
+}
+
 export async function cancelProductionOperationInTransaction(
   tx: Prisma.TransactionClient,
   input: CancelProductionOperationTxInput,
@@ -390,6 +425,7 @@ export async function cancelProductionOperationInTransaction(
   const effects = shadowEffects(op);
   const costFlowActive = await isCostFlowActive(tx);
   await reversePhysical(tx, op, costFlowActive);
+  await reopenBatchAfterRestoredRails(tx, op, input.adminUserId);
   await tx.productionOperation.update({
     where: { id: op.id },
     data: { cancelledAt: new Date() },
