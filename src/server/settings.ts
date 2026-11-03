@@ -21,52 +21,83 @@ import {
 // Общие параметры приложения хранятся одним JSON-значением в key-value Setting.
 const APP_SETTINGS_KEY = "app:settings";
 
-export type VerifyApiCredentialsPasswordResult = { ok: true } | { ok: false; error: string };
+export type ApiCredentialAccessResult =
+  | { ok: true; values: ApiCredentialValues }
+  | { ok: false; error: string };
+
+export type VerifyApiCredentialsPasswordResult = ApiCredentialAccessResult;
+
+const API_PASSWORD_REQUIRED = "Введите пароль";
+const API_PASSWORD_REJECTED = "Неверный пароль";
 
 /**
- * Повторная проверка пароля текущего администратора перед просмотром API-ключей.
- * Используется тот же пароль, что и при входе в систему.
+ * Пароль текущего администратора проверяется до чтения или записи ключей.
+ * Пустой и неверный пароль не открывают таблицу Setting с секретами.
+ */
+async function authorizeApiCredentialPassword(
+  adminId: string,
+  password: string,
+): Promise<{ ok: true; adminId: string } | { ok: false; error: string }> {
+  if (typeof password !== "string" || password.trim() === "") {
+    return { ok: false, error: API_PASSWORD_REQUIRED };
+  }
+  const user = await prisma.user.findUnique({
+    where: { id: adminId },
+    select: { passwordHash: true },
+  });
+  if (!user || !(await verifyPassword(password, user.passwordHash))) {
+    return { ok: false, error: API_PASSWORD_REJECTED };
+  }
+  return { ok: true, adminId };
+}
+
+async function readApiCredentialsAfterPassword(
+  adminId: string,
+  password: string,
+): Promise<ApiCredentialAccessResult> {
+  const auth = await authorizeApiCredentialPassword(adminId, password);
+  if (!auth.ok) return auth;
+  return { ok: true, values: await loadStoredApiCredentialsInternal() };
+}
+
+/**
+ * Повторная проверка пароля текущего администратора. Ключи возвращаются
+ * только после успешной проверки и не раньше чтения Setting.
  */
 export async function verifyApiCredentialsPassword(
   password: string,
 ): Promise<VerifyApiCredentialsPasswordResult> {
   const admin = await requireAdmin();
-  if (!password) {
-    return { ok: false, error: "Введите пароль" };
-  }
-
-  const user = await prisma.user.findUnique({
-    where: { id: admin.id },
-    select: { passwordHash: true },
-  });
-  if (!user || !(await verifyPassword(password, user.passwordHash))) {
-    return { ok: false, error: "Неверный пароль" };
-  }
-
-  return { ok: true };
+  return readApiCredentialsAfterPassword(admin.id, password);
 }
 
 /**
- * Значения API-ключей из key-value модели Setting. Возвращает { key: value }
- * для всех известных полей (отсутствующие — пустая строка). Только для админа.
+ * Прямое чтение без пароля ничего не возвращает. С паролем это тот же
+ * барьер, что и у разблокировки.
  */
-export async function getApiCredentials(): Promise<ApiCredentialValues> {
-  await requireAdmin();
-  return loadStoredApiCredentialsInternal();
-}
-
-/**
- * Сохраняет API-ключи (upsert по каждому известному полю). Неизвестные ключи
- * игнорируются. Значения в аудит НЕ пишем (секреты) — только факт обновления.
- */
-export async function saveApiCredentials(values: ApiCredentialValues): Promise<{ ok: true }> {
+export async function getApiCredentials(password = ""): Promise<ApiCredentialAccessResult> {
   const admin = await requireAdmin();
+  return readApiCredentialsAfterPassword(admin.id, password);
+}
 
+/**
+ * Сохраняет API-ключи только после свежей проверки пароля. Неизвестные и
+ * непереданные ключи не изменяются. В аудит пишутся имена полей, не секреты.
+ */
+export async function saveApiCredentials(
+  password: string,
+  values: ApiCredentialValues,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const admin = await requireAdmin();
+  const auth = await authorizeApiCredentialPassword(admin.id, password);
+  if (!auth.ok) return auth;
+
+  const input = values && typeof values === "object" ? values : {};
   const updatedFields: string[] = [];
   await prisma.$transaction(async (tx) => {
     for (const key of API_CREDENTIAL_KEYS) {
-      if (!(key in values)) continue;
-      const value = String(values[key] ?? "").trim();
+      if (!(key in input)) continue;
+      const value = String(input[key] ?? "").trim();
       await tx.setting.upsert({
         where: { key: `${SETTING_PREFIX}${key}` },
         create: { key: `${SETTING_PREFIX}${key}`, value },
@@ -78,7 +109,7 @@ export async function saveApiCredentials(values: ApiCredentialValues): Promise<{
       {
         entity: "Setting",
         entityId: "apiCredentials",
-        userId: admin.id,
+        userId: auth.adminId,
         newValues: { updatedFields },
       },
       tx,
