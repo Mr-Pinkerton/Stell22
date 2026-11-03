@@ -119,8 +119,9 @@ export async function submitTorcovkaInTransaction(
   };
   if (await replayMatched()) return { status: "IDEMPOTENT_REPLAY" as const };
 
-  await lockBatches(tx, [batchId]);
+  // Сначала пакет, потом партия — как корректировка и аннулирование торцовки.
   await lockRailLots(tx, [railLotId]);
+  await lockBatches(tx, [batchId]);
   if (await replayMatched()) return { status: "IDEMPOTENT_REPLAY" as const };
   const lot = await tx.railLot.findUnique({ where: { id: railLotId } });
   if (!lot || lot.batchId !== batchId) throw new Error("Пакет реек не найден");

@@ -412,6 +412,9 @@ export async function cancelProductionOperationInTransaction(
   if (op.cancelledAt) throw new Error(CANCEL_ALREADY);
   if (fingerprintOf(op) !== input.expectedStateFingerprint) throw new Error(STALE_OPERATION_CANCEL);
   if (op.batchId) {
+    if (op.type === "TORCOVKA" && op.railLotId) {
+      await lockRailLots(tx, [op.railLotId]);
+    }
     await lockBatches(tx, [op.batchId]);
     const batch = await tx.batch.findUnique({ where: { id: op.batchId }, select: { frozenAt: true } });
     if (batch?.frozenAt) throw new Error(CANCEL_FROZEN_BLOCKED);
