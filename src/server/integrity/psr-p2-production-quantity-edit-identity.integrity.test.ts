@@ -901,7 +901,7 @@ describe.skipIf(!enabled)("PSR-P2 Package 2 production quantity-edit identity", 
     expect(adj?.quantityDelta).not.toBe(-5);
   });
 
-  it("P1-02 UPAKOVKA changed current BOM snapshots non-zero new target", async () => {
+  it("P1-02 UPAKOVKA quantity edit keeps the stored detail when the current BOM gains a target", async () => {
     const { world, op } = await seedUpakovka(`u-bom-${seq}`, 1);
     const extra = await prismaA.detail.create({
       data: {
@@ -931,6 +931,15 @@ describe.skipIf(!enabled)("PSR-P2 Package 2 production quantity-edit identity", 
       data: { quantity: { increment: 3 } },
     });
     const extraBefore = extraStock.quantity;
+    const storedBefore = await prismaA.detailStock.findUniqueOrThrow({
+      where: {
+        detailId_torcevayaDone_ploskostDone: {
+          detailId: world.detail.id,
+          torcevayaDone: true,
+          ploskostDone: false,
+        },
+      },
+    });
     const productBefore = await prismaA.productStock.findUniqueOrThrow({
       where: { productId: world.product.id },
     });
@@ -941,7 +950,9 @@ describe.skipIf(!enabled)("PSR-P2 Package 2 production quantity-edit identity", 
       newQuantity: 2,
     });
     const extraAfter = await prismaA.detailStock.findUniqueOrThrow({ where: { id: extraStock.id } });
-    expect(extraAfter.quantity).toBe(extraBefore - 2);
+    expect(extraAfter.quantity).toBe(extraBefore);
+    const storedAfter = await prismaA.detailStock.findUniqueOrThrow({ where: { id: storedBefore.id } });
+    expect(storedAfter.quantity).toBe(storedBefore.quantity - 1);
     const row = await prismaA.productionOperationQuantityEdit.findUniqueOrThrow({
       where: { requestId: result.requestId },
     });
@@ -953,11 +964,12 @@ describe.skipIf(!enabled)("PSR-P2 Package 2 production quantity-edit identity", 
         quantityDelta: number;
       }>;
     };
-    const extraAdj = effect.physicalAdjustments.find(
-      (a) => a.targetType === "DETAIL" && a.detailId === extra.id,
+    expect(effect.physicalAdjustments.find((a) => a.detailId === extra.id)).toBeUndefined();
+    const storedAdj = effect.physicalAdjustments.find(
+      (a) => a.targetType === "DETAIL" && a.detailId === world.detail.id,
     );
-    expect(extraAdj?.quantityDelta).toBe(-2);
-    expect(extraAdj?.quantityDelta).not.toBe(extraAfter.quantity);
+    expect(storedAdj?.quantityDelta).toBe(-1);
+    expect(storedAdj?.quantityDelta).not.toBe(storedAfter.quantity);
     const productAdj = effect.physicalAdjustments.find(
       (a) => a.targetType === "PRODUCT" && a.productId === world.product.id,
     );

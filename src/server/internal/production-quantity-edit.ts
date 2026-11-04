@@ -27,6 +27,29 @@ export const QUANTITY_EDIT_SHADOW_WRITER_NOT_READY =
 export const QUANTITY_EDIT_UPAKOVKA_COST_FLOW_NOT_READY =
   "QUANTITY_EDIT_UPAKOVKA_COST_FLOW_NOT_READY: ARCH-P1-001 OPEN — правка количества УПАКОВКИ при ACTIVE cost-flow запрещена";
 
+export const QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS =
+  "QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS: сохранённые строки упаковки нельзя изменить на это количество без подмены состава";
+
+export function scaleRetainedUpakovkaQuantity(
+  lineQuantity: number,
+  oldProductQty: number,
+  newProductQty: number,
+): number {
+  if (
+    !Number.isSafeInteger(oldProductQty) ||
+    oldProductQty <= 0 ||
+    !Number.isSafeInteger(newProductQty) ||
+    newProductQty <= 0 ||
+    !Number.isSafeInteger(lineQuantity) ||
+    lineQuantity < 0 ||
+    !Number.isSafeInteger(lineQuantity * newProductQty) ||
+    (lineQuantity * newProductQty) % oldProductQty !== 0
+  ) {
+    throw new Error(QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS);
+  }
+  return (lineQuantity * newProductQty) / oldProductQty;
+}
+
 export const QUANTITY_EDIT_HOURS_NOT_PHYSICAL =
   "HOURS quantity edit is outside ProductionOperationQuantityEdit";
 
@@ -589,6 +612,55 @@ export function mergePhysicalKeys(...lists: PhysicalKey[][]): PhysicalKey[] {
 export function uncoveredPhysicalKeys(frozen: PhysicalKey[], used: PhysicalKey[]): PhysicalKey[] {
   const allowed = new Set(frozen.map(physicalTargetKey));
   return used.filter((key) => !allowed.has(physicalTargetKey(key)));
+}
+
+/**
+ * Physical targets of a stored UPAKOVKA. Blank lines keep their recorded blank
+ * spec. Processed lines keep the recorded detail and source flags, including
+ * false/false. The current product card is not consulted.
+ */
+export function collectRetainedUpakovkaPhysicalKeys(input: {
+  productId: string;
+  lines: QuantityEditLine[];
+  nomenclatureLines: QuantityEditNomLine[];
+}): PhysicalKey[] {
+  const keys = new Map<string, PhysicalKey>();
+  const product: PhysicalKey = { targetType: "PRODUCT", productId: input.productId };
+  keys.set(physicalTargetKey(product), product);
+  for (const line of input.lines) {
+    if (line.sourceIsBlank) {
+      if (
+        line.blankMaterialId == null ||
+        line.blankLengthM == null ||
+        line.blankType == null ||
+        line.blankSort == null
+      ) {
+        throw new Error(QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS);
+      }
+      const blank: PhysicalKey = {
+        targetType: "BLANK",
+        materialId: line.blankMaterialId,
+        lengthM: canonicalBlankLengthM(line.blankLengthM),
+        detailType: line.blankType,
+        sort: line.blankSort,
+      };
+      keys.set(physicalTargetKey(blank), blank);
+      continue;
+    }
+    if (!line.detailId) throw new Error(QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS);
+    const detail: PhysicalKey = {
+      targetType: "DETAIL",
+      detailId: line.detailId,
+      torcevayaDone: line.sourceTorcevayaDone,
+      ploskostDone: line.sourcePloskostDone,
+    };
+    keys.set(physicalTargetKey(detail), detail);
+  }
+  for (const line of input.nomenclatureLines) {
+    const nom: PhysicalKey = { targetType: "NOMENCLATURE", nomenclatureId: line.nomenclatureId };
+    keys.set(physicalTargetKey(nom), nom);
+  }
+  return [...keys.values()];
 }
 
 export function collectPreparedUpakovkaPhysicalKeys(prepared: PreparedUpakovkaApply): PhysicalKey[] {

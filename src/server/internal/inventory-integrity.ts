@@ -1,6 +1,6 @@
 import { Prisma, type RailType, type Sort } from "@prisma/client";
 import { D } from "@/lib/cost";
-import { isNoPrisadkaDetail, isReady, requiredPrisadki } from "@/lib/detail-stock";
+import { isNoPrisadkaDetail, isReady } from "@/lib/detail-stock";
 import { canonicalLengthDecimal } from "@/server/internal/blank-length";
 import {
   planInventoryPhysicalEffects,
@@ -823,39 +823,6 @@ export async function prepareTorcovkaBlankMutation(
   await assertInventoryBoundary(tx, occurredAt, refs);
 }
 
-async function collectCurrentUpakovkaApplyRefs(
-  tx: Prisma.TransactionClient,
-  prepared: PreparedUpakovkaApply,
-): Promise<InventoryRef[]> {
-  const refs: InventoryRef[] = [{ refType: "PRODUCT", refId: prepared.productId }];
-  for (const f of prepared.fasteners) {
-    refs.push({ refType: "NOMENCLATURE", refId: f.nomenclatureId });
-  }
-  if (prepared.packagingId) {
-    refs.push({ refType: "NOMENCLATURE", refId: prepared.packagingId });
-  }
-  for (const ex of prepared.extras) {
-    refs.push({ refType: "NOMENCLATURE", refId: ex.nomenclatureId });
-  }
-  for (const row of prepared.details) {
-    if (row.quantity <= 0) continue;
-    const req = requiredPrisadki(row);
-    if (!req.torcev && !req.plosk) {
-      refs.push(
-        ...(await blankSpecToInventoryRefs(tx, {
-          materialId: row.materialId,
-          lengthM: row.lengthM,
-          detailType: row.detailType,
-          sort: row.sort,
-        })),
-      );
-    } else {
-      refs.push({ refType: "DETAIL", refId: row.detailId });
-    }
-  }
-  return refs;
-}
-
 export async function snapshotUpakovkaApply(
   tx: Prisma.TransactionClient,
   productId: string,
@@ -897,24 +864,25 @@ export async function snapshotUpakovkaApply(
   };
 }
 
+type RetainedUpakovkaLine = UpakovkaDetailLine & {
+  quantity: number;
+  sourceTorcevayaDone: boolean;
+  sourcePloskostDone: boolean;
+};
+
 /**
- * UPAKOVKA qty edit: snapshot CURRENT BOM once, lock union(old provenance,
- * snapshot refs) in canonical order, boundary on that union — before reverse
- * or re-apply. Caller must re-apply from the returned snapshot, not live BOM.
+ * UPAKOVKA qty edit: lock the operation's stored component lines, then the
+ * inventory boundary on those same lines. The current product card is not read.
+ * Physical targets are derived by the caller from these lines, not from a BOM.
  */
 export async function prepareUpakovkaEdit(
   tx: Prisma.TransactionClient,
   occurredAt: Date,
   productId: string,
-  oldDetailLines: UpakovkaDetailLine[],
-  oldNomenclatureLines: { nomenclatureId: string }[],
-): Promise<PreparedUpakovkaApply> {
-  const prepared = await snapshotUpakovkaApply(tx, productId);
-
-  await lockDetails(tx, [
-    ...prepared.details.map((d) => d.detailId),
-    ...oldDetailLines.map((l) => l.detailId),
-  ]);
+  oldDetailLines: RetainedUpakovkaLine[],
+  oldNomenclatureLines: { nomenclatureId: string; quantity: number }[],
+): Promise<void> {
+  await lockDetails(tx, oldDetailLines.map((line) => line.detailId));
 
   const blanks: BlankSpec[] = [];
   for (const line of oldDetailLines) {
@@ -933,32 +901,17 @@ export async function prepareUpakovkaEdit(
       });
     }
   }
-  for (const row of prepared.details) {
-    if (row.quantity <= 0) continue;
-    if (!row.prisadkaTorcevaya && !row.prisadkaPloskost) {
-      blanks.push({
-        materialId: row.materialId,
-        lengthM: row.lengthM,
-        detailType: row.detailType,
-        sort: row.sort,
-      });
-    }
-  }
   await lockBlankSpecs(tx, blanks);
-
-  const nomIds = [
-    ...oldNomenclatureLines.map((l) => l.nomenclatureId),
-    ...prepared.fasteners.map((f) => f.nomenclatureId),
-    prepared.packagingId,
-    ...prepared.extras.map((e) => e.nomenclatureId),
-  ];
-  await lockNomenclatureIds(tx, nomIds);
+  await lockNomenclatureIds(
+    tx,
+    oldNomenclatureLines.map((line) => line.nomenclatureId),
+  );
   await lockProductIds(tx, [productId]);
-
-  const oldRefs = await collectUpakovkaRefs(tx, productId, oldDetailLines, oldNomenclatureLines);
-  const currentRefs = await collectCurrentUpakovkaApplyRefs(tx, prepared);
-  await assertInventoryBoundary(tx, occurredAt, [...oldRefs, ...currentRefs]);
-  return prepared;
+  await assertInventoryBoundary(
+    tx,
+    occurredAt,
+    await collectUpakovkaRefs(tx, productId, oldDetailLines, oldNomenclatureLines),
+  );
 }
 
 type SimBucket = {

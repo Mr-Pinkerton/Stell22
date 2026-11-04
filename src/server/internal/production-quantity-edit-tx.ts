@@ -20,11 +20,9 @@ import {
   prisadkaDestFlags,
   type BlankSpec,
   type PreparedPrisadkaQuantityEdit,
-  type PreparedUpakovkaApply,
 } from "@/server/internal/inventory-integrity";
 import {
   applyInactivePrisadkaPreparedSteps,
-  applyUpakovkaPrepared,
   reversePrisadkaLine,
   reverseUpakovkaOperation,
 } from "@/server/internal/production-reversal";
@@ -33,6 +31,8 @@ import type { OperationType } from "@/types/domain";
 import {
   QUANTITY_EDIT_ACTIVE_TARGET_ESCAPE,
   QUANTITY_EDIT_UPAKOVKA_COST_FLOW_NOT_READY,
+  QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS,
+  scaleRetainedUpakovkaQuantity,
   STALE_QUANTITY_EDIT,
   acquireQuantityEditRequestLock,
   assertNoMoneyInQuantityEditContract,
@@ -46,7 +46,7 @@ import {
   canonicalBlankLengthM,
   collectExistingDetailStockKeys,
   collectPhysicalKeys,
-  collectPreparedUpakovkaPhysicalKeys,
+  collectRetainedUpakovkaPhysicalKeys,
   uncoveredPhysicalKeys,
   computeQuantityEditStateFingerprint,
   derivePhysicalAdjustments,
@@ -68,6 +68,107 @@ type OpFull = Prisma.ProductionOperationGetPayload<{
 function num(value: Prisma.Decimal | number | null): number {
   if (value == null) return 0;
   return typeof value === "object" && "toNumber" in value ? value.toNumber() : Number(value);
+}
+
+function assertRetainedUpakovkaHistory(op: OpFull, oldQty: number, newQty: number): void {
+  for (const line of op.lines) {
+    scaleRetainedUpakovkaQuantity(line.quantity, oldQty, newQty);
+    if (line.sourceIsBlank) {
+      if (
+        line.blankLengthM == null ||
+        line.blankType == null ||
+        line.blankSort == null ||
+        line.blankMaterialId == null ||
+        line.detailId == null
+      ) {
+        throw new Error(QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS);
+      }
+    } else if (line.detailId == null) {
+      throw new Error(QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS);
+    }
+  }
+  for (const line of op.nomenclatureLines) {
+    scaleRetainedUpakovkaQuantity(line.quantity, oldQty, newQty);
+    if (!line.nomenclatureId) throw new Error(QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS);
+  }
+}
+
+async function applyRetainedUpakovkaQuantity(
+  tx: Prisma.TransactionClient,
+  operationId: string,
+  productId: string,
+  oldQty: number,
+  newQty: number,
+  detailLines: OpFull["lines"],
+  nomenclatureLines: OpFull["nomenclatureLines"],
+): Promise<void> {
+  for (const line of detailLines) {
+    const quantity = scaleRetainedUpakovkaQuantity(line.quantity, oldQty, newQty);
+    if (quantity === 0) continue;
+    if (line.sourceIsBlank) {
+      const dec = await tx.blankStock.updateMany({
+        where: {
+          materialId: line.blankMaterialId!,
+          lengthM: line.blankLengthM!,
+          detailType: line.blankType!,
+          sort: line.blankSort!,
+          quantity: { gte: quantity },
+        },
+        data: { quantity: { decrement: quantity } },
+      });
+      if (dec.count === 0) throw new Error("Недостаточно заготовок для упаковки");
+      await tx.operationDetailLine.create({
+        data: {
+          operationId,
+          detailId: line.detailId,
+          quantity,
+          sourceIsBlank: true,
+          blankLengthM: line.blankLengthM,
+          blankType: line.blankType,
+          blankSort: line.blankSort,
+          blankMaterialId: line.blankMaterialId,
+        },
+      });
+      continue;
+    }
+    const dec = await tx.detailStock.updateMany({
+      where: {
+        detailId: line.detailId!,
+        torcevayaDone: line.sourceTorcevayaDone,
+        ploskostDone: line.sourcePloskostDone,
+        quantity: { gte: quantity },
+      },
+      data: { quantity: { decrement: quantity } },
+    });
+    if (dec.count === 0) throw new Error("Недостаточно готовых деталей для упаковки");
+    await tx.operationDetailLine.create({
+      data: {
+        operationId,
+        detailId: line.detailId,
+        quantity,
+        sourceIsBlank: false,
+        sourceTorcevayaDone: line.sourceTorcevayaDone,
+        sourcePloskostDone: line.sourcePloskostDone,
+      },
+    });
+  }
+  for (const line of nomenclatureLines) {
+    const quantity = scaleRetainedUpakovkaQuantity(line.quantity, oldQty, newQty);
+    if (quantity === 0) continue;
+    const dec = await tx.nomenclatureStock.updateMany({
+      where: { nomenclatureId: line.nomenclatureId, quantity: { gte: quantity } },
+      data: { quantity: { decrement: quantity } },
+    });
+    if (dec.count === 0) throw new Error("Недостаточно комплектующих на складе");
+    await tx.operationNomenclatureLine.create({
+      data: { operationId, nomenclatureId: line.nomenclatureId, quantity },
+    });
+  }
+  await tx.productStock.upsert({
+    where: { productId },
+    create: { productId, quantity: newQty },
+    update: { quantity: { increment: newQty } },
+  });
 }
 
 function asEditLine(line: OpFull["lines"][number]): QuantityEditLine {
@@ -451,7 +552,7 @@ function captureAfterProvenance(
 }
 
 type PreparedQuantityEdit = {
-  upakovka: PreparedUpakovkaApply | null;
+  retainedUpakovka: PhysicalKey[] | null;
   prisadka: PreparedPrisadkaQuantityEdit | null;
   activePrisadka: PreparedActivePrisadkaWriteSet | null;
 };
@@ -469,14 +570,21 @@ async function prepareQuantityEditMutation(
   const { op, targetLine, replacedLines, newQty, costFlowActive } = input;
   if (op.type === "UPAKOVKA") {
     if (!op.productId) throw new Error("У операции не указано изделие");
+    const oldQty = op.productQty ?? 0;
+    assertRetainedUpakovkaHistory(op, oldQty, newQty);
+    await prepareUpakovkaEdit(
+      tx,
+      op.createdAt,
+      op.productId,
+      op.lines,
+      op.nomenclatureLines,
+    );
     return {
-      upakovka: await prepareUpakovkaEdit(
-        tx,
-        op.createdAt,
-        op.productId,
-        op.lines,
-        op.nomenclatureLines,
-      ),
+      retainedUpakovka: collectRetainedUpakovkaPhysicalKeys({
+        productId: op.productId,
+        lines: op.lines.map(asEditLine),
+        nomenclatureLines: op.nomenclatureLines.map(asNomLine),
+      }),
       prisadka: null,
       activePrisadka: null,
     };
@@ -490,19 +598,19 @@ async function prepareQuantityEditMutation(
       orderBy: { id: "asc" },
     });
     return {
-      upakovka: null,
+      retainedUpakovka: null,
       prisadka: null,
       activePrisadka: await prepareActivePrisadkaQuantityEdit(tx, details),
     };
   }
   if (op.type === "PRISADKA" && targetLine && !costFlowActive) {
     return {
-      upakovka: null,
+      retainedUpakovka: null,
       prisadka: await planPrisadkaQuantityEdit(tx, op.createdAt, targetLine, newQty),
       activePrisadka: null,
     };
   }
-  return { upakovka: null, prisadka: null, activePrisadka: null };
+  return { retainedUpakovka: null, prisadka: null, activePrisadka: null };
 }
 
 function collectPrisadkaPlanKeys(plan: PreparedPrisadkaQuantityEdit): PhysicalKey[] {
@@ -560,18 +668,20 @@ async function collectLockedPhysicalTargets(
     prepared: PreparedQuantityEdit;
   },
 ): Promise<PhysicalKey[]> {
+  if (input.op.type === "UPAKOVKA") {
+    if (!input.prepared.retainedUpakovka) throw new Error("У операции не указано изделие");
+    return input.prepared.retainedUpakovka;
+  }
   const oldKeys = collectPhysicalKeys({
     productId: input.op.productId,
-    lines: (input.op.type === "UPAKOVKA" ? input.op.lines : input.replacedLines).map(asEditLine),
+    lines: input.replacedLines.map(asEditLine),
     nomenclatureLines: input.op.nomenclatureLines.map(asNomLine),
   });
-  const preparedKeys = input.prepared.upakovka
-    ? collectPreparedUpakovkaPhysicalKeys(input.prepared.upakovka)
-    : input.prepared.prisadka
-      ? collectPrisadkaPlanKeys(input.prepared.prisadka)
-      : input.prepared.activePrisadka
-        ? collectActivePrisadkaWriteSetKeys(input.prepared.activePrisadka)
-        : [];
+  const preparedKeys = input.prepared.prisadka
+    ? collectPrisadkaPlanKeys(input.prepared.prisadka)
+    : input.prepared.activePrisadka
+      ? collectActivePrisadkaWriteSetKeys(input.prepared.activePrisadka)
+      : [];
   if (input.prepared.activePrisadka) {
     return mergePhysicalKeys(oldKeys, preparedKeys);
   }
@@ -598,8 +708,9 @@ async function executePreparedQuantityEdit(
   const id = op.id;
 
   if (op.type === "UPAKOVKA") {
-    if (!op.productId || !prepared.upakovka) throw new Error("У операции не указано изделие");
+    if (!op.productId || !prepared.retainedUpakovka) throw new Error("У операции не указано изделие");
     const oldQty = op.productQty ?? 0;
+    assertRetainedUpakovkaHistory(op, oldQty, newQty);
     await reverseUpakovkaOperation(
       tx,
       op.productId,
@@ -610,7 +721,7 @@ async function executePreparedQuantityEdit(
     );
     await tx.operationDetailLine.deleteMany({ where: { operationId: id } });
     await tx.operationNomenclatureLine.deleteMany({ where: { operationId: id } });
-    await applyUpakovkaPrepared(tx, id, newQty, prepared.upakovka);
+    await applyRetainedUpakovkaQuantity(tx, id, op.productId, oldQty, newQty, op.lines, op.nomenclatureLines);
     await tx.productionOperation.update({ where: { id }, data: { productQty: newQty } });
     return;
   }
