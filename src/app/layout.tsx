@@ -1,13 +1,16 @@
 import type { Metadata } from "next";
-import { Montserrat } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 
-const montserrat = Montserrat({
+// google/fonts 76fca9fd0bb4ea46583f92e978660f3984ab9442, Montserrat Version 9.000.
+const montserrat = localFont({
+  src: "./fonts/Montserrat[wght].ttf",
   variable: "--font-sans",
-  subsets: ["latin", "cyrillic"],
-  weight: ["400", "500", "600", "700"],
+  weight: "100 900",
+  style: "normal",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
