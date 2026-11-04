@@ -18,11 +18,20 @@ FROM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472
 # These timestamps exist, and the three debs were present on the security snapshot.
 # Apt still verifies the Debian archive signature. The historical Release file is
 # past Valid-Until, so only that date check is disabled.
+# The pinned node image has no CA bundle, so these sources stay on HTTP.
+# snapshot.debian.org returns 503/504 for individual indexes and then serves
+# the same object. Apt's default timeout holds that stall for the whole build
+# budget, so the HTTP timeout and retry count are bounded. Snapshot timestamps
+# and package versions are unchanged.
 # This is not a claim of byte-for-byte image reproducibility.
 # npm ci runs the locked Prisma install script, which fetches the engine for
 # the build platform. The npm tarball integrity is locked; the engine blob is not
 # stored in this repository.
 RUN set -eux \
+ && printf '%s\n' \
+      'Acquire::Retries "5";' \
+      'Acquire::http::Timeout "20";' \
+      > /etc/apt/apt.conf.d/99snapshot-transport \
  && printf '%s\n' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261005T023518Z bookworm main' \
       'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261005T020725Z bookworm-security main' \
