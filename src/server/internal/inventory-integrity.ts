@@ -864,80 +864,16 @@ export async function snapshotUpakovkaApply(
   };
 }
 
-function retainedPerUnit(quantity: number, oldProductQty: number): number {
-  if (!Number.isSafeInteger(quantity) || quantity < 0) {
-    throw new Error("Сохранённое количество строки упаковки неоднозначно");
-  }
-  if (!Number.isSafeInteger(oldProductQty) || oldProductQty <= 0) {
-    throw new Error("Сохранённое количество упаковки неоднозначно");
-  }
-  return quantity % oldProductQty === 0 ? quantity / oldProductQty : quantity;
-}
-
 type RetainedUpakovkaLine = UpakovkaDetailLine & {
   quantity: number;
   sourceTorcevayaDone: boolean;
   sourcePloskostDone: boolean;
 };
 
-function historicalUpakovkaPrepared(
-  productId: string,
-  oldProductQty: number,
-  oldDetailLines: RetainedUpakovkaLine[],
-  oldNomenclatureLines: { nomenclatureId: string; quantity: number }[],
-): PreparedUpakovkaApply {
-  const details: PreparedUpakovkaDetail[] = [];
-  for (const line of oldDetailLines) {
-    if (!line.detailId) throw new Error("Строка упаковки без детали");
-    const quantity = retainedPerUnit(line.quantity, oldProductQty);
-    if (line.sourceIsBlank) {
-      if (
-        line.blankLengthM == null ||
-        line.blankType == null ||
-        line.blankSort == null ||
-        line.blankMaterialId == null
-      ) {
-        throw new Error("Нет спецификации заготовки для возврата");
-      }
-      details.push({
-        detailId: line.detailId,
-        quantity,
-        materialId: line.blankMaterialId,
-        lengthM: toDec(line.blankLengthM),
-        detailType: line.blankType,
-        sort: line.blankSort,
-        prisadkaTorcevaya: false,
-        prisadkaPloskost: false,
-      });
-      continue;
-    }
-    const sourceClosed = line.sourceTorcevayaDone || line.sourcePloskostDone;
-    details.push({
-      detailId: line.detailId,
-      quantity,
-      materialId: line.blankMaterialId ?? line.detailId,
-      lengthM: line.blankLengthM == null ? new Prisma.Decimal(0) : toDec(line.blankLengthM),
-      detailType: line.blankType ?? "POLKA",
-      sort: line.blankSort ?? "SORT1",
-      prisadkaTorcevaya: sourceClosed ? line.sourceTorcevayaDone : true,
-      prisadkaPloskost: sourceClosed ? line.sourcePloskostDone : true,
-    });
-  }
-  return {
-    productId,
-    details,
-    fasteners: oldNomenclatureLines.map((line) => ({
-      nomenclatureId: line.nomenclatureId,
-      quantity: retainedPerUnit(line.quantity, oldProductQty),
-    })),
-    packagingId: null,
-    extras: [],
-  };
-}
-
 /**
  * UPAKOVKA qty edit: lock the operation's stored component lines, then the
  * inventory boundary on those same lines. The current product card is not read.
+ * Physical targets are derived by the caller from these lines, not from a BOM.
  */
 export async function prepareUpakovkaEdit(
   tx: Prisma.TransactionClient,
@@ -945,15 +881,7 @@ export async function prepareUpakovkaEdit(
   productId: string,
   oldDetailLines: RetainedUpakovkaLine[],
   oldNomenclatureLines: { nomenclatureId: string; quantity: number }[],
-  oldProductQty: number,
-): Promise<PreparedUpakovkaApply> {
-  const prepared = historicalUpakovkaPrepared(
-    productId,
-    oldProductQty,
-    oldDetailLines,
-    oldNomenclatureLines,
-  );
-
+): Promise<void> {
   await lockDetails(tx, oldDetailLines.map((line) => line.detailId));
 
   const blanks: BlankSpec[] = [];
@@ -984,7 +912,6 @@ export async function prepareUpakovkaEdit(
     occurredAt,
     await collectUpakovkaRefs(tx, productId, oldDetailLines, oldNomenclatureLines),
   );
-  return prepared;
 }
 
 type SimBucket = {

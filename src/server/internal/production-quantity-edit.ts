@@ -614,6 +614,55 @@ export function uncoveredPhysicalKeys(frozen: PhysicalKey[], used: PhysicalKey[]
   return used.filter((key) => !allowed.has(physicalTargetKey(key)));
 }
 
+/**
+ * Physical targets of a stored UPAKOVKA. Blank lines keep their recorded blank
+ * spec. Processed lines keep the recorded detail and source flags, including
+ * false/false. The current product card is not consulted.
+ */
+export function collectRetainedUpakovkaPhysicalKeys(input: {
+  productId: string;
+  lines: QuantityEditLine[];
+  nomenclatureLines: QuantityEditNomLine[];
+}): PhysicalKey[] {
+  const keys = new Map<string, PhysicalKey>();
+  const product: PhysicalKey = { targetType: "PRODUCT", productId: input.productId };
+  keys.set(physicalTargetKey(product), product);
+  for (const line of input.lines) {
+    if (line.sourceIsBlank) {
+      if (
+        line.blankMaterialId == null ||
+        line.blankLengthM == null ||
+        line.blankType == null ||
+        line.blankSort == null
+      ) {
+        throw new Error(QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS);
+      }
+      const blank: PhysicalKey = {
+        targetType: "BLANK",
+        materialId: line.blankMaterialId,
+        lengthM: canonicalBlankLengthM(line.blankLengthM),
+        detailType: line.blankType,
+        sort: line.blankSort,
+      };
+      keys.set(physicalTargetKey(blank), blank);
+      continue;
+    }
+    if (!line.detailId) throw new Error(QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS);
+    const detail: PhysicalKey = {
+      targetType: "DETAIL",
+      detailId: line.detailId,
+      torcevayaDone: line.sourceTorcevayaDone,
+      ploskostDone: line.sourcePloskostDone,
+    };
+    keys.set(physicalTargetKey(detail), detail);
+  }
+  for (const line of input.nomenclatureLines) {
+    const nom: PhysicalKey = { targetType: "NOMENCLATURE", nomenclatureId: line.nomenclatureId };
+    keys.set(physicalTargetKey(nom), nom);
+  }
+  return [...keys.values()];
+}
+
 export function collectPreparedUpakovkaPhysicalKeys(prepared: PreparedUpakovkaApply): PhysicalKey[] {
   const keys = new Map<string, PhysicalKey>();
   const product: PhysicalKey = { targetType: "PRODUCT", productId: prepared.productId };

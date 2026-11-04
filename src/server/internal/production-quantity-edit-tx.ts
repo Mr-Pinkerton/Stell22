@@ -20,7 +20,6 @@ import {
   prisadkaDestFlags,
   type BlankSpec,
   type PreparedPrisadkaQuantityEdit,
-  type PreparedUpakovkaApply,
 } from "@/server/internal/inventory-integrity";
 import {
   applyInactivePrisadkaPreparedSteps,
@@ -47,7 +46,7 @@ import {
   canonicalBlankLengthM,
   collectExistingDetailStockKeys,
   collectPhysicalKeys,
-  collectPreparedUpakovkaPhysicalKeys,
+  collectRetainedUpakovkaPhysicalKeys,
   uncoveredPhysicalKeys,
   computeQuantityEditStateFingerprint,
   derivePhysicalAdjustments,
@@ -553,7 +552,7 @@ function captureAfterProvenance(
 }
 
 type PreparedQuantityEdit = {
-  upakovka: PreparedUpakovkaApply | null;
+  retainedUpakovka: PhysicalKey[] | null;
   prisadka: PreparedPrisadkaQuantityEdit | null;
   activePrisadka: PreparedActivePrisadkaWriteSet | null;
 };
@@ -573,15 +572,19 @@ async function prepareQuantityEditMutation(
     if (!op.productId) throw new Error("У операции не указано изделие");
     const oldQty = op.productQty ?? 0;
     assertRetainedUpakovkaHistory(op, oldQty, newQty);
+    await prepareUpakovkaEdit(
+      tx,
+      op.createdAt,
+      op.productId,
+      op.lines,
+      op.nomenclatureLines,
+    );
     return {
-      upakovka: await prepareUpakovkaEdit(
-        tx,
-        op.createdAt,
-        op.productId,
-        op.lines,
-        op.nomenclatureLines,
-        oldQty,
-      ),
+      retainedUpakovka: collectRetainedUpakovkaPhysicalKeys({
+        productId: op.productId,
+        lines: op.lines.map(asEditLine),
+        nomenclatureLines: op.nomenclatureLines.map(asNomLine),
+      }),
       prisadka: null,
       activePrisadka: null,
     };
@@ -595,19 +598,19 @@ async function prepareQuantityEditMutation(
       orderBy: { id: "asc" },
     });
     return {
-      upakovka: null,
+      retainedUpakovka: null,
       prisadka: null,
       activePrisadka: await prepareActivePrisadkaQuantityEdit(tx, details),
     };
   }
   if (op.type === "PRISADKA" && targetLine && !costFlowActive) {
     return {
-      upakovka: null,
+      retainedUpakovka: null,
       prisadka: await planPrisadkaQuantityEdit(tx, op.createdAt, targetLine, newQty),
       activePrisadka: null,
     };
   }
-  return { upakovka: null, prisadka: null, activePrisadka: null };
+  return { retainedUpakovka: null, prisadka: null, activePrisadka: null };
 }
 
 function collectPrisadkaPlanKeys(plan: PreparedPrisadkaQuantityEdit): PhysicalKey[] {
@@ -665,18 +668,20 @@ async function collectLockedPhysicalTargets(
     prepared: PreparedQuantityEdit;
   },
 ): Promise<PhysicalKey[]> {
+  if (input.op.type === "UPAKOVKA") {
+    if (!input.prepared.retainedUpakovka) throw new Error("У операции не указано изделие");
+    return input.prepared.retainedUpakovka;
+  }
   const oldKeys = collectPhysicalKeys({
     productId: input.op.productId,
-    lines: (input.op.type === "UPAKOVKA" ? input.op.lines : input.replacedLines).map(asEditLine),
+    lines: input.replacedLines.map(asEditLine),
     nomenclatureLines: input.op.nomenclatureLines.map(asNomLine),
   });
-  const preparedKeys = input.prepared.upakovka
-    ? collectPreparedUpakovkaPhysicalKeys(input.prepared.upakovka)
-    : input.prepared.prisadka
-      ? collectPrisadkaPlanKeys(input.prepared.prisadka)
-      : input.prepared.activePrisadka
-        ? collectActivePrisadkaWriteSetKeys(input.prepared.activePrisadka)
-        : [];
+  const preparedKeys = input.prepared.prisadka
+    ? collectPrisadkaPlanKeys(input.prepared.prisadka)
+    : input.prepared.activePrisadka
+      ? collectActivePrisadkaWriteSetKeys(input.prepared.activePrisadka)
+      : [];
   if (input.prepared.activePrisadka) {
     return mergePhysicalKeys(oldKeys, preparedKeys);
   }
@@ -703,7 +708,7 @@ async function executePreparedQuantityEdit(
   const id = op.id;
 
   if (op.type === "UPAKOVKA") {
-    if (!op.productId || !prepared.upakovka) throw new Error("У операции не указано изделие");
+    if (!op.productId || !prepared.retainedUpakovka) throw new Error("У операции не указано изделие");
     const oldQty = op.productQty ?? 0;
     assertRetainedUpakovkaHistory(op, oldQty, newQty);
     await reverseUpakovkaOperation(

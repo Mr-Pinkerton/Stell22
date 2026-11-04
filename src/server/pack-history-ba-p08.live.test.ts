@@ -15,6 +15,7 @@ import {
   QUANTITY_EDIT_UPAKOVKA_COST_FLOW_NOT_READY,
   QUANTITY_EDIT_UPAKOVKA_HISTORY_AMBIGUOUS,
   computeQuantityEditStateFingerprint,
+  type QuantityEditPhysicalAdjustment,
 } from "@/server/internal/production-quantity-edit";
 
 const gate = vi.hoisted(() => ({
@@ -416,6 +417,127 @@ describe("BA-P08-001 historical pack quantity on disposable PostgreSQL 17", () =
     expect(await seed!.setting.findUnique({ where: { key: PRODUCTION_COST_FLOW_KEY } })).toBeNull();
   }, 30_000);
 
+  async function seedProcessedHistory(label: string) {
+    seq += 1;
+    const material = await seed!.material.create({
+      data: { name: `${label}-${runId}-${seq}`, sectionWidthMm: 40, sectionHeightMm: 20 },
+    });
+    const employee = await seed!.employee.create({
+      data: { fullName: `История ${seq}`, pin: String(5300 + seq), rateUpakovka: new Prisma.Decimal(80) },
+    });
+    const historical = await seed!.detail.create({
+      data: {
+        name: `источник-${seq}`,
+        materialId: material.id,
+        detailNumber: 6,
+        lengthM: new Prisma.Decimal("0.7000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        prisadkaTorcevaya: true,
+        prisadkaPloskost: true,
+      },
+    });
+    const replacement = await seed!.detail.create({
+      data: {
+        name: `карточка-${seq}`,
+        materialId: material.id,
+        detailNumber: 7,
+        lengthM: new Prisma.Decimal("0.8000"),
+        detailType: "POLKA",
+        sort: "SORT1",
+        prisadkaTorcevaya: true,
+        prisadkaPloskost: true,
+      },
+    });
+    const fastener = await seed!.nomenclatureItem.create({
+      data: { name: `крест-${seq}`, type: "FASTENER", unitPrice: new Prisma.Decimal(3) },
+    });
+    const product = await seed!.product.create({
+      data: {
+        name: `история-${seq}`,
+        materialId: material.id,
+        skuOzon: `ozh-${runId}-${seq}`,
+        skuWb: `wbh-${runId}-${seq}`,
+        sort: "SORT1",
+        details: { create: [{ detailId: replacement.id, quantity: 9 }] },
+      },
+    });
+    await seed!.detailStock.createMany({
+      data: [
+        { detailId: historical.id, torcevayaDone: false, ploskostDone: false, quantity: 5 },
+        { detailId: historical.id, torcevayaDone: true, ploskostDone: false, quantity: 5 },
+        { detailId: historical.id, torcevayaDone: true, ploskostDone: true, quantity: 7 },
+        { detailId: replacement.id, torcevayaDone: true, ploskostDone: true, quantity: 9 },
+      ],
+    });
+    await seed!.nomenclatureStock.create({ data: { nomenclatureId: fastener.id, quantity: 10 } });
+    await seed!.productStock.create({ data: { productId: product.id, quantity: 2 } });
+    const op = await seed!.productionOperation.create({
+      data: {
+        type: "UPAKOVKA",
+        employeeId: employee.id,
+        workDate: new Date("2026-03-02T00:00:00.000Z"),
+        clientRequestId: newRequestId(),
+        productId: product.id,
+        productQty: 2,
+        rateSnapshotVersion: 1,
+        lines: {
+          create: [
+            { detailId: historical.id, quantity: 1, sourceIsBlank: false, sourceTorcevayaDone: false, sourcePloskostDone: false },
+            { detailId: historical.id, quantity: 1, sourceIsBlank: false, sourceTorcevayaDone: true, sourcePloskostDone: false },
+          ],
+        },
+        nomenclatureLines: { create: [{ nomenclatureId: fastener.id, quantity: 1 }] },
+      },
+    });
+    return {
+      materialId: material.id,
+      historicalId: historical.id,
+      replacementId: replacement.id,
+      fastenerId: fastener.id,
+      productId: product.id,
+      operationId: op.id,
+    };
+  }
+
+  it("scales non-divisible stored lines onto their recorded source buckets", async () => {
+    const packed = await seedProcessedHistory("flags");
+    await editQty(packed.operationId, 4);
+    const lines = await seed!.operationDetailLine.findMany({
+      where: { operationId: packed.operationId },
+      orderBy: [{ sourceTorcevayaDone: "asc" }, { sourcePloskostDone: "asc" }],
+    });
+    expect(lines).toHaveLength(2);
+    expect(lines.map((line) => [line.detailId, line.sourceIsBlank, line.sourceTorcevayaDone, line.sourcePloskostDone, line.quantity, line.blankMaterialId])).toEqual([
+      [packed.historicalId, false, false, false, 2, null],
+      [packed.historicalId, false, true, false, 2, null],
+    ]);
+    expect(await seed!.operationNomenclatureLine.count({ where: { operationId: packed.operationId } })).toBe(1);
+    const bucket = (torcevayaDone: boolean, ploskostDone: boolean) => seed!.detailStock.findUniqueOrThrow({
+      where: { detailId_torcevayaDone_ploskostDone: { detailId: packed.historicalId, torcevayaDone, ploskostDone } },
+    });
+    expect((await bucket(false, false)).quantity).toBe(4);
+    expect((await bucket(true, false)).quantity).toBe(4);
+    expect((await bucket(true, true)).quantity).toBe(7);
+    expect((await seed!.detailStock.findUniqueOrThrow({
+      where: { detailId_torcevayaDone_ploskostDone: { detailId: packed.replacementId, torcevayaDone: true, ploskostDone: true } },
+    })).quantity).toBe(9);
+    expect(await seed!.blankStock.count({ where: { materialId: packed.materialId } })).toBe(0);
+    expect(await nomQty(packed.fastenerId)).toBe(9);
+    expect((await seed!.productStock.findUniqueOrThrow({ where: { productId: packed.productId } })).quantity).toBe(4);
+    const effect = await seed!.productionOperationQuantityEdit.findFirstOrThrow({ where: { operationId: packed.operationId } });
+    const snapshot = effect.effectSnapshot as { physicalAdjustments: QuantityEditPhysicalAdjustment[] };
+    expect(snapshot.physicalAdjustments).toEqual(expect.arrayContaining([
+      { targetType: "DETAIL", detailId: packed.historicalId, torcevayaDone: false, ploskostDone: false, quantityDelta: -1 },
+      { targetType: "DETAIL", detailId: packed.historicalId, torcevayaDone: true, ploskostDone: false, quantityDelta: -1 },
+      { targetType: "NOMENCLATURE", nomenclatureId: packed.fastenerId, quantityDelta: -1 },
+      { targetType: "PRODUCT", productId: packed.productId, quantityDelta: 2 },
+    ]));
+    expect(snapshot.physicalAdjustments).toHaveLength(4);
+    expect(snapshot.physicalAdjustments.some((row) => row.targetType === "BLANK")).toBe(false);
+    expect(JSON.stringify(snapshot)).not.toContain(packed.replacementId);
+  }, 30_000);
+
   it("decreases an old pack on the stored composition", async () => {
     const packed = await packProduct("down", 2);
     await editQty(packed.operationId, 1);
@@ -706,5 +828,66 @@ describe("BA-P08-001 historical pack quantity on disposable PostgreSQL 17", () =
     } finally {
       await seed!.setting.delete({ where: { key: PRODUCTION_COST_FLOW_KEY } });
     }
+  }, 30_000);
+
+  it("serializes concurrent edits of the same processed-detail buckets", async () => {
+    const packed = await seedProcessedHistory("race-flags");
+    const settled = await Promise.allSettled([editQty(packed.operationId, 4), editQty(packed.operationId, 4)]);
+    expect(settled.filter((item) => item.status === "fulfilled")).toHaveLength(1);
+    const rejected = settled.find((item) => item.status === "rejected") as PromiseRejectedResult;
+    expect(errorText(rejected.reason)).not.toContain("40P01");
+    expect((await seed!.detailStock.findUniqueOrThrow({
+      where: { detailId_torcevayaDone_ploskostDone: { detailId: packed.historicalId, torcevayaDone: false, ploskostDone: false } },
+    })).quantity).toBe(4);
+    expect((await seed!.productStock.findUniqueOrThrow({ where: { productId: packed.productId } })).quantity).toBe(4);
+    expect((await seed!.productionOperation.findUniqueOrThrow({ where: { id: packed.operationId } })).productQty).toBe(4);
+    expect(await seed!.operationDetailLine.count({ where: { operationId: packed.operationId } })).toBe(2);
+  }, 30_000);
+
+  it("keeps the active cost-flow refusal for a processed-detail history", async () => {
+    const packed = await seedProcessedHistory("gate-flags");
+    await seed!.setting.create({
+      data: { key: PRODUCTION_COST_FLOW_KEY, value: { version: 1, active: true } },
+    });
+    try {
+      await expect(editQty(packed.operationId, 4)).rejects.toThrow(QUANTITY_EDIT_UPAKOVKA_COST_FLOW_NOT_READY);
+      expect((await seed!.detailStock.findUniqueOrThrow({
+        where: { detailId_torcevayaDone_ploskostDone: { detailId: packed.historicalId, torcevayaDone: false, ploskostDone: false } },
+      })).quantity).toBe(5);
+      expect((await seed!.productionOperation.findUniqueOrThrow({ where: { id: packed.operationId } })).productQty).toBe(2);
+    } finally {
+      await seed!.setting.delete({ where: { key: PRODUCTION_COST_FLOW_KEY } });
+    }
+  }, 30_000);
+
+  it("refuses a processed-detail edit after a conducted inventory of that detail", async () => {
+    const packed = await seedProcessedHistory("inv-flags");
+    const doc = await seed!.inventory.create({
+      data: {
+        date: new Date(),
+        status: "DRAFT",
+        lines: {
+          create: [{
+            refType: "DETAIL",
+            refId: packed.historicalId,
+            accountedQty: 7,
+            actualQty: 7,
+            deviation: 0,
+            deviationSum: 0,
+          }],
+        },
+      },
+    });
+    await conductInventory(doc.id);
+    const opBefore = await seed!.productionOperation.findUniqueOrThrow({ where: { id: packed.operationId } });
+    await seed!.inventory.update({
+      where: { id: doc.id },
+      data: { date: new Date(opBefore.createdAt.getTime() + 48 * 60 * 60 * 1000) },
+    });
+    await expect(editQty(packed.operationId, 4)).rejects.toThrow(INVENTORY_BOUNDARY);
+    expect((await seed!.detailStock.findUniqueOrThrow({
+      where: { detailId_torcevayaDone_ploskostDone: { detailId: packed.historicalId, torcevayaDone: false, ploskostDone: false } },
+    })).quantity).toBe(5);
+    expect((await seed!.productionOperation.findUniqueOrThrow({ where: { id: packed.operationId } })).productQty).toBe(2);
   }, 30_000);
 });

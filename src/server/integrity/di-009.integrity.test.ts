@@ -20,7 +20,7 @@ vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Prisma } from "@prisma/client";
 import { isReady } from "@/lib/detail-stock";
-import { applyPrisadkaPick, applyUpakovkaPrepared, reverseUpakovkaOperation } from "@/server/internal/production-reversal";
+import { applyPrisadkaPick, reverseUpakovkaOperation } from "@/server/internal/production-reversal";
 import {
   ALREADY_CONDUCTED,
   INVENTORY_BOUNDARY,
@@ -1404,25 +1404,11 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     ]);
 
     await prismaA.$transaction(async (tx) => {
-      const prepared = await prepareUpakovkaEdit(
-        tx,
-        op.createdAt,
-        p.id,
-        detailLines,
-        nomenclatureLines,
-        1,
-      );
-      expect(prepared.details.map((d) => d.detailId)).toEqual([dA.id]);
-
+      await prepareUpakovkaEdit(tx, op.createdAt, p.id, detailLines, nomenclatureLines);
       await tx.productDetail.deleteMany({ where: { productId: p.id } });
       await tx.productDetail.create({ data: { productId: p.id, detailId: dC.id, quantity: 1 } });
-
-      await reverseUpakovkaOperation(tx, p.id, 1, detailLines, nomenclatureLines, op.createdAt);
-      await tx.operationDetailLine.deleteMany({ where: { operationId: op.id } });
-      await tx.operationNomenclatureLine.deleteMany({ where: { operationId: op.id } });
-      await applyUpakovkaPrepared(tx, op.id, 2, prepared);
-      await tx.productionOperation.update({ where: { id: op.id }, data: { productQty: 2 } });
     });
+    await editPhysicalQuantityByLineIndex(prismaA, op.id, 0, 2);
 
     const linesAfter = await prismaA.operationDetailLine.findMany({ where: { operationId: op.id } });
     expect(linesAfter.map((l) => l.detailId).sort()).toEqual([dA.id]);
@@ -1460,7 +1446,7 @@ describe.skipIf(!enabled)("DI-009 inventory integrity", () => {
     ]);
     await expect(
       prismaA.$transaction(async (tx) => {
-        await prepareUpakovkaEdit(tx, op.createdAt, p.id, linesB, nomsB, 2);
+        await prepareUpakovkaEdit(tx, op.createdAt, p.id, linesB, nomsB);
         await tx.productDetail.deleteMany({ where: { productId: p.id } });
         await tx.productDetail.create({ data: { productId: p.id, detailId: dC.id, quantity: 1 } });
         await reverseUpakovkaOperation(tx, p.id, 2, linesB, nomsB, op.createdAt);
