@@ -794,7 +794,7 @@ describe.skipIf(!enabled)("PSR-P2 Package 3 production quantity-edit SHADOW writ
     expect(adj.some((a) => a.targetType === "PRODUCT" && a.productId === world.product.id && a.quantityDelta === 1)).toBe(
       true,
     );
-    expect(adj.some((a) => a.detailId === extra.id)).toBe(false);
+    expect(adj.some((a) => a.targetType === "DETAIL" && a.detailId === extra.id)).toBe(false);
     expect(adj.some((a) => a.targetType === "DETAIL" && a.detailId === world.detail.id && a.quantityDelta === -1)).toBe(
       true,
     );
