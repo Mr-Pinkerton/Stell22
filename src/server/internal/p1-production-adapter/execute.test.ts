@@ -852,6 +852,11 @@ describe("production P1 adapter", () => {
     expect(recipe).toContain("npm ci --omit=dev");
     expect(recipe).toContain("openssl=3.0.22-1~deb12u1");
     expect(recipe).toContain("snapshot.debian.org/archive/debian-security/20261005T020725Z");
+    expect(recipe).toContain("http://snapshot.debian.org/archive/debian/20261005T023518Z");
+    expect(recipe).toContain('Acquire::Retries "5";');
+    expect(recipe).toContain('Acquire::http::Timeout "20";');
+    expect(recipe).toContain("check-valid-until=no");
+    expect(recipe).not.toContain("trusted=yes");
     expect(recipe).not.toMatch(/npm install/i);
     expect(recipe).not.toMatch(/:latest/i);
     expect(recipe).not.toMatch(/\bpull\b/i);
