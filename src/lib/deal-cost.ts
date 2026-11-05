@@ -8,6 +8,11 @@ export interface DealCashFlowLite {
   amount: Decimal.Value;
   /** Счёт операции подтверждён (не в карантине импорта выписки). */
   accountConfirmed: boolean;
+  /**
+   * Перевод между своими счетами. Флаг важнее статьи и сделки: историческая
+   * строка с isTransfer и заполненным articleId/dealId в расход не входит.
+   */
+  isTransfer?: boolean;
 }
 
 /**
@@ -15,11 +20,12 @@ export interface DealCashFlowLite {
  * Операции с авто-созданного неподтверждённого счёта (карантин импорта выписки)
  * не должны менять себестоимость партии / сумму сделки до подтверждения счёта в
  * Настройках — то же правило, что уже действует в ДДС/KPI/накладных.
+ * Перевод (isTransfer) не расход, даже если на строке остались статья или сделка.
  */
 export function sumConfirmedExpense(flows: DealCashFlowLite[]): Decimal {
   return flows.reduce(
     (sum, f) =>
-      f.flowType === "EXPENSE" && f.accountConfirmed
+      f.flowType === "EXPENSE" && f.accountConfirmed && f.isTransfer !== true
         ? sum.plus(new Decimal(f.amount))
         : sum,
     new Decimal(0),

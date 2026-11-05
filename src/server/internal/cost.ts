@@ -146,6 +146,7 @@ export async function getPeriodOverhead(
   const flows = await db.cashFlow.findMany({
     where: {
       flowType: "EXPENSE",
+      isTransfer: false,
       article: { category: { isOverhead: true } },
       account: { confirmed: true },
       ...(period ? { date: { gte: period.start, lte: period.end } } : {}),

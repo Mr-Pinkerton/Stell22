@@ -31,6 +31,23 @@ describe("sumConfirmedExpense (A13 карантин)", () => {
     ]);
     expect(sum.toNumber()).toBe(0.3);
   });
+
+  it("не считает перевод расходом, даже если на нём остались статья и сделка", () => {
+    const sum = sumConfirmedExpense([
+      { flowType: "EXPENSE", amount: 2_000, accountConfirmed: true, isTransfer: false },
+      { flowType: "EXPENSE", amount: 1_500, accountConfirmed: true, isTransfer: true },
+      { flowType: "INCOME", amount: 1_500, accountConfirmed: true, isTransfer: true },
+    ]);
+    expect(sum.toNumber()).toBe(2_000);
+  });
+
+  it("обычный подтверждённый расход без флага перевода по-прежнему входит в сумму", () => {
+    const sum = sumConfirmedExpense([
+      { flowType: "EXPENSE", amount: 2_000, accountConfirmed: true },
+      { flowType: "EXPENSE", amount: 300, accountConfirmed: true, isTransfer: false },
+    ]);
+    expect(sum.toNumber()).toBe(2_300);
+  });
 });
 
 describe("dealDeliveryExtra", () => {

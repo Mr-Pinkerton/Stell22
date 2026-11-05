@@ -275,7 +275,7 @@ export async function getFinanceData(): Promise<FinanceData> {
   // считаем только по подтверждённым счетам, как и остальную ДДС.
   const expenseByDeal = new Map<string, number>();
   for (const cf of cashFlows) {
-    if (cf.dealId && cf.flowType === "EXPENSE") {
+    if (cf.dealId && cf.flowType === "EXPENSE" && !cf.isTransfer) {
       expenseByDeal.set(cf.dealId, (expenseByDeal.get(cf.dealId) ?? 0) + num(cf.amount));
     }
   }
@@ -824,6 +824,7 @@ export async function reapplyAutoRules(): Promise<ReapplyAutoRulesResult> {
         if (!sameSortedIds([current.accountId], [peek.accountId])) {
           throw new LockSetChangedError();
         }
+        if (current.isTransfer) return;
         if (current.articleId != null) return;
 
         const auto = await applyAutoRulesInternal({
@@ -1043,6 +1044,12 @@ export async function assignCashFlow(
       if (!current) throw new Error("Операция не найдена");
       if (!sameSortedIds([current.accountId], [peek.accountId])) {
         throw new LockSetChangedError();
+      }
+      if (
+        current.isTransfer &&
+        (patch.articleId !== undefined || patch.dealId !== undefined)
+      ) {
+        throw new Error("Перевод нельзя разнести на статью или сделку");
       }
       const dealIds = sortedUniqueIds([current.dealId, patch.dealId]);
       await lockDealsThenBatches(tx, dealIds);
@@ -1266,6 +1273,7 @@ export async function unlinkTransfer(
 type CashFlowWithAccountConfirmed = {
   flowType: FlowType;
   amount: Prisma.Decimal;
+  isTransfer: boolean;
   account: { confirmed: boolean };
 };
 
@@ -1274,6 +1282,7 @@ function toCfLite(flows: CashFlowWithAccountConfirmed[]): DealCashFlowLite[] {
     flowType: cashFlow.flowType,
     amount: num(cashFlow.amount),
     accountConfirmed: cashFlow.account.confirmed,
+    isTransfer: cashFlow.isTransfer,
   }));
 }
 
