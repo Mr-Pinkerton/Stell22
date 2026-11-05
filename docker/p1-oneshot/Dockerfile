@@ -13,36 +13,22 @@
 # node -p process.version on this digest: v22.23.3
 FROM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
 
-# OS packages are taken from snapshot.debian.org, not the live Debian mirror.
-# The base image comments snapshot 20261005T000000Z. That exact id is not published.
-# These timestamps exist, and the three debs were present on the security snapshot.
-# Apt still verifies the Debian archive signature. The historical Release file is
-# past Valid-Until, so only that date check is disabled.
-# The pinned node image has no CA bundle, so these sources stay on HTTP.
-# snapshot.debian.org returns 503/504 for individual indexes and then serves
-# the same object. Apt's default timeout holds that stall for the whole build
-# budget, so the HTTP timeout and retry count are bounded. Snapshot timestamps
-# and package versions are unchanged.
+# OS packages are the three Debian .deb files in debs/.
+# SHA256SUMS is checked before dpkg installs them. A mismatch stops the build.
+# Debian security provenance for those exact bytes is debs/PROVENANCE.txt.
+# The build does not download those packages.
 # This is not a claim of byte-for-byte image reproducibility.
 # npm ci runs the locked Prisma install script, which fetches the engine for
 # the build platform. The npm tarball integrity is locked; the engine blob is not
 # stored in this repository.
-RUN set -eux \
- && printf '%s\n' \
-      'Acquire::Retries "5";' \
-      'Acquire::http::Timeout "20";' \
-      > /etc/apt/apt.conf.d/99snapshot-transport \
- && printf '%s\n' \
-      'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20261005T023518Z bookworm main' \
-      'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20261005T020725Z bookworm-security main' \
-      > /etc/apt/sources.list \
- && rm -rf /etc/apt/sources.list.d \
- && apt-get update \
- && apt-get install -y --no-install-recommends \
-      openssl=3.0.22-1~deb12u1 \
-      ca-certificates=20250419~deb12u1 \
-      libssl3=3.0.22-1~deb12u1 \
- && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=bind,source=debs,target=/tmp/stell22-debs \
+    set -eux; \
+    cd /tmp/stell22-debs; \
+    sha256sum -c SHA256SUMS; \
+    dpkg -i \
+      libssl3_3.0.22-1~deb12u1_amd64.deb \
+      openssl_3.0.22-1~deb12u1_amd64.deb \
+      ca-certificates_20250419~deb12u1_all.deb
 
 WORKDIR /opt/migrator
 COPY package.json package-lock.json ./
