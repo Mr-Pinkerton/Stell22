@@ -1,3 +1,5 @@
 docker-entrypoint-app-only.sh text eol=lf
 docker/app-only-startup/Dockerfile text eol=lf
+docker/p1-oneshot/Dockerfile text eol=lf
+docker/p1-oneshot/debs/*.deb binary
 scripts/admin-corrections-release.sh text eol=lf
