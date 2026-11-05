@@ -126,6 +126,7 @@ describe.skipIf(!enabled)("DI-003 integrity", () => {
       [...new Set(keys.map((k) => k.importKey))].sort(),
     );
     expect(keys).toHaveLength(parsedDocCount);
+    expect(await prismaA.statement.count({ where: { accountId: accounts[0].id } })).toBe(1);
   });
 
   it("sequential second importStatementInternal same file skips documents", async () => {
@@ -136,8 +137,10 @@ describe.skipIf(!enabled)("DI-003 integrity", () => {
     expect(first.importedCount).toBeGreaterThan(0);
     expect(second.importedCount).toBe(0);
     expect(second.skippedCount).toBeGreaterThan(0);
+    expect(second.statement.id).toBe(first.statement.id);
     const accounts = await prismaA.account.findMany({ where: { accountNumber: ourNumber } });
     expect(accounts).toHaveLength(1);
+    expect(await prismaA.statement.count({ where: { accountId: accounts[0].id } })).toBe(1);
     expect(
       await prismaA.cashFlow.count({
         where: { accountId: accounts[0].id, importKey: { not: null } },

@@ -19,7 +19,7 @@ import {
 const migrationsDir = path.join(process.cwd(), "prisma", "migrations");
 
 function imageRows() {
-  return readMigrationInventory(migrationsDir);
+  return readMigrationInventory(migrationsDir).filter((row) => row.name <= MIGRATION_NAME);
 }
 
 function historyFrom(rows: { name: string; sha256: string }[], unfinished: string[] = []) {
@@ -67,6 +67,10 @@ describe("admin corrections release decisions", () => {
     expect(compareHistory(image, mismatched).checksumMismatch).toBe("1");
     const extraImage = [...image, { name: "20990101000000_other", sha256: "d".repeat(64) }];
     expect(compareHistory(extraImage, historyFrom(image.filter((row) => row.name !== MIGRATION_NAME))).pendingCount).toBe("2");
+    const tree = readMigrationInventory(migrationsDir);
+    expect(tree.some((row) => row.name > MIGRATION_NAME)).toBe(true);
+    const historical = historyFrom(image.filter((row) => row.name !== MIGRATION_NAME));
+    expect(compareHistory(tree, historical).pendingCount).toBe("2");
   });
 
   it("restarts the old image only before an unattempted migration", () => {

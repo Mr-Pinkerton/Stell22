@@ -42,9 +42,15 @@ export function isDuplicateImportKey(err: unknown): boolean {
   return /importKey|CashFlow_accountId_importKey_key/i.test(d);
 }
 
-/** Account.accountNumber or CashFlow importKey unique — retry whole import once. */
+export function isDuplicateStatementContent(err: unknown): boolean {
+  if (!isPrismaP2002(err)) return false;
+  const d = prismaUniqueDiscriminator(err);
+  return /contentKey|Statement_accountId_contentKey_key/i.test(d);
+}
+
+/** Account number, CashFlow importKey, or identical statement content — retry once. */
 export function isRetryableStatementImportConflict(err: unknown): boolean {
-  return isDuplicateAccountNumber(err) || isDuplicateImportKey(err);
+  return isDuplicateAccountNumber(err) || isDuplicateImportKey(err) || isDuplicateStatementContent(err);
 }
 
 export function throwFriendlyAccountNumberConflict(err: unknown): never | void {

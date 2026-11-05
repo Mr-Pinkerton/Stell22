@@ -81,6 +81,24 @@ function writeExecutable(file: string, body: string) {
   fs.chmodSync(file, 0o755);
 }
 
+function releaseInventory() {
+  return readMigrationInventory(path.join(process.cwd(), "prisma", "migrations")).filter((row) => row.name <= MIGRATION_NAME);
+}
+
+function releaseSchemaDir(parent: string) {
+  const schema = path.join(parent, "release-schema");
+  const migrations = path.join(schema, "prisma", "migrations");
+  fs.mkdirSync(migrations, { recursive: true });
+  const source = path.join(process.cwd(), "prisma", "migrations");
+  for (const name of fs.readdirSync(source)) {
+    if (name > MIGRATION_NAME) continue;
+    const from = path.join(source, name);
+    if (!fs.statSync(from).isDirectory()) continue;
+    fs.cpSync(from, path.join(migrations, name), { recursive: true });
+  }
+  return schema.replace(/\\/g, "/");
+}
+
 function fixture(options: {
   history?: string;
   privileges?: string;
@@ -101,7 +119,7 @@ function fixture(options: {
   const unix = root.replace(/\\/g, "/");
   const facts = path.join(root, "facts");
   fs.mkdirSync(facts);
-  const image = readMigrationInventory(path.join(process.cwd(), "prisma", "migrations"));
+  const image = releaseInventory();
   const pending = image.filter((row) => row.name !== MIGRATION_NAME);
   const history = options.history ?? `${pending.map((row) => `${row.name}|${row.sha256}|true|false|1`).join("\n")}\n`;
   fs.writeFileSync(path.join(facts, "history.txt"), history);
@@ -176,6 +194,7 @@ function fixture(options: {
       STELL22_AC_MIGRATE_EXIT: options.migrateExit ?? "0",
       STELL22_AC_APP_EXIT: options.appExit ?? "0",
       STELL22_AC_CHECKSUM_OK: options.checksumOk ?? "1",
+      STELL22_AC_SCHEMA_DIR: releaseSchemaDir(root),
     }),
   };
 }
@@ -267,7 +286,7 @@ describe("admin corrections release operator", () => {
   }, 30_000);
 
   it("refuses unexpected history, privileges, writers, and a second apply", () => {
-    const image = readMigrationInventory(path.join(process.cwd(), "prisma", "migrations"));
+    const image = releaseInventory();
     const withoutTwo = image.filter((row) => row.name !== MIGRATION_NAME && row.name !== image[0]?.name);
     const pending = run(fixture({ history: `${withoutTwo.map((row) => `${row.name}|${row.sha256}|true|false|1`).join("\n")}\n` }).env);
     expect(pending.out).toContain("RESULT=STOP_PENDING");

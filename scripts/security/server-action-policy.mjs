@@ -51,6 +51,7 @@ export const actionPolicy = {
     "finance.updateAutoRule",
     "finance.updateCounterparty",
     "finance.updateDeal",
+    "finance.updateManualCashFlow",
     "goals.createGoal",
     "goals.getGoalsData",
     "marketplace.getMpStock",

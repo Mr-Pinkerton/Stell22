@@ -43,6 +43,8 @@ function materialize(dir: string, includeTarget: boolean) {
   if (listed.status !== 0) throw new Error("git ls-files failed");
   for (const relative of listed.stdout.split(/\r?\n/).filter(Boolean)) {
     if (relative !== "prisma/schema.prisma" && !relative.startsWith("prisma/migrations/")) continue;
+    const migration = relative.match(/^prisma\/migrations\/([^/]+)/)?.[1] ?? "";
+    if (migration > MIGRATION_NAME) continue;
     if (!includeTarget && relative.includes(MIGRATION_NAME)) continue;
     const shown = spawnSync("git", ["show", `HEAD:${relative}`], {
       cwd: process.cwd(),
@@ -206,7 +208,7 @@ describe.skipIf(!LIVE)("admin corrections disposable postgresql 17", () => {
           `SELECT migration_name || ' ' || checksum FROM public."_prisma_migrations" ORDER BY migration_name`,
           secrets,
         ).split(/\r?\n/).filter(Boolean);
-        const imageMigrations = readImageMigrations(process.cwd());
+        const imageMigrations = readImageMigrations(full);
         expect(rows).toHaveLength(47);
         const role: StartupRole = {
           currentUser: "stell22_app",

@@ -22,6 +22,17 @@ import {
 import { writeChangeLog } from "@/server/change-log";
 import { enqueueRecalcBatchCosts } from "@/server/cost-queue";
 import { sumConfirmedExpense, type DealCashFlowLite } from "@/lib/deal-cost";
+import {
+  cashFlowSource,
+  coverAccounts,
+  decideTransferPair,
+  isBankImportedOperation,
+  isRealCalendarDate,
+  statementPeriodFields,
+  transferGroupIsBankProtected,
+  type AccountCoverageSummary,
+  type TransferPairLeg,
+} from "@/lib/bank-statement-integrity";
 import { computeAccountBalances, type BalanceFlow } from "@/lib/account-balance";
 import type { FlowType } from "@/types/domain";
 import type {
@@ -131,6 +142,8 @@ export interface FinanceData {
   autoRules: FinanceAutoRule[];
   cashFlows: FinanceCashFlowRow[];
   statements: FinanceStatementRow[];
+  statementCoverage: AccountCoverageSummary[];
+  coverageAsOf: string;
   batchOptions: BatchOption[];
 }
 
@@ -179,15 +192,26 @@ function serDeal(d: DealWithItems, expenseByDeal: Map<string, number>): FinanceD
   };
 }
 
-function serStatement(s: StatementWithRefs): FinanceStatementRow {
+function serStatement(
+  s: StatementWithRefs,
+  overlapDates: string[] = [],
+): FinanceStatementRow {
+  const period = statementPeriodFields({
+    source: s.source,
+    periodStart: s.periodStart ? isoDay(s.periodStart) : null,
+    periodEnd: s.periodEnd ? isoDay(s.periodEnd) : null,
+    operationsCount: s.cashFlows.length,
+  });
   return {
     id: s.id,
-    date: s.date.toISOString().slice(0, 10),
+    date: isoDay(s.date),
     accountName: s.account?.name ?? null,
     operationsCount: s.cashFlows.length,
     unassignedCount: s.cashFlows.filter((cf) => !cf.articleId && !cf.isTransfer).length,
     uploaded: s.uploadedAt != null,
     mismatch: s.mismatch,
+    ...period,
+    overlapDates,
   };
 }
 
@@ -203,7 +227,10 @@ function serAutoRule(r: AutoRuleWithRefs, dealNameById: Map<string, string>): Fi
   };
 }
 
-function serCashFlow(cf: CashFlowWithRefs): FinanceCashFlowRow {
+function serCashFlow(
+  cf: CashFlowWithRefs,
+  protectedTransferIds: ReadonlySet<string>,
+): FinanceCashFlowRow {
   return {
     id: cf.id,
     date: cf.date.toISOString().slice(0, 10),
@@ -218,7 +245,26 @@ function serCashFlow(cf: CashFlowWithRefs): FinanceCashFlowRow {
     dealId: cf.dealId,
     isAutoAssigned: cf.isAutoAssigned,
     isTransfer: cf.isTransfer,
+    pairedTransfer: cf.transferId != null,
+    source: cashFlowSource({
+      statementId: cf.statementId,
+      importKey: cf.importKey,
+      isAutoAssigned: cf.isAutoAssigned,
+      linkedToImportedTransfer:
+        cf.transferId != null && protectedTransferIds.has(cf.transferId),
+    }),
   };
+}
+
+async function protectedTransferIdSet(): Promise<Set<string>> {
+  const rows = await prisma.cashFlow.findMany({
+    where: {
+      transferId: { not: null },
+      OR: [{ statementId: { not: null } }, { importKey: { not: null } }],
+    },
+    select: { transferId: true },
+  });
+  return new Set(rows.map((row) => row.transferId).filter((id): id is string => id != null));
 }
 
 export async function getFinanceData(): Promise<FinanceData> {
@@ -234,6 +280,7 @@ export async function getFinanceData(): Promise<FinanceData> {
     cashFlows,
     statements,
     batches,
+    protectedTransfers,
   ] = await Promise.all([
     prisma.account.findMany({ orderBy: { name: "asc" } }),
     // Остаток счёта считаем по ВСЕМ его операциям (даже в карантине) — на
@@ -267,6 +314,7 @@ export async function getFinanceData(): Promise<FinanceData> {
       orderBy: { date: "desc" },
     }),
     prisma.batch.findMany({ orderBy: { purchaseDate: "desc" } }),
+    protectedTransferIdSet(),
   ]);
 
   const dealNameById = new Map(deals.map((d) => [d.id, d.name]));
@@ -280,6 +328,41 @@ export async function getFinanceData(): Promise<FinanceData> {
     }
   }
 
+  const coverageAsOf = isoDay(new Date());
+  const statedAccountIds = new Set(
+    statements.flatMap((statement) => (statement.accountId ? [statement.accountId] : [])),
+  );
+  const statementCoverage = coverAccounts({
+    asOf: coverageAsOf,
+    accounts: accounts
+      .filter((account) => statedAccountIds.has(account.id))
+      .map((account) => ({ id: account.id, name: account.name })),
+    intervals: statements.flatMap((statement) => {
+      if (
+        statement.source !== "BANK_1C" ||
+        !statement.periodStart ||
+        !statement.periodEnd ||
+        !statement.accountId
+      ) {
+        return [];
+      }
+      return [
+        {
+          statementId: statement.id,
+          accountId: statement.accountId,
+          periodStart: isoDay(statement.periodStart),
+          periodEnd: isoDay(statement.periodEnd),
+        },
+      ];
+    }),
+  });
+  const overlapDatesFor = (statementId: string) =>
+    statementCoverage.flatMap((row) =>
+      row.overlappingDates
+        .filter((day) => day.statementIds.includes(statementId))
+        .map((day) => day.date),
+    );
+
   return {
     accounts: serAccountsWithBalances(accounts, allFlows),
     articles: articles.map(serArticle),
@@ -287,8 +370,10 @@ export async function getFinanceData(): Promise<FinanceData> {
     counterparties: counterparties.map((c) => ({ id: c.id, name: c.name, inn: c.inn })),
     deals: deals.map((d) => serDeal(d, expenseByDeal)),
     autoRules: autoRules.map((r) => serAutoRule(r, dealNameById)),
-    cashFlows: cashFlows.map(serCashFlow),
-    statements: statements.map(serStatement),
+    cashFlows: cashFlows.map((row) => serCashFlow(row, protectedTransfers)),
+    statements: statements.map((row) => serStatement(row, overlapDatesFor(row.id))),
+    statementCoverage,
+    coverageAsOf,
     batchOptions: batches.map((b) => ({ id: b.id, name: b.name, status: b.status })),
   };
 }
@@ -825,6 +910,7 @@ export async function reapplyAutoRules(): Promise<ReapplyAutoRulesResult> {
           throw new LockSetChangedError();
         }
         if (current.isTransfer) return;
+        if (isBankImportedOperation(current)) return;
         if (current.articleId != null) return;
 
         const auto = await applyAutoRulesInternal({
@@ -867,15 +953,18 @@ export async function reapplyAutoRules(): Promise<ReapplyAutoRulesResult> {
         include: { account: true, counterparty: true, article: true, deal: true },
       })
     : [];
-  return { ok: true, assigned: updatedIds.length, updated: updated.map(serCashFlow) };
+  return { ok: true, assigned: updatedIds.length, updated: updated.map((row) => serCashFlow(row, new Set())) };
 }
 
 async function loadCashFlow(id: string): Promise<FinanceCashFlowRow> {
-  const cf = await prisma.cashFlow.findUniqueOrThrow({
-    where: { id },
-    include: { account: true, counterparty: true, article: true, deal: true },
-  });
-  return serCashFlow(cf);
+  const [cf, protectedIds] = await Promise.all([
+    prisma.cashFlow.findUniqueOrThrow({
+      where: { id },
+      include: { account: true, counterparty: true, article: true, deal: true },
+    }),
+    protectedTransferIdSet(),
+  ]);
+  return serCashFlow(cf, protectedIds);
 }
 
 export async function createCashFlow(values: CashflowFormValues): Promise<FinanceCashFlowRow> {
@@ -941,6 +1030,69 @@ export async function createCashFlow(values: CashflowFormValues): Promise<Financ
   });
   await afterTotalsCommit(batchIds);
   return loadCashFlow(createdId);
+}
+
+/** Правка суммы, даты, счёта, направления и назначения ручной операции. */
+export async function updateManualCashFlow(
+  id: string,
+  values: CashflowFormValues,
+): Promise<FinanceCashFlowRow> {
+  await requireAdmin();
+  if (!(values.amount > 0)) throw new Error("Сумма должна быть положительной");
+  if (!isRealCalendarDate(values.date)) throw new Error("Некорректная дата");
+  const amount = exactMoneyString(values.amount);
+  if (!values.accountName) throw new Error("Выберите счёт");
+  if (!values.description.trim()) throw new Error("Укажите назначение");
+  const account = await prisma.account.findFirst({ where: { name: values.accountName } });
+  if (!account) throw new Error("Счёт не найден");
+
+  let batchIds: string[] = [];
+  await retryOnLockSetChange(async () => {
+    batchIds = [];
+    await prisma.$transaction(async (tx) => {
+      const peek = await tx.cashFlow.findUnique({ where: { id } });
+      if (!peek) throw new Error("Операция не найдена");
+      const lockedAccounts = sortedUniqueIds([peek.accountId, account.id]);
+      await lockAccountsThenDealsThenBatches(tx, lockedAccounts, []);
+      const current = await tx.cashFlow.findUnique({ where: { id } });
+      if (!current) throw new Error("Операция не найдена");
+      if (current.accountId !== peek.accountId) throw new LockSetChangedError();
+      if (isBankImportedOperation(current)) {
+        throw new Error("Импортированную банковскую операцию нельзя изменить");
+      }
+      const legs = current.transferId
+        ? await tx.cashFlow.findMany({ where: { transferId: current.transferId } })
+        : [current];
+      if (current.isTransfer || transferGroupIsBankProtected(legs)) {
+        throw new Error(
+          current.isTransfer
+            ? "Ручной перевод удаляется целиком и создаётся заново"
+            : "Импортированную банковскую операцию нельзя изменить",
+        );
+      }
+      await lockDealsThenBatches(tx, current.dealId ? [current.dealId] : []);
+      await tx.cashFlow.update({
+        where: { id },
+        data: {
+          amount,
+          date: dayToDate(values.date),
+          accountId: account.id,
+          flowType: values.flowType,
+          description: values.description.trim(),
+        },
+      });
+      if (current.dealId) {
+        batchIds.push(...(await syncDealInternal(current.dealId, tx)));
+      }
+    });
+  });
+  await writeChangeLog({
+    entity: "CashFlow",
+    entityId: id,
+    newValues: { amount: values.amount, date: values.date, account: values.accountName },
+  });
+  await afterTotalsCommit(batchIds);
+  return loadCashFlow(id);
 }
 
 /**
@@ -1045,6 +1197,18 @@ export async function assignCashFlow(
       if (!sameSortedIds([current.accountId], [peek.accountId])) {
         throw new LockSetChangedError();
       }
+      if (isBankImportedOperation(current)) {
+        throw new Error("Импортированную банковскую операцию нельзя изменить");
+      }
+      if (current.transferId) {
+        const group = await tx.cashFlow.findMany({
+          where: { transferId: current.transferId },
+          select: { statementId: true, importKey: true },
+        });
+        if (transferGroupIsBankProtected(group)) {
+          throw new Error("Импортированную банковскую операцию нельзя изменить");
+        }
+      }
       if (
         current.isTransfer &&
         (patch.articleId !== undefined || patch.dealId !== undefined)
@@ -1093,6 +1257,9 @@ export async function deleteCashFlow(id: string): Promise<string[]> {
       if (!sameSortedIds(legs.map((l) => l.accountId), lockedAccounts)) {
         throw new LockSetChangedError();
       }
+      if (transferGroupIsBankProtected(legs)) {
+        throw new Error("Импортированную банковскую операцию нельзя удалить");
+      }
 
       await lockDealsThenBatches(
         tx,
@@ -1129,7 +1296,7 @@ export async function convertCashFlowToTransfer(
   await requireAdmin();
   const source = await prisma.cashFlow.findUnique({ where: { id } });
   if (!source) throw new Error("Операция не найдена");
-  if (source.isTransfer) throw new Error("Операция уже является переводом");
+  if (source.transferId) throw new Error("Операция уже является переводом");
   if (!otherAccountId) throw new Error("Выберите второй счёт");
   if (otherAccountId === source.accountId) {
     throw new Error("Второй счёт должен отличаться от счёта операции");
@@ -1145,7 +1312,7 @@ export async function convertCashFlowToTransfer(
     return prisma.$transaction(async (tx) => {
       const peek = await tx.cashFlow.findUnique({ where: { id } });
       if (!peek) throw new Error("Операция не найдена");
-      if (peek.isTransfer) throw new Error("Операция уже является переводом");
+      if (peek.transferId) throw new Error("Операция уже является переводом");
       if (otherAccountId === peek.accountId) {
         throw new Error("Второй счёт должен отличаться от счёта операции");
       }
@@ -1154,45 +1321,86 @@ export async function convertCashFlowToTransfer(
 
       const current = await tx.cashFlow.findUnique({ where: { id } });
       if (!current) throw new Error("Операция не найдена");
-      if (current.isTransfer) throw new Error("Операция уже является переводом");
+      if (current.transferId) throw new Error("Операция уже является переводом");
       if (!sameSortedIds([current.accountId, otherAccountId], lockedAccounts)) {
         throw new LockSetChangedError();
       }
       const otherAcc = await tx.account.findUnique({ where: { id: otherAccountId } });
       if (!otherAcc) throw new Error("Счёт не найден");
 
-      await lockDealsThenBatches(tx, current.dealId ? [current.dealId] : []);
       const oppositeType = current.flowType === "INCOME" ? "EXPENSE" : "INCOME";
-      const note = current.description?.trim() || "";
+      const pool = await tx.cashFlow.findMany({
+        where: { accountId: otherAccountId, flowType: oppositeType, amount: current.amount },
+      });
+      const candidates: TransferPairLeg[] = pool.map((row) => ({
+          id: row.id,
+          accountId: row.accountId,
+          flowType: row.flowType,
+          amount: row.amount.toFixed(2),
+          date: isoDay(row.date),
+          isTransfer: row.isTransfer,
+          paired: row.transferId != null,
+          statementId: row.statementId,
+          importKey: row.importKey,
+        }));
+      const decision = decideTransferPair({
+        source: {
+          id: current.id,
+          accountId: current.accountId,
+          flowType: current.flowType,
+          amount: current.amount.toFixed(2),
+          date: isoDay(current.date),
+          isTransfer: current.isTransfer,
+          paired: current.transferId != null,
+          statementId: current.statementId,
+          importKey: current.importKey,
+        },
+        otherAccountId,
+        candidates,
+      });
+      if (decision.action === "refuse") throw new Error(decision.reason);
 
-      await tx.cashFlow.update({
-        where: { id },
-        data: {
-          isTransfer: true,
-          transferId,
-          isAutoAssigned: true,
-          counterpartyId: null,
-          articleId: null,
-          dealId: null,
-        },
-      });
-      const otherLeg = await tx.cashFlow.create({
-        data: {
-          amount: current.amount,
-          date: current.date,
-          flowType: oppositeType,
-          accountId: otherAcc.id,
-          description:
-            note || `Перевод ${current.flowType === "INCOME" ? "на" : "с"} «${otherAcc.name}»`,
-          isTransfer: true,
-          isAutoAssigned: true,
-          transferId,
-        },
-      });
-      if (current.dealId) {
-        batchIds.push(...(await syncDealInternal(current.dealId, tx)));
+      const dealIds = [current.dealId];
+      if (decision.action === "link-existing") {
+        const candidate = await tx.cashFlow.findUnique({ where: { id: decision.candidateId } });
+        if (!candidate || candidate.transferId) throw new Error("Встречная банковская операция не найдена");
+        dealIds.push(candidate.dealId);
       }
-      return otherLeg.id;
+      await lockDealsThenBatches(tx, dealIds);
+      const classification = {
+        isTransfer: true,
+        transferId,
+        isAutoAssigned: true,
+        counterpartyId: null,
+        articleId: null,
+        dealId: null,
+      };
+      await tx.cashFlow.update({ where: { id }, data: classification });
+      let otherLegId: string;
+      if (decision.action === "link-existing") {
+        await tx.cashFlow.update({ where: { id: decision.candidateId }, data: classification });
+        otherLegId = decision.candidateId;
+      } else {
+        const note = current.description?.trim() || "";
+        const otherLeg = await tx.cashFlow.create({
+          data: {
+            amount: current.amount,
+            date: current.date,
+            flowType: oppositeType,
+            accountId: otherAcc.id,
+            description:
+              note || `Перевод ${current.flowType === "INCOME" ? "на" : "с"} «${otherAcc.name}»`,
+            isTransfer: true,
+            isAutoAssigned: true,
+            transferId,
+          },
+        });
+        otherLegId = otherLeg.id;
+      }
+      for (const dealId of sortedUniqueIds(dealIds)) {
+        batchIds.push(...(await syncDealInternal(dealId, tx)));
+      }
+      return otherLegId;
     });
   });
 
@@ -1235,6 +1443,9 @@ export async function unlinkTransfer(
       const legs = await tx.cashFlow.findMany({ where: { transferId: current.transferId } });
       if (!sameSortedIds(legs.map((l) => l.accountId), lockedAccounts)) {
         throw new LockSetChangedError();
+      }
+      if (transferGroupIsBankProtected(legs)) {
+        throw new Error("Банковский перевод нельзя расцепить");
       }
 
       await lockDealsThenBatches(
@@ -1412,6 +1623,9 @@ export async function createStatement(values: StatementUploadValues): Promise<Fi
       accountId: account?.id ?? null,
       fileUrl: values.fileName || null,
       uploadedAt: new Date(),
+      source: "MANUAL",
+      periodStart: null,
+      periodEnd: null,
     },
     include: { account: true, cashFlows: true },
   });
@@ -1435,6 +1649,8 @@ export interface ImportStatementResult {
   unassignedCount: number;
   skippedCount: number;
   warning: string | null;
+  statementCoverage: FinanceData["statementCoverage"];
+  coverageAsOf: string;
 }
 
 export async function importStatement(
@@ -1461,7 +1677,7 @@ export async function getStatementDetail(id: string): Promise<FinanceCashFlowRow
     include: { account: true, counterparty: true, article: true, deal: true },
     orderBy: { date: "asc" },
   });
-  return flows.map(serCashFlow);
+  return flows.map((row) => serCashFlow(row, new Set()));
 }
 
 export interface DeleteStatementResult {
@@ -1478,60 +1694,29 @@ export interface DeleteStatementResult {
  */
 export async function deleteStatement(id: string): Promise<DeleteStatementResult> {
   await requireAdmin();
-  const batchIds: string[] = [];
-  const removedIds: string[] = [];
 
   await prisma.$transaction(async (tx) => {
     const stmt = await tx.statement.findUnique({ where: { id } });
-    if (stmt?.accountId) {
+    if (!stmt) throw new Error("Выписка не найдена");
+    if (stmt.accountId) {
       await lockAccountsThenDealsThenBatches(tx, [stmt.accountId], []);
     }
-    const flows = await tx.cashFlow.findMany({
-      where: { statementId: id },
-      select: { id: true, dealId: true },
+    const current = await tx.statement.findUnique({
+      where: { id },
+      include: { cashFlows: { select: { id: true } } },
     });
-    removedIds.push(...flows.map((f) => f.id));
-    const affectedDeals = sortedUniqueIds(flows.map((f) => f.dealId));
-    await lockDealsThenBatches(tx, affectedDeals);
-
-    await tx.cashFlow.deleteMany({ where: { statementId: id } });
+    if (!current) throw new Error("Выписка не найдена");
+    if (
+      current.cashFlows.length > 0 ||
+      current.periodStart ||
+      current.periodEnd ||
+      current.source === "BANK_1C"
+    ) {
+      throw new Error("Импортированные банковские операции нельзя удалить вместе с выпиской");
+    }
     await tx.statement.delete({ where: { id } });
-
-    // Восстановление якоря: если точка отсчёта счёта была установлена именно
-    // этой выпиской (день после её конца), переносим её на последнюю из
-    // оставшихся выписок с остатком. Если таких нет — якорь не трогаем
-    // (его можно поправить вручную в Настройках → Счета).
-    if (stmt?.accountId && stmt.closingBalance != null) {
-      const account = await tx.account.findUnique({ where: { id: stmt.accountId } });
-      const anchorHeldByStmt =
-        account?.balanceAsOf != null &&
-        account.balanceAsOf.getTime() === dayToDate(isoDay(stmt.date), 1).getTime();
-
-      if (account && anchorHeldByStmt) {
-        const prev = await tx.statement.findFirst({
-          where: { accountId: account.id, closingBalance: { not: null } },
-          orderBy: { date: "desc" },
-        });
-        if (prev?.closingBalance != null) {
-          await tx.account.update({
-            where: { id: account.id },
-            data: {
-              balance: prev.closingBalance,
-              openingBalance: prev.closingBalance,
-              balanceAsOf: dayToDate(isoDay(prev.date), 1),
-              balanceMismatch: prev.mismatch,
-            },
-          });
-        }
-      }
-    }
-
-    for (const dealId of affectedDeals) {
-      batchIds.push(...(await syncDealInternal(dealId, tx)));
-    }
   });
   await writeChangeLog({ entity: "Statement", entityId: id, oldValues: { deleted: true } });
-  await afterTotalsCommit(batchIds);
   revalidatePath(SETTINGS_PATH);
-  return { removedIds, accounts: await getAccounts() };
+  return { removedIds: [], accounts: await getAccounts() };
 }

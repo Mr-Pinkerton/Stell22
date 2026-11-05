@@ -41,6 +41,7 @@ import {
   updateAutoRule,
   updateCounterparty,
   updateDeal,
+  updateManualCashFlow,
 } from "@/server/finance";
 import { exportXlsx } from "@/lib/export-xlsx";
 import { XLSX_FMT, type XlsxSheet } from "@/lib/xlsx-types";
@@ -185,8 +186,11 @@ export function FinanceView({ data }: { data: FinanceData }) {
   const [counterparties, setCounterparties] = useState(data.counterparties);
   const [deals, setDeals] = useState(data.deals);
   const [statements, setStatements] = useState(data.statements);
+  const [statementCoverage, setStatementCoverage] = useState(data.statementCoverage);
+  const [coverageAsOf, setCoverageAsOf] = useState(data.coverageAsOf);
 
   const [cashflowDialogOpen, setCashflowDialogOpen] = useState(false);
+  const [editingCashFlow, setEditingCashFlow] = useState<FinanceCashFlowRow | null>(null);
   const [transferDialogOpen, setTransferDialogOpen] = useState(false);
   const [convertDialogOpen, setConvertDialogOpen] = useState(false);
   const [convertRow, setConvertRow] = useState<FinanceCashFlowRow | null>(null);
@@ -596,6 +600,7 @@ export function FinanceView({ data }: { data: FinanceData }) {
                 toast.success(removed.length > 1 ? "Перевод удалён" : "Операция удалена");
               })
             }
+            onEdit={(row) => setEditingCashFlow(row)}
             onConvertToTransfer={(row) => {
               setConvertRow(row);
               setConvertDialogOpen(true);
@@ -760,6 +765,8 @@ export function FinanceView({ data }: { data: FinanceData }) {
         {activeTab === "statements" && (
           <FinanceStatementsTab
             statements={statements}
+            coverage={statementCoverage}
+            asOf={coverageAsOf}
             onUploadRequest={() => setStatementDialogOpen(true)}
             onLoadDetail={(id) => getStatementDetail(id)}
             onDelete={(id) =>
@@ -794,6 +801,38 @@ export function FinanceView({ data }: { data: FinanceData }) {
         }
       />
 
+      <CashflowFormDialog
+        open={editingCashFlow != null}
+        editing={
+          editingCashFlow
+            ? {
+                date: editingCashFlow.date,
+                amount: editingCashFlow.amount,
+                flowType: editingCashFlow.flowType,
+                accountId: editingCashFlow.accountId ?? "",
+                description: editingCashFlow.description,
+              }
+            : null
+        }
+        accounts={accounts}
+        counterparties={counterparties}
+        articles={articles}
+        deals={deals}
+        onOpenChange={(open) => {
+          if (!open) setEditingCashFlow(null);
+        }}
+        onSubmit={(values) => {
+          const current = editingCashFlow;
+          if (!current) return;
+          run(async () => {
+            const row = await updateManualCashFlow(current.id, values);
+            setCashFlows((prev) => prev.map((item) => (item.id === row.id ? row : item)));
+            setEditingCashFlow(null);
+            toast.success("Операция изменена");
+          });
+        }}
+      />
+
       <TransferFormDialog
         open={transferDialogOpen}
         accounts={accounts}
@@ -821,8 +860,9 @@ export function FinanceView({ data }: { data: FinanceData }) {
           run(async () => {
             const [sourceRow, otherRow] = await convertCashFlowToTransfer(source.id, otherAccountId);
             setCashFlows((prev) => {
-              const next = prev.map((r) => (r.id === sourceRow.id ? sourceRow : r));
-              return cashFlowBelongsInDds(otherRow, accounts) ? [otherRow, ...next] : next;
+              const rest = prev.filter((row) => row.id !== sourceRow.id && row.id !== otherRow.id);
+              const visible = [sourceRow, otherRow].filter((row) => cashFlowBelongsInDds(row, accounts));
+              return [...visible, ...rest];
             });
             toast.success("Операция стала переводом");
           });
@@ -894,9 +934,14 @@ export function FinanceView({ data }: { data: FinanceData }) {
                 values.fileName,
                 values.bindAccountId,
               );
-              setStatements((prev) => [res.statement, ...prev]);
-              setCashFlows((prev) => [...res.newCashFlows, ...prev]);
+              setStatements((prev) => [res.statement, ...prev.filter((row) => row.id !== res.statement.id)]);
+              setCashFlows((prev) => {
+                const ids = new Set(res.newCashFlows.map((row) => row.id));
+                return [...res.newCashFlows, ...prev.filter((row) => !ids.has(row.id))];
+              });
               setAccounts(res.accounts);
+              setStatementCoverage(res.statementCoverage);
+              setCoverageAsOf(res.coverageAsOf);
               setCounterparties(res.counterparties);
               imported += res.importedCount;
               unassigned += res.unassignedCount;

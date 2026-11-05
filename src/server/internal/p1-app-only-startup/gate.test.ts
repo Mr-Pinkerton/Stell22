@@ -209,9 +209,9 @@ describe("app-only startup gate", () => {
     expect(classifySchemaShape(absentP1Schema())).toBe("absent");
   });
 
-  it("accepts 47 completed migrations that include the admin corrections checksum", () => {
+  it("accepts the completed image migrations that include the admin corrections checksum", () => {
     const migrations = readImageMigrations(process.cwd());
-    expect(migrations).toHaveLength(47);
+    expect(migrations).toHaveLength(48);
     const targetName = "20261025120000_admin_corrections_batch_and_cancel";
     const target = migrations.find((migration) => migration.name === targetName);
     expect(target?.sha256).toBe("d8d83b48d536bd42cb9f394958dc981003d43da5b5904bcecadd3899b179f834");

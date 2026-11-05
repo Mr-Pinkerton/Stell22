@@ -41,6 +41,7 @@ describe("DI-013 finance writers wrap lock + sync inside source TX", () => {
       "assignCashFlow",
       "deleteCashFlow",
       "convertCashFlowToTransfer",
+      "updateManualCashFlow",
       "reapplyAutoRules",
       "deleteStatement",
     ]) {
@@ -54,10 +55,22 @@ describe("DI-013 finance writers wrap lock + sync inside source TX", () => {
     expectInsideTransaction(extractFn(finance, "assignCashFlow"), "syncDealInternal");
     expectInsideTransaction(extractFn(finance, "deleteCashFlow"), "syncDealInternal");
     expectInsideTransaction(extractFn(finance, "convertCashFlowToTransfer"), "syncDealInternal");
+    expectInsideTransaction(extractFn(finance, "updateManualCashFlow"), "syncDealInternal");
+    const unlink = finance.slice(finance.indexOf("export async function unlinkTransfer"));
+    const unlinkBody = unlink.slice(0, unlink.indexOf("export async function", 20));
+    expect(unlinkBody).toContain("$transaction");
+    expect(unlinkBody).toContain("transferGroupIsBankProtected");
     expectInsideTransaction(extractFn(finance, "reapplyAutoRules"), "syncDealInternal");
     expectInsideTransaction(extractFn(finance, "reapplyAutoRules"), "current.isTransfer");
+    expectInsideTransaction(extractFn(finance, "reapplyAutoRules"), "isBankImportedOperation");
     expectInsideTransaction(extractFn(finance, "assignCashFlow"), "current.isTransfer");
-    expectInsideTransaction(extractFn(finance, "deleteStatement"), "syncDealInternal");
+    expectInsideTransaction(extractFn(finance, "assignCashFlow"), "isBankImportedOperation");
+    expectInsideTransaction(extractFn(finance, "deleteCashFlow"), "transferGroupIsBankProtected");
+    expectInsideTransaction(extractFn(finance, "convertCashFlowToTransfer"), "decideTransferPair");
+    const deleteStatement = extractFn(finance, "deleteStatement");
+    expect(deleteStatement).toContain("Импортированные банковские операции нельзя удалить вместе с выпиской");
+    expect(deleteStatement).not.toContain("cashFlow.deleteMany");
+    expectInsideTransaction(deleteStatement, "statement.delete");
     expectInsideTransaction(extractFn(finance, "createTransfer"), "lockAccountsThenDealsThenBatches");
   });
 
