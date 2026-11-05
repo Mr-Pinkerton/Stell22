@@ -54,8 +54,8 @@ import {
   updateDeal,
 } from "@/server/finance";
 
+const LIVE = process.env.P1_DISPOSABLE_LIVE === "1";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const PG17_BIN = process.env.P1_PG17_BIN ?? "C:\\Users\\bocma\\AppData\\Local\\Temp\\pg17\\pgsql\\bin";
 const FORBIDDEN_PORTS = new Set(["5432", "5433", "5434"]);
 const MARCH = {
   start: new Date("2026-03-01T00:00:00.000Z"),
@@ -127,28 +127,32 @@ async function startPostgres17(input: {
     if (!ready.includes("PostgreSQL 17")) throw new Error("disposable PostgreSQL 17 did not become ready");
     return port;
   }
-  const postgres = path.join(PG17_BIN, "postgres.exe");
-  if (!fs.existsSync(postgres)) throw new Error("PostgreSQL 17 binaries are not available");
+  const pgBin = process.env.P1_PG17_BIN;
+  if (!pgBin) {
+    throw new Error("Docker did not start disposable PostgreSQL 17, and P1_PG17_BIN is not set");
+  }
+  const postgres = path.join(pgBin, "postgres.exe");
+  if (!fs.existsSync(postgres)) throw new Error("P1_PG17_BIN does not contain PostgreSQL 17 binaries");
   const version = spawnSync(postgres, ["-V"], { encoding: "utf8" });
   if (!version.stdout.includes("17.")) throw new Error(`expected PostgreSQL 17, got ${version.stdout.trim()}`);
   const port = await reserveLoopbackPort();
   if (FORBIDDEN_PORTS.has(port)) throw new Error("disposable port was not an ephemeral loopback port");
   const dataDir = path.join(input.cwd, "pgdata");
-  const env = { ...process.env, PATH: `${PG17_BIN};${process.env.PATH ?? ""}`, PGCONNECT_TIMEOUT: "5" };
-  const init = spawnSync(path.join(PG17_BIN, "initdb.exe"), ["-D", dataDir, "-U", "p1iso", "-A", "trust", "--encoding", "UTF8"], {
+  const env = { ...process.env, PATH: `${pgBin};${process.env.PATH ?? ""}`, PGCONNECT_TIMEOUT: "5" };
+  const init = spawnSync(path.join(pgBin, "initdb.exe"), ["-D", dataDir, "-U", "p1iso", "-A", "trust", "--encoding", "UTF8"], {
     encoding: "utf8",
     env,
   });
   if (init.status !== 0) throw new Error(`disposable cluster init failed\n${init.stderr}`);
   input.markLocalDataDir(dataDir);
   const started = spawnSync(
-    path.join(PG17_BIN, "pg_ctl.exe"),
+    path.join(pgBin, "pg_ctl.exe"),
     ["-D", dataDir, "-l", path.join(input.cwd, "pg.log"), "-w", "-t", "30", "start", "-o", `-h 127.0.0.1 -p ${port}`],
     { encoding: "utf8", timeout: 40_000, env },
   );
   if (started.status !== 0) throw new Error(`disposable cluster start failed\n${started.stderr}`);
   const createdDb = spawnSync(
-    path.join(PG17_BIN, "psql.exe"),
+    path.join(pgBin, "psql.exe"),
     ["-X", "-h", "127.0.0.1", "-p", port, "-U", "p1iso", "-d", "postgres", "-q", "-v", "ON_ERROR_STOP=1", "-c", `CREATE DATABASE "${input.database}"`],
     { encoding: "utf8", env, timeout: 15_000, input: "" },
   );
@@ -156,7 +160,7 @@ async function startPostgres17(input: {
   return port;
 }
 
-describe("BA-P02-002 / BA-P11-002 transfer exclusion on disposable PostgreSQL 17", () => {
+describe.skipIf(!LIVE)("BA-P02-002 / BA-P11-002 transfer exclusion on disposable PostgreSQL 17", () => {
   let runId = "";
   let database = "";
   let dbPassword = "";
@@ -269,11 +273,13 @@ describe("BA-P02-002 / BA-P11-002 transfer exclusion on disposable PostgreSQL 17
   afterAll(async () => {
     await seed?.$disconnect();
     await harness.client?.$disconnect();
+    const pgBin = process.env.P1_PG17_BIN;
     if (localDataDir) {
-      spawnSync(path.join(PG17_BIN, "pg_ctl.exe"), ["-D", localDataDir, "stop", "-m", "immediate", "-w", "-t", "20"], {
+      if (!pgBin) throw new Error("P1_PG17_BIN is required to stop the disposable cluster");
+      spawnSync(path.join(pgBin, "pg_ctl.exe"), ["-D", localDataDir, "stop", "-m", "immediate", "-w", "-t", "20"], {
         encoding: "utf8",
         timeout: 25_000,
-        env: { ...process.env, PATH: `${PG17_BIN};${process.env.PATH ?? ""}` },
+        env: { ...process.env, PATH: `${pgBin};${process.env.PATH ?? ""}` },
       });
     }
     if (startedDocker) spawnSync("docker", ["rm", "-f", container], { encoding: "utf8" });
