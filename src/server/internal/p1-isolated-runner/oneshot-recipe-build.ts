@@ -81,6 +81,7 @@ export function buildReviewedOneShotImage(): ReviewedOneShotBuild {
     for (const name of RECIPE_FILES) {
       fs.copyFileSync(path.join(recipeDir, name), path.join(context, name));
     }
+    fs.cpSync(path.join(recipeDir, "debs"), path.join(context, "debs"), { recursive: true });
     const built = spawnSync("docker", ["build", "-t", tag, context], {
       encoding: "utf8",
       windowsHide: true,

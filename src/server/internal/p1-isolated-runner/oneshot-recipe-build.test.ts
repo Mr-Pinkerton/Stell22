@@ -108,6 +108,7 @@ describe("one-shot recipe image identity", () => {
   it("does not accept an operator tag from rootfs equality", () => {
     const source = fs.readFileSync(path.join(process.cwd(), "src/server/internal/p1-isolated-runner/oneshot-recipe-build.ts"), "utf8");
     expect(source).not.toContain("RootFS");
+    expect(source).toContain('fs.cpSync(path.join(recipeDir, "debs")');
   });
 });
 
