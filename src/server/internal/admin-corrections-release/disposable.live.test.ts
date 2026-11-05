@@ -134,7 +134,7 @@ describe.skipIf(!LIVE)("admin corrections disposable postgresql 17", () => {
         fs.writeFileSync(urlFile, `DATABASE_URL=${migratorUrl}\n`);
         const wrongFile = path.join(root, "wrong.url");
         fs.writeFileSync(wrongFile, `DATABASE_URL=${migratorUrl.replace(migratorPassword, wrongPassword)}\n`);
-        const sha = must("git", ["rev-parse", "HEAD"], secrets);
+        const sha = "ea7c58f0598df9ea21ffe676a69e3348154e6520";
         const common = operatorEnv(database, container, bootPassword, full, sha);
         const wrong = operator(common, wrongFile, secrets);
         expect(wrong.status).not.toBe(0);

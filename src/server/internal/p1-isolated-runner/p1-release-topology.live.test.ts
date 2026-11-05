@@ -347,8 +347,8 @@ describe.skipIf(process.env[LIVE_FLAG] !== "1")("isolated P1-only release topolo
         const sealedSchema = path.join(runtime, "sealed", "prisma", "schema.prisma");
         const restoredDeploy = deployPrisma(sealedSchema, restoredUrl);
         expect(restoredDeploy.status, restoredDeploy.detail).toBe(0);
-        // Historical sealed schema stops at 46 migrations. The guard proof needs the
-        // production inventory row; the applied 47-migration database is tested separately.
+        // Historical sealed schema stops at 46 migrations. The guard proof inserts the
+        // later inventory rows; the fully migrated database is tested separately.
         recordAdminCorrectionsChecksum(restored.containerName, restored.databaseName);
         expect(writerVerdict(restored.containerName, restored.databaseName)).toBe("P1_APPLIED");
         proveWriterRefusals(restored.containerName, restored.databaseName, queryScript, restoredUrl);
@@ -661,7 +661,9 @@ function recordAdminCorrectionsChecksum(containerName: string, databaseName: str
     containerName,
     databaseName,
     `INSERT INTO public."_prisma_migrations" (id, checksum, finished_at, migration_name, started_at, applied_steps_count)
-     VALUES ('p1-writer-gate-47', 'd8d83b48d536bd42cb9f394958dc981003d43da5b5904bcecadd3899b179f834', NOW(), '20261025120000_admin_corrections_batch_and_cancel', NOW(), 1);`,
+     VALUES ('p1-writer-gate-47', 'd8d83b48d536bd42cb9f394958dc981003d43da5b5904bcecadd3899b179f834', NOW(), '20261025120000_admin_corrections_batch_and_cancel', NOW(), 1);
+     INSERT INTO public."_prisma_migrations" (id, checksum, finished_at, migration_name, started_at, applied_steps_count)
+     VALUES ('p1-writer-gate-48', '9625815128d45b4cf4397b6360ae5bf28ac4b3ef2033baefa4d85142f907c52e', NOW(), '20261105120000_statement_period_coverage', NOW(), 1);`,
   );
 }
 

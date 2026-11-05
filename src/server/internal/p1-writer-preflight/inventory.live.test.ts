@@ -62,7 +62,7 @@ function git(repo: string, args: readonly string[], input?: string) {
   return must("git", ["-c", "core.autocrlf=false", ...args], repo, input);
 }
 
-describe.skipIf(!LIVE)("p1 writer preflight 47-migration inventory", () => {
+describe.skipIf(!LIVE)("p1 writer preflight current migration inventory", () => {
   it(
     "accepts the exact applied inventory and blocks the previous 46-migration gate",
     () => {
@@ -118,7 +118,7 @@ describe.skipIf(!LIVE)("p1 writer preflight 47-migration inventory", () => {
         expect(corrected).toContain(ADMIN_TUPLE);
         expect(corrected).not.toContain("\r");
         expect(verdict(container, database, password, corrected)).toBe("P1_APPLIED");
-        expect(psql(container, database, password, 'SELECT count(*)::text FROM public."_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')).toBe("47");
+        expect(psql(container, database, password, 'SELECT count(*)::text FROM public."_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')).toBe("48");
 
         expect(mutated(container, database, password, `DELETE FROM public."_prisma_migrations" WHERE migration_name = '${MIGRATION_NAME}';`)).toBe("P1_BLOCKED");
         expect(mutated(
@@ -197,7 +197,7 @@ describe.skipIf(!LIVE)("p1 writer preflight 47-migration inventory", () => {
         const trustedSql = fs.readFileSync(path.join(trusted, "p1-writer-preflight.sql"), "utf8");
         expect(verdict(container, database, password, trustedSql)).toBe("P1_APPLIED");
         expect(verdict(container, database, password, fs.readFileSync(path.join(repo, "scripts", "p1-writer-preflight.sql"), "utf8"))).toBe("P1_BLOCKED");
-        expect(psql(container, database, password, 'SELECT count(*)::text FROM public."_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')).toBe("47");
+        expect(psql(container, database, password, 'SELECT count(*)::text FROM public."_prisma_migrations" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL')).toBe("48");
         expect(must("docker", ["inspect", "--format", "{{.Id}}", container])).toBe(containerId);
         expect(createHash("sha256").update(trustedSql).digest("hex")).toBe(createHash("sha256").update(corrected).digest("hex"));
       } finally {
