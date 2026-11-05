@@ -55,6 +55,8 @@ describe("DI-013 finance writers wrap lock + sync inside source TX", () => {
     expectInsideTransaction(extractFn(finance, "deleteCashFlow"), "syncDealInternal");
     expectInsideTransaction(extractFn(finance, "convertCashFlowToTransfer"), "syncDealInternal");
     expectInsideTransaction(extractFn(finance, "reapplyAutoRules"), "syncDealInternal");
+    expectInsideTransaction(extractFn(finance, "reapplyAutoRules"), "current.isTransfer");
+    expectInsideTransaction(extractFn(finance, "assignCashFlow"), "current.isTransfer");
     expectInsideTransaction(extractFn(finance, "deleteStatement"), "syncDealInternal");
     expectInsideTransaction(extractFn(finance, "createTransfer"), "lockAccountsThenDealsThenBatches");
   });

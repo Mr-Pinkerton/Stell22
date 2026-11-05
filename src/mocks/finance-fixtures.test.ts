@@ -76,6 +76,20 @@ describe("переводы между счетами не искажают об�
     },
   ];
 
+  it("исторический перевод со статьёй не входит в расходы периода", () => {
+    const legacy = {
+      ...transferLegs[0]!,
+      id: "legacy-transfer",
+      amount: 1_500,
+      articleName: "Накладные",
+      dealName: "Сделка",
+      dealId: "deal-legacy",
+      isTransfer: true,
+    };
+    const withLegacy = [...financeCashFlows, legacy];
+    expect(financePeriodExpense(withLegacy)).toBe(financePeriodExpense(financeCashFlows));
+  });
+
   it("перевод не попадает в поступления/расходы", () => {
     const withTransfer = [...financeCashFlows, ...transferLegs];
     expect(financePeriodIncome(withTransfer)).toBe(financePeriodIncome(financeCashFlows));

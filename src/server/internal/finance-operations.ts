@@ -51,6 +51,7 @@ export async function applyAutoRulesInternal(cf: {
 type CashFlowWithAccountConfirmed = {
   flowType: FlowType;
   amount: Prisma.Decimal;
+  isTransfer: boolean;
   account: { confirmed: boolean };
 };
 function toCfLite(flows: CashFlowWithAccountConfirmed[]): DealCashFlowLite[] {
@@ -58,6 +59,7 @@ function toCfLite(flows: CashFlowWithAccountConfirmed[]): DealCashFlowLite[] {
     flowType: c.flowType,
     amount: num(c.amount),
     accountConfirmed: c.account.confirmed,
+    isTransfer: c.isTransfer,
   }));
 }
 const CF_WITH_CONFIRMED = { include: { account: { select: { confirmed: true } } } } as const;
