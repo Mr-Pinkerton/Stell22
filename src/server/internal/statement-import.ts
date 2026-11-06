@@ -12,6 +12,7 @@ import { is1CStatement, parse1CStatement } from "@/lib/bank-statement-1c";
 import {
   cashFlowSource,
   periodsOverlap,
+  canonicalStatementDocument,
   statementContentIdentity,
   statementPeriodFields,
   validateVerifiedPeriod,
@@ -111,6 +112,7 @@ function serStatement(s: StatementWithRefs, overlapDates: string[] = []): Financ
     source: s.source,
     periodStart: s.periodStart ? isoDay(s.periodStart) : null,
     periodEnd: s.periodEnd ? isoDay(s.periodEnd) : null,
+    contentKey: s.contentKey,
     operationsCount: s.cashFlows.length,
   });
   return {
@@ -235,11 +237,25 @@ export async function importStatementInternal(
     .update(
       statementContentIdentity({
         accountNumber: ourNumber,
+        bik: parsed.bik,
         periodStart: statementStart,
         periodEnd: statementDate,
         openingBalance: parsed.openingBalance == null ? null : parsed.openingBalance.toFixed(2),
         closingBalance: parsed.closingBalance == null ? null : parsed.closingBalance.toFixed(2),
-        importKeys: parsed.documents.map((doc) => statementImportKey(doc)),
+        documents: parsed.documents.map((doc) =>
+          canonicalStatementDocument({
+            docNumber: doc.docNumber,
+            date: doc.date,
+            amount: doc.amount.toFixed(2),
+            payerName: doc.payerName,
+            payerInn: doc.payerInn,
+            payerAccount: doc.payerAccount,
+            payeeName: doc.payeeName,
+            payeeInn: doc.payeeInn,
+            payeeAccount: doc.payeeAccount,
+            purpose: doc.purpose,
+          }),
+        ),
       }),
     )
     .digest("hex");

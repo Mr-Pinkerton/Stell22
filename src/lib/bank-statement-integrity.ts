@@ -133,6 +133,7 @@ export function statementPeriodFields(input: {
   source: "MANUAL" | "BANK_1C" | null;
   periodStart: string | null;
   periodEnd: string | null;
+  contentKey: string | null;
   operationsCount: number;
 }): {
   source: "MANUAL" | "BANK_1C" | null;
@@ -148,7 +149,8 @@ export function statementPeriodFields(input: {
     input.source === "MANUAL" &&
     input.operationsCount === 0 &&
     input.periodStart == null &&
-    input.periodEnd == null;
+    input.periodEnd == null &&
+    input.contentKey == null;
   return {
     source: input.source,
     periodStart: input.periodStart,
@@ -267,21 +269,52 @@ export function coverAccounts(input: {
   });
 }
 
+export interface StatementContentDocument {
+  docNumber: string | null;
+  date: string;
+  amount: string;
+  payerName: string | null;
+  payerInn: string | null;
+  payerAccount: string | null;
+  payeeName: string | null;
+  payeeInn: string | null;
+  payeeAccount: string | null;
+  purpose: string | null;
+}
+
+/** Stable document line. Amount is already fixed to two decimals. */
+export function canonicalStatementDocument(doc: StatementContentDocument): string {
+  return JSON.stringify([
+    doc.docNumber ?? "",
+    doc.date,
+    doc.amount,
+    doc.payerAccount ?? "",
+    doc.payeeAccount ?? "",
+    doc.payerName ?? "",
+    doc.payerInn ?? "",
+    doc.payeeName ?? "",
+    doc.payeeInn ?? "",
+    doc.purpose ?? "",
+  ]);
+}
+
 export function statementContentIdentity(input: {
   accountNumber: string;
+  bik: string | null;
   periodStart: string;
   periodEnd: string;
   openingBalance: string | null;
   closingBalance: string | null;
-  importKeys: string[];
+  documents: string[];
 }): string {
   return [
     input.accountNumber,
+    input.bik ?? "",
     input.periodStart,
     input.periodEnd,
     input.openingBalance ?? "",
     input.closingBalance ?? "",
-    ...[...input.importKeys].sort(),
+    ...[...input.documents].sort(),
   ].join("\n");
 }
 

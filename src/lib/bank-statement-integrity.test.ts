@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  canonicalStatementDocument,
   cashFlowSource,
   coverAccounts,
   decideTransferPair,
@@ -200,24 +201,85 @@ describe("import paths share one statement rule", () => {
 });
 
 describe("statement identity and transfer pairing", () => {
-  it("builds the same identity for the same bank content", () => {
+  const document = (purpose: string, payerName = "Плательщик", payerInn = "7700000001") =>
+    canonicalStatementDocument({
+      docNumber: "1",
+      date: "2026-09-01",
+      amount: "10.00",
+      payerName,
+      payerInn,
+      payerAccount: "4070",
+      payeeName: "Получатель",
+      payeeInn: "7800000002",
+      payeeAccount: "4080",
+      purpose,
+    });
+
+  it("builds the same identity for the same bank content regardless of document order", () => {
     const first = statementContentIdentity({
       accountNumber: "4070",
+      bik: "044525104",
       periodStart: "2026-09-01",
       periodEnd: "2026-09-01",
       openingBalance: "0.00",
       closingBalance: "10.00",
-      importKeys: ["2|2026-09-01|5.00|a|b", "1|2026-09-01|5.00|a|b"],
+      documents: [document("Оплата", "Б"), document("Оплата", "А")],
     });
     const second = statementContentIdentity({
       accountNumber: "4070",
+      bik: "044525104",
       periodStart: "2026-09-01",
       periodEnd: "2026-09-01",
       openingBalance: "0.00",
       closingBalance: "10.00",
-      importKeys: ["1|2026-09-01|5.00|a|b", "2|2026-09-01|5.00|a|b"],
+      documents: [document("Оплата", "А"), document("Оплата", "Б")],
     });
     expect(first).toBe(second);
+  });
+
+  it("changes identity when purpose, counterparty name, or INN changes", () => {
+    const base = statementContentIdentity({
+      accountNumber: "4070",
+      bik: null,
+      periodStart: "2026-09-01",
+      periodEnd: "2026-09-01",
+      openingBalance: "0.00",
+      closingBalance: "10.00",
+      documents: [document("Оплата")],
+    });
+    expect(
+      statementContentIdentity({
+        accountNumber: "4070",
+        bik: null,
+        periodStart: "2026-09-01",
+        periodEnd: "2026-09-01",
+        openingBalance: "0.00",
+        closingBalance: "10.00",
+        documents: [document("Другое назначение")],
+      }),
+    ).not.toBe(base);
+    expect(
+      statementContentIdentity({
+        accountNumber: "4070",
+        bik: null,
+        periodStart: "2026-09-01",
+        periodEnd: "2026-09-01",
+        openingBalance: "0.00",
+        closingBalance: "10.00",
+        documents: [document("Оплата", "Другой плательщик")],
+      }),
+    ).not.toBe(base);
+    expect(
+      statementContentIdentity({
+        accountNumber: "4070",
+        bik: null,
+        periodStart: "2026-09-01",
+        periodEnd: "2026-09-01",
+        openingBalance: "0.00",
+        closingBalance: "10.00",
+        documents: [document("Оплата", "Плательщик", "7700000099")],
+      }),
+    ).not.toBe(base);
   });
 
   it("links one opposite bank document and refuses an amount-only match", () => {

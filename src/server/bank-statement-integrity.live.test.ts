@@ -46,7 +46,10 @@ import {
   convertCashFlowToTransfer,
   createCashFlow,
   createDeal,
+  createStatement,
+  deleteAccount,
   deleteCashFlow,
+  deleteDeal,
   deleteStatement,
   getFinanceData,
   importStatement,
@@ -181,7 +184,18 @@ function bankFile(input: {
   end: string;
   opening: string;
   closing: string;
-  docs: Array<{ number: string; date: string; amount: string; payer: string; payee: string; purpose?: string }>;
+  docs: Array<{
+    number: string;
+    date: string;
+    amount: string;
+    payer: string;
+    payee: string;
+    purpose?: string;
+    payerName?: string;
+    payerInn?: string;
+    payeeName?: string;
+    payeeInn?: string;
+  }>;
 }): string {
   const docs = input.docs
     .map(
@@ -190,11 +204,11 @@ function bankFile(input: {
 Дата=${doc.date}
 Сумма=${doc.amount}
 ПлательщикСчет=${doc.payer}
-Плательщик=Плательщик
-ПлательщикИНН=7700000001
+Плательщик=${doc.payerName ?? "Плательщик"}
+ПлательщикИНН=${doc.payerInn ?? "7700000001"}
 ПолучательСчет=${doc.payee}
-Получатель=Получатель
-ПолучательИНН=7800000002
+Получатель=${doc.payeeName ?? "Получатель"}
+ПолучательИНН=${doc.payeeInn ?? "7800000002"}
 НазначениеПлатежа=${doc.purpose ?? "Оплата"}
 КонецДокумента`,
     )
@@ -673,5 +687,217 @@ describe.skipIf(!LIVE)("bank statement immutability and coverage on disposable P
     await expect(convertCashFlowToTransfer(ambSource.id, ambDest.id)).rejects.toThrow(/только по сумме/);
     expect(await seed!.cashFlow.count({ where: { accountId: ambDest.id } })).toBe(2);
     expect(ambSource.isTransfer).toBe(false);
+  });
+
+  it("B–D a changed purpose or counterparty is an overlap, on every import path", async () => {
+    const number = `407028100000${runId.slice(0, 8)}m`;
+    const base = {
+      account: number,
+      start: "20.09.2026",
+      end: "20.09.2026",
+      opening: "0.00",
+      closing: "15.00",
+      docs: [{
+        number: "91",
+        date: "20.09.2026",
+        amount: "15.00",
+        payer: number,
+        payee: "40602810000000000091",
+        purpose: "Оплата поставки",
+        payerName: "Ромашка",
+        payerInn: "7700000091",
+      }],
+    };
+    const file = bankFile(base);
+    const ui = await importStatement(file, "purpose-ui.txt");
+    const owner = await seed!.account.findFirstOrThrow({ where: { accountNumber: number } });
+    const before = {
+      statements: await seed!.statement.count({ where: { accountId: owner.id } }),
+      flows: await seed!.cashFlow.count({ where: { accountId: owner.id } }),
+      opening: owner.openingBalance.toFixed(2),
+      asOf: owner.balanceAsOf?.toISOString() ?? null,
+    };
+    const again = await importStatementInternal(file, "purpose-mail.txt");
+    expect(again.importedCount).toBe(0);
+    expect(again.statement.id).toBe(ui.statement.id);
+    const zipped = extractStatements("purpose.zip", zipSync({ "purpose.txt": encodeWindows1251(file) }));
+    const fromZip = await importStatementInternal(zipped.statements[0]!.content, "renamed.txt");
+    expect(fromZip.importedCount).toBe(0);
+    expect(fromZip.statement.id).toBe(ui.statement.id);
+
+    const changedPurpose = bankFile({
+      ...base,
+      docs: [{ ...base.docs[0]!, purpose: "Возврат поставки" }],
+    });
+    await expect(importStatement(changedPurpose, "purpose-ui-changed.txt")).rejects.toThrow(/пересекаются/);
+    await expect(importStatementInternal(changedPurpose, "purpose-mail-changed.txt")).rejects.toThrow(/пересекаются/);
+    const changedPayerName = bankFile({
+      ...base,
+      docs: [{ ...base.docs[0]!, payerName: "Лютик" }],
+    });
+    const changedPayerInn = bankFile({
+      ...base,
+      docs: [{ ...base.docs[0]!, payerInn: "7700000092" }],
+    });
+    const changedPayeeName = bankFile({
+      ...base,
+      docs: [{ ...base.docs[0]!, payeeName: "Лютик" }],
+    });
+    const changedPayeeInn = bankFile({
+      ...base,
+      docs: [{ ...base.docs[0]!, payeeInn: "7700000092" }],
+    });
+    await expect(importStatementInternal(changedPayerName, "payer-name.txt")).rejects.toThrow(/пересекаются/);
+    await expect(importStatementInternal(changedPayerInn, "payer-inn.txt")).rejects.toThrow(/пересекаются/);
+    await expect(importStatement(changedPayeeName, "payee-name.txt")).rejects.toThrow(/пересекаются/);
+    await expect(importStatementInternal(changedPayeeInn, "payee-inn.txt")).rejects.toThrow(/пересекаются/);
+    const changedParty = bankFile({
+      ...base,
+      docs: [{ ...base.docs[0]!, payerName: "Лютик", payerInn: "7700000092" }],
+    });
+    await expect(importStatementInternal(changedParty, "party-mail.txt")).rejects.toThrow(/пересекаются/);
+    const zippedParty = extractStatements("party.zip", zipSync({ "party.txt": encodeWindows1251(changedParty) }));
+    await expect(
+      importStatementInternal(zippedParty.statements[0]!.content, zippedParty.statements[0]!.fileName),
+    ).rejects.toThrow(/пересекаются/);
+
+    const after = await seed!.account.findUniqueOrThrow({ where: { id: owner.id } });
+    expect(await seed!.statement.count({ where: { accountId: owner.id } })).toBe(before.statements);
+    expect(await seed!.cashFlow.count({ where: { accountId: owner.id } })).toBe(before.flows);
+    expect(after.openingBalance.toFixed(2)).toBe(before.opening);
+    expect(after.balanceAsOf?.toISOString() ?? null).toBe(before.asOf);
+    const saved = await seed!.cashFlow.findMany({
+      where: { accountId: owner.id },
+      include: { counterparty: true },
+    });
+    expect(saved.map((row) => row.description)).toEqual(["Оплата поставки"]);
+    expect(saved[0]!.counterparty?.name).toBe("Получатель");
+    expect(saved[0]!.counterparty?.inn).toBe("7800000002");
+    expect(saved[0]!.amount.toFixed(2)).toBe("15.00");
+  });
+
+  it("E–G account deletion keeps every statement and still removes an empty account", async () => {
+    const number = `407028100000${runId.slice(0, 8)}e`;
+    const silent = bankFile({
+      account: number,
+      start: "21.09.2026",
+      end: "21.09.2026",
+      opening: "0.00",
+      closing: "0.00",
+      docs: [],
+    });
+    await importStatementInternal(silent, "silent.txt");
+    const bank = await seed!.account.findFirstOrThrow({ where: { accountNumber: number } });
+    expect(await seed!.cashFlow.count({ where: { accountId: bank.id } })).toBe(0);
+    expect(await seed!.statement.count({ where: { accountId: bank.id, source: "BANK_1C" } })).toBe(1);
+    await expect(deleteAccount(bank.id)).rejects.toThrow(/выписки/);
+    expect(await seed!.statement.count({ where: { accountId: bank.id } })).toBe(1);
+
+    const historical = await account(`История ${runId}`, `407028100000${runId.slice(0, 8)}f`);
+    await seed!.statement.create({
+      data: { date: new Date("2019-01-01T00:00:00.000Z"), accountId: historical.id, uploadedAt: new Date() },
+    });
+    await expect(deleteAccount(historical.id)).rejects.toThrow(/выписки/);
+    expect(await seed!.statement.count({ where: { accountId: historical.id, source: null } })).toBe(1);
+
+    const placeholderOwner = await account(`Пустая заготовка ${runId}`, `407028100000${runId.slice(0, 8)}g`);
+    const placeholder = await createStatement({
+      date: "2026-09-21",
+      accountName: placeholderOwner.name,
+      fileName: "manual.txt",
+      content: "",
+      is1C: false,
+      bindAccountId: null,
+    });
+    await expect(deleteAccount(placeholderOwner.id)).rejects.toThrow(/выписки/);
+    await deleteStatement(placeholder.id);
+    expect(await seed!.statement.count({ where: { accountId: placeholderOwner.id } })).toBe(0);
+    await deleteAccount(placeholderOwner.id);
+    expect(await seed!.account.count({ where: { id: placeholderOwner.id } })).toBe(0);
+
+    const empty = await account(`Пустой ${runId}`, `407028100000${runId.slice(0, 8)}h`);
+    await deleteAccount(empty.id);
+    expect(await seed!.account.count({ where: { id: empty.id } })).toBe(0);
+  });
+
+  it("H–K imported deal links and unknown statements stay, and a manual placeholder can be deleted", async () => {
+    const keyword = `ключ${runId}`;
+    const category = await seed!.articleCategory.create({ data: { name: `Категория ${runId}` } });
+    const article = await seed!.article.create({
+      data: { name: `Статья ${runId}`, flowType: "EXPENSE", categoryId: category.id },
+    });
+    const importedDeal = await seed!.deal.create({ data: { name: `Импортная ${runId}`, total: 0 } });
+    await seed!.autoRule.create({
+      data: {
+        flowType: "EXPENSE",
+        articleId: article.id,
+        dealId: importedDeal.id,
+        descriptionKeywords: keyword,
+        logicOperator: "AND",
+      },
+    });
+    const number = `407028100000${runId.slice(0, 8)}i`;
+    await importStatementInternal(bankFile({
+      account: number,
+      start: "22.09.2026",
+      end: "22.09.2026",
+      opening: "0.00",
+      closing: "12.00",
+      docs: [{
+        number: "92",
+        date: "22.09.2026",
+        amount: "12.00",
+        payer: number,
+        payee: "40602810000000000092",
+        purpose: `Оплата ${keyword}`,
+      }],
+    }), "auto-deal.txt");
+    const bank = await seed!.account.findFirstOrThrow({ where: { accountNumber: number } });
+    const imported = await seed!.cashFlow.findFirstOrThrow({ where: { accountId: bank.id } });
+    expect(imported.dealId).toBe(importedDeal.id);
+    expect(imported.statementId).not.toBeNull();
+    const anchor = bank.balanceAsOf?.toISOString() ?? null;
+    await expect(deleteDeal(importedDeal.id)).rejects.toThrow(/импортированная банковская/);
+    const kept = await seed!.cashFlow.findUniqueOrThrow({ where: { id: imported.id } });
+    expect(kept.dealId).toBe(importedDeal.id);
+    expect(kept.amount.toFixed(2)).toBe("12.00");
+    expect(await seed!.deal.count({ where: { id: importedDeal.id } })).toBe(1);
+    expect((await seed!.account.findUniqueOrThrow({ where: { id: bank.id } })).balanceAsOf?.toISOString() ?? null).toBe(anchor);
+
+    const manualAccount = await account(`Ручная сделка ${runId}`, `407028100000${runId.slice(0, 8)}j`);
+    const manualDeal = await seed!.deal.create({ data: { name: `Ручная ${runId}`, total: 0 } });
+    const manual = await createCashFlow({
+      date: "2026-09-22",
+      amount: 9,
+      flowType: "EXPENSE",
+      accountName: manualAccount.name,
+      counterpartyName: null,
+      description: "ручная в сделке",
+      articleName: null,
+      dealId: manualDeal.id,
+      dealName: manualDeal.name,
+    });
+    await deleteDeal(manualDeal.id);
+    expect(await seed!.deal.count({ where: { id: manualDeal.id } })).toBe(0);
+    expect((await seed!.cashFlow.findUniqueOrThrow({ where: { id: manual.id } })).dealId).toBeNull();
+
+    const unknownOwner = await account(`Неизвестная ${runId}`, `407028100000${runId.slice(0, 8)}k`);
+    const unknown = await seed!.statement.create({
+      data: { date: new Date("2018-05-01T00:00:00.000Z"), accountId: unknownOwner.id, uploadedAt: new Date() },
+    });
+    await expect(deleteStatement(unknown.id)).rejects.toThrow(/нельзя удалить/);
+    expect(await seed!.statement.count({ where: { id: unknown.id } })).toBe(1);
+
+    const manualPlaceholder = await createStatement({
+      date: "2026-09-22",
+      accountName: unknownOwner.name,
+      fileName: "manual-2.txt",
+      content: "",
+      is1C: false,
+      bindAccountId: null,
+    });
+    await deleteStatement(manualPlaceholder.id);
+    expect(await seed!.statement.count({ where: { id: manualPlaceholder.id } })).toBe(0);
+    expect(await seed!.statement.count({ where: { id: unknown.id } })).toBe(1);
   });
 });

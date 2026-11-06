@@ -200,6 +200,7 @@ function serStatement(
     source: s.source,
     periodStart: s.periodStart ? isoDay(s.periodStart) : null,
     periodEnd: s.periodEnd ? isoDay(s.periodEnd) : null,
+    contentKey: s.contentKey,
     operationsCount: s.cashFlows.length,
   });
   return {
@@ -521,13 +522,23 @@ export async function setAccountPrimary(id: string, isPrimary: boolean): Promise
 
 export async function deleteAccount(id: string): Promise<void> {
   await requireAdmin();
-  const opsCount = await prisma.cashFlow.count({ where: { accountId: id } });
-  if (opsCount > 0) {
-    throw new Error("Нельзя удалить счёт с операциями ДДС. Сначала удалите/перенесите операции.");
-  }
 
   await prisma.$transaction(async (tx) => {
-    await tx.statement.deleteMany({ where: { accountId: id } });
+    await lockAccountsThenDealsThenBatches(tx, [id], []);
+    const current = await tx.account.findUnique({
+      where: { id },
+      include: {
+        cashFlows: { select: { id: true } },
+        statements: { select: { id: true } },
+      },
+    });
+    if (!current) throw new Error("Счёт не найден");
+    if (current.cashFlows.length > 0) {
+      throw new Error("Нельзя удалить счёт с операциями ДДС. Сначала удалите/перенесите операции.");
+    }
+    if (current.statements.length > 0) {
+      throw new Error("Нельзя удалить счёт, пока к нему привязаны выписки.");
+    }
     await tx.account.delete({ where: { id } });
   });
   await writeChangeLog({ entity: "Account", entityId: id, oldValues: { deleted: true } });
@@ -1594,6 +1605,27 @@ export async function deleteDeal(id: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
     await lockDealsThenBatches(tx, [id]);
     const currentItems = await tx.dealItem.findMany({ where: { dealId: id } });
+    const linked = await tx.cashFlow.findMany({
+      where: { dealId: id },
+      select: { statementId: true, importKey: true, transferId: true },
+    });
+    if (linked.some((row) => isBankImportedOperation(row))) {
+      throw new Error("Нельзя удалить сделку, пока к ней привязана импортированная банковская операция.");
+    }
+    const transferIds = [
+      ...new Set(linked.map((row) => row.transferId).filter((value): value is string => value != null)),
+    ];
+    if (transferIds.length > 0) {
+      const legs = await tx.cashFlow.findMany({
+        where: { transferId: { in: transferIds } },
+        select: { transferId: true, statementId: true, importKey: true },
+      });
+      for (const transferId of transferIds) {
+        if (transferGroupIsBankProtected(legs.filter((leg) => leg.transferId === transferId))) {
+          throw new Error("Нельзя удалить сделку, пока к ней привязана импортированная банковская операция.");
+        }
+      }
+    }
     await tx.cashFlow.updateMany({ where: { dealId: id }, data: { dealId: null } });
     await tx.dealItem.deleteMany({ where: { dealId: id } });
     await tx.deal.delete({ where: { id } });
@@ -1706,10 +1738,11 @@ export async function deleteStatement(id: string): Promise<DeleteStatementResult
     });
     if (!current) throw new Error("Выписка не найдена");
     if (
-      current.cashFlows.length > 0 ||
-      current.periodStart ||
-      current.periodEnd ||
-      current.source === "BANK_1C"
+      current.source !== "MANUAL" ||
+      current.periodStart != null ||
+      current.periodEnd != null ||
+      current.contentKey != null ||
+      current.cashFlows.length > 0
     ) {
       throw new Error("Импортированные банковские операции нельзя удалить вместе с выпиской");
     }
