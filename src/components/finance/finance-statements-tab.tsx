@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Eye, Trash2, Upload } from "lucide-react";
 import { formatIsoDate, formatMoney } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { DataTable, type Column } from "@/components/data-table";
 import { TableFilterSlot, tableHeaderClassName, tableSurfaceCardClass } from "@/components/table-surface";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +15,8 @@ import { NestedTable, NestedTableCell } from "@/components/reports/expandable-ta
 import { TableRow } from "@/components/ui/table";
 
 import type { FinanceCashFlowRow, FinanceStatementRow } from "@/mocks/finance-fixtures";
+import type { AccountCoverageSummary } from "@/lib/bank-statement-integrity";
+import { scrollThinY } from "@/lib/scroll-classes";
 
 const iconActionClass =
   "text-muted-foreground hover:text-foreground hover:bg-muted/60 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
@@ -24,6 +27,8 @@ const iconDestructiveClass =
 interface FinanceStatementsTabProps {
   filters?: React.ReactNode;
   statements: FinanceStatementRow[];
+  coverage?: AccountCoverageSummary[];
+  asOf?: string;
   onUploadRequest?: () => void;
   onLoadDetail?: (id: string) => Promise<FinanceCashFlowRow[]>;
   onDelete?: (id: string) => void;
@@ -32,6 +37,8 @@ interface FinanceStatementsTabProps {
 export function FinanceStatementsTab({
   filters,
   statements,
+  coverage = [],
+  asOf,
   onUploadRequest,
   onLoadDetail,
   onDelete,
@@ -46,12 +53,21 @@ export function FinanceStatementsTab({
     setDetailRows(rows);
   };
 
+  const canDelete = (row: FinanceStatementRow) =>
+    row.periodStatus !== "VERIFIED" &&
+    row.periodStatus !== "UNKNOWN" &&
+    row.source !== "BANK_1C" &&
+    row.operationsCount === 0;
+
   const columns: Column<FinanceStatementRow>[] = [
     {
       key: "date",
-      header: "Дата",
+      header: "Период",
       className: "tabular-nums font-medium",
-      render: (row) => formatIsoDate(row.date),
+      render: (row) =>
+        row.periodStart && row.periodEnd
+          ? `${formatIsoDate(row.periodStart)} — ${formatIsoDate(row.periodEnd)}`
+          : "Период неизвестен",
     },
     {
       key: "account",
@@ -79,10 +95,23 @@ export function FinanceStatementsTab({
       key: "status",
       header: "Статус",
       render: (row) => (
-        <div className="flex items-center gap-2">
-          <Badge variant={row.uploaded ? "secondary" : "outline"}>
-            {row.uploaded ? "Загружена" : "Нет выписки"}
+        <div className="flex flex-col gap-1">
+          <Badge variant={row.periodStatus === "VERIFIED" ? "secondary" : "outline"}>
+            {row.source === "BANK_1C"
+              ? "Банк"
+              : row.source === "MANUAL"
+                ? "Вручную"
+                : "Источник неизвестен"}
+            {" · "}
+            {row.periodStatus === "VERIFIED"
+              ? "покрытие доказано"
+              : row.periodStatus === "PLACEHOLDER"
+                ? "не банковское покрытие"
+                : "покрытие неизвестно"}
           </Badge>
+          {(row.overlapDates?.length ?? 0) > 0 && (
+            <span className="text-xs text-red-700">Пересечение: {row.overlapDates?.join(", ")}</span>
+          )}
           {row.mismatch && (
             <Tooltip>
               <TooltipTrigger
@@ -133,7 +162,7 @@ export function FinanceStatementsTab({
             <Upload className="size-3.5" />
             {row.uploaded ? "Перезагрузить" : "Загрузить"}
           </Button>
-          {onDelete && (
+          {onDelete && canDelete(row) && (
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -158,6 +187,61 @@ export function FinanceStatementsTab({
 
   return (
     <>
+      {coverage.length > 0 && (
+        <Card className="mb-4">
+          <CardContent className={cn("space-y-3 p-4", scrollThinY, "max-h-72")}>
+            <p className="text-sm font-medium">
+              Покрытие по счетам{asOf ? ` на ${formatIsoDate(asOf)}` : ""}
+            </p>
+            {coverage.map((row) => (
+              <div key={row.accountId} className="text-sm">
+                <p className="font-medium">{row.accountName}</p>
+                {row.status === "UNKNOWN" ? (
+                  <p className="text-muted-foreground">
+                    Нет доказанного периода. Дни до первой проверенной выписки не считаются пропуском.
+                  </p>
+                ) : (
+                  <div className="text-muted-foreground space-y-1">
+                    <p>
+                      Покрыто:{" "}
+                      {row.coveredRanges.length
+                        ? row.coveredRanges
+                            .map((range) => `${formatIsoDate(range.start)} — ${formatIsoDate(range.end)}`)
+                            .join("; ")
+                        : "нет цельного диапазона"}
+                    </p>
+                    <p>
+                      Пропуски рабочих дней:{" "}
+                      {row.missingDates.length ? row.missingDates.map(formatIsoDate).join(", ") : "нет"}
+                    </p>
+                    <p>
+                      Пересечения:{" "}
+                      {row.overlappingDates.length
+                        ? row.overlappingDates.map((day) => formatIsoDate(day.date)).join(", ")
+                        : "нет"}
+                    </p>
+                    <p>
+                      После последней выписки
+                      {row.trailingFrom && row.trailingTo
+                        ? ` ${formatIsoDate(row.trailingFrom)} — ${formatIsoDate(row.trailingTo)}`
+                        : ": нет"}
+                      {row.trailingBusinessDates.length
+                        ? `. Рабочие дни без выписки: ${row.trailingBusinessDates.map(formatIsoDate).join(", ")}`
+                        : ""}
+                    </p>
+                    {row.possibleGapDates.length > 0 && (
+                      <p>
+                        Выходные внутри пропусков, покрытие не ставится:{" "}
+                        {row.possibleGapDates.map(formatIsoDate).join(", ")}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
       <Card className={tableSurfaceCardClass}>
         <CardContent className="p-0">
           <TableFilterSlot filters={filters} />

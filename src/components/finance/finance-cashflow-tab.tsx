@@ -1,7 +1,7 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
-import { ArrowLeftRight, Trash2, Unlink } from "lucide-react";
+import { ArrowLeftRight, Pencil, Trash2, Unlink } from "lucide-react";
 import { TableFilterSlot, tableBodyRowClass, tableHeadClass, tableStickyHeadRowClass, tableSurfaceCardClass } from "@/components/table-surface";
 import { cn } from "@/lib/utils";
 import {
@@ -62,8 +62,12 @@ const tableActionClass =
 function rowHighlightClass(row: FinanceCashFlowRow) {
   return cn(
     row.isTransfer && "!bg-sky-500/8 hover:!bg-sky-500/12",
-    !row.isTransfer && !row.isAutoAssigned && "!bg-amber-500/10 hover:!bg-amber-500/15",
-    !row.isTransfer &&
+    row.source !== "BANK" &&
+      !row.isTransfer &&
+      !row.isAutoAssigned &&
+      "!bg-amber-500/10 hover:!bg-amber-500/15",
+    row.source !== "BANK" &&
+      !row.isTransfer &&
       row.dealId &&
       row.isAutoAssigned &&
       "!bg-violet-500/8 hover:!bg-violet-500/12",
@@ -81,6 +85,7 @@ interface FinanceCashflowTabProps {
   autoRules: FinanceAutoRule[];
   onAssign?: (id: string, patch: CashflowAssignPatch) => void;
   onDelete?: (id: string) => void;
+  onEdit?: (row: FinanceCashFlowRow) => void;
   onConvertToTransfer?: (row: FinanceCashFlowRow) => void;
   onUnlinkTransfer?: (id: string) => void;
   onAutoRuleCreated?: (values: AutoRuleFormValues) => void;
@@ -96,6 +101,7 @@ export function FinanceCashflowTab({
   autoRules,
   onAssign,
   onDelete,
+  onEdit,
   onConvertToTransfer,
   onUnlinkTransfer,
   onAutoRuleCreated,
@@ -165,6 +171,8 @@ export function FinanceCashflowTab({
                         const matchedRule = row.isTransfer
                           ? null
                           : findMatchingAutoRule(autoRules, row);
+                        const bank = row.source === "BANK";
+                        const paired = row.pairedTransfer === true;
                         return (
                         <TableRow
                           key={row.id}
@@ -187,14 +195,23 @@ export function FinanceCashflowTab({
                               </span>
                               <p className="text-muted-foreground mt-0.5 text-xs font-normal">
                                 {row.accountName}
+                                {bank ? (
+                                  <span className="ml-2 inline-flex rounded-full bg-slate-500/15 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                                    Банк
+                                  </span>
+                                ) : (
+                                  <span className="ml-2 inline-flex rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium">
+                                    Вручную
+                                  </span>
+                                )}
                               </p>
                             </div>
                           </TableCell>
-                          {row.isTransfer ? (
+                          {bank || row.isTransfer ? (
                             <TableCell className={cn(cellPad, "align-middle text-center")}>
-                              <span className="bg-sky-500/12 text-sky-700 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium">
-                                Перевод
-                              </span>
+                              <p className={transferMutedCellClass}>
+                                {row.counterpartyName ?? (row.isTransfer ? "Между счетами" : "—")}
+                              </p>
                             </TableCell>
                           ) : (
                             <TableCell className={cn(cellPad, "align-middle text-center")}>
@@ -210,9 +227,11 @@ export function FinanceCashflowTab({
                               {row.description}
                             </p>
                           </TableCell>
-                          {row.isTransfer ? (
+                          {bank || row.isTransfer ? (
                             <TableCell className={cn(cellPad, "align-middle")}>
-                              <p className={transferMutedCellClass}>Между счетами</p>
+                              <p className={transferMutedCellClass}>
+                                {row.isTransfer ? "Между счетами" : (row.articleName ?? "—")}
+                              </p>
                             </TableCell>
                           ) : (
                             <TableCell className={cn(cellPad, "align-middle text-center")}>
@@ -223,9 +242,9 @@ export function FinanceCashflowTab({
                               />
                             </TableCell>
                           )}
-                          {row.isTransfer ? (
+                          {bank || row.isTransfer ? (
                             <TableCell className={cn(cellPad, "align-middle")}>
-                              <p className={transferMutedCellClass}>—</p>
+                              <p className={transferMutedCellClass}>{row.dealName ?? "—"}</p>
                             </TableCell>
                           ) : (
                             <TableCell className={cn(cellPad, "align-middle text-center")}>
@@ -238,7 +257,7 @@ export function FinanceCashflowTab({
                           )}
                           <TableCell className={cn(cellPad, "align-middle text-center")}>
                             <div className="flex items-center justify-center gap-0.5">
-                              {!row.isTransfer && (
+                              {!bank && !row.isTransfer && (
                                 <AutoRuleQuickButton
                                   hasRule={Boolean(matchedRule)}
                                   onClick={() =>
@@ -246,7 +265,26 @@ export function FinanceCashflowTab({
                                   }
                                 />
                               )}
-                              {!row.isTransfer && onConvertToTransfer && (
+                              {!bank && !row.isTransfer && onEdit && (
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className={tableActionClass}
+                                        aria-label="Изменить"
+                                        onClick={() => onEdit(row)}
+                                      >
+                                        <Pencil />
+                                      </Button>
+                                    }
+                                  />
+                                  <TooltipContent>Изменить</TooltipContent>
+                                </Tooltip>
+                              )}
+                              {!paired && onConvertToTransfer && (
                                 <Tooltip>
                                   <TooltipTrigger
                                     render={
@@ -265,7 +303,7 @@ export function FinanceCashflowTab({
                                   <TooltipContent>Сделать переводом</TooltipContent>
                                 </Tooltip>
                               )}
-                              {row.isTransfer && onUnlinkTransfer && (
+                              {paired && !bank && onUnlinkTransfer && (
                                 <Tooltip>
                                   <TooltipTrigger
                                     render={
@@ -284,6 +322,7 @@ export function FinanceCashflowTab({
                                   <TooltipContent>Убрать перевод</TooltipContent>
                                 </Tooltip>
                               )}
+                              {!bank && (
                               <Tooltip>
                                 <TooltipTrigger
                                   render={
@@ -301,6 +340,7 @@ export function FinanceCashflowTab({
                                 />
                                 <TooltipContent>Удалить</TooltipContent>
                               </Tooltip>
+                              )}
                             </div>
                           </TableCell>
                         </TableRow>

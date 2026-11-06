@@ -50,6 +50,13 @@ interface CashflowFormDialogProps {
   counterparties: FinanceCounterparty[];
   articles: FinanceArticle[];
   deals: FinanceDeal[];
+  editing?: {
+    date: string;
+    amount: number;
+    flowType: "INCOME" | "EXPENSE";
+    accountId: string;
+    description: string;
+  } | null;
   onOpenChange: (open: boolean) => void;
   onSubmit?: (values: CashflowFormValues) => void;
 }
@@ -67,6 +74,7 @@ export function CashflowFormDialog({
   counterparties,
   articles: allArticles,
   deals,
+  editing = null,
   onOpenChange,
   onSubmit,
 }: CashflowFormDialogProps) {
@@ -82,13 +90,13 @@ export function CashflowFormDialog({
   const [amountBlocked, setAmountBlocked] = useState(false);
 
   if (useJustOpened(open)) {
-    setDateText(isoToDisplayDate(todayIso()));
-    setAmount(null);
+    setDateText(isoToDisplayDate(editing?.date ?? todayIso()));
+    setAmount(editing?.amount ?? null);
     setAmountBlocked(false);
-    setFlowType("EXPENSE");
-    setAccountId(accounts[0]?.id ?? "");
+    setFlowType(editing?.flowType ?? "EXPENSE");
+    setAccountId(editing?.accountId ?? accounts[0]?.id ?? "");
     setCounterpartyId("");
-    setDescription("");
+    setDescription(editing?.description ?? "");
     setArticleId("");
     setDealId("");
     setShowErrors(false);
@@ -133,10 +141,10 @@ export function CashflowFormDialog({
   return (
     <FinanceFormDialog
       open={open}
-      title="Добавить операцию"
+      title={editing ? "Изменить операцию" : "Добавить операцию"}
       onOpenChange={onOpenChange}
       onSubmit={handleSubmit}
-      submitLabel="Добавить"
+      submitLabel={editing ? "Сохранить" : "Добавить"}
       canSubmit={canSubmit}
       onInvalid={() => setShowErrors(true)}
       maxWidth="sm:max-w-lg"
@@ -218,6 +226,7 @@ export function CashflowFormDialog({
         </Field>
       </div>
 
+      {!editing && (
       <div className="grid gap-4 sm:grid-cols-2">
         <Field id="cf-counterparty" label="Контрагент">
           <Select value={counterpartyId} onValueChange={(v) => setCounterpartyId(v ?? "")}>
@@ -263,6 +272,7 @@ export function CashflowFormDialog({
           </Select>
         </Field>
       </div>
+      )}
 
       <Field
         id="cf-description"
@@ -280,6 +290,7 @@ export function CashflowFormDialog({
         />
       </Field>
 
+      {!editing && (
       <Field id="cf-deal" label="Сделка">
         <Select value={dealId} onValueChange={(v) => setDealId(v ?? "")}>
           <SelectTrigger className={selectTriggerClass}>
@@ -303,6 +314,7 @@ export function CashflowFormDialog({
           </SelectContent>
         </Select>
       </Field>
+      )}
     </FinanceFormDialog>
   );
 }

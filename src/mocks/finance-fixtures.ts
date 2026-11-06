@@ -72,6 +72,10 @@ export interface FinanceCashFlowRow {
   isAutoAssigned: boolean;
   /** Перевод между своими счетами — не учитывается в доходах/расходах. */
   isTransfer?: boolean;
+  /** Строка или её перевод входят в банковскую группу. Не путать с isAutoAssigned. */
+  source?: "BANK" | "MANUAL";
+  /** У перевода уже есть transferId. */
+  pairedTransfer?: boolean;
 }
 
 export type AutoRuleLogic = "AND" | "OR";
@@ -96,6 +100,12 @@ export interface FinanceStatementRow {
   uploaded: boolean;
   /** «Конечный остаток» выписки разошёлся с расчётным (бейдж «≠»). */
   mismatch?: boolean;
+  periodStart?: string | null;
+  periodEnd?: string | null;
+  source?: "MANUAL" | "BANK_1C" | null;
+  periodStatus?: "VERIFIED" | "UNKNOWN" | "PLACEHOLDER";
+  deletable?: boolean;
+  overlapDates?: string[];
 }
 
 export interface ExpenseChartSlice {

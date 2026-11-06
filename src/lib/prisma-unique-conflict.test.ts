@@ -4,6 +4,7 @@ import {
   ACCOUNT_NUMBER_TAKEN,
   isDuplicateAccountNumber,
   isDuplicateImportKey,
+  isDuplicateStatementContent,
   isRetryableStatementImportConflict,
   prismaUniqueDiscriminator,
   retryOnceOnImportUnique,
@@ -37,6 +38,12 @@ describe("prisma unique discriminators (measured-shape matchers)", () => {
       true,
     );
     expect(isDuplicateAccountNumber(p2002({ target: ["accountId", "importKey"] }))).toBe(false);
+  });
+
+  it("retries an identical statement content conflict", () => {
+    const err = p2002({ constraint: "Statement_accountId_contentKey_key" });
+    expect(isDuplicateStatementContent(err)).toBe(true);
+    expect(isRetryableStatementImportConflict(err)).toBe(true);
   });
 
   it("does not retry unrelated P2002 (e.g. clientRequestId)", () => {

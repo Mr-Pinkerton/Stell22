@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
 import {
@@ -8,6 +9,15 @@ import {
 } from "@/server/internal/finance-operations";
 import { writeChangeLog } from "@/server/change-log";
 import { is1CStatement, parse1CStatement } from "@/lib/bank-statement-1c";
+import {
+  cashFlowSource,
+  periodsOverlap,
+  canonicalStatementDocument,
+  statementContentIdentity,
+  statementPeriodFields,
+  validateVerifiedPeriod,
+  coverAccounts,
+} from "@/lib/bank-statement-integrity";
 import { statementImportKey } from "@/lib/statement-import";
 import {
   retryOnceOnImportUnique,
@@ -26,6 +36,7 @@ import type {
   FinanceCounterparty,
   FinanceStatementRow,
 } from "@/mocks/finance-fixtures";
+import type { AccountCoverageSummary } from "@/lib/bank-statement-integrity";
 
 function num(value: Prisma.Decimal | number | null): number {
   if (value == null) return 0;
@@ -96,15 +107,24 @@ type CashFlowWithRefs = Prisma.CashFlowGetPayload<{
   include: { account: true; counterparty: true; article: true; deal: true };
 }>;
 
-function serStatement(s: StatementWithRefs): FinanceStatementRow {
+function serStatement(s: StatementWithRefs, overlapDates: string[] = []): FinanceStatementRow {
+  const period = statementPeriodFields({
+    source: s.source,
+    periodStart: s.periodStart ? isoDay(s.periodStart) : null,
+    periodEnd: s.periodEnd ? isoDay(s.periodEnd) : null,
+    contentKey: s.contentKey,
+    operationsCount: s.cashFlows.length,
+  });
   return {
     id: s.id,
-    date: s.date.toISOString().slice(0, 10),
+    date: isoDay(s.date),
     accountName: s.account?.name ?? null,
     operationsCount: s.cashFlows.length,
     unassignedCount: s.cashFlows.filter((cf) => !cf.articleId && !cf.isTransfer).length,
     uploaded: s.uploadedAt != null,
     mismatch: s.mismatch,
+    ...period,
+    overlapDates,
   };
 }
 
@@ -123,6 +143,11 @@ function serCashFlow(cf: CashFlowWithRefs): FinanceCashFlowRow {
     dealId: cf.dealId,
     isAutoAssigned: cf.isAutoAssigned,
     isTransfer: cf.isTransfer,
+    source: cashFlowSource({
+      statementId: cf.statementId,
+      importKey: cf.importKey,
+      linkedToImportedTransfer: false,
+    }),
   };
 }
 
@@ -136,6 +161,8 @@ export interface ImportStatementInternalResult {
   skippedCount: number;
   warning: string | null;
   affectedBatchIds: string[];
+  statementCoverage: AccountCoverageSummary[];
+  coverageAsOf: string;
 }
 
 const last4 = (account: string) => account.slice(-4);
@@ -187,8 +214,51 @@ export async function importStatementInternal(
   }
 
   const ourNumber = parsed.accountNumber;
-  const statementDate = parsed.dateEnd ?? parsed.dateStart ?? new Date().toISOString().slice(0, 10);
-  const statementStart = parsed.dateStart ?? statementDate;
+  const period = validateVerifiedPeriod({
+    dateStart: parsed.dateStart,
+    dateEnd: parsed.dateEnd,
+    documentDates: parsed.documents.map((doc) => doc.date),
+    accountNumber: ourNumber,
+    boundAccountNumber: null,
+  });
+  if (!period.ok) throw new Error(period.reason);
+  for (const doc of parsed.documents) {
+    const payer = doc.payerAccount === ourNumber;
+    const payee = doc.payeeAccount === ourNumber;
+    if (payer === payee) {
+      throw new Error(
+        `Счёт документа ${doc.docNumber ?? "без номера"} не совпадает с расчётным счётом выписки`,
+      );
+    }
+  }
+  const statementDate = period.periodEnd;
+  const statementStart = period.periodStart;
+  const contentKey = createHash("sha256")
+    .update(
+      statementContentIdentity({
+        accountNumber: ourNumber,
+        bik: parsed.bik,
+        periodStart: statementStart,
+        periodEnd: statementDate,
+        openingBalance: parsed.openingBalance == null ? null : parsed.openingBalance.toFixed(2),
+        closingBalance: parsed.closingBalance == null ? null : parsed.closingBalance.toFixed(2),
+        documents: parsed.documents.map((doc) =>
+          canonicalStatementDocument({
+            docNumber: doc.docNumber,
+            date: doc.date,
+            amount: doc.amount.toFixed(2),
+            payerName: doc.payerName,
+            payerInn: doc.payerInn,
+            payerAccount: doc.payerAccount,
+            payeeName: doc.payeeName,
+            payeeInn: doc.payeeInn,
+            payeeAccount: doc.payeeAccount,
+            purpose: doc.purpose,
+          }),
+        ),
+      }),
+    )
+    .digest("hex");
 
   return retryOnceOnImportUnique(async () => {
   const newCounterparties: { id: string; name: string }[] = [];
@@ -199,6 +269,7 @@ export async function importStatementInternal(
   let warning: string | null = null;
   let isNewAccount = false;
   let accountConfirmed = true;
+  let identical = false;
 
   const result = await prisma.$transaction(async (tx) => {
     // Счёт: по номеру → по явной привязке → создаём новый.
@@ -225,6 +296,9 @@ export async function importStatementInternal(
         },
       });
     } else {
+      if (account.accountNumber && account.accountNumber !== ourNumber) {
+        throw new Error("Номер счёта выписки не совпадает со счётом привязки");
+      }
       const patch: Prisma.AccountUncheckedUpdateInput = {};
       if (!account.accountNumber) patch.accountNumber = ourNumber;
       if (parsed.bik && !account.bik) patch.bik = parsed.bik;
@@ -244,6 +318,44 @@ export async function importStatementInternal(
     if (!lockedAccount) throw new Error("Счёт не найден");
     account = lockedAccount;
     accountConfirmed = account.confirmed;
+    if (account.accountNumber !== ourNumber) {
+      throw new Error("Номер счёта выписки не совпадает со счётом привязки");
+    }
+
+    const duplicate = await tx.statement.findFirst({
+      where: { accountId: account.id, contentKey },
+      select: { id: true },
+    });
+    if (duplicate) {
+      identical = true;
+      skipped = parsed.documents.length;
+      return { statementId: duplicate.id, syncedBatchIds: [] as string[] };
+    }
+
+    const verified = await tx.statement.findMany({
+      where: {
+        accountId: account.id,
+        source: "BANK_1C",
+        periodStart: { not: null },
+        periodEnd: { not: null },
+      },
+      select: { id: true, periodStart: true, periodEnd: true },
+    });
+    for (const other of verified) {
+      if (!other.periodStart || !other.periodEnd) continue;
+      const start = isoDay(other.periodStart);
+      const end = isoDay(other.periodEnd);
+      if (
+        periodsOverlap(
+          { periodStart: statementStart, periodEnd: statementDate },
+          { periodStart: start, periodEnd: end },
+        )
+      ) {
+        throw new Error(
+          `Периоды выписок пересекаются: ${other.id} ${start}–${end} и новая ${statementStart}–${statementDate}`,
+        );
+      }
+    }
 
     // Точка отсчёта ДО импорта — по ней сверяем расчётный остаток с выпиской.
     const priorOpening = num(account.openingBalance);
@@ -251,12 +363,16 @@ export async function importStatementInternal(
 
     const statement = await tx.statement.create({
       data: {
-        date: new Date(statementDate),
+        date: dayToDate(statementDate),
         accountId: account.id,
         fileUrl: fileName || null,
         uploadedAt: new Date(),
         openingBalance: parsed.openingBalance != null ? parsed.openingBalance.toFixed(2) : null,
         closingBalance: parsed.closingBalance != null ? parsed.closingBalance.toFixed(2) : null,
+        periodStart: dayToDate(statementStart),
+        periodEnd: dayToDate(statementDate),
+        source: "BANK_1C",
+        contentKey,
       },
     });
 
@@ -307,7 +423,7 @@ export async function importStatementInternal(
           articleId,
           dealId,
           statementId: statement.id,
-          date: new Date(doc.date || statementDate),
+          date: dayToDate(doc.date),
           isAutoAssigned: isTransfer || Boolean(articleId),
           isTransfer,
           importKey: key,
@@ -393,13 +509,15 @@ export async function importStatementInternal(
     warning = warning ? `${warning} ${quarantineNote}` : quarantineNote;
   }
 
-  await writeChangeLog({
-    entity: "Statement",
-    entityId: statementId,
-    newValues: { file: fileName, account: ourNumber, operations: imported, skipped },
-  });
+  if (!identical) {
+    await writeChangeLog({
+      entity: "Statement",
+      entityId: statementId,
+      newValues: { file: fileName, account: ourNumber, operations: imported, skipped },
+    });
+  }
 
-  const [statement, accounts, allFlows, counterparties] = await Promise.all([
+  const [statement, accounts, allFlows, counterparties, periodRows] = await Promise.all([
     prisma.statement.findUniqueOrThrow({
       where: { id: statementId },
       include: { account: true, cashFlows: true },
@@ -409,11 +527,28 @@ export async function importStatementInternal(
       select: { accountId: true, date: true, flowType: true, amount: true },
     }),
     prisma.counterparty.findMany({ orderBy: { name: "asc" } }),
+    prisma.statement.findMany({
+      select: { id: true, accountId: true, source: true, periodStart: true, periodEnd: true },
+    }),
   ]);
+  const coverageAsOf = isoDay(new Date());
+  const statementCoverage = coverAccounts({
+    asOf: coverageAsOf,
+    accounts: accounts.map((account) => ({ id: account.id, name: account.name })),
+    intervals: periodRows.flatMap((row) => {
+      if (row.source !== "BANK_1C" || !row.periodStart || !row.periodEnd || !row.accountId) return [];
+      return [{
+        statementId: row.id,
+        accountId: row.accountId,
+        periodStart: isoDay(row.periodStart),
+        periodEnd: isoDay(row.periodEnd),
+      }];
+    }),
+  });
 
   // Операции счёта в карантине не отдаём в ДДС клиента (даже как «новые»
   // после импорта) — подтверждение в Настройках подтянет их сразу.
-  const newCashFlows = accountConfirmed
+  const newCashFlows = accountConfirmed && !identical
     ? await prisma.cashFlow.findMany({
         where: { statementId },
         include: { account: true, counterparty: true, article: true, deal: true },
@@ -431,6 +566,8 @@ export async function importStatementInternal(
     skippedCount: skipped,
     warning,
     affectedBatchIds: [...new Set(affectedBatchIds)],
+    statementCoverage,
+    coverageAsOf,
   };
   });
 }

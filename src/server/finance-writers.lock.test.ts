@@ -41,6 +41,7 @@ describe("DI-013 finance writers wrap lock + sync inside source TX", () => {
       "assignCashFlow",
       "deleteCashFlow",
       "convertCashFlowToTransfer",
+      "updateManualCashFlow",
       "reapplyAutoRules",
       "deleteStatement",
     ]) {
@@ -54,10 +55,35 @@ describe("DI-013 finance writers wrap lock + sync inside source TX", () => {
     expectInsideTransaction(extractFn(finance, "assignCashFlow"), "syncDealInternal");
     expectInsideTransaction(extractFn(finance, "deleteCashFlow"), "syncDealInternal");
     expectInsideTransaction(extractFn(finance, "convertCashFlowToTransfer"), "syncDealInternal");
+    expectInsideTransaction(extractFn(finance, "updateManualCashFlow"), "syncDealInternal");
+    const unlink = finance.slice(finance.indexOf("export async function unlinkTransfer"));
+    const unlinkBody = unlink.slice(0, unlink.indexOf("export async function", 20));
+    expect(unlinkBody).toContain("$transaction");
+    expect(unlinkBody).toContain("transferGroupIsBankProtected");
     expectInsideTransaction(extractFn(finance, "reapplyAutoRules"), "syncDealInternal");
     expectInsideTransaction(extractFn(finance, "reapplyAutoRules"), "current.isTransfer");
+    expectInsideTransaction(extractFn(finance, "reapplyAutoRules"), "isBankImportedOperation");
     expectInsideTransaction(extractFn(finance, "assignCashFlow"), "current.isTransfer");
-    expectInsideTransaction(extractFn(finance, "deleteStatement"), "syncDealInternal");
+    expectInsideTransaction(extractFn(finance, "assignCashFlow"), "isBankImportedOperation");
+    expectInsideTransaction(extractFn(finance, "deleteCashFlow"), "transferGroupIsBankProtected");
+    expectInsideTransaction(extractFn(finance, "convertCashFlowToTransfer"), "decideTransferPair");
+    const deleteStatement = extractFn(finance, "deleteStatement");
+    expect(deleteStatement).toContain("Импортированные банковские операции нельзя удалить вместе с выпиской");
+    expect(deleteStatement).not.toContain("cashFlow.deleteMany");
+    expect(deleteStatement).toContain("contentKey");
+    expect(deleteStatement).toContain('current.source !== "MANUAL"');
+    expectInsideTransaction(deleteStatement, "statement.delete");
+    const deleteAccount = extractFn(finance, "deleteAccount");
+    expect(deleteAccount).not.toContain("statement.deleteMany");
+    expectInsideTransaction(deleteAccount, "account.delete");
+    expectInsideTransaction(extractFn(finance, "deleteDeal"), "transferGroupIsBankProtected");
+    const updateAccount = extractFn(finance, "updateAccount");
+    expectInsideTransaction(updateAccount, "lockAccountsThenDealsThenBatches");
+    expect(updateAccount).toContain("Нельзя изменить начальный остаток счёта с сохранённой банковской выпиской.");
+    expectInsideTransaction(extractFn(finance, "deleteArticle("), "lockArticles");
+    expectInsideTransaction(extractFn(finance, "deleteArticle("), "article.delete");
+    expectInsideTransaction(extractFn(finance, "deleteCounterparty"), "lockCounterparties");
+    expectInsideTransaction(extractFn(finance, "deleteCounterparty"), "counterparty.delete");
     expectInsideTransaction(extractFn(finance, "createTransfer"), "lockAccountsThenDealsThenBatches");
   });
 

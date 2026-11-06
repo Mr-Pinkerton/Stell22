@@ -83,6 +83,11 @@ enum FlowType {
   EXPENSE // списание
 }
 
+enum StatementSource {
+  MANUAL
+  BANK_1C
+}
+
 enum DealStatus {
   OPEN
   ARCHIVED // полностью оплачена
@@ -999,7 +1004,17 @@ model Statement {
   openingBalance Decimal? @db.Decimal(14, 2)
   closingBalance Decimal? @db.Decimal(14, 2)
 
+  // Доказанный период 1С (ДатаНачала/ДатаКонца), включительно.
+  // source NULL — историческая строка: покрытие UNKNOWN, начало не угадывается.
+  // MANUAL не доказывает банковское покрытие. Значение по умолчанию не ставится.
+  periodStart DateTime?
+  periodEnd   DateTime?
+  source      StatementSource?
+  contentKey  String?
+
   cashFlows  CashFlow[]
+
+  @@unique([accountId, contentKey])
 }
 
 // Операция ДДС.

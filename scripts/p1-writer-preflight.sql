@@ -46,11 +46,12 @@ SELECT CASE
   ('20260920180000_psr_p2_production_quantity_edit_identity', '997fcb0caf5f57f3514aa981976c72122f0c09e35a408922f1baea5df1a51a61'),
   ('20261008120000_upakovka_recovery_receipt', '7a243476d0dc561dde1e31d11db16613996a3d5e0a88af7695a6b48950cc3c54'),
   ('20261010210000_psr_p3_s2_b_batch_receipt_provenance', '47ff9c932aea0a692b81ecfaf6c4a931b431e3e332e3e9c5b3fca96694550fe5'),
-  ('20261025120000_admin_corrections_batch_and_cancel', 'd8d83b48d536bd42cb9f394958dc981003d43da5b5904bcecadd3899b179f834')
-  ) AS expected(migration_name, checksum)) = 47
+  ('20261025120000_admin_corrections_batch_and_cancel', 'd8d83b48d536bd42cb9f394958dc981003d43da5b5904bcecadd3899b179f834'),
+  ('20261105120000_statement_period_coverage', '9625815128d45b4cf4397b6360ae5bf28ac4b3ef2033baefa4d85142f907c52e')
+  ) AS expected(migration_name, checksum)) = 48
   AND (
     SELECT count(*) FROM public."_prisma_migrations"
-  ) = 47
+  ) = 48
   AND NOT EXISTS (
     SELECT 1
     FROM (VALUES
@@ -100,7 +101,8 @@ SELECT CASE
   ('20260920180000_psr_p2_production_quantity_edit_identity', '997fcb0caf5f57f3514aa981976c72122f0c09e35a408922f1baea5df1a51a61'),
   ('20261008120000_upakovka_recovery_receipt', '7a243476d0dc561dde1e31d11db16613996a3d5e0a88af7695a6b48950cc3c54'),
   ('20261010210000_psr_p3_s2_b_batch_receipt_provenance', '47ff9c932aea0a692b81ecfaf6c4a931b431e3e332e3e9c5b3fca96694550fe5'),
-  ('20261025120000_admin_corrections_batch_and_cancel', 'd8d83b48d536bd42cb9f394958dc981003d43da5b5904bcecadd3899b179f834')
+  ('20261025120000_admin_corrections_batch_and_cancel', 'd8d83b48d536bd42cb9f394958dc981003d43da5b5904bcecadd3899b179f834'),
+  ('20261105120000_statement_period_coverage', '9625815128d45b4cf4397b6360ae5bf28ac4b3ef2033baefa4d85142f907c52e')
     ) AS expected(migration_name, checksum)
     FULL OUTER JOIN public."_prisma_migrations" AS applied
       ON applied.migration_name = expected.migration_name
