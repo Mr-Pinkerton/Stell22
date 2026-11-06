@@ -8,6 +8,9 @@ import { AUTHORIZATION_PHRASE, REJECTED_AUTHORIZATION_PHRASE } from "./decide.mj
 
 const LIVE = process.env.P1_DISPOSABLE_LIVE === "1";
 const IMAGE = "node:22-bookworm-slim";
+// The admin-corrections release stays pinned at 47 migrations. Current main
+// has the later statement-period migration, so this fixture must not follow it.
+const PINNED_RELEASE_SHA = "ea7c58f0598df9ea21ffe676a69e3348154e6520";
 
 function unixPath(file: string) {
   return file.replace(/\\/g, "/").replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`);
@@ -62,7 +65,7 @@ describe.skipIf(!LIVE)("admin corrections decision runtime", () => {
 
     const migrations = path.join(root, "migrations");
     fs.mkdirSync(migrations);
-    const archive = spawnSync("git", ["archive", "--format=tar", "origin/main", "prisma/migrations"], {
+    const archive = spawnSync("git", ["archive", "--format=tar", PINNED_RELEASE_SHA, "prisma/migrations"], {
       cwd: process.cwd(),
       windowsHide: true,
       maxBuffer: 20 * 1024 * 1024,
