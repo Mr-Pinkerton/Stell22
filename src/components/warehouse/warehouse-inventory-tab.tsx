@@ -35,7 +35,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { tableBodyRowClass, tableHeadClass, tableSurfaceCardClass } from "@/components/table-surface";
+import { TableFilterSlot, tableBodyRowClass, tableHeadClass, tableSurfaceCardClass } from "@/components/table-surface";
 import { Input } from "@/components/ui/input";
 import { FormDialog } from "@/components/form-dialog-shared";
 import {
@@ -181,6 +181,7 @@ export function WarehouseInventoryTab({
 
           <Card className={tableSurfaceCardClass}>
             <CardContent className="p-0">
+              <TableFilterSlot />
               <div className={scrollTableYClass}>
                 <table className="w-full table-fixed border-collapse text-sm">
                   <colgroup>
@@ -251,6 +252,7 @@ export function WarehouseInventoryTab({
           <h2 className="text-lg font-semibold tracking-tight">Проведённые инвентаризации</h2>
           <Card className={tableSurfaceCardClass}>
             <CardContent className="p-0">
+              <TableFilterSlot />
               <div className={scrollTableYClass}>
                 <table className="w-full table-fixed border-collapse text-sm">
                   <colgroup>

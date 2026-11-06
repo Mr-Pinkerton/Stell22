@@ -78,8 +78,10 @@ describe("DDS table responsiveness", () => {
         onDelete={() => {}}
         onConvertToTransfer={() => {}}
         onUnlinkTransfer={() => {}}
+        filters={<div>Поиск</div>}
       />,
     );
+    expect(document.querySelector("[data-slot=table-top-gap]")).toBeNull();
     for (const name of ["Сумма", "Контрагент", "Назначение", "Статья", "Сделка"]) {
       expect(screen.getByRole("columnheader", { name })).toBeTruthy();
     }
@@ -141,6 +143,10 @@ const statement: FinanceStatementRow = {
 describe("statement visual labels", () => {
   it("shows overlap dates as DD.MM.YYYY and splits holidays from weekends", () => {
     render(<FinanceStatementsTab statements={[statement]} coverage={[coverage]} asOf="2026-11-06" />);
+    const gap = document.querySelector("[data-slot=table-top-gap]");
+    expect(gap?.className).toContain("h-[16px]");
+    expect(gap?.textContent).toBe("");
+    expect(gap?.nextElementSibling?.querySelector("table")).toBeTruthy();
     expect(screen.getByText("Пересечение: 03.09.2026")).toBeTruthy();
     expect(document.body.textContent).not.toContain("2026-09-03");
     const text = document.body.textContent ?? "";

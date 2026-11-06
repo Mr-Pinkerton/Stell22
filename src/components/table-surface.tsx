@@ -27,9 +27,20 @@ export const tableStickyHeadRowClass =
 /** Карточка таблицы: один радиус и одна тень, без верхнего поля Card. */
 export const tableSurfaceCardClass = "surface-card ring-0 !pt-0";
 
-/** Фильтры над таблицей внутри уже открытой карточки. */
+/**
+ * Пустая полоса над серым заголовком. Высота совпадает с нижним полем
+ * карточки (`--spacing(4)` = 16px). Фильтры эту полосу заменяют.
+ */
 export function TableFilterSlot({ filters }: { filters?: ReactNode }) {
-  if (!filters) return null;
+  if (!filters) {
+    return (
+      <div
+        data-slot="table-top-gap"
+        aria-hidden="true"
+        className="h-[16px] shrink-0 bg-card"
+      />
+    );
+  }
   return (
     <>
       {filters}
