@@ -29,7 +29,8 @@ export const tableSurfaceCardClass = "surface-card ring-0 !pt-0";
 
 /**
  * Пустая полоса над серым заголовком. Высота совпадает с нижним полем
- * карточки (`--spacing(4)` = 16px). Фильтры эту полосу заменяют.
+ * карточки (`--spacing(4)` = 16px). Нижняя граница — верхняя линия серого
+ * заголовка. Фильтры эту полосу заменяют.
  */
 export function TableFilterSlot({ filters }: { filters?: ReactNode }) {
   if (!filters) {
@@ -37,7 +38,7 @@ export function TableFilterSlot({ filters }: { filters?: ReactNode }) {
       <div
         data-slot="table-top-gap"
         aria-hidden="true"
-        className="h-[16px] shrink-0 bg-card"
+        className="h-[16px] shrink-0 border-b border-border bg-card"
       />
     );
   }

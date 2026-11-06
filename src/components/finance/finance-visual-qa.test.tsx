@@ -145,6 +145,8 @@ describe("statement visual labels", () => {
     render(<FinanceStatementsTab statements={[statement]} coverage={[coverage]} asOf="2026-11-06" />);
     const gap = document.querySelector("[data-slot=table-top-gap]");
     expect(gap?.className).toContain("h-[16px]");
+    expect(gap?.className).toContain("border-b");
+    expect(gap?.className).toContain("border-border");
     expect(gap?.textContent).toBe("");
     expect(gap?.nextElementSibling?.querySelector("table")).toBeTruthy();
     expect(screen.getByText("Пересечение: 03.09.2026")).toBeTruthy();
@@ -153,5 +155,16 @@ describe("statement visual labels", () => {
     expect(text).toContain("Выходные внутри пропусков, покрытие не ставится: 06.09.2026");
     expect(text).toContain("Праздники внутри пропусков, покрытие не ставится: 04.11.2026");
     expect(text).not.toContain("Выходные внутри пропусков, покрытие не ставится: 06.09.2026, 04.11.2026");
+  });
+
+  it("draws the header line above an empty statements table", () => {
+    render(<FinanceStatementsTab statements={[]} asOf="2026-11-06" />);
+    const gap = document.querySelector("[data-slot=table-top-gap]");
+    expect(gap?.className).toContain("h-[16px]");
+    expect(gap?.className).toContain("border-b");
+    expect(gap?.className).toContain("border-border");
+    expect(screen.getByText("Выписок нет")).toBeTruthy();
+    expect(gap?.closest("[data-slot=card]")?.className).not.toMatch(/\bborder-b\b/);
+    expect(document.querySelector("th")?.className).toContain("h-[49px]");
   });
 });
