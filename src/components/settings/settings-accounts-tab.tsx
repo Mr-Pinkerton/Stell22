@@ -94,7 +94,11 @@ export function SettingsAccountsTab({
             <Tooltip>
               <TooltipTrigger
                 render={
-                  <Badge variant="outline" className="border-red-300 text-red-600">
+                  <Badge
+                    variant="outline"
+                    className="border-red-300 text-red-600"
+                    aria-label="Расхождение остатка"
+                  >
                     ≠
                   </Badge>
                 }
@@ -164,6 +168,7 @@ export function SettingsAccountsTab({
                   variant="ghost"
                   size="icon"
                   className={tableActionClass}
+                  aria-label={row.isPrimary ? "Убрать из основных" : "Сделать основным"}
                   onClick={() =>
                     run(async () => {
                       const nextPrimary = !row.isPrimary;
@@ -191,6 +196,9 @@ export function SettingsAccountsTab({
                   variant="ghost"
                   size="icon"
                   className={tableActionClass}
+                  aria-label={
+                    isAccountConfirmed(row.confirmed) ? "Снять подтверждение" : "Подтвердить счёт"
+                  }
                   onClick={() =>
                     run(async () => {
                       const nextConfirmed = !isAccountConfirmed(row.confirmed);
@@ -220,6 +228,7 @@ export function SettingsAccountsTab({
                   variant="ghost"
                   size="icon"
                   className={tableActionClass}
+                  aria-label="Редактировать"
                   onClick={() => {
                     setEditing(row);
                     setDialogOpen(true);
@@ -239,6 +248,7 @@ export function SettingsAccountsTab({
                   variant="ghost"
                   size="icon"
                   className={tableActionDestructiveClass}
+                  aria-label="Удалить"
                   onClick={() =>
                     run(async () => {
                       await deleteAccount(row.id);

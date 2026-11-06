@@ -15,7 +15,7 @@ import { NestedTable, NestedTableCell } from "@/components/reports/expandable-ta
 import { TableRow } from "@/components/ui/table";
 
 import type { FinanceCashFlowRow, FinanceStatementRow } from "@/mocks/finance-fixtures";
-import type { AccountCoverageSummary } from "@/lib/bank-statement-integrity";
+import { reportingGapLines, type AccountCoverageSummary } from "@/lib/bank-statement-integrity";
 import { scrollThinY } from "@/lib/scroll-classes";
 
 const iconActionClass =
@@ -110,7 +110,9 @@ export function FinanceStatementsTab({
                 : "покрытие неизвестно"}
           </Badge>
           {(row.overlapDates?.length ?? 0) > 0 && (
-            <span className="text-xs text-red-700">Пересечение: {row.overlapDates?.join(", ")}</span>
+            <span className="text-xs text-red-700">
+              Пересечение: {row.overlapDates?.map((day) => formatIsoDate(day)).join(", ")}
+            </span>
           )}
           {row.mismatch && (
             <Tooltip>
@@ -229,12 +231,9 @@ export function FinanceStatementsTab({
                         ? `. Рабочие дни без выписки: ${row.trailingBusinessDates.map(formatIsoDate).join(", ")}`
                         : ""}
                     </p>
-                    {row.possibleGapDates.length > 0 && (
-                      <p>
-                        Выходные внутри пропусков, покрытие не ставится:{" "}
-                        {row.possibleGapDates.map(formatIsoDate).join(", ")}
-                      </p>
-                    )}
+                    {reportingGapLines(row.possibleGapDates).map((line) => (
+                      <p key={line}>{line}</p>
+                    ))}
                   </div>
                 )}
               </div>

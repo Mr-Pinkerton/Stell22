@@ -5,6 +5,7 @@ import {
   formatGroupedInteger,
   formatIsoDateTime,
   formatLength,
+  formatBalanceMismatchMessage,
   formatMoney,
   formatMoneyDecimal,
   formatProductSku,
@@ -169,5 +170,20 @@ describe("parseGroupedMoney (ввод с копейками)", () => {
 
   it("пусто → null", () => {
     expect(parseGroupedMoney("", 2)).toMatchObject({ text: "", value: null, empty: true });
+  });
+});
+
+describe("formatBalanceMismatchMessage", () => {
+  it("uses whole-ruble currency text and leaves the amounts unchanged", () => {
+    const expected = 1250;
+    const closing = 750;
+    const message = formatBalanceMismatchMessage(expected, closing);
+    expect(clean(message)).toBe(
+      `Расчётный остаток (${clean(formatMoney(expected))}) не совпал с конечным остатком выписки (${clean(formatMoney(closing))}). Оставлен остаток из выписки.`,
+    );
+    expect(message).not.toContain("1250.00");
+    expect(message).not.toContain("750.00");
+    expect(expected).toBe(1250);
+    expect(closing).toBe(750);
   });
 });

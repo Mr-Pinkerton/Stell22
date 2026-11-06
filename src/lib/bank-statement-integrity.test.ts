@@ -9,6 +9,8 @@ import {
   decideTransferPair,
   isBankImportedOperation,
   isPotentialBankReportingGap,
+  reportingGapKind,
+  reportingGapLines,
   statementContentIdentity,
   transferGroupIsBankProtected,
   validateVerifiedPeriod,
@@ -169,6 +171,33 @@ describe("per-account statement coverage", () => {
     expect(isPotentialBankReportingGap("2026-11-04")).toBe(true);
     expect(isPotentialBankReportingGap("2026-09-02")).toBe(false);
     expect(row?.coveredRanges).toEqual([{ start: "2026-09-01", end: "2026-09-04" }]);
+  });
+
+  it("keeps 4 November a reporting gap and labels holidays apart from weekends", () => {
+    const [row] = coverAccounts({
+      asOf: "2026-11-06",
+      accounts: [{ id: "a", name: "A" }],
+      intervals: [
+        { statementId: "s1", accountId: "a", periodStart: "2026-11-02", periodEnd: "2026-11-02" },
+      ],
+    });
+    expect(row?.coveredRanges).toEqual([{ start: "2026-11-02", end: "2026-11-02" }]);
+    expect(row?.missingDates).not.toContain("2026-11-04");
+    expect(row?.trailingBusinessDates).not.toContain("2026-11-04");
+    expect(row?.possibleGapDates).toContain("2026-11-04");
+    expect(reportingGapKind("2026-11-04")).toBe("holiday");
+    expect(reportingGapKind("2026-09-06")).toBe("weekend");
+    expect(reportingGapKind("2026-09-02")).toBe("business");
+    expect(reportingGapKind("2028-01-01")).toBe("holiday");
+    const lines = reportingGapLines(["2026-09-06", "2026-11-04", "2028-01-01"]);
+    const holidayLine = lines.find((line) => line.includes("04.11.2026"));
+    const weekendLine = lines.find((line) => line.includes("06.09.2026"));
+    expect(holidayLine).toMatch(/Праздник/);
+    expect(holidayLine).not.toMatch(/Выходн/);
+    expect(holidayLine).toContain("01.01.2028");
+    expect(weekendLine).toMatch(/Выходн/);
+    expect(weekendLine).not.toContain("04.11.2026");
+    expect(weekendLine).not.toContain("01.01.2028");
   });
 
   it("lists overlapping days and does not call them a clean covered range", () => {
