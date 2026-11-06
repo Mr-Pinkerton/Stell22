@@ -7,7 +7,7 @@ import type { FinanceArticle } from "@/mocks/finance-fixtures";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { tableBodyRowClass, tableHeadClass, tableSurfaceCardClass } from "@/components/table-surface";
+import { TableFilterSlot, tableBodyRowClass, tableHeadClass, tableSurfaceCardClass } from "@/components/table-surface";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   TableBody,
@@ -71,6 +71,7 @@ function ArticleSection({
       <h3 className="text-sm font-semibold">{title}</h3>
       <Card className={tableSurfaceCardClass}>
         <CardContent className="p-0">
+          <TableFilterSlot />
           <table className="w-full table-fixed border-collapse text-sm">
             <colgroup>
               {COL_WIDTHS.map((width, i) => (
