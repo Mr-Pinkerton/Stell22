@@ -11,6 +11,8 @@ import { importStatementInternal } from "@/server/internal/statement-import";
 import {
   applyAutoRulesInternal,
   lockAccountsThenDealsThenBatches,
+  lockArticles,
+  lockCounterparties,
   lockDealsThenBatches,
   LockSetChangedError,
   retryOnLockSetChange,
@@ -448,17 +450,45 @@ export async function updateAccount(
   await requireAdmin();
   const name = values.name.trim();
   if (!name) throw new Error("Укажите название счёта");
+  const openingBalance = exactMoneyString(values.openingBalance);
+  const openingDay = values.openingDate.trim() ? isoDay(dayToDate(values.openingDate.trim())) : null;
 
   try {
-    await prisma.account.update({
-      where: { id },
-      data: {
-        name,
-        openingBalance: exactMoneyString(values.openingBalance),
-        balanceAsOf: values.openingDate ? dayToDate(values.openingDate) : null,
-        // Ручная смена точки отсчёта снимает бейдж расхождения по прошлой выписке.
-        balanceMismatch: false,
-      },
+    await prisma.$transaction(async (tx) => {
+      await lockAccountsThenDealsThenBatches(tx, [id], []);
+      const current = await tx.account.findUnique({
+        where: { id },
+        include: {
+          statements: {
+            select: { source: true, periodStart: true, periodEnd: true, contentKey: true },
+          },
+        },
+      });
+      if (!current) throw new Error("Счёт не найден");
+      const storedDay = current.balanceAsOf ? isoDay(current.balanceAsOf) : null;
+      const anchorSame = current.openingBalance.equals(openingBalance) && storedDay === openingDay;
+      // Пустая ручная заготовка якорь не держит. BANK_1C и source NULL держат.
+      const protectsAnchor = current.statements.some(
+        (statement) =>
+          statement.source !== "MANUAL" ||
+          statement.periodStart != null ||
+          statement.periodEnd != null ||
+          statement.contentKey != null,
+      );
+      if (protectsAnchor && !anchorSame) {
+        throw new Error("Нельзя изменить начальный остаток счёта с сохранённой банковской выпиской.");
+      }
+      await tx.account.update({
+        where: { id },
+        data: protectsAnchor
+          ? { name }
+          : {
+              name,
+              openingBalance,
+              balanceAsOf: openingDay ? dayToDate(openingDay) : null,
+              balanceMismatch: false,
+            },
+      });
     });
   } catch (err) {
     throwFriendlyAccountNumberConflict(err);
@@ -590,14 +620,17 @@ export async function updateCounterparty(
 
 export async function deleteCounterparty(id: string): Promise<void> {
   await requireAdmin();
-  const [flows, rules] = await Promise.all([
-    prisma.cashFlow.count({ where: { counterpartyId: id } }),
-    prisma.autoRule.count({ where: { counterpartyId: id } }),
-  ]);
-  if (flows > 0 || rules > 0) {
-    throw new Error("Нельзя удалить: контрагент используется в ДДС или автоправилах");
-  }
-  await prisma.counterparty.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    await lockCounterparties(tx, [id]);
+    const [flows, rules] = await Promise.all([
+      tx.cashFlow.count({ where: { counterpartyId: id } }),
+      tx.autoRule.count({ where: { counterpartyId: id } }),
+    ]);
+    if (flows > 0 || rules > 0) {
+      throw new Error("Нельзя удалить: контрагент используется в ДДС или автоправилах");
+    }
+    await tx.counterparty.delete({ where: { id } });
+  });
   await writeChangeLog({ entity: "Counterparty", entityId: id, oldValues: { deleted: true } });
   revalidatePath(PATH);
 }
@@ -760,22 +793,24 @@ export async function updateArticle(
 
 export async function deleteArticle(id: string): Promise<void> {
   await requireAdmin();
-  const [children, cashFlows, autoRules] = await Promise.all([
-    prisma.article.count({ where: { parentId: id } }),
-    prisma.cashFlow.count({ where: { articleId: id } }),
-    prisma.autoRule.count({ where: { articleId: id } }),
-  ]);
-  if (children > 0) {
-    throw new Error("Нельзя удалить статью с субстатьями. Сначала удалите/перенесите субстатьи.");
-  }
-  if (cashFlows > 0) {
-    throw new Error(`Статья используется в операциях ДДС (${cashFlows}). Сначала перенесите их.`);
-  }
-  if (autoRules > 0) {
-    throw new Error("Статья используется в автоправилах. Сначала измените правила.");
-  }
-
-  await prisma.article.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    await lockArticles(tx, [id]);
+    const [children, cashFlows, autoRules] = await Promise.all([
+      tx.article.count({ where: { parentId: id } }),
+      tx.cashFlow.count({ where: { articleId: id } }),
+      tx.autoRule.count({ where: { articleId: id } }),
+    ]);
+    if (children > 0) {
+      throw new Error("Нельзя удалить статью с субстатьями. Сначала удалите/перенесите субстатьи.");
+    }
+    if (cashFlows > 0) {
+      throw new Error(`Статья используется в операциях ДДС (${cashFlows}). Сначала перенесите их.`);
+    }
+    if (autoRules > 0) {
+      throw new Error("Статья используется в автоправилах. Сначала измените правила.");
+    }
+    await tx.article.delete({ where: { id } });
+  });
   await writeChangeLog({ entity: "Article", entityId: id, oldValues: { deleted: true } });
   revalidatePath(PATH);
 }

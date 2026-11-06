@@ -48,13 +48,16 @@ import {
   createDeal,
   createStatement,
   deleteAccount,
+  deleteArticle,
   deleteCashFlow,
+  deleteCounterparty,
   deleteDeal,
   deleteStatement,
   getFinanceData,
   importStatement,
   reapplyAutoRules,
   unlinkTransfer,
+  updateAccount,
   updateManualCashFlow,
 } from "@/server/finance";
 import { importStatementInternal } from "@/server/internal/statement-import";
@@ -79,6 +82,82 @@ function encodeWindows1251(text: string): Uint8Array {
 
 function pause(ms: number) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+async function linkImportedWhileDeleting(input: {
+  table: "Article" | "Counterparty";
+  directoryId: string;
+  flowId: string;
+  column: "articleId" | "counterpartyId";
+  remove: () => Promise<void>;
+  refusal: RegExp;
+  client: PrismaClient;
+}): Promise<void> {
+  let markReady!: () => void;
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    markReady = resolve;
+  });
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const held = input.client.$transaction(async (tx) => {
+    if (input.table === "Article") {
+      await tx.$queryRaw`SELECT id FROM "Article" WHERE id = ${input.directoryId} FOR UPDATE`;
+    } else {
+      await tx.$queryRaw`SELECT id FROM "Counterparty" WHERE id = ${input.directoryId} FOR UPDATE`;
+    }
+    await tx.cashFlow.update({
+      where: { id: input.flowId },
+      data: { [input.column]: input.directoryId },
+    });
+    markReady();
+    await released;
+  }, { timeout: 20_000 });
+  await ready;
+  const deletion = input.remove().then(
+    () => ({ failed: false as const }),
+    (error: unknown) => ({ failed: true as const, error }),
+  );
+  const deadline = Date.now() + 3_000;
+  let waiting = false;
+  let activity = "";
+  try {
+    while (Date.now() < deadline) {
+      const rows = await input.client.$queryRaw<Array<{ n: number }>>`
+        SELECT count(*)::int AS n
+        FROM pg_stat_activity
+        WHERE pid <> pg_backend_pid() AND wait_event_type = 'Lock'
+      `;
+      if (Number(rows[0]?.n ?? 0) > 0) {
+        waiting = true;
+        break;
+      }
+      const settled = await Promise.race([
+        deletion.then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 25)),
+      ]);
+      if (settled) break;
+    }
+    if (!waiting) {
+      const rows = await input.client.$queryRaw<Array<{ state: string | null; wait: string | null; query: string | null }>>`
+        SELECT state, wait_event_type AS wait, left(query, 160) AS query
+        FROM pg_stat_activity
+        WHERE datname = current_database() AND pid <> pg_backend_pid()
+      `;
+      activity = JSON.stringify(rows);
+    }
+  } finally {
+    release();
+  }
+  await held;
+  const result = await deletion;
+  if (!waiting) {
+    throw new Error(`delete did not wait on ${input.table}: ${activity}; result ${JSON.stringify(result.failed ? String(result.error) : "resolved")}`);
+  }
+  expect(result.failed, result.failed ? String(result.error) : "delete resolved").toBe(true);
+  if (result.failed) expect(result.error).toBeInstanceOf(Error);
+  if (result.failed && result.error instanceof Error) expect(result.error.message).toMatch(input.refusal);
 }
 
 function reserveLoopbackPort(): Promise<string> {
@@ -900,4 +979,233 @@ describe.skipIf(!LIVE)("bank statement immutability and coverage on disposable P
     expect(await seed!.statement.count({ where: { id: manualPlaceholder.id } })).toBe(0);
     expect(await seed!.statement.count({ where: { id: unknown.id } })).toBe(1);
   });
+
+  it("A–G bank anchor and directory deletion stay atomic", async () => {
+    const number = `407028100000${runId.slice(0, 8)}n`;
+    await importStatementInternal(bankFile({
+      account: number,
+      start: "23.09.2026",
+      end: "23.09.2026",
+      opening: "100.00",
+      closing: "100.00",
+      docs: [],
+    }), "anchor.txt");
+    const bank = await seed!.account.findFirstOrThrow({ where: { accountNumber: number } });
+    await seed!.account.update({ where: { id: bank.id }, data: { balanceMismatch: true } });
+    const before = await seed!.account.findUniqueOrThrow({ where: { id: bank.id } });
+    const statement = await seed!.statement.findFirstOrThrow({ where: { accountId: bank.id } });
+    await expect(updateAccount(bank.id, {
+      name: "Сдвиг остатка",
+      openingBalance: 250,
+      openingDate: "2026-09-24",
+    })).rejects.toThrow(/начальный остаток/);
+    await expect(updateAccount(bank.id, {
+      name: "Сдвиг даты",
+      openingBalance: 100,
+      openingDate: "2026-09-25",
+    })).rejects.toThrow(/начальный остаток/);
+    const refused = await seed!.account.findUniqueOrThrow({ where: { id: bank.id } });
+    expect(refused.name).toBe(before.name);
+    expect(refused.openingBalance.toFixed(2)).toBe("100.00");
+    expect(refused.balanceAsOf?.toISOString() ?? null).toBe(before.balanceAsOf?.toISOString() ?? null);
+    expect(refused.balanceMismatch).toBe(true);
+    const statementAfter = await seed!.statement.findUniqueOrThrow({ where: { id: statement.id } });
+    expect(statementAfter.contentKey).toBe(statement.contentKey);
+    expect(statementAfter.source).toBe("BANK_1C");
+    expect(statementAfter.periodStart?.toISOString() ?? null).toBe(statement.periodStart?.toISOString() ?? null);
+    expect(statementAfter.periodEnd?.toISOString() ?? null).toBe(statement.periodEnd?.toISOString() ?? null);
+    expect(await seed!.cashFlow.count({ where: { accountId: bank.id } })).toBe(0);
+
+    await updateAccount(bank.id, {
+      name: `Переименован ${runId}`,
+      openingBalance: 100,
+      openingDate: "2026-09-24",
+    });
+    const renamed = await seed!.account.findUniqueOrThrow({ where: { id: bank.id } });
+    expect(renamed.name).toBe(`Переименован ${runId}`);
+    expect(renamed.openingBalance.toFixed(2)).toBe("100.00");
+    expect(renamed.balanceAsOf?.toISOString() ?? null).toBe(before.balanceAsOf?.toISOString() ?? null);
+    expect(renamed.balanceMismatch).toBe(true);
+
+    const unknown = await account(`Неизвестный якорь ${runId}`, `407028100000${runId.slice(0, 8)}o`);
+    await seed!.account.update({
+      where: { id: unknown.id },
+      data: {
+        openingBalance: "40.00",
+        balanceAsOf: new Date("2026-09-23T00:00:00.000Z"),
+        balanceMismatch: true,
+      },
+    });
+    await seed!.statement.create({
+      data: { date: new Date("2019-01-01T00:00:00.000Z"), accountId: unknown.id, uploadedAt: new Date() },
+    });
+    await expect(updateAccount(unknown.id, {
+      name: "Чужой остаток",
+      openingBalance: 1,
+      openingDate: "2026-09-23",
+    })).rejects.toThrow(/начальный остаток/);
+    await updateAccount(unknown.id, {
+      name: `История ${runId}`,
+      openingBalance: 40,
+      openingDate: "2026-09-23",
+    });
+    const unknownKept = await seed!.account.findUniqueOrThrow({ where: { id: unknown.id } });
+    expect(unknownKept.name).toBe(`История ${runId}`);
+    expect(unknownKept.openingBalance.toFixed(2)).toBe("40.00");
+    expect(unknownKept.balanceMismatch).toBe(true);
+
+    const placeholderOwner = await account(`Заготовка якоря ${runId}`, `407028100000${runId.slice(0, 8)}p`);
+    await createStatement({
+      date: "2026-09-23",
+      accountName: placeholderOwner.name,
+      fileName: "anchor-manual.txt",
+      content: "",
+      is1C: false,
+      bindAccountId: null,
+    });
+    await updateAccount(placeholderOwner.id, {
+      name: `Ручной якорь ${runId}`,
+      openingBalance: 8,
+      openingDate: "2026-09-01",
+    });
+    const placeholderAccount = await seed!.account.findUniqueOrThrow({ where: { id: placeholderOwner.id } });
+    expect(placeholderAccount.name).toBe(`Ручной якорь ${runId}`);
+    expect(placeholderAccount.openingBalance.toFixed(2)).toBe("8.00");
+    expect(placeholderAccount.balanceMismatch).toBe(false);
+
+    const category = await seed!.articleCategory.create({ data: { name: `Категория якоря ${runId}` } });
+    const usedArticle = await seed!.article.create({
+      data: { name: `Статья банка ${runId}`, flowType: "EXPENSE", categoryId: category.id },
+    });
+    const flowAccount = await account(`Операции справочника ${runId}`, `407028100000${runId.slice(0, 8)}q`);
+    const bankStatement = await seed!.statement.create({
+      data: {
+        date: new Date("2026-09-23T00:00:00.000Z"),
+        accountId: flowAccount.id,
+        uploadedAt: new Date(),
+        source: "BANK_1C",
+        periodStart: new Date("2026-09-23T00:00:00.000Z"),
+        periodEnd: new Date("2026-09-23T00:00:00.000Z"),
+        contentKey: `directory-${runId}`,
+      },
+    });
+    const referenced = await seed!.cashFlow.create({
+      data: {
+        amount: "5.00",
+        flowType: "EXPENSE",
+        accountId: flowAccount.id,
+        statementId: bankStatement.id,
+        importKey: `dir|2026-09-23|5.00|${number}|4060`,
+        date: new Date("2026-09-23T00:00:00.000Z"),
+        description: "импорт со статьёй",
+        articleId: usedArticle.id,
+      },
+    });
+    await expect(deleteArticle(usedArticle.id)).rejects.toThrow(/используется в операциях/);
+    expect((await seed!.cashFlow.findUniqueOrThrow({ where: { id: referenced.id } })).articleId).toBe(usedArticle.id);
+
+    const parent = await seed!.article.create({
+      data: { name: `Родитель ${runId}`, flowType: "EXPENSE", categoryId: category.id },
+    });
+    await seed!.article.create({
+      data: { name: `Субстатья ${runId}`, flowType: "EXPENSE", categoryId: category.id, parentId: parent.id },
+    });
+    await expect(deleteArticle(parent.id)).rejects.toThrow(/субстать/);
+    const ruleArticle = await seed!.article.create({
+      data: { name: `Правило ${runId}`, flowType: "EXPENSE", categoryId: category.id },
+    });
+    await seed!.autoRule.create({
+      data: { flowType: "EXPENSE", articleId: ruleArticle.id, logicOperator: "AND" },
+    });
+    await expect(deleteArticle(ruleArticle.id)).rejects.toThrow(/автоправилах/);
+    const freeArticle = await seed!.article.create({
+      data: { name: `Свободная ${runId}`, flowType: "EXPENSE", categoryId: category.id },
+    });
+    await deleteArticle(freeArticle.id);
+    expect(await seed!.article.count({ where: { id: freeArticle.id } })).toBe(0);
+
+    const party = await seed!.counterparty.create({ data: { name: `Сторона банка ${runId}`, inn: "7700000093" } });
+    await seed!.cashFlow.update({ where: { id: referenced.id }, data: { counterpartyId: party.id } });
+    await expect(deleteCounterparty(party.id)).rejects.toThrow(/используется/);
+    expect((await seed!.cashFlow.findUniqueOrThrow({ where: { id: referenced.id } })).counterpartyId).toBe(party.id);
+    const freeParty = await seed!.counterparty.create({ data: { name: `Свободный ${runId}` } });
+    await deleteCounterparty(freeParty.id);
+    expect(await seed!.counterparty.count({ where: { id: freeParty.id } })).toBe(0);
+
+    const raceArticle = await seed!.article.create({
+      data: { name: `Гонка статьи ${runId}`, flowType: "EXPENSE", categoryId: category.id },
+    });
+    const raceParty = await seed!.counterparty.create({ data: { name: `Гонка стороны ${runId}` } });
+    const articleFlow = await seed!.cashFlow.create({
+      data: {
+        amount: "6.00",
+        flowType: "EXPENSE",
+        accountId: flowAccount.id,
+        statementId: bankStatement.id,
+        importKey: `race-a|2026-09-23|6.00|${number}|4060`,
+        date: new Date("2026-09-23T00:00:00.000Z"),
+        description: "импорт без статьи",
+      },
+    });
+    const partyFlow = await seed!.cashFlow.create({
+      data: {
+        amount: "7.00",
+        flowType: "EXPENSE",
+        accountId: flowAccount.id,
+        statementId: bankStatement.id,
+        importKey: `race-p|2026-09-23|7.00|${number}|4060`,
+        date: new Date("2026-09-23T00:00:00.000Z"),
+        description: "импорт без контрагента",
+      },
+    });
+    await linkImportedWhileDeleting({
+      table: "Article",
+      directoryId: raceArticle.id,
+      flowId: articleFlow.id,
+      column: "articleId",
+      remove: () => deleteArticle(raceArticle.id),
+      refusal: /используется в операциях/,
+      client: seed!,
+    });
+    await linkImportedWhileDeleting({
+      table: "Counterparty",
+      directoryId: raceParty.id,
+      flowId: partyFlow.id,
+      column: "counterpartyId",
+      remove: () => deleteCounterparty(raceParty.id),
+      refusal: /используется/,
+      client: seed!,
+    });
+    expect((await seed!.cashFlow.findUniqueOrThrow({ where: { id: articleFlow.id } })).articleId).toBe(raceArticle.id);
+    expect((await seed!.cashFlow.findUniqueOrThrow({ where: { id: partyFlow.id } })).counterpartyId).toBe(raceParty.id);
+    expect((await seed!.cashFlow.findUniqueOrThrow({ where: { id: referenced.id } })).articleId).toBe(usedArticle.id);
+    expect((await seed!.cashFlow.findUniqueOrThrow({ where: { id: referenced.id } })).importKey).toContain("dir|");
+
+    const manualOwner = await account(`Ручная правка ${runId}`, `407028100000${runId.slice(0, 8)}r`);
+    const manual = await createCashFlow({
+      date: "2026-09-23",
+      amount: 4,
+      flowType: "EXPENSE",
+      accountName: manualOwner.name,
+      counterpartyName: null,
+      description: "ручная правка",
+      articleName: null,
+      dealId: null,
+      dealName: null,
+    });
+    const edited = await updateManualCashFlow(manual.id, {
+      date: "2026-09-24",
+      amount: 6,
+      flowType: "EXPENSE",
+      accountName: manualOwner.name,
+      counterpartyName: null,
+      description: "ручная после правки",
+      articleName: null,
+      dealId: null,
+      dealName: null,
+    });
+    expect(edited.amount).toBe(6);
+    await deleteCashFlow(edited.id);
+    expect(await seed!.cashFlow.count({ where: { id: edited.id } })).toBe(0);
+  }, 20_000);
 });

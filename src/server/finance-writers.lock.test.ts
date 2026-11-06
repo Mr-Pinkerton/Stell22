@@ -77,6 +77,13 @@ describe("DI-013 finance writers wrap lock + sync inside source TX", () => {
     expect(deleteAccount).not.toContain("statement.deleteMany");
     expectInsideTransaction(deleteAccount, "account.delete");
     expectInsideTransaction(extractFn(finance, "deleteDeal"), "transferGroupIsBankProtected");
+    const updateAccount = extractFn(finance, "updateAccount");
+    expectInsideTransaction(updateAccount, "lockAccountsThenDealsThenBatches");
+    expect(updateAccount).toContain("Нельзя изменить начальный остаток счёта с сохранённой банковской выпиской.");
+    expectInsideTransaction(extractFn(finance, "deleteArticle("), "lockArticles");
+    expectInsideTransaction(extractFn(finance, "deleteArticle("), "article.delete");
+    expectInsideTransaction(extractFn(finance, "deleteCounterparty"), "lockCounterparties");
+    expectInsideTransaction(extractFn(finance, "deleteCounterparty"), "counterparty.delete");
     expectInsideTransaction(extractFn(finance, "createTransfer"), "lockAccountsThenDealsThenBatches");
   });
 
