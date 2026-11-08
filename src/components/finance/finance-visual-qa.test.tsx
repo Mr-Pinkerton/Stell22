@@ -1,5 +1,6 @@
 /** @vitest-environment happy-dom */
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { FinanceCashflowTab } from "@/components/finance/finance-cashflow-tab";
 import { FinanceStatementsTab } from "@/components/finance/finance-statements-tab";
@@ -141,7 +142,8 @@ const statement: FinanceStatementRow = {
 };
 
 describe("statement visual labels", () => {
-  it("shows overlap dates as DD.MM.YYYY and splits holidays from weekends", () => {
+  it("shows overlap dates as DD.MM.YYYY and splits holidays from weekends", async () => {
+    const user = userEvent.setup();
     render(<FinanceStatementsTab statements={[statement]} coverage={[coverage]} asOf="2026-11-06" />);
     const gap = document.querySelector("[data-slot=table-top-gap]");
     expect(gap?.className).toContain("h-[16px]");
@@ -149,8 +151,9 @@ describe("statement visual labels", () => {
     expect(gap?.className).toContain("border-border");
     expect(gap?.textContent).toBe("");
     expect(gap?.nextElementSibling?.querySelector("table")).toBeTruthy();
-    expect(screen.getByText("Пересечение периодов: 03.09.2026")).toBeTruthy();
+    expect(screen.getByText("За 03.09.2026 загружено несколько выписок")).toBeTruthy();
     expect(document.body.textContent).not.toContain("2026-09-03");
+    await user.click(screen.getByRole("button", { name: "Подробнее" }));
     const text = document.body.textContent ?? "";
     expect(text).toContain("Выходные внутри пропусков, покрытие не ставится: 06.09.2026");
     expect(text).toContain("Праздники внутри пропусков, покрытие не ставится: 04.11.2026");

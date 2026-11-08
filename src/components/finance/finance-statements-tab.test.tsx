@@ -54,7 +54,7 @@ describe("statement source labels and actions", () => {
   const rows: FinanceStatementRow[] = [
     statement({
       id: "bank-overlap",
-      accountName: "Банк с пересечением",
+      accountName: "Банк с двумя выписками",
       source: "BANK_1C",
       periodStatus: "VERIFIED",
       operationsCount: 2,
@@ -88,7 +88,8 @@ describe("statement source labels and actions", () => {
     }),
   ];
 
-  it("shows only the source name and keeps coverage in the summary", () => {
+  it("shows only the source name and keeps coverage in the summary", async () => {
+    const user = userEvent.setup();
     render(
       <FinanceStatementsTab
         statements={rows}
@@ -103,21 +104,26 @@ describe("statement source labels and actions", () => {
     expect(screen.getByRole("columnheader", { name: "Источник" })).toBeTruthy();
     expect(screen.queryByRole("columnheader", { name: "Статус" })).toBeNull();
 
-    expect(within(rowByAccount("Банк с пересечением")).getByText("Банк")).toBeTruthy();
+    expect(within(rowByAccount("Банк с двумя выписками")).getByText("Банк")).toBeTruthy();
     expect(within(rowByAccount("Ручная заготовка")).getByText("Вручную")).toBeTruthy();
     expect(within(rowByAccount("Неизвестный источник")).getByText("Источник неизвестен")).toBeTruthy();
 
+    expect(document.body.textContent).toContain(
+      "За даты 03.09.2026, 04.09.2026 загружено по несколько выписок",
+    );
+    expect(document.body.textContent).not.toMatch(/Пересечени/);
+    await user.click(screen.getByRole("button", { name: "Подробнее" }));
     const text = document.body.textContent ?? "";
     expect(text).not.toContain("Банк 1С");
     expect(text).not.toContain("покрытие доказано");
     expect(text).not.toContain("не банковское покрытие");
     expect(text).not.toContain("покрытие неизвестно");
-    expect(text).toContain("Покрыто:");
-    expect(text).toContain("Пропуски рабочих дней:");
+    expect(text).toContain("Проверенный период:");
+    expect(text).toContain("01.09.2026 — 03.09.2026");
+    expect(text).toContain("Нет выписок за рабочие дни: 04.09.2026");
     expect(text).toContain("Выходные внутри пропусков, покрытие не ставится: 06.09.2026");
     expect(text).toContain("Праздники внутри пропусков, покрытие не ставится: 04.11.2026");
-    expect(text).toContain("Пересечение периодов: 03.09.2026, 04.09.2026");
-    expect(text).not.toContain("Пересечение: 03.09.2026");
+    expect(text).not.toMatch(/Пересечени/);
   });
 
   it("keeps upload rightmost and leaves bank rows without delete", async () => {
@@ -143,7 +149,7 @@ describe("statement source labels and actions", () => {
       expect(group?.lastElementChild).toBe(upload);
     }
 
-    const withEye = rowByAccount("Банк с пересечением");
+    const withEye = rowByAccount("Банк с двумя выписками");
     const eye = within(withEye).getByRole("button", { name: "Операции выписки" });
     expect(eye.compareDocumentPosition(uploadButton(withEye)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(withEye).queryByRole("button", { name: "Откатить выписку" })).toBeNull();
