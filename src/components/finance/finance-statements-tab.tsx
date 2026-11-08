@@ -272,7 +272,13 @@ function CoverageNotice({
                 {notice.headline}
               </p>
             )}
-            <p className={notice.tone === "warning" ? "text-foreground" : "text-muted-foreground"}>
+            <p
+              data-slot="coverage-summary-body"
+              className={cn(
+                "line-clamp-2 whitespace-normal",
+                notice.tone === "warning" ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
               {notice.summary}
             </p>
           </div>

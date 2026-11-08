@@ -226,4 +226,99 @@ describe("compact statement coverage notice", () => {
     expect(details?.className).toContain("overflow-y-auto");
     expect(details?.className).toContain("scrollbar-thin-y");
   });
+
+  it.each([1, 5, 30, 100])(
+    "keeps a %s-date summary clamped without dropping dates from the details",
+    async (count) => {
+      const user = userEvent.setup();
+      const dates = isoDates(count);
+      render(
+        <FinanceStatementsTab
+          statements={[]}
+          coverage={[
+            account({
+              accountId: "alfa",
+              accountName: "Расчётный Альфа",
+              status: "VERIFIED",
+              overlappingDates: dates.map((date) => ({ date, statementIds: ["a", "b"] })),
+            }),
+          ]}
+        />,
+      );
+
+      const body = document.querySelector("[data-slot=coverage-summary-body]");
+      expect(body?.className).toContain("line-clamp-2");
+      expect(body?.textContent).toContain(formatDay(dates[0]!));
+      expect(body?.textContent).toContain(formatDay(dates[count - 1]!));
+      if (count === 1) {
+        expect(body?.textContent).toBe(
+          `Расчётный Альфа: За ${formatDay(dates[0]!)} загружено несколько выписок.`,
+        );
+      } else {
+        expect(body?.textContent).toContain("За даты ");
+        expect(body?.textContent).toContain("загружено по несколько выписок");
+      }
+      expect(document.querySelector("[data-coverage-notice]")?.className).not.toContain("overflow-x-auto");
+
+      await user.click(screen.getByRole("button", { name: "Подробнее" }));
+      const details = document.getElementById("statement-coverage-details")?.textContent ?? "";
+      for (const date of dates) expect(details).toContain(formatDay(date));
+    },
+  );
+
+  it("clamps a summary that mixes several issue categories and still lists every date", async () => {
+    const user = userEvent.setup();
+    const shared = isoDates(30);
+    const missing = isoDates(12).map((day) => shift(day, 40));
+    const trailing = isoDates(8).map((day) => shift(day, 80));
+    render(
+      <FinanceStatementsTab
+        statements={[]}
+        coverage={[
+          account({
+            accountId: "alfa",
+            accountName: "Расчётный Альфа",
+            status: "VERIFIED",
+            overlappingDates: shared.map((date) => ({ date, statementIds: ["a", "b"] })),
+            missingDates: missing,
+            trailingBusinessDates: trailing,
+            trailingFrom: trailing[0],
+            trailingTo: trailing[trailing.length - 1],
+          }),
+        ]}
+      />,
+    );
+
+    const body = document.querySelector("[data-slot=coverage-summary-body]");
+    expect(body?.className).toContain("line-clamp-2");
+    expect(body?.textContent).toContain("загружено по несколько выписок");
+    expect(body?.textContent).toContain("Нет выписок за рабочие дни:");
+    expect(body?.textContent).toContain("После последней выписки нет данных за рабочие дни:");
+    const toggle = screen.getByRole("button", { name: "Подробнее" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const row = body?.parentElement?.getBoundingClientRect();
+    const button = toggle.getBoundingClientRect();
+    expect(button.left).toBeGreaterThanOrEqual((row?.left ?? 0) - 1);
+
+    await user.click(toggle);
+    const details = document.getElementById("statement-coverage-details")?.textContent ?? "";
+    for (const date of [...shared, ...missing, ...trailing]) expect(details).toContain(formatDay(date));
+  });
 });
+
+function isoDates(count: number): string[] {
+  return Array.from({ length: count }, (_, index) => shift("2026-01-01", index));
+}
+
+function shift(iso: string, days: number): string {
+  const [year, month, day] = iso.split("-").map(Number);
+  const date = new Date(Date.UTC(year!, month! - 1, day! + days));
+  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(date.getUTCDate()).padStart(2, "0");
+  return `${date.getUTCFullYear()}-${m}-${d}`;
+}
+
+function formatDay(iso: string): string {
+  const [year, month, day] = iso.split("-");
+  return `${day}.${month}.${year}`;
+}
