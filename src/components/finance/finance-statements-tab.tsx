@@ -98,7 +98,7 @@ export function FinanceStatementsTab({
       key: "status",
       header: "Источник",
       render: (row) => (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col items-start gap-1 text-left">
           <Badge variant={row.periodStatus === "VERIFIED" ? "secondary" : "outline"}>
             {row.source === "BANK_1C"
               ? "Банк"

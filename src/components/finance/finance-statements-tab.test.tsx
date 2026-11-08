@@ -175,4 +175,63 @@ describe("statement source labels and actions", () => {
     await user.click(eye);
     expect(onLoadDetail).toHaveBeenCalledWith("bank-overlap");
   });
+
+  it("aligns the source badge, warning, and mismatch to the same left edge", () => {
+    render(
+      <FinanceStatementsTab
+        statements={[
+          ...rows,
+          statement({
+            id: "bank-one-date",
+            accountName: "Банк с одной датой",
+            source: "BANK_1C",
+            periodStatus: "VERIFIED",
+            overlapDates: ["2026-11-02"],
+          }),
+        ]}
+      />,
+    );
+
+    const header = screen.getByRole("columnheader", { name: "Источник" });
+    expect(header.className).toContain("text-center");
+    expect(header.className).not.toContain("text-left");
+
+    function sourceStack(row: HTMLElement) {
+      const stack = within(row).getByText(/^(Банк|Вручную|Источник неизвестен)$/).parentElement;
+      if (!stack) throw new Error("source stack missing");
+      return stack;
+    }
+
+    for (const name of [
+      "Банк с двумя выписками",
+      "Банк без операций",
+      "Ручная заготовка",
+      "Неизвестный источник",
+      "Банк с одной датой",
+    ]) {
+      const stack = sourceStack(rowByAccount(name));
+      expect(stack.className).toContain("flex-col");
+      expect(stack.className).toContain("items-start");
+      expect(stack.className).toContain("text-left");
+      const cell = stack.parentElement;
+      expect(cell?.tagName).toBe("TD");
+      expect(cell?.className).toContain("px-4");
+      expect(cell?.className).toContain("text-center");
+    }
+
+    const several = rowByAccount("Банк с двумя выписками");
+    const severalStack = sourceStack(several);
+    const severalWarning = within(several).getByText(
+      "За даты 03.09.2026, 04.09.2026 загружено по несколько выписок",
+    );
+    expect(severalWarning.parentElement).toBe(severalStack);
+    expect(severalWarning.className).not.toContain("text-center");
+    const mismatch = within(several).getByText("≠");
+    expect(severalStack.contains(mismatch)).toBe(true);
+    expect(mismatch.closest("td")).toBe(severalStack.parentElement);
+
+    const one = rowByAccount("Банк с одной датой");
+    const oneWarning = within(one).getByText("За 02.11.2026 загружено несколько выписок");
+    expect(oneWarning.parentElement).toBe(sourceStack(one));
+  });
 });
