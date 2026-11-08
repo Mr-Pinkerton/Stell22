@@ -149,7 +149,7 @@ describe("statement visual labels", () => {
     expect(gap?.className).toContain("border-border");
     expect(gap?.textContent).toBe("");
     expect(gap?.nextElementSibling?.querySelector("table")).toBeTruthy();
-    expect(screen.getByText("Пересечение: 03.09.2026")).toBeTruthy();
+    expect(screen.getByText("Пересечение периодов: 03.09.2026")).toBeTruthy();
     expect(document.body.textContent).not.toContain("2026-09-03");
     const text = document.body.textContent ?? "";
     expect(text).toContain("Выходные внутри пропусков, покрытие не ставится: 06.09.2026");

@@ -93,7 +93,7 @@ export function FinanceStatementsTab({
     },
     {
       key: "status",
-      header: "Статус",
+      header: "Источник",
       render: (row) => (
         <div className="flex flex-col gap-1">
           <Badge variant={row.periodStatus === "VERIFIED" ? "secondary" : "outline"}>
@@ -102,16 +102,10 @@ export function FinanceStatementsTab({
               : row.source === "MANUAL"
                 ? "Вручную"
                 : "Источник неизвестен"}
-            {" · "}
-            {row.periodStatus === "VERIFIED"
-              ? "покрытие доказано"
-              : row.periodStatus === "PLACEHOLDER"
-                ? "не банковское покрытие"
-                : "покрытие неизвестно"}
           </Badge>
           {(row.overlapDates?.length ?? 0) > 0 && (
             <span className="text-xs text-red-700">
-              Пересечение: {row.overlapDates?.map((day) => formatIsoDate(day)).join(", ")}
+              Пересечение периодов: {row.overlapDates?.map((day) => formatIsoDate(day)).join(", ")}
             </span>
           )}
           {row.mismatch && (
@@ -134,9 +128,9 @@ export function FinanceStatementsTab({
     {
       key: "actions",
       header: "",
-      className: "w-44",
+      className: "min-w-56 whitespace-nowrap",
       render: (row) => (
-        <div className="flex items-center justify-center gap-0.5">
+        <div className="flex w-full items-center justify-end gap-0.5">
           {row.operationsCount > 0 && onLoadDetail && (
             <Tooltip>
               <TooltipTrigger
@@ -146,6 +140,7 @@ export function FinanceStatementsTab({
                     variant="ghost"
                     size="icon"
                     className={iconActionClass}
+                    aria-label="Операции выписки"
                     onClick={() => void openDetail(row.id)}
                   >
                     <Eye />
@@ -153,6 +148,25 @@ export function FinanceStatementsTab({
                 }
               />
               <TooltipContent>Операции выписки</TooltipContent>
+            </Tooltip>
+          )}
+          {onDelete && canDelete(row) && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className={iconDestructiveClass}
+                    aria-label="Откатить выписку"
+                    onClick={() => onDelete(row.id)}
+                  >
+                    <Trash2 />
+                  </Button>
+                }
+              />
+              <TooltipContent>Откатить выписку</TooltipContent>
             </Tooltip>
           )}
           <Button
@@ -164,24 +178,6 @@ export function FinanceStatementsTab({
             <Upload className="size-3.5" />
             {row.uploaded ? "Перезагрузить" : "Загрузить"}
           </Button>
-          {onDelete && canDelete(row) && (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className={iconDestructiveClass}
-                    onClick={() => onDelete(row.id)}
-                  >
-                    <Trash2 />
-                  </Button>
-                }
-              />
-              <TooltipContent>Откатить выписку</TooltipContent>
-            </Tooltip>
-          )}
         </div>
       ),
     },
