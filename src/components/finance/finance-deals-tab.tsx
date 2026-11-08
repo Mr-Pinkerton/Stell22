@@ -38,6 +38,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { tableActionClass } from "@/components/nomenclature/form-shared";
 
 const COL_SPAN = 4;
 const COL_WIDTHS = ["38%", "20%", "18%", "24%"] as const;
@@ -49,9 +50,6 @@ const headClass = tableHeadClass;
 const headLeftClass = cn(headClass, "text-left");
 
 const headCenterClass = cn(headClass, "text-center");
-
-const tableActionClass =
-  "text-muted-foreground hover:text-foreground hover:bg-muted/60 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
 const DETAIL_HEADERS = ["Источник", "Описание", "Сумма"] as const;
 

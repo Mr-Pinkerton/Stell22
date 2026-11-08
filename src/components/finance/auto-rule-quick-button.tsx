@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { tableActionClass } from "@/components/nomenclature/form-shared";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
@@ -25,10 +26,9 @@ export function AutoRuleQuickButton({ hasRule, onClick }: AutoRuleQuickButtonPro
             variant="ghost"
             size="icon"
             className={cn(
-              "size-8 cursor-pointer rounded-lg text-xs font-bold",
-              hasRule
-                ? "bg-violet-500/10 text-violet-700 hover:bg-violet-500/20"
-                : "text-muted-foreground hover:text-foreground hover:bg-muted/60",
+              tableActionClass,
+              "text-xs font-bold",
+              hasRule && "bg-violet-500/10 text-violet-700",
             )}
             aria-label={hasRule ? "Автоправило есть" : "Автоправила нет"}
             onClick={onClick}

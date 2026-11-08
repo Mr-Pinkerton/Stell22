@@ -2,6 +2,8 @@
 // Dates are inclusive calendar days, yyyy-mm-dd, compared in UTC.
 // Coverage is never inferred from CashFlow dates.
 
+import { formatIsoDate } from "@/lib/format";
+
 export type CashFlowSource = "BANK" | "MANUAL";
 
 export function isBankImportedOperation(row: {
@@ -69,14 +71,48 @@ const FIXED_HOLIDAY_MD = new Set([
   "11-04",
 ]);
 
-/** Выходной или фиксированный праздник. Это не покрытие и не рабочий пропуск. */
-export function isPotentialBankReportingGap(iso: string): boolean {
+export type ReportingGapKind = "holiday" | "weekend" | "business";
+
+/**
+ * Праздник важнее совпавшего выходного: 1 января в субботу остаётся праздником.
+ * Это подпись списка, не другое правило покрытия.
+ */
+export function reportingGapKind(iso: string): ReportingGapKind {
   const match = ISO_DAY.exec(iso);
-  if (!match) return false;
+  if (!match) return "business";
+  if (FIXED_HOLIDAY_MD.has(iso.slice(5))) return "holiday";
   const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
   const weekday = date.getUTCDay();
-  if (weekday === 0 || weekday === 6) return true;
-  return FIXED_HOLIDAY_MD.has(iso.slice(5));
+  if (weekday === 0 || weekday === 6) return "weekend";
+  return "business";
+}
+
+/** Выходной или фиксированный праздник. Это не покрытие и не рабочий пропуск. */
+export function isPotentialBankReportingGap(iso: string): boolean {
+  const kind = reportingGapKind(iso);
+  return kind === "holiday" || kind === "weekend";
+}
+
+export function reportingGapLines(dates: readonly string[]): string[] {
+  const weekends: string[] = [];
+  const holidays: string[] = [];
+  for (const iso of dates) {
+    const kind = reportingGapKind(iso);
+    if (kind === "holiday") holidays.push(iso);
+    else if (kind === "weekend") weekends.push(iso);
+  }
+  const lines: string[] = [];
+  if (weekends.length > 0) {
+    lines.push(
+      `Выходные внутри пропусков, покрытие не ставится: ${weekends.map((iso) => formatIsoDate(iso)).join(", ")}`,
+    );
+  }
+  if (holidays.length > 0) {
+    lines.push(
+      `Праздники внутри пропусков, покрытие не ставится: ${holidays.map((iso) => formatIsoDate(iso)).join(", ")}`,
+    );
+  }
+  return lines;
 }
 
 export function eachInclusiveDay(start: string, end: string): string[] {

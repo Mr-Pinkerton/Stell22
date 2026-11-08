@@ -18,6 +18,7 @@ import {
   validateVerifiedPeriod,
   coverAccounts,
 } from "@/lib/bank-statement-integrity";
+import { formatBalanceMismatchMessage } from "@/lib/format";
 import { statementImportKey } from "@/lib/statement-import";
 import {
   retryOnceOnImportUnique,
@@ -484,9 +485,7 @@ export async function importStatementInternal(
       await tx.statement.update({ where: { id: statement.id }, data: { mismatch } });
 
       if (mismatch) {
-        warning =
-          `Расчётный остаток (${expected.toFixed(2)}) не совпал с конечным остатком ` +
-          `выписки (${parsed.closingBalance.toFixed(2)}). Оставлен остаток из выписки.`;
+        warning = formatBalanceMismatchMessage(expected, parsed.closingBalance);
       }
     }
 

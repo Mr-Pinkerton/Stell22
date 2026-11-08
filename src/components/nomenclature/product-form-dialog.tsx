@@ -29,6 +29,7 @@ import type { ProductFormValues } from "@/server/nomenclature";
 import {
   Field,
   FormSection,
+  tableActionClass,
   SORT_LABEL,
   fieldClass,
   formAddButtonClass,
@@ -383,8 +384,8 @@ function ProductFormBody({
                       <Button
                         type="button"
                         variant="ghost"
-                        size="icon-sm"
-                        className="text-muted-foreground hover:text-destructive mb-0.5 size-8"
+                        size="icon"
+                        className={cn(tableActionClass, "mb-0.5")}
                         aria-label="Удалить крепёж"
                         onClick={() =>
                           setFastenerRows((rows) => rows.filter((r) => r.id !== row.id))
@@ -551,8 +552,8 @@ function ProductFormBody({
                             <Button
                               type="button"
                               variant="ghost"
-                              size="icon-sm"
-                              className="text-muted-foreground hover:text-destructive size-8 shrink-0"
+                              size="icon"
+                              className={cn(tableActionClass, "shrink-0")}
                               aria-label="Удалить деталь"
                               onClick={() =>
                                 setDetailRows((rows) => rows.filter((r) => r.id !== row.id))

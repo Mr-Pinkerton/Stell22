@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Plus, Trash2, XIcon } from "lucide-react";
 import { capitalizeFirst, cn } from "@/lib/utils";
 import { FormSubmitButton } from "@/components/form-dialog-shared";
-import { fieldInvalidClass } from "@/components/nomenclature/form-shared";
+import { fieldInvalidClass, tableActionClass } from "@/components/nomenclature/form-shared";
 import { sectionAreaM2 } from "@/lib/batch-stats";
 import { evaluateRailAdd } from "@/lib/rail-draft";
 import { parseDecimalText, parsePositiveIntDraft, type DecimalDraft } from "@/lib/decimal-input";
@@ -821,8 +821,8 @@ function BatchFormBody({
                         <Button
                           type="button"
                           variant="ghost"
-                          size="icon-sm"
-                          className="text-muted-foreground hover:text-destructive size-8 cursor-pointer rounded-lg"
+                          size="icon"
+                          className={tableActionClass}
                           aria-label={deleteBlocked ? "Удаление недоступно" : "Удалить"}
                           disabled={deleteBlocked}
                           title={

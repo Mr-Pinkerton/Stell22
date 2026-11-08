@@ -32,6 +32,14 @@ export function formatMoney(value: number): string {
   return moneyFormatter.format(value);
 }
 
+/** Текст расхождения остатка. Считает уже готовые числа и только показывает их. */
+export function formatBalanceMismatchMessage(expected: number, closingBalance: number): string {
+  return (
+    `Расчётный остаток (${formatMoney(expected)}) не совпал с конечным остатком ` +
+    `выписки (${formatMoney(closingBalance)}). Оставлен остаток из выписки.`
+  );
+}
+
 const moneyDecimalFormatter = new Intl.NumberFormat("ru-RU", {
   style: "currency",
   currency: "RUB",

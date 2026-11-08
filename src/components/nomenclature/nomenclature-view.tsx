@@ -129,7 +129,7 @@ function ActionsCell({
             <Button
               type="button"
               variant="ghost"
-              size="icon-sm"
+              size="icon"
               className={tableActionClass}
               aria-label="Изменить"
               onClick={onEdit}
@@ -148,7 +148,7 @@ function ActionsCell({
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 className={tableActionClass}
                 aria-label="В архив"
                 onClick={onArchive}
@@ -166,7 +166,7 @@ function ActionsCell({
               <Button
                 type="button"
                 variant="ghost"
-                size="icon-sm"
+                size="icon"
                 className={tableActionClass}
                 aria-label="Восстановить"
                 onClick={onRestore}
@@ -185,7 +185,7 @@ function ActionsCell({
             <Button
               type="button"
               variant="ghost"
-              size="icon-sm"
+              size="icon"
               className={tableActionDestructiveClass}
               aria-label="Удалить"
               onClick={onDelete}

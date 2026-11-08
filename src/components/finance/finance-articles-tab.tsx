@@ -7,7 +7,7 @@ import type { FinanceArticle } from "@/mocks/finance-fixtures";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { tableBodyRowClass, tableHeadClass, tableSurfaceCardClass } from "@/components/table-surface";
+import { TableFilterSlot, tableBodyRowClass, tableHeadClass, tableSurfaceCardClass } from "@/components/table-surface";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   TableBody,
@@ -16,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { tableActionClass, tableActionDestructiveClass } from "@/components/nomenclature/form-shared";
 
 const COL_WIDTHS = ["26%", "22%", "10%", "30%", "12%"] as const;
 
@@ -26,12 +27,6 @@ const headClass = tableHeadClass;
 const headLeftClass = cn(headClass, "text-left");
 
 const headCenterClass = cn(headClass, "text-center");
-
-const tableActionClass =
-  "text-muted-foreground hover:text-foreground hover:bg-muted/60 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
-
-const tableActionDestructiveClass =
-  "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
 function ArticleSection({
   title,
@@ -71,6 +66,7 @@ function ArticleSection({
       <h3 className="text-sm font-semibold">{title}</h3>
       <Card className={tableSurfaceCardClass}>
         <CardContent className="p-0">
+          <TableFilterSlot />
           <table className="w-full table-fixed border-collapse text-sm">
             <colgroup>
               {COL_WIDTHS.map((width, i) => (

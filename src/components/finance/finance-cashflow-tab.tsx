@@ -12,7 +12,7 @@ import {
   type FinanceCounterparty,
   type FinanceDeal,
 } from "@/mocks/finance-fixtures";
-import { scrollTableYClass } from "@/lib/scroll-classes";
+import { scrollTableYClass, scrollThinX } from "@/lib/scroll-classes";
 import { formatIsoDate, formatMoney } from "@/lib/format";
 import { findMatchingAutoRule } from "@/lib/auto-rule-match";
 import {
@@ -36,10 +36,11 @@ import {
   AutoRuleFormDialog,
   type AutoRuleFormValues,
 } from "@/components/finance/auto-rule-form-dialog";
+import { tableActionClass } from "@/components/nomenclature/form-shared";
 
 const COL_SPAN = 6;
 
-const COL_WIDTHS = ["14%", "15%", "26%", "15%", "15%", "15%"] as const;
+const COL_WIDTHS = ["14%", "15%", "22%", "15%", "15%", "19%"] as const;
 
 const cellPad = "px-4 first:pl-5 last:pr-5 md:first:pl-6 md:last:pr-6";
 
@@ -55,9 +56,6 @@ const stickyHeadRowClass = tableStickyHeadRowClass;
 
 const stickyDateRowClass =
   "sticky top-[49px] z-10 bg-muted/95 hover:bg-muted/95 border-border/40 backdrop-blur-sm";
-
-const tableActionClass =
-  "text-muted-foreground hover:text-foreground hover:bg-muted/60 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
 function rowHighlightClass(row: FinanceCashFlowRow) {
   return cn(
@@ -126,8 +124,8 @@ export function FinanceCashflowTab({
       <Card className={tableSurfaceCardClass}>
         <CardContent className="p-0">
           <TableFilterSlot filters={filters} />
-          <div className={scrollTableYClass}>
-            <table className="w-full table-fixed border-collapse caption-bottom text-sm">
+          <div className={cn(scrollTableYClass, scrollThinX, "max-w-full")}>
+            <table className="w-full min-w-[68rem] table-fixed border-collapse caption-bottom text-sm">
               <colgroup>
                 {COL_WIDTHS.map((width, i) => (
                   <col key={i} style={{ width }} />
@@ -255,8 +253,8 @@ export function FinanceCashflowTab({
                               />
                             </TableCell>
                           )}
-                          <TableCell className={cn(cellPad, "align-middle text-center")}>
-                            <div className="flex items-center justify-center gap-0.5">
+                          <TableCell className={cn(cellPad, "align-middle whitespace-nowrap text-center")}>
+                            <div className="flex shrink-0 items-center justify-center gap-0.5">
                               {!bank && !row.isTransfer && (
                                 <AutoRuleQuickButton
                                   hasRule={Boolean(matchedRule)}

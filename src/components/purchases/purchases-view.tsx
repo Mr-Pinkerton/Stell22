@@ -42,12 +42,7 @@ import {
   simplePurchaseCommandKey,
   writeOffCommandKey,
 } from "@/lib/purchase-command-request";
-
-const tableActionClass =
-  "text-muted-foreground hover:text-foreground hover:bg-muted/60 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
-
-const tableActionDestructiveClass =
-  "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
+import { tableActionClass, tableActionDestructiveClass } from "@/components/nomenclature/form-shared";
 
 interface PurchasesViewProps {
   initialRows: PurchaseBatchRow[];
@@ -325,7 +320,7 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   className={tableActionClass}
                   aria-label="Изменить"
                   onClick={() => openEdit(row)}
@@ -344,7 +339,7 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
                   <Button
                     type="button"
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
                     className={tableActionClass}
                     aria-label="Списать остаток"
                     disabled={pending}
@@ -383,7 +378,7 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
                   <Button
                     type="button"
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
                     className={tableActionClass}
                     aria-label="Печать этикеток"
                     disabled={pending}
@@ -403,7 +398,7 @@ export function PurchasesView({ initialRows, items, materials }: PurchasesViewPr
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   className={tableActionDestructiveClass}
                   aria-label="Удалить"
                   disabled={pending}

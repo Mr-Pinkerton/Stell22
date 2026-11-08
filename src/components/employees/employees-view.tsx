@@ -25,13 +25,8 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmployeeFormDialog } from "@/components/employees/employee-form-dialog";
 import { PinCell } from "@/components/employees/pin-cell";
+import { tableActionClass, tableActionDestructiveClass } from "@/components/nomenclature/form-shared";
 import type { Employee } from "@/types/domain";
-
-const tableActionClass =
-  "text-muted-foreground hover:text-foreground hover:bg-muted/60 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
-
-const tableActionDestructiveClass =
-  "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
 export function EmployeesView({ initialEmployees }: { initialEmployees: Employee[] }) {
   const [search, setSearch] = useState("");
@@ -164,7 +159,7 @@ export function EmployeesView({ initialEmployees }: { initialEmployees: Employee
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   className={tableActionClass}
                   aria-label="Изменить"
                   onClick={() => openEdit(row)}
@@ -183,7 +178,7 @@ export function EmployeesView({ initialEmployees }: { initialEmployees: Employee
                   <Button
                     type="button"
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
                   className={tableActionClass}
                   aria-label="В архив"
                   disabled={pending}
@@ -202,7 +197,7 @@ export function EmployeesView({ initialEmployees }: { initialEmployees: Employee
                   <Button
                     type="button"
                     variant="ghost"
-                    size="icon-sm"
+                    size="icon"
                   className={tableActionClass}
                   aria-label="Восстановить"
                   disabled={pending}
@@ -222,7 +217,7 @@ export function EmployeesView({ initialEmployees }: { initialEmployees: Employee
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
                   className={tableActionDestructiveClass}
                   aria-label="Удалить"
                   disabled={pending}

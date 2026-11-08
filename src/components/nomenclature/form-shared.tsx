@@ -21,11 +21,11 @@ export const formSelectContentProps = {
   alignItemWithTrigger: false,
 };
 
+/** 32×32 compact icon action. Delete uses the same hover as view, edit and toggle. */
 export const tableActionClass =
-  "text-muted-foreground hover:text-foreground hover:bg-muted/60 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
+  "text-muted-foreground hover:text-foreground hover:bg-muted/60 dark:hover:bg-muted/60 size-8 cursor-pointer rounded-[8px] [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
-export const tableActionDestructiveClass =
-  "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
+export const tableActionDestructiveClass = tableActionClass;
 
 /** Оранжевая кнопка «Добавить …» внутри форм (как в форме партии). */
 export const formAddButtonClass = "h-10 cursor-pointer rounded-xl";

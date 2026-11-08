@@ -20,12 +20,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AccountFormDialog } from "@/components/settings/account-form-dialog";
-
-const tableActionClass =
-  "text-muted-foreground hover:text-foreground hover:bg-muted/60 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
-
-const tableActionDestructiveClass =
-  "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
+import { tableActionClass, tableActionDestructiveClass } from "@/components/nomenclature/form-shared";
 
 interface SettingsAccountsTabProps {
   filters?: React.ReactNode;
@@ -94,7 +89,11 @@ export function SettingsAccountsTab({
             <Tooltip>
               <TooltipTrigger
                 render={
-                  <Badge variant="outline" className="border-red-300 text-red-600">
+                  <Badge
+                    variant="outline"
+                    className="border-red-300 text-red-600"
+                    aria-label="Расхождение остатка"
+                  >
                     ≠
                   </Badge>
                 }
@@ -164,6 +163,7 @@ export function SettingsAccountsTab({
                   variant="ghost"
                   size="icon"
                   className={tableActionClass}
+                  aria-label={row.isPrimary ? "Убрать из основных" : "Сделать основным"}
                   onClick={() =>
                     run(async () => {
                       const nextPrimary = !row.isPrimary;
@@ -191,6 +191,9 @@ export function SettingsAccountsTab({
                   variant="ghost"
                   size="icon"
                   className={tableActionClass}
+                  aria-label={
+                    isAccountConfirmed(row.confirmed) ? "Снять подтверждение" : "Подтвердить счёт"
+                  }
                   onClick={() =>
                     run(async () => {
                       const nextConfirmed = !isAccountConfirmed(row.confirmed);
@@ -220,6 +223,7 @@ export function SettingsAccountsTab({
                   variant="ghost"
                   size="icon"
                   className={tableActionClass}
+                  aria-label="Редактировать"
                   onClick={() => {
                     setEditing(row);
                     setDialogOpen(true);
@@ -239,6 +243,7 @@ export function SettingsAccountsTab({
                   variant="ghost"
                   size="icon"
                   className={tableActionDestructiveClass}
+                  aria-label="Удалить"
                   onClick={() =>
                     run(async () => {
                       await deleteAccount(row.id);
