@@ -17,12 +17,7 @@ import { TableRow } from "@/components/ui/table";
 import type { FinanceCashFlowRow, FinanceStatementRow } from "@/mocks/finance-fixtures";
 import { reportingGapLines, type AccountCoverageSummary } from "@/lib/bank-statement-integrity";
 import { scrollThinY } from "@/lib/scroll-classes";
-
-const iconActionClass =
-  "text-muted-foreground hover:text-foreground hover:bg-muted/60 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
-
-const iconDestructiveClass =
-  "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
+import { tableActionClass, tableActionDestructiveClass } from "@/components/nomenclature/form-shared";
 
 interface FinanceStatementsTabProps {
   filters?: React.ReactNode;
@@ -139,7 +134,7 @@ export function FinanceStatementsTab({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className={iconActionClass}
+                    className={tableActionClass}
                     aria-label="Операции выписки"
                     onClick={() => void openDetail(row.id)}
                   >
@@ -158,7 +153,7 @@ export function FinanceStatementsTab({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className={iconDestructiveClass}
+                    className={tableActionDestructiveClass}
                     aria-label="Откатить выписку"
                     onClick={() => onDelete(row.id)}
                   >

@@ -80,7 +80,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { FormDialog } from "@/components/form-dialog-shared";
-import { Field, fieldClass } from "@/components/nomenclature/form-shared";
+import { Field, fieldClass, tableActionDestructiveClass } from "@/components/nomenclature/form-shared";
 import {
   TableBody,
   TableCell,
@@ -102,9 +102,6 @@ const headLeftClass = cn(headClass, "text-left");
 const headCenterClass = cn(headClass, "text-center");
 
 const stickyHeadRowClass = tableStickyHeadRowClass;
-
-const tableActionDestructiveClass =
-  "text-muted-foreground hover:text-destructive hover:bg-destructive/10 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
 const DETAIL_HEADERS = [
   "Деталь",

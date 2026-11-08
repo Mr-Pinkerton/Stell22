@@ -36,6 +36,7 @@ import {
   AutoRuleFormDialog,
   type AutoRuleFormValues,
 } from "@/components/finance/auto-rule-form-dialog";
+import { tableActionClass } from "@/components/nomenclature/form-shared";
 
 const COL_SPAN = 6;
 
@@ -55,9 +56,6 @@ const stickyHeadRowClass = tableStickyHeadRowClass;
 
 const stickyDateRowClass =
   "sticky top-[49px] z-10 bg-muted/95 hover:bg-muted/95 border-border/40 backdrop-blur-sm";
-
-const tableActionClass =
-  "text-muted-foreground hover:text-foreground hover:bg-muted/60 size-8 cursor-pointer rounded-lg [&_svg]:size-4 [&_svg]:stroke-[1.75]";
 
 function rowHighlightClass(row: FinanceCashFlowRow) {
   return cn(

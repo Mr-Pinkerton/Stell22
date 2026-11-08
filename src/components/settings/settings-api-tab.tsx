@@ -12,6 +12,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { tableActionClass } from "@/components/nomenclature/form-shared";
+import { cn } from "@/lib/utils";
 
 const fieldClass =
   "border-border bg-card hover:border-[#98a2b3] focus-visible:border-ring focus-visible:bg-card h-10 rounded-xl border px-4";
@@ -181,8 +183,8 @@ export function SettingsApiTab() {
                         <Button
                           type="button"
                           variant="ghost"
-                          size="icon-sm"
-                          className="absolute top-1/2 right-1 size-8 -translate-y-1/2"
+                          size="icon"
+                          className={cn(tableActionClass, "absolute top-1/2 right-1 -translate-y-1/2")}
                           onClick={() => toggleVisible(field.key)}
                           aria-label={shown ? "Скрыть" : "Показать"}
                         >

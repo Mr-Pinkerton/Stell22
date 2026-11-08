@@ -8,6 +8,7 @@ import type {
   FinanceCounterparty,
 } from "@/mocks/finance-fixtures";
 import { AutoRuleEditor } from "@/components/finance/auto-rule-editor";
+import { tableActionClass } from "@/components/nomenclature/form-shared";
 import { Button } from "@/components/ui/button";
 
 interface AutoRuleInlineRowProps {
@@ -46,7 +47,7 @@ export function AutoRuleInlineRow({
         type="button"
         variant="ghost"
         size="icon"
-        className="text-muted-foreground hover:text-destructive hover:bg-destructive/10 mt-0.5 size-8 shrink-0 cursor-pointer rounded-lg"
+        className={cn(tableActionClass, "mt-0.5 shrink-0")}
         aria-label="Удалить правило"
         onClick={onDelete}
       >
