@@ -10,7 +10,7 @@ import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { notifyEvent } from "@/server/internal/notification-event";
 import { lockBatches } from "@/server/internal/finance-operations";
-import { canFreezeBatch, D } from "@/lib/cost";
+import { canFreezeBatch, D, persistSortCosts } from "@/lib/cost";
 import {
   blendedCostPerMeterByMaterial,
   blankPhysicalUnitCost,
@@ -326,13 +326,22 @@ function computeBatchSnapshot(
 ): BatchSnapshotData | null {
   const s = buildBatchSnapshots({ batches: [serBatch(batch)], lines: allLines }).get(batch.id);
   if (!s) return null;
+  const volumeSort1 = s.lengthSort1.times(s.areaM2);
+  const volumeSort2 = s.lengthSort2.times(s.areaM2);
+  const persisted = persistSortCosts({
+    totalCost: batch.totalCost.toString(),
+    costSort1: s.costSort1,
+    costSort2: s.costSort2,
+    volumeSort1,
+    volumeSort2,
+  });
   return {
-    volumeSort1: s.lengthSort1.times(s.areaM2).toString(),
-    volumeSort2: s.lengthSort2.times(s.areaM2).toString(),
-    costSort1: s.costSort1.toString(),
-    costSort2: s.costSort2.toString(),
-    pricePerM3Sort1: s.pricePerM3Sort1.toString(),
-    pricePerM3Sort2: s.pricePerM3Sort2.toString(),
+    volumeSort1: volumeSort1.toString(),
+    volumeSort2: volumeSort2.toString(),
+    costSort1: persisted.costSort1.toFixed(2),
+    costSort2: persisted.costSort2.toFixed(2),
+    pricePerM3Sort1: persisted.pricePerM3Sort1.toFixed(2),
+    pricePerM3Sort2: persisted.pricePerM3Sort2.toFixed(2),
   };
 }
 

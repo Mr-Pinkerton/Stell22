@@ -133,6 +133,64 @@ export function distributeBatchCost(input: BatchCostInput): BatchCostResult {
 }
 
 /**
+ * Суммы для колонок Decimal(14,2). Первый сорт округляется до копейки,
+ * второй равен остатку сохранённого C. Нулевой выпуск остаётся нулём.
+ */
+export function persistSortCosts(input: {
+  totalCost: Num;
+  costSort1: Num;
+  costSort2: Num;
+  volumeSort1: Num;
+  volumeSort2: Num;
+}): {
+  costSort1: Decimal;
+  costSort2: Decimal;
+  pricePerM3Sort1: Decimal;
+  pricePerM3Sort2: Decimal;
+} {
+  const persistedC = D(input.totalCost).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const volumeSort1 = D(input.volumeSort1);
+  const volumeSort2 = D(input.volumeSort2);
+  const price = (cost: Decimal, volume: Decimal) =>
+    volume.isZero() ? ZERO : cost.div(volume).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+
+  if (volumeSort1.isZero() && volumeSort2.isZero()) {
+    return {
+      costSort1: ZERO,
+      costSort2: ZERO,
+      pricePerM3Sort1: ZERO,
+      pricePerM3Sort2: ZERO,
+    };
+  }
+  if (volumeSort1.isZero()) {
+    return {
+      costSort1: ZERO,
+      costSort2: persistedC,
+      pricePerM3Sort1: ZERO,
+      pricePerM3Sort2: price(persistedC, volumeSort2),
+    };
+  }
+  if (volumeSort2.isZero()) {
+    return {
+      costSort1: persistedC,
+      costSort2: ZERO,
+      pricePerM3Sort1: price(persistedC, volumeSort1),
+      pricePerM3Sort2: ZERO,
+    };
+  }
+
+  const costSort1 = D(input.costSort1).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const costSort2 = persistedC.minus(costSort1);
+  if (costSort2.isNeg()) throw new Error("persisted sort residual is negative");
+  return {
+    costSort1,
+    costSort2,
+    pricePerM3Sort1: price(costSort1, volumeSort1),
+    pricePerM3Sort2: price(costSort2, volumeSort2),
+  };
+}
+
+/**
  * Себестоимость материала на одну деталь.
  *   Материал = Цена за м³ (по сорту детали) × Длина детали × Сечение
  */
