@@ -207,6 +207,42 @@ describe("allocateWritableDealExtras", () => {
     expect(rows).toEqual([]);
   });
 
+  it("три строки одной партии считаются одним получателем", () => {
+    const rows = extras("20.10", [
+      { id: "b", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+    ]);
+    expect(rows.map((row) => `${row.id}:${row.extra.toFixed(2)}`)).toEqual(["b:20.10"]);
+    expect(sumExtras(rows)).toBe("20.10");
+  });
+
+  it("нулевая доплата на повторах одной партии остаётся нулём", () => {
+    const rows = extras("0.00", [
+      { id: "b", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+    ]);
+    expect(rows.map((row) => row.extra.toFixed(2))).toEqual(["0.00"]);
+  });
+
+  it("порядок повторяющихся строк не меняет доли разных партий", () => {
+    const forward = extras("0.01", [
+      { id: "b", purchaseCost: "10.00" },
+      { id: "a", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+    ]);
+    const backward = extras("0.01", [
+      { id: "a", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+      { id: "a", purchaseCost: "10.00" },
+    ]);
+    expect(forward.map((row) => `${row.id}:${row.extra.toFixed(2)}`)).toEqual(["a:0.00", "b:0.01"]);
+    expect(backward.map((row) => `${row.id}:${row.extra.toFixed(2)}`)).toEqual(
+      forward.map((row) => `${row.id}:${row.extra.toFixed(2)}`),
+    );
+  });
+
   it("две сделки на одну партию складывают доли без потери копейки", () => {
     const first = extras("0.01", [
       { id: "shared", purchaseCost: "10.00" },

@@ -54,20 +54,23 @@ type CashFlowWithAccountConfirmed = {
 function dealParticipants(
   items: readonly { batch: { id: string; purchaseCost: Prisma.Decimal; frozenAt: Date | null } | null }[],
 ): DealExtraParticipant[] {
-  return items.flatMap((item) =>
-    item.batch
-      ? [{
-          id: item.batch.id,
-          purchaseCost: item.batch.purchaseCost.toString(),
-          frozen: item.batch.frozenAt != null,
-        }]
-      : [],
-  );
+  const byId = new Map<string, DealExtraParticipant>();
+  for (const item of items) {
+    if (!item.batch || byId.has(item.batch.id)) continue;
+    byId.set(item.batch.id, {
+      id: item.batch.id,
+      purchaseCost: item.batch.purchaseCost.toString(),
+      frozen: item.batch.frozenAt != null,
+    });
+  }
+  return [...byId.values()];
 }
 
-function money(value: Prisma.Decimal | number | null): ReturnType<typeof D> {
-  if (value == null) return D(0);
-  return D(typeof value === "object" && "toString" in value ? value.toString() : value);
+/** Маркер интерактивной транзакции Prisma. У корневого клиента его нет. */
+const PRISMA_TRANSACTION_ID = Symbol.for("prisma.client.transaction.id");
+
+function isCallerTransaction(db: FinanceDb): boolean {
+  return PRISMA_TRANSACTION_ID in db;
 }
 
 function toCfLite(flows: CashFlowWithAccountConfirmed[]): DealCashFlowLite[] {
@@ -330,7 +333,10 @@ export async function syncBatchTotalCostInternal(
   });
 
   let extra = D(0);
+  const seenDeals = new Set<string>();
   for (const { deal } of items) {
+    if (seenDeals.has(deal.id)) continue;
+    seenDeals.add(deal.id);
     const expense = sumConfirmedExpense(toCfLite(deal.cashFlows));
     const participants = dealParticipants(deal.items);
     const purchaseTotal = participants.reduce((sum, item) => sum.plus(item.purchaseCost), D(0));
@@ -359,6 +365,11 @@ export async function syncDealInternal(
   db: FinanceDb = prisma,
   options?: SyncBatchTotalCostOptions,
 ): Promise<string[]> {
+  // Корневой клиент иначе фиксирует Deal.total до отказа на следующей партии.
+  // Уже открытая транзакция не вкладывается: у неё есть маркер Prisma.
+  if (!isCallerTransaction(db)) {
+    return (db as typeof prisma).$transaction((tx) => syncDealInternal(dealId, tx, options));
+  }
   await lockDealsThenBatches(db, [dealId]);
   const deal = await db.deal.findUnique({
     where: { id: dealId },
@@ -367,20 +378,19 @@ export async function syncDealInternal(
   if (!deal) return [];
 
   const expense = sumConfirmedExpense(toCfLite(deal.cashFlows));
-  const purchaseTotal = deal.items.reduce(
-    (sum, item) => sum.plus(money(item.batch?.purchaseCost ?? null)),
-    D(0),
-  );
-  const dealExtra = dealDeliveryExtra(expense, purchaseTotal);
   const participants = dealParticipants(deal.items);
+  const purchaseTotal = participants.reduce((sum, item) => sum.plus(item.purchaseCost), D(0));
+  const dealExtra = dealDeliveryExtra(expense, purchaseTotal);
   assertDealExtraAllocatable(dealExtra, participants);
   const total = purchaseTotal.plus(dealExtra);
 
   await db.deal.update({ where: { id: dealId }, data: { total: total.toFixed(2) } });
 
   const batchIds: string[] = [];
+  const seenBatches = new Set<string>();
   for (const item of deal.items) {
-    if (!item.batchId) continue;
+    if (!item.batchId || seenBatches.has(item.batchId)) continue;
+    seenBatches.add(item.batchId);
     const skipLateDeltaC = options?.skipLateDeltaCBatchIds?.has(item.batchId) === true;
     const written = await syncBatchTotalCostInternal(item.batchId, db, { skipLateDeltaC });
     if (written) batchIds.push(written);

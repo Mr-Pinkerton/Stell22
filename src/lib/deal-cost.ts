@@ -66,7 +66,12 @@ export interface DealExtraParticipant {
   frozen: boolean;
 }
 
-/** Смешанная сделка с положительной доплатой не имеет безопасного остатка. */
+/**
+ * Смешанная сделка с положительной доплатой не имеет безопасного остатка.
+ * Публичный расход на такую сделку отклоняется целиком, вместе с самой
+ * операцией. До выкладки это нужно явно подтвердить владельцем: прежнее
+ * поведение записывало расход и клало доплату только на открытые партии.
+ */
 export const DEAL_EXTRA_FROZEN_MIX = "DEAL_EXTRA_FROZEN_MIX";
 
 export function assertDealExtraAllocatable(
@@ -83,16 +88,27 @@ export function assertDealExtraAllocatable(
   }
 }
 
+/** Первая строка каждого id. Повторная ссылка на ту же партию не удваивает закупку. */
+export function uniqueDealParticipants(
+  batches: readonly DealExtraParticipant[],
+): DealExtraParticipant[] {
+  const byId = new Map<string, DealExtraParticipant>();
+  for (const batch of batches) {
+    if (!byId.has(batch.id)) byId.set(batch.id, batch);
+  }
+  return [...byId.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
 /**
  * Доли доплаты в копейках. Остаток получает последняя партия в порядке id.
  * Положительная доплата при смеси замороженных и открытых партий отклоняется
- * до расчёта долей.
+ * до расчёта долей. Повторные строки одной партии считаются один раз.
  */
 export function allocateWritableDealExtras(
   dealExtra: Decimal.Value,
   batches: readonly DealExtraParticipant[],
 ): { id: string; extra: Decimal }[] {
-  const ordered = [...batches].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const ordered = uniqueDealParticipants(batches);
   const extra = new Decimal(dealExtra).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
   const purchaseTotal = ordered.reduce(
     (sum, batch) => sum.plus(batch.purchaseCost),

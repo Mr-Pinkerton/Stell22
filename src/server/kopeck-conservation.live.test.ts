@@ -332,6 +332,121 @@ describe.skipIf(!LIVE)("BA-P01 kopeck conservation on disposable PostgreSQL 17",
     expect(await totals(["ko-other", "ko-shared"])).toEqual(["10.00", "10.06"]);
   }, 60_000);
 
+  it("повторяющиеся строки одной партии не теряют и не удваивают доплату", async () => {
+    await makeBatch("ko-dup", "10.00");
+    const duplicated = await seed!.deal.create({ data: { name: "три строки", total: "0.00" } });
+    for (let copy = 0; copy < 3; copy += 1) {
+      await seed!.dealItem.create({ data: { dealId: duplicated.id, batchId: "ko-dup" } });
+    }
+    await seed!.cashFlow.create({
+      data: {
+        amount: "30.10",
+        flowType: "EXPENSE",
+        accountId,
+        dealId: duplicated.id,
+        date: WHEN,
+        isTransfer: false,
+      },
+    });
+    await syncDealInternal(duplicated.id);
+    expect((await seed!.deal.findUniqueOrThrow({ where: { id: duplicated.id } })).total.toFixed(2)).toBe("30.10");
+    expect(await totals(["ko-dup"])).toEqual(["30.10"]);
+    await syncDealInternal(duplicated.id);
+    expect((await seed!.deal.findUniqueOrThrow({ where: { id: duplicated.id } })).total.toFixed(2)).toBe("30.10");
+    expect(await totals(["ko-dup"])).toEqual(["30.10"]);
+
+    await makeBatch("ko-dup-zero", "10.00");
+    const zeroCopies = await seed!.deal.create({ data: { name: "нули строк", total: "0.00" } });
+    for (let copy = 0; copy < 3; copy += 1) {
+      await seed!.dealItem.create({ data: { dealId: zeroCopies.id, batchId: "ko-dup-zero" } });
+    }
+    await seed!.cashFlow.create({
+      data: {
+        amount: "10.00",
+        flowType: "EXPENSE",
+        accountId,
+        dealId: zeroCopies.id,
+        date: WHEN,
+        isTransfer: false,
+      },
+    });
+    await syncDealInternal(zeroCopies.id);
+    expect((await seed!.deal.findUniqueOrThrow({ where: { id: zeroCopies.id } })).total.toFixed(2)).toBe("10.00");
+    expect(await totals(["ko-dup-zero"])).toEqual(["10.00"]);
+
+    await makeBatch("ko-ord-a", "10.00");
+    await makeBatch("ko-ord-b", "10.00");
+    const forward = await seed!.deal.create({ data: { name: "прямой порядок", total: "0.00" } });
+    const backward = await seed!.deal.create({ data: { name: "обратный порядок", total: "0.00" } });
+    for (const batchId of ["ko-ord-b", "ko-ord-a", "ko-ord-b"]) {
+      await seed!.dealItem.create({ data: { dealId: forward.id, batchId } });
+    }
+    for (const batchId of ["ko-ord-a", "ko-ord-b", "ko-ord-a"]) {
+      await seed!.dealItem.create({ data: { dealId: backward.id, batchId } });
+    }
+    for (const dealId of [forward.id, backward.id]) {
+      await seed!.cashFlow.create({
+        data: {
+          amount: "20.01",
+          flowType: "EXPENSE",
+          accountId,
+          dealId,
+          date: WHEN,
+          isTransfer: false,
+        },
+      });
+      await syncDealInternal(dealId);
+    }
+    expect(await totals(["ko-ord-a", "ko-ord-b"])).toEqual(["10.00", "10.02"]);
+    expect((await seed!.deal.findUniqueOrThrow({ where: { id: forward.id } })).total.toFixed(2)).toBe("20.01");
+    expect((await seed!.deal.findUniqueOrThrow({ where: { id: backward.id } })).total.toFixed(2)).toBe("20.01");
+
+    await makeBatch("ko-share-dup", "10.00");
+    const neighbor = await dealWith("сосед без повторов", ["ko-share-dup", "ko-ord-a"], "20.01");
+    const repeated = await seed!.deal.create({ data: { name: "повтор общей", total: "0.00" } });
+    for (let copy = 0; copy < 3; copy += 1) {
+      await seed!.dealItem.create({ data: { dealId: repeated.id, batchId: "ko-share-dup" } });
+    }
+    await seed!.cashFlow.create({
+      data: {
+        amount: "10.05",
+        flowType: "EXPENSE",
+        accountId,
+        dealId: repeated.id,
+        date: WHEN,
+        isTransfer: false,
+      },
+    });
+    await syncDealInternal(neighbor);
+    await syncDealInternal(repeated.id);
+    await syncDealInternal(neighbor);
+    expect((await seed!.deal.findUniqueOrThrow({ where: { id: repeated.id } })).total.toFixed(2)).toBe("10.05");
+    expect(await totals(["ko-share-dup"])).toEqual(["10.06"]);
+    expect(await seed!.setting.findUnique({ where: { key: "production_cost_flow" } })).toBeNull();
+  }, 60_000);
+
+  it("прямой пересчёт без внешней транзакции откатывает отказ целиком", async () => {
+    await makeBatch("ko-good-a", "10.00");
+    await makeBatch("ko-good-b", "10.00");
+    await makeBatch("ko-mix-c", "10.00", true);
+    await dealWith("смесь соседа", ["ko-good-b", "ko-mix-c"], "100.00");
+    const good = await dealWith("хорошая сделка", ["ko-good-a", "ko-good-b"], "30.00");
+    const read = async () => ({
+      good: (await seed!.deal.findUniqueOrThrow({ where: { id: good } })).total.toFixed(2),
+      a: (await totals(["ko-good-a"]))[0],
+      b: (await totals(["ko-good-b"]))[0],
+      c: (await totals(["ko-mix-c"]))[0],
+      events: await seed!.costEvent.count({
+        where: { batchId: { in: ["ko-good-a", "ko-good-b", "ko-mix-c"] } },
+      }),
+    });
+    const before = await read();
+    expect(before).toEqual({ good: "0.00", a: "10.00", b: "10.00", c: "10.00", events: 0 });
+    await expect(syncDealInternal(good)).rejects.toThrow(DEAL_EXTRA_FROZEN_MIX);
+    expect(await read()).toEqual(before);
+    expect(await seed!.setting.findUnique({ where: { key: "production_cost_flow" } })).toBeNull();
+  }, 60_000);
+
   async function snapshot(batchIds: string[], dealId: string) {
     const deal = await seed!.deal.findUniqueOrThrow({ where: { id: dealId } });
     return {
