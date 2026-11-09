@@ -1,38 +1,47 @@
 ---
-description: Правила работы с Git и GitHub
+description: GitHub lifecycle Stell22 — HEAD-owned merge, feature-only push и exact evidence
 alwaysApply: true
 ---
 
 # Git / GitHub
 
-## Репозиторий
-- Origin: `git@github.com:Mr-Pinkerton/Stell22.git`
-- Основная ветка: `main`.
+## Repository и source of truth
+- Origin: git@github.com:Mr-Pinkerton/Stell22.git
+- Canonical branch: main.
+- Перед каждым новым TASK: независимо сверить origin/main SHA и tree с EXPECTED из HEAD TASK, существующие PR, CI и governing docs.
+- Main SHA в исторических документах является checkpoint, не постоянным baseline. При drift — STOP AND REPORT TO HEAD.
 
-## Пуш каждого этапа (обязательно)
-По завершении каждого этапа `roadmap.md`:
-1. Убедиться, что сборка проходит и тесты зелёные.
-2. Отметить выполненные чекбоксы в `roadmap.md`.
-3. Закоммитить и запушить в `origin main`.
+## Изолированные изменения
+- Работать только в разрешённой HEAD ветке и изолированном worktree от точного main.
+- Основной checkout и чужие worktree не переключать, не сбрасывать, не перезаписывать.
+- Никогда не создавать коммиты или push непосредственно в main.
+- Не применять force-push, reset --hard, rebase или overwrite к чужим веткам.
+- Не менять git config. Не коммитить секреты, ключи, .env и боевые данные.
+- Conventional Commits: feat:, fix:, refactor:, test:, docs:, chore:. Указывать конкретный TASK ID в commit/PR.
 
-Коммит этапа делать отдельной веткой/коммитом с понятным сообщением.
+## Явные права из HEAD TASK
+- CODE, COMMIT, PUSH, PR, MERGE, DEPLOY — шесть независимых разрешений.
+- Если HEAD не выдал YES для конкретного действия, оно запрещено.
+- PUSH: YES означает push только в указанную feature branch, не в main; отдельный запрос Owner на каждый разрешённый push не нужен.
+- PR: YES означает открыть PR для review, не merge; нельзя модифицировать посторонние PR.
+- MERGE только после отдельного явного решения HEAD по точному проверенному candidate SHA/tree.
+- DEPLOY — самостоятельный lifecycle, требует отдельного Owner decision и release gates даже после merge.
+- Успешный CI, коммит и PR не являются разрешением merge/deploy.
 
-## Формат сообщений (Conventional Commits)
-- `feat: ...` — новая функциональность
-- `fix: ...` — исправление
-- `refactor: ...`, `chore: ...`, `docs: ...`
-- В теле — ссылка на этап роадмапа, напр. `Этап 3: Справочники`.
+## Report / verification
+После работы вернуть BASE SHA/tree, parent SHA, branch HEAD/tree, changed paths, commits, PR URL, test results и exact-head CI run/conclusion.
+HEAD независимо проверяет GitHub commit/ancestry/diff/CI.
+Изменение кандидата после review требует повторной проверки затронутого scope.
+Не создавать ZIP/evidence bundles для данных, доступных напрямую в GitHub/CI.
+Для genuinely local-only evidence использовать постоянный HEAD ARTIFACT ROOT, заданный в HEAD TASK.
 
-Пример:
-```
-feat: закупки — форма добавления партии
+## Документы и чекбоксы
+- Старый roadmap.md — исторический план. Не обновлять его чекбоксы автоматически.
+- Audit/remediation статусы и чекбоксы не закрывать по одному факту кода, PR или green CI.
+- Любой документальный scope регулируется audit-truth.mdc и отдельным HEAD TASK.
 
-Этап 3: Справочники (Закупки). Пакеты/поштучно, расчёт объёма.
-```
-
-## Безопасность
-- НИКОГДА не менять git config.
-- Не коммитить секреты (`.env`, ключи API) — только `.env.example`.
-- Не использовать `push --force` в `main`.
-- Промежуточные коммиты внутри этапа допустимы; пуш — минимум на каждом
-  завершённом этапе.
+## Production freeze
+До восстановления Beget, нового release preflight и явного разрешения Owner — NO DEPLOY.
+Нет production migrations/backfill/data writes, activation или marketplace sync.
+production_cost_flow OFF. FREEZE_PASS_FORBIDDEN сохраняется.
+Merge в main не равен production release.

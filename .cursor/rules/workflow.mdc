@@ -1,34 +1,47 @@
 ---
-description: Базовый рабочий процесс проекта (vibecode)
+description: Актуальный bounded workflow проекта Stell22; старый roadmap.md не является командой
 alwaysApply: true
 ---
 
-# Рабочий процесс
+# Рабочий процесс Stell22
 
-## Источники истины (читать перед задачей)
-- **Аудит и drift vs ТЗ:** `audit/00-audit-principles.md` — текущая модель важнее старого ТЗ.
-- Логика и интерфейс (исторический spec): `Описание проекта v2.txt`
-- Модель данных: `prisma/schema.prisma`
-- План работ: `roadmap.md` — двигаемся строго по этапам сверху вниз.
+## Идентичность и роли
+- Stell22 — ERP/MES для производства стеллажей. Не переносить сущности, BOM, учёт или задачи из Woodveri и других проектов.
+- Owner определяет бизнес-семантику, продуктовые решения и разрешает production actions.
+- HEAD управляет архитектурой, sequencing, техническими решениями, scope, независимой проверкой и Git lifecycle.
+- Cursor/Grok — bounded executor: выполняет только конкретный HEAD TASK, не открывает самостоятельно следующий этап, не меняет архитектуру или roadmap.
 
-## Главная цель
-Точный и непротиворечивый расчёт **себестоимости изделия** в **фактически
-выбранной** модели. Новое изменение расчёта сверять с текущим кодом/инвариантами
-и с разделом «МОДЕЛЬ СЕБЕСТОИМОСТИ» в v2 как с гипотезой, не как с приказом
-откатить drift. Расхождение с v2 — не автобаг (см. audit-truth).
+## Источники истины и приоритет
+1. Актуальные явные решения Owner и конкретный HEAD TASK с точными разрешениями.
+2. Проверенный GitHub main: текущий код, тесты и committed canonical documentation.
+3. PROJECT.md, START-HERE.md, audit/AUDIT-INDEX.md, audit/00-audit-principles.md, audit/00-invariants.md.
+4. Актуальные audit/09.31-remediation-roadmap.md, audit/09.32-owner-decisions.md, audit/09.33-release-safety-gates.md и audit/09.35-remediation-checklist.md для текущего remediation.
+5. Старые ТЗ, roadmap.md и ранние audit docs — исторический контекст, а не автоматические задания.
 
-## Не ломать сделанное
-- Перед изменением общего кода проверь, кто его использует.
-- Не меняй уже реализованную и работающую логику без явной причины.
-- После изменений запускай линтер и сборку; не оставляй ошибок типов.
-- Если правка затрагивает расчёт себестоимости — перепроверь снапшоты и
-  пересчёты (предварительный/финальный).
+При противоречиях — STOP AND REPORT TO HEAD. Не считать прошлый checkpoint из PROJECT.md разрешением на production. Drift относительно v2 не является доказанным багом (см. audit-truth.mdc).
 
-## Прогресс по этапам
-- Обновляй чекбоксы в `roadmap.md` по мере выполнения.
-- Завершение этапа = код работает + тесты зелёные + коммит и пуш
-  (см. правило git-github).
+## Выполнение задания
+- Перед задачей проверить точные main SHA/tree, нужные governing docs, ветку и worktree. При drift остановиться.
+- Только одна bounded задача на разрешённый workstream. Scope, acceptance, permissions и STOP conditions задаёт HEAD.
+- Работать в новой изолированной ветке/worktree, не трогать основные checkout, чужие процессы, порты и базы.
+- Проверить, кто использует изменяемый код; не менять существующую логику ради старого spec.
+- При существенной архитектурной или бизнес-развилке — STOP AND REPORT TO HEAD. Не требовать отдельного Owner «ок» на рутинные технические решения, уже разрешённые HEAD.
+- Тесты, типы, lint, build и CI проверять в объёме HEAD TASK; ошибки и ограничения явно отражать в отчёте.
+
+## Прогресс и закрытие
+- Cursor REPORT не означает HEAD ACCEPTED. Коммит, push в feature branch и PR не означают merge.
+- Cursor никогда не мержит и не деплоит без отдельной точной HEAD authorization.
+- Не отмечать roadmap.md или audit/09.35 чекбоксы автоматически по факту реализации/PR/CI.
+- Изменения статусов canonical audit документов делать только по отдельному scope; соблюдать audit-truth.mdc и синхронизацию audit/AUDIT-INDEX.md.
+- Только HEAD открывает следующий remediation package после закрытия текущего lifecycle.
+
+## Действующий production freeze
+- Beget deploy freeze до восстановления хостинга, отдельного release preflight и явного решения Owner.
+- NO production deploy, migrations, backfill, data writes или проверочного production read без отдельного разрешения.
+- NO production Ozon/Wildberries sync на любом пути.
+- production_cost_flow OFF. FREEZE_PASS_FORBIDDEN действует.
+- Ledger не authoritative, OPENING_BALANCE не создавать, paper removal запрещён.
+- Разрешены только изолированные локальные/CI проверки с синтетическими данными и disposable PG17 по установленным правилам.
 
 ## Стек
-Next.js + TypeScript + PostgreSQL (Prisma). Терминал — онлайн-only.
-Внешние интеграции (Ozon/WB, банк, принтер) на старте — заглушки.
+Next.js + TypeScript + PostgreSQL (Prisma). Фактический статус внешних интеграций определять по текущему коду и audit, а не по историческому утверждению «всё заглушки».
