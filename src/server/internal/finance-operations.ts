@@ -3,7 +3,7 @@ import { prisma } from "@/server/db";
 import { D } from "@/lib/cost";
 import { allocatePersistenceShares, q6 } from "@/lib/cost-foundation";
 import {
-  batchExtraShare,
+  allocateWritableDealExtras,
   batchTotalCost,
   dealDeliveryExtra,
   sumConfirmedExpense,
@@ -18,11 +18,6 @@ import {
 import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 
 export type FinanceDb = Prisma.TransactionClient | typeof prisma;
-
-function num(value: Prisma.Decimal | number | null): number {
-  if (value == null) return 0;
-  return typeof value === "object" && "toNumber" in value ? value.toNumber() : Number(value);
-}
 
 export async function applyAutoRulesInternal(cf: {
   flowType: FinanceAutoRule["flowType"];
@@ -54,10 +49,15 @@ type CashFlowWithAccountConfirmed = {
   isTransfer: boolean;
   account: { confirmed: boolean };
 };
+function money(value: Prisma.Decimal | number | null): ReturnType<typeof D> {
+  if (value == null) return D(0);
+  return D(typeof value === "object" && "toString" in value ? value.toString() : value);
+}
+
 function toCfLite(flows: CashFlowWithAccountConfirmed[]): DealCashFlowLite[] {
   return flows.map((c) => ({
     flowType: c.flowType,
-    amount: num(c.amount),
+    amount: c.amount.toString(),
     accountConfirmed: c.account.confirmed,
     isTransfer: c.isTransfer,
   }));
@@ -316,25 +316,29 @@ export async function syncBatchTotalCostInternal(
   let extra = D(0);
   for (const { deal } of items) {
     const expense = sumConfirmedExpense(toCfLite(deal.cashFlows));
-    const purchaseTotal = deal.items.reduce(
-      (s, i) => s.plus(D(num(i.batch?.purchaseCost ?? null))),
-      D(0),
+    const participants = deal.items.flatMap((item) =>
+      item.batch
+        ? [{
+            id: item.batch.id,
+            purchaseCost: item.batch.purchaseCost.toString(),
+            frozen: item.batch.frozenAt != null,
+          }]
+        : [],
     );
-    const dealExtra = dealDeliveryExtra(expense, purchaseTotal);
-    extra = extra.plus(
-      batchExtraShare(dealExtra, num(batch.purchaseCost), purchaseTotal, deal.items.length),
-    );
+    const purchaseTotal = participants.reduce((sum, item) => sum.plus(item.purchaseCost), D(0));
+    const shares = allocateWritableDealExtras(dealDeliveryExtra(expense, purchaseTotal), participants);
+    extra = extra.plus(shares.find((share) => share.id === batchId)?.extra ?? 0);
   }
 
   const cOld = D(batch.totalCost.toString());
-  const newTotal = batchTotalCost(num(batch.purchaseCost), extra);
+  const persistedTotal = batchTotalCost(batch.purchaseCost.toString(), extra).toDecimalPlaces(2);
   const written = await db.batch.updateMany({
     where: { id: batchId, frozenAt: null },
-    data: { totalCost: newTotal.toFixed(2) },
+    data: { totalCost: persistedTotal.toFixed(2) },
   });
   if (written.count === 0) return null;
   if (!options?.skipLateDeltaC && (await isCostFlowActive(db))) {
-    await applyActiveLateDeltaC(db, batchId, cOld, D(newTotal));
+    await applyActiveLateDeltaC(db, batchId, cOld, D(persistedTotal.toFixed(2)));
   }
   return batchId;
 }
@@ -352,9 +356,12 @@ export async function syncDealInternal(
   });
   if (!deal) return [];
 
-  const expense = sumConfirmedExpense(toCfLite(deal.cashFlows)).toNumber();
-  const purchaseTotal = deal.items.reduce((s, i) => s + num(i.batch?.purchaseCost ?? null), 0);
-  const total = purchaseTotal + Math.max(0, expense - purchaseTotal);
+  const expense = sumConfirmedExpense(toCfLite(deal.cashFlows));
+  const purchaseTotal = deal.items.reduce(
+    (sum, item) => sum.plus(money(item.batch?.purchaseCost ?? null)),
+    D(0),
+  );
+  const total = purchaseTotal.plus(dealDeliveryExtra(expense, purchaseTotal));
 
   await db.deal.update({ where: { id: dealId }, data: { total: total.toFixed(2) } });
 

@@ -60,6 +60,61 @@ export function batchExtraShare(
   return new Decimal(dealExtra).times(weight);
 }
 
+export interface DealExtraParticipant {
+  id: string;
+  purchaseCost: Decimal.Value;
+  frozen: boolean;
+}
+
+/**
+ * Доли доплаты в копейках. Все записываемые партии получают остаток на
+ * последнюю в порядке id. Замороженная партия не переписывается и не
+ * отдаёт свою уже сохранённую долю другой партии: для смешанного состава
+ * записываемая доля округляется отдельно.
+ */
+export function allocateWritableDealExtras(
+  dealExtra: Decimal.Value,
+  batches: readonly DealExtraParticipant[],
+): { id: string; extra: Decimal }[] {
+  const ordered = [...batches].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const extra = new Decimal(dealExtra).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const purchaseTotal = ordered.reduce(
+    (sum, batch) => sum.plus(batch.purchaseCost),
+    new Decimal(0),
+  );
+  const count = ordered.length;
+  if (ordered.some((batch) => batch.frozen)) {
+    return ordered
+      .filter((batch) => !batch.frozen)
+      .map((batch) => ({
+        id: batch.id,
+        extra: batchExtraShare(extra, batch.purchaseCost, purchaseTotal, count).toDecimalPlaces(
+          2,
+          Decimal.ROUND_HALF_UP,
+        ),
+      }));
+  }
+
+  const shares: { id: string; extra: Decimal }[] = [];
+  let allocated = new Decimal(0);
+  for (let i = 0; i < ordered.length; i += 1) {
+    const batch = ordered[i];
+    if (i === ordered.length - 1) {
+      const last = extra.minus(allocated);
+      if (last.isNeg()) throw new Error("deal extra allocation residual is negative");
+      shares.push({ id: batch.id, extra: last });
+      break;
+    }
+    const weight = purchaseTotal.gt(0)
+      ? new Decimal(batch.purchaseCost).div(purchaseTotal)
+      : new Decimal(1).div(count);
+    const share = extra.times(weight).toDecimalPlaces(2, Decimal.ROUND_DOWN);
+    shares.push({ id: batch.id, extra: share });
+    allocated = allocated.plus(share);
+  }
+  return shares;
+}
+
 /** «Стоимость общая» партии = закупочная + сумма долей доставки из её сделок. */
 export function batchTotalCost(
   batchPurchase: Decimal.Value,
