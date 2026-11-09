@@ -192,7 +192,7 @@ describe("per-account statement coverage", () => {
     const lines = reportingGapLines(["2026-09-06", "2026-11-04", "2028-01-01"]);
     const holidayLine = lines.find((line) => line.includes("04.11.2026"));
     const weekendLine = lines.find((line) => line.includes("06.09.2026"));
-    expect(holidayLine).toMatch(/Праздник/);
+    expect(holidayLine).toMatch(/Праздничные дни/);
     expect(holidayLine).not.toMatch(/Выходн/);
     expect(holidayLine).toContain("01.01.2028");
     expect(weekendLine).toMatch(/Выходн/);
@@ -212,6 +212,48 @@ describe("per-account statement coverage", () => {
     expect(row?.overlappingDates.map((day) => day.date)).toEqual(["2026-09-02", "2026-09-03"]);
     expect(row?.coveredRanges).toEqual([{ start: "2026-09-01", end: "2026-09-01" }]);
     expect(row?.missingDates).toEqual([]);
+  });
+});
+
+describe("reporting gap presentation lines", () => {
+  const weekend = "Выходные дни (не считаются пропусками выписок):";
+  const holiday = "Праздничные дни (не считаются пропусками выписок):";
+
+  it("returns no lines for an empty date list", () => {
+    expect(reportingGapLines([])).toEqual([]);
+  });
+
+  it("labels one weekend and keeps the classification", () => {
+    expect(reportingGapKind("2026-09-06")).toBe("weekend");
+    expect(isPotentialBankReportingGap("2026-09-06")).toBe(true);
+    expect(reportingGapLines(["2026-09-06"])).toEqual([`${weekend} 06.09.2026`]);
+  });
+
+  it("labels several weekends in the given order", () => {
+    expect(reportingGapLines(["2026-09-06", "2026-09-05"])).toEqual([
+      `${weekend} 06.09.2026, 05.09.2026`,
+    ]);
+  });
+
+  it("labels one holiday", () => {
+    expect(reportingGapKind("2026-11-04")).toBe("holiday");
+    expect(reportingGapLines(["2026-11-04"])).toEqual([`${holiday} 04.11.2026`]);
+  });
+
+  it("labels holidays from different years in the given order", () => {
+    expect(reportingGapKind("2026-01-01")).toBe("holiday");
+    expect(reportingGapKind("2028-01-01")).toBe("holiday");
+    expect(reportingGapLines(["2028-01-01", "2026-11-04"])).toEqual([
+      `${holiday} 01.01.2028, 04.11.2026`,
+    ]);
+  });
+
+  it("keeps weekend and holiday lines separate and does not relabel a business day", () => {
+    expect(reportingGapKind("2026-09-02")).toBe("business");
+    expect(reportingGapLines(["2026-09-02", "2026-09-06", "2026-11-04", "2028-01-01"])).toEqual([
+      `${weekend} 06.09.2026`,
+      `${holiday} 04.11.2026, 01.01.2028`,
+    ]);
   });
 });
 

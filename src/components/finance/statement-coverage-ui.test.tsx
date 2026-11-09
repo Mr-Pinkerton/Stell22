@@ -128,8 +128,8 @@ describe("compact statement coverage notice", () => {
     await user.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("Период выписок пока не подтверждён")).toBeTruthy();
-    expect(screen.getByText("Выходные внутри пропусков, покрытие не ставится: 07.11.2026, 08.11.2026")).toBeTruthy();
-    expect(screen.getByText("Праздники внутри пропусков, покрытие не ставится: 04.11.2026")).toBeTruthy();
+    expect(screen.getByText("Выходные дни (не считаются пропусками выписок): 07.11.2026, 08.11.2026")).toBeTruthy();
+    expect(screen.getByText("Праздничные дни (не считаются пропусками выписок): 04.11.2026")).toBeTruthy();
     expect(document.body.textContent).not.toContain("VERIFIED");
     expect(document.body.textContent).not.toContain("UNKNOWN");
     expect(document.body.textContent).not.toMatch(/Пересечени/);

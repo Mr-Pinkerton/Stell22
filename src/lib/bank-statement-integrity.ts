@@ -104,12 +104,12 @@ export function reportingGapLines(dates: readonly string[]): string[] {
   const lines: string[] = [];
   if (weekends.length > 0) {
     lines.push(
-      `Выходные внутри пропусков, покрытие не ставится: ${weekends.map((iso) => formatIsoDate(iso)).join(", ")}`,
+      `Выходные дни (не считаются пропусками выписок): ${weekends.map((iso) => formatIsoDate(iso)).join(", ")}`,
     );
   }
   if (holidays.length > 0) {
     lines.push(
-      `Праздники внутри пропусков, покрытие не ставится: ${holidays.map((iso) => formatIsoDate(iso)).join(", ")}`,
+      `Праздничные дни (не считаются пропусками выписок): ${holidays.map((iso) => formatIsoDate(iso)).join(", ")}`,
     );
   }
   return lines;

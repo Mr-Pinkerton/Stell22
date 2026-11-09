@@ -121,8 +121,8 @@ describe("statement source labels and actions", () => {
     expect(text).toContain("Проверенный период:");
     expect(text).toContain("01.09.2026 — 03.09.2026");
     expect(text).toContain("Нет выписок за рабочие дни: 04.09.2026");
-    expect(text).toContain("Выходные внутри пропусков, покрытие не ставится: 06.09.2026");
-    expect(text).toContain("Праздники внутри пропусков, покрытие не ставится: 04.11.2026");
+    expect(text).toContain("Выходные дни (не считаются пропусками выписок): 06.09.2026");
+    expect(text).toContain("Праздничные дни (не считаются пропусками выписок): 04.11.2026");
     expect(text).not.toMatch(/Пересечени/);
   });
 
