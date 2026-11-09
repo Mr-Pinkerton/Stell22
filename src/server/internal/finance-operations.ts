@@ -4,10 +4,12 @@ import { D } from "@/lib/cost";
 import { allocatePersistenceShares, q6 } from "@/lib/cost-foundation";
 import {
   allocateWritableDealExtras,
+  assertDealExtraAllocatable,
   batchTotalCost,
   dealDeliveryExtra,
   sumConfirmedExpense,
   type DealCashFlowLite,
+  type DealExtraParticipant,
 } from "@/lib/deal-cost";
 import type { FinanceAutoRule } from "@/mocks/finance-fixtures";
 import type { FlowType } from "@/types/domain";
@@ -49,6 +51,20 @@ type CashFlowWithAccountConfirmed = {
   isTransfer: boolean;
   account: { confirmed: boolean };
 };
+function dealParticipants(
+  items: readonly { batch: { id: string; purchaseCost: Prisma.Decimal; frozenAt: Date | null } | null }[],
+): DealExtraParticipant[] {
+  return items.flatMap((item) =>
+    item.batch
+      ? [{
+          id: item.batch.id,
+          purchaseCost: item.batch.purchaseCost.toString(),
+          frozen: item.batch.frozenAt != null,
+        }]
+      : [],
+  );
+}
+
 function money(value: Prisma.Decimal | number | null): ReturnType<typeof D> {
   if (value == null) return D(0);
   return D(typeof value === "object" && "toString" in value ? value.toString() : value);
@@ -316,15 +332,7 @@ export async function syncBatchTotalCostInternal(
   let extra = D(0);
   for (const { deal } of items) {
     const expense = sumConfirmedExpense(toCfLite(deal.cashFlows));
-    const participants = deal.items.flatMap((item) =>
-      item.batch
-        ? [{
-            id: item.batch.id,
-            purchaseCost: item.batch.purchaseCost.toString(),
-            frozen: item.batch.frozenAt != null,
-          }]
-        : [],
-    );
+    const participants = dealParticipants(deal.items);
     const purchaseTotal = participants.reduce((sum, item) => sum.plus(item.purchaseCost), D(0));
     const shares = allocateWritableDealExtras(dealDeliveryExtra(expense, purchaseTotal), participants);
     extra = extra.plus(shares.find((share) => share.id === batchId)?.extra ?? 0);
@@ -338,7 +346,9 @@ export async function syncBatchTotalCostInternal(
   });
   if (written.count === 0) return null;
   if (!options?.skipLateDeltaC && (await isCostFlowActive(db))) {
-    await applyActiveLateDeltaC(db, batchId, cOld, D(persistedTotal.toFixed(2)));
+    // Gate stays off. persistedTotal is already the stored kopeck total.
+    // skipLateDeltaC is unchanged. This is not the BA-P02-001 pool fix.
+    await applyActiveLateDeltaC(db, batchId, cOld, persistedTotal);
   }
   return batchId;
 }
@@ -361,7 +371,10 @@ export async function syncDealInternal(
     (sum, item) => sum.plus(money(item.batch?.purchaseCost ?? null)),
     D(0),
   );
-  const total = purchaseTotal.plus(dealDeliveryExtra(expense, purchaseTotal));
+  const dealExtra = dealDeliveryExtra(expense, purchaseTotal);
+  const participants = dealParticipants(deal.items);
+  assertDealExtraAllocatable(dealExtra, participants);
+  const total = purchaseTotal.plus(dealExtra);
 
   await db.deal.update({ where: { id: dealId }, data: { total: total.toFixed(2) } });
 

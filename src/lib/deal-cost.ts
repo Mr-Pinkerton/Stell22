@@ -66,11 +66,27 @@ export interface DealExtraParticipant {
   frozen: boolean;
 }
 
+/** Смешанная сделка с положительной доплатой не имеет безопасного остатка. */
+export const DEAL_EXTRA_FROZEN_MIX = "DEAL_EXTRA_FROZEN_MIX";
+
+export function assertDealExtraAllocatable(
+  dealExtra: Decimal.Value,
+  batches: readonly DealExtraParticipant[],
+): void {
+  const extra = new Decimal(dealExtra).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const hasFrozen = batches.some((batch) => batch.frozen);
+  const hasWritable = batches.some((batch) => !batch.frozen);
+  if (extra.gt(0) && hasFrozen && hasWritable) {
+    throw new Error(
+      `${DEAL_EXTRA_FROZEN_MIX}: доплата сделки не распределяется, пока в ней есть и замороженная, и открытая партия`,
+    );
+  }
+}
+
 /**
- * Доли доплаты в копейках. Все записываемые партии получают остаток на
- * последнюю в порядке id. Замороженная партия не переписывается и не
- * отдаёт свою уже сохранённую долю другой партии: для смешанного состава
- * записываемая доля округляется отдельно.
+ * Доли доплаты в копейках. Остаток получает последняя партия в порядке id.
+ * Положительная доплата при смеси замороженных и открытых партий отклоняется
+ * до расчёта долей.
  */
 export function allocateWritableDealExtras(
   dealExtra: Decimal.Value,
@@ -83,6 +99,7 @@ export function allocateWritableDealExtras(
     new Decimal(0),
   );
   const count = ordered.length;
+  assertDealExtraAllocatable(extra, ordered);
   if (ordered.some((batch) => batch.frozen)) {
     return ordered
       .filter((batch) => !batch.frozen)

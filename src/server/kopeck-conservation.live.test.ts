@@ -33,8 +33,9 @@ vi.mock("@/server/db", async () => {
   return { prisma };
 });
 
+import { DEAL_EXTRA_FROZEN_MIX } from "@/lib/deal-cost";
 import { maybeFreezeBatch, recalcBatchCosts } from "@/server/internal/cost";
-import { syncDealInternal } from "@/server/internal/finance-operations";
+import { syncBatchTotalCostInternal, syncDealInternal } from "@/server/internal/finance-operations";
 
 const LIVE = process.env.P1_DISPOSABLE_LIVE === "1";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -329,12 +330,42 @@ describe.skipIf(!LIVE)("BA-P01 kopeck conservation on disposable PostgreSQL 17",
     await syncDealInternal(second);
     await syncDealInternal(first);
     expect(await totals(["ko-other", "ko-shared"])).toEqual(["10.00", "10.06"]);
+  }, 60_000);
 
+  async function snapshot(batchIds: string[], dealId: string) {
+    const deal = await seed!.deal.findUniqueOrThrow({ where: { id: dealId } });
+    return {
+      batches: await totals(batchIds),
+      deal: deal.total.toFixed(2),
+      costs: await seed!.batchCost.count({ where: { batchId: { in: batchIds } } }),
+      events: await seed!.costEvent.count({ where: { batchId: { in: batchIds } } }),
+    };
+  }
+
+  it("отклоняет положительную доплату смешанной сделки до записи", async () => {
     await makeBatch("ko-frozen", "10.00", true);
     await makeBatch("ko-open", "10.00");
     const mixed = await dealWith("смесь", ["ko-open", "ko-frozen"], "120.00");
-    await syncDealInternal(mixed);
-    expect(await totals(["ko-frozen", "ko-open"])).toEqual(["10.00", "60.00"]);
+    const before = await snapshot(["ko-frozen", "ko-open"], mixed);
+    await expect(syncDealInternal(mixed)).rejects.toThrow(DEAL_EXTRA_FROZEN_MIX);
+    expect(await snapshot(["ko-frozen", "ko-open"], mixed)).toEqual(before);
+    await expect(syncBatchTotalCostInternal("ko-open")).rejects.toThrow(DEAL_EXTRA_FROZEN_MIX);
+    await expect(syncBatchTotalCostInternal("ko-frozen")).resolves.toBeNull();
+    expect(await snapshot(["ko-frozen", "ko-open"], mixed)).toEqual(before);
+
+    await makeBatch("ko-frozen-zero", "10.00", true);
+    await makeBatch("ko-open-zero", "10.00");
+    const zero = await dealWith("смесь без доплаты", ["ko-open-zero", "ko-frozen-zero"], "20.00");
+    await syncDealInternal(zero);
+    expect(await totals(["ko-frozen-zero", "ko-open-zero"])).toEqual(["10.00", "10.00"]);
+    expect((await seed!.deal.findUniqueOrThrow({ where: { id: zero } })).total.toFixed(2)).toBe("20.00");
+
+    await makeBatch("ko-frozen-a", "10.00", true);
+    await makeBatch("ko-frozen-b", "10.00", true);
+    const frozenOnly = await dealWith("только замороженные", ["ko-frozen-b", "ko-frozen-a"], "120.00");
+    await syncDealInternal(frozenOnly);
+    expect(await totals(["ko-frozen-a", "ko-frozen-b"])).toEqual(["10.00", "10.00"]);
+    expect(await seed!.setting.findUnique({ where: { key: "production_cost_flow" } })).toBeNull();
   }, 60_000);
 
   async function produced(batchId: string, lines: { sort: "SORT1" | "SORT2"; quantity: number }[]) {

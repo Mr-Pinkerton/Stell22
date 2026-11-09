@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { Decimal } from "decimal.js";
 import {
   allocateWritableDealExtras,
+  assertDealExtraAllocatable,
+  DEAL_EXTRA_FROZEN_MIX,
   batchExtraShare,
   batchTotalCost,
   dealDeliveryExtra,
@@ -175,12 +177,34 @@ describe("allocateWritableDealExtras", () => {
     );
   });
 
-  it("замороженная партия не забирает остаток у записываемой", () => {
-    const rows = extras("0.01", [
-      { id: "a", purchaseCost: "10.00", frozen: true },
-      { id: "b", purchaseCost: "10.00" },
+  it("положительная доплата на смесь замороженной и открытой партии отклоняется", () => {
+    const batches = [
+      { id: "frozen", purchaseCost: "10.00", frozen: true },
+      { id: "open", purchaseCost: "10.00" },
+    ];
+    expect(() => extras("100.00", batches)).toThrow(DEAL_EXTRA_FROZEN_MIX);
+    expect(() =>
+      assertDealExtraAllocatable("100.00", [
+        { id: "frozen", purchaseCost: "10.00", frozen: true },
+        { id: "open", purchaseCost: "10.00", frozen: false },
+      ]),
+    ).toThrow(DEAL_EXTRA_FROZEN_MIX);
+  });
+
+  it("нулевая доплата на смешанную сделку не отклоняется", () => {
+    const rows = extras("0.00", [
+      { id: "frozen", purchaseCost: "10.00", frozen: true },
+      { id: "open", purchaseCost: "10.00" },
     ]);
-    expect(rows).toEqual([{ id: "b", extra: new Decimal("0.01") }]);
+    expect(rows.map((row) => `${row.id}:${row.extra.toFixed(2)}`)).toEqual(["open:0.00"]);
+  });
+
+  it("сделка только из замороженных партий не отклоняется", () => {
+    const rows = extras("100.00", [
+      { id: "a", purchaseCost: "10.00", frozen: true },
+      { id: "b", purchaseCost: "10.00", frozen: true },
+    ]);
+    expect(rows).toEqual([]);
   });
 
   it("две сделки на одну партию складывают доли без потери копейки", () => {
