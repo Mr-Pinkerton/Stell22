@@ -155,9 +155,9 @@ describe("statement visual labels", () => {
     expect(document.body.textContent).not.toContain("2026-09-03");
     await user.click(screen.getByRole("button", { name: "Подробнее" }));
     const text = document.body.textContent ?? "";
-    expect(text).toContain("Выходные внутри пропусков, покрытие не ставится: 06.09.2026");
-    expect(text).toContain("Праздники внутри пропусков, покрытие не ставится: 04.11.2026");
-    expect(text).not.toContain("Выходные внутри пропусков, покрытие не ставится: 06.09.2026, 04.11.2026");
+    expect(text).toContain("Выходные дни (не считаются пропусками выписок): 06.09.2026");
+    expect(text).toContain("Праздничные дни (не считаются пропусками выписок): 04.11.2026");
+    expect(text).not.toContain("Выходные дни (не считаются пропусками выписок): 06.09.2026, 04.11.2026");
   });
 
   it("draws the header line above an empty statements table", () => {
