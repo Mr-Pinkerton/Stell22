@@ -89,11 +89,13 @@ jobs:
       - name: Test
         run: npm test
 
-      # Только pull_request. workflow_call, включая Production Deploy, и push
-      # этот шаг не запускают. Флаг не попадает в npm test и не выбирает
+      # pull_request и push в refs/heads/main. workflow_call из Production
+      # Deploy шаг не запускает: github context вызванного workflow — это
+      # caller, а Production Deploy только workflow_dispatch. Push в другую
+      # ветку тоже не запускает. Флаг не попадает в npm test и не выбирает
       # базу integrity или restore-drill.
       - name: Disposable P1 PostgreSQL 17 live read
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         env:
           P1_DISPOSABLE_LIVE: "1"
         run: |
