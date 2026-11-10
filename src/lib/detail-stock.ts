@@ -65,6 +65,18 @@ export function allocate(quantities: number[], needed: number): number[] {
   });
 }
 
+/** Отказ упаковки: готовых деталей меньше потребности. */
+export const PACK_READY_SHORTAGE_MESSAGE = "Недостаточно готовых деталей для упаковки";
+
+/**
+ * Проверка до распределения. При нехватке упаковка отказывает этой фразой.
+ * Когда готовых деталей достаточно, списание по-прежнему делает `allocate`.
+ */
+export function assertPackReadyQuantity(quantities: number[], needed: number): void {
+  const total = quantities.reduce((s, q) => s + Math.max(0, q), 0);
+  if (total < needed) throw new Error(PACK_READY_SHORTAGE_MESSAGE);
+}
+
 /** Строка склада «готова», если выполнены все требуемые присадки детали. */
 export function isReady(detail: PrisadkaFlags, torcevDone: boolean, ploskDone: boolean): boolean {
   const req = requiredPrisadki(detail);

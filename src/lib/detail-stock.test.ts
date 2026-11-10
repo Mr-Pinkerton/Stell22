@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allocate,
+  assertPackReadyQuantity,
   buildStockSnapshot,
   isReady,
   normalizeReadyBuckets,
@@ -59,6 +60,23 @@ describe("allocate", () => {
 
   it("бросает при нехватке остатка", () => {
     expect(() => allocate([2, 2], 5)).toThrow("Недостаточно остатка");
+  });
+});
+
+describe("assertPackReadyQuantity", () => {
+  it("отказывает упаковке, когда готовых деталей меньше потребности", () => {
+    expect(() => assertPackReadyQuantity([], 1)).toThrow(
+      "Недостаточно готовых деталей для упаковки",
+    );
+    expect(() => assertPackReadyQuantity([2, 2], 5)).toThrow(
+      "Недостаточно готовых деталей для упаковки",
+    );
+  });
+
+  it("при достаточном количестве не меняет распределение", () => {
+    const quantities = [5, 5, 5];
+    expect(() => assertPackReadyQuantity(quantities, 7)).not.toThrow();
+    expect(allocate(quantities, 7)).toEqual([5, 2, 0]);
   });
 });
 
