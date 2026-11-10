@@ -1,5 +1,6 @@
 import {
   addMonths,
+  businessCalendarDate,
   createLocalDate,
   getDaysInMonth,
   getMondayBasedWeekday,
@@ -49,8 +50,10 @@ export function resolveDashboardPeriod(
   now: Date = new Date(),
   custom?: { start: Date; end: Date },
 ): DashboardPeriod {
+  const today = businessCalendarDate(now);
+
   if (mode === "week") {
-    const start = startOfStandardWeek(now);
+    const start = startOfStandardWeek(today);
     return { mode, start, end: addDays(start, 6) };
   }
 
@@ -59,8 +62,8 @@ export function resolveDashboardPeriod(
     return { mode, start, end };
   }
 
-  const start = startOfMonth(now);
-  return { mode: "month", start, end: endOfMonth(now) };
+  const start = startOfMonth(today);
+  return { mode: "month", start, end: endOfMonth(today) };
 }
 
 /** Предыдущий период той же длины для сравнения KPI. */

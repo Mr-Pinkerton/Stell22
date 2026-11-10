@@ -1,5 +1,6 @@
 "use server";
 
+import { businessDateKey } from "@/lib/dates";
 import { prisma } from "@/server/db";
 import { requireAdmin } from "@/server/session";
 import { getFinanceData } from "@/server/finance";
@@ -72,7 +73,7 @@ export async function getDashboardData(): Promise<DashboardSource> {
   const production: ProductionEntry[] = [];
   const torcovkaByDay = new Map<string, { takenM: number; producedM: number }>();
   for (const op of ops) {
-    const date = op.workDate.toISOString().slice(0, 10);
+    const date = businessDateKey(op.workDate);
     if (op.type === "UPAKOVKA") {
       production.push({ occurredAt: op.workDate.toISOString(), quantity: op.productQty ?? 0 });
     } else {

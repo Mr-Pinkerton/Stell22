@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/server/db";
+import { businessDateKey } from "@/lib/dates";
 import { exactMoneyString } from "@/lib/decimal-input";
 import { throwFriendlyAccountNumberConflict } from "@/lib/prisma-unique-conflict";
 import { requireAdmin } from "@/server/session";
@@ -236,7 +237,7 @@ function serCashFlow(
 ): FinanceCashFlowRow {
   return {
     id: cf.id,
-    date: cf.date.toISOString().slice(0, 10),
+    date: businessDateKey(cf.date),
     amount: num(cf.amount),
     flowType: cf.flowType,
     accountId: cf.accountId,

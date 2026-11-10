@@ -1,3 +1,4 @@
+import { businessCalendarDate, businessDateKey, calendarDateKey } from "@/lib/dates";
 import type { DashboardPeriod } from "@/lib/dashboard-period";
 import {
   buildStandardWeeksInPeriod,
@@ -87,7 +88,7 @@ function filterCashFlows(period: DashboardPeriod, rows: FinanceCashFlowRow[]): F
 
 function productionQty(entries: ProductionEntry[], period: DashboardPeriod): number {
   return entries
-    .filter((e) => isDateInDashboardPeriod(e.occurredAt.slice(0, 10), period))
+    .filter((e) => isDateInDashboardPeriod(businessDateKey(new Date(e.occurredAt)), period))
     .reduce((sum, e) => sum + e.quantity, 0);
 }
 
@@ -212,9 +213,10 @@ export function buildGoalProgress(
   source: DashboardSource,
   now: Date = new Date(),
 ): DashboardGoalProgress[] {
-  const monthIso = formatGoalMonthIso(now);
-  const day = now.getDate();
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const today = businessCalendarDate(now);
+  const monthIso = formatGoalMonthIso(today);
+  const day = today.getDate();
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
 
   return source.goals
     .filter((g) => g.status === "ACTIVE" && g.month === monthIso)
@@ -310,7 +312,7 @@ export function buildWasteByDay(
   let cursor = new Date(period.start);
   let i = 0;
   while (cursor <= period.end && i < 14) {
-    const iso = cursor.toISOString().slice(0, 10);
+    const iso = calendarDateKey(cursor);
     const d = byDay.get(iso);
     const pct = d && d.takenM > 0 ? Math.round(((d.takenM - d.producedM) / d.takenM) * 100) : 0;
     days.push({ date: iso.slice(8, 10) + "." + iso.slice(5, 7), pct: Math.max(0, pct) });

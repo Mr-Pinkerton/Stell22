@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { GoalProductOption } from "@/server/goals";
+import { businessCalendarDate } from "@/lib/dates";
 import { capitalizeFirst } from "@/lib/utils";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import {
@@ -60,7 +61,7 @@ export function GoalFormDialog({
     name.trim().length > 0 && productId.length > 0 && Number.isFinite(quantity) && quantity > 0;
 
   const monthNote = useMemo(() => {
-    const now = new Date();
+    const now = businessCalendarDate();
     const months = [
       "января",
       "февраля",
