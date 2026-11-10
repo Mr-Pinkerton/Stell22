@@ -1,5 +1,5 @@
 import type { DateFilterValue } from "@/lib/date-filter-value";
-import { isSameMonth } from "@/lib/dates";
+import { businessCalendarDate, isSameMonth } from "@/lib/dates";
 import { parseGoalMonthIso } from "@/lib/goals";
 import type { GoalRow } from "@/mocks/goals-fixtures";
 
@@ -49,8 +49,9 @@ export type GoalMonthRelation = "past" | "current" | "future";
 /** Календарный месяц цели относительно «сейчас». Статус в базе не меняет. */
 export function goalMonthRelation(iso: string, now: Date = new Date()): GoalMonthRelation {
   const month = parseGoalMonthIso(iso);
+  const current = businessCalendarDate(now);
   const goalIndex = month.getFullYear() * 12 + month.getMonth();
-  const nowIndex = now.getFullYear() * 12 + now.getMonth();
+  const nowIndex = current.getFullYear() * 12 + current.getMonth();
   if (goalIndex === nowIndex) return "current";
   return goalIndex < nowIndex ? "past" : "future";
 }

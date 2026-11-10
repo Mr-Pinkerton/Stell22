@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/server/db";
 import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
-import { formatGoalMonthIso } from "@/lib/goals";
+import { businessMonthIso, startOfBusinessMonth } from "@/lib/dates";
 import { formatProductSku } from "@/lib/format";
 import type { GoalRow } from "@/mocks/goals-fixtures";
 
@@ -19,13 +19,11 @@ export interface GoalsData {
   products: GoalProductOption[];
 }
 
-function monthStart(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), 1);
-}
-
 /**
  * Цели с фактом производства. Факт — суммарное количество упакованных изделий
- * (операции УПАКОВКИ) этого изделия за календарный месяц цели.
+ * (операции УПАКОВКИ) этого изделия за хозяйственный месяц цели (UTC+3).
+ * Goal.month — выбранный календарный месяц (полночь его начала), не новое
+ * событие: businessMonthIso читает этот месяц, не переписывая строку.
  */
 export async function getGoalsData(): Promise<GoalsData> {
   await requireAdmin();
@@ -42,12 +40,12 @@ export async function getGoalsData(): Promise<GoalsData> {
   const producedByKey = new Map<string, number>();
   for (const op of upakovka) {
     if (!op.productId) continue;
-    const key = `${op.productId}|${formatGoalMonthIso(op.workDate)}`;
+    const key = `${op.productId}|${businessMonthIso(op.workDate)}`;
     producedByKey.set(key, (producedByKey.get(key) ?? 0) + (op.productQty ?? 0));
   }
 
   const rows: GoalRow[] = goals.map((g) => {
-    const monthIso = formatGoalMonthIso(g.month);
+    const monthIso = businessMonthIso(g.month);
     return {
       id: g.id,
       name: g.name,
@@ -89,7 +87,7 @@ export async function createGoal(input: CreateGoalInput): Promise<{ ok: true } |
       name,
       productId: input.productId,
       quantity: Math.round(input.quantity),
-      month: monthStart(new Date()),
+      month: startOfBusinessMonth(),
       status: "ACTIVE",
     },
   });
