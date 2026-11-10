@@ -7,10 +7,8 @@ import { writeChangeLog } from "@/server/change-log";
 import { requireAdmin } from "@/server/session";
 import {
   blankKey,
-  buildStockSnapshot,
   isNoPrisadkaDetail,
   isReady,
-  type BlankStockRow as RawBlankRow,
   type DetailStockRow as RawStockRow,
 } from "@/lib/detail-stock";
 import { formatProductSku } from "@/lib/format";
@@ -19,6 +17,7 @@ import { getUnitCostSnapshot } from "@/server/internal/cost";
 import type { Detail } from "@/types/domain";
 import type { ProductionStockRow, DetailStockRow } from "@/lib/warehouse-stock";
 import {
+  buildPhysicalDetailStockRows,
   formatBlankPoolLabel,
   inventoryDeviation,
   inventoryDeviationSum,
@@ -94,14 +93,6 @@ export async function getWarehouseStock(): Promise<WarehouseStock> {
     ploskostDone: r.ploskostDone,
     quantity: r.quantity,
   }));
-  const blankRows: RawBlankRow[] = blankStock.map((b) => ({
-    materialId: b.materialId,
-    lengthM: num(b.lengthM),
-    detailType: b.detailType,
-    sort: b.sort,
-    quantity: b.quantity,
-  }));
-  const snapshot = buildStockSnapshot(domainDetails, rows, blankRows);
 
   const productRows: ProductionStockRow[] = products
     .map((p) => ({
@@ -131,27 +122,7 @@ export async function getWarehouseStock(): Promise<WarehouseStock> {
     })
     .sort((a, b) => a.name.localeCompare(b.name, "ru"));
 
-  const detailById = new Map(domainDetails.map((d) => [d.id, d]));
-  const detailIds = new Set([
-    ...Object.keys(snapshot.detailsReady),
-    ...Object.keys(snapshot.prisadkaPending),
-  ]);
-  const detailRows: DetailStockRow[] = [];
-  for (const id of detailIds) {
-    const detail = detailById.get(id);
-    if (!detail) continue;
-    const ready = snapshot.detailsReady[id] ?? 0;
-    const pend = snapshot.prisadkaPending[id];
-    const pendingPrisadka = (pend?.torcev ?? 0) + (pend?.plosk ?? 0);
-    detailRows.push({
-      id,
-      name: detail.name,
-      quantity: ready + pendingPrisadka,
-      ready,
-      pendingPrisadka,
-    });
-  }
-  detailRows.sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  const detailRows = buildPhysicalDetailStockRows(domainDetails, rows);
 
   const itemRows = (type: "FASTENER" | "PACKAGING" | "OTHER"): ProductionStockRow[] =>
     items

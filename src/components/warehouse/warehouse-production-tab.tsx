@@ -8,10 +8,11 @@ import type { DetailStockRow, ProductionStockRow } from "@/lib/warehouse-stock";
 import type { WarehouseStock } from "@/server/warehouse";
 import { cn } from "@/lib/utils";
 
-type ProductionTab = "products" | "details" | "fasteners" | "packaging" | "other";
+type ProductionTab = "products" | "blanks" | "details" | "fasteners" | "packaging" | "other";
 
 const TABS: { key: ProductionTab; label: string }[] = [
   { key: "products", label: "Изделия" },
+  { key: "blanks", label: "Заготовки" },
   { key: "details", label: "Детали" },
   { key: "fasteners", label: "Крепёж" },
   { key: "packaging", label: "Упаковка" },
@@ -116,6 +117,7 @@ export function WarehouseProductionTab({
   const [activeTab, setActiveTab] = useState<ProductionTab>("products");
 
   const productRows = stock.products;
+  const blankRows = stock.blanks;
   const detailRows = stock.details;
   const fastenerRows = stock.fasteners;
   const packagingRows = stock.packaging;
@@ -138,6 +140,16 @@ export function WarehouseProductionTab({
               columns={productColumns}
               rows={productRows}
               empty={sourceStock.products.length === 0 ? "Изделий нет" : filterEmpty}
+              padded
+              className="border-0"
+              headerClassName={tableHeaderClassName}
+            />
+          )}
+          {activeTab === "blanks" && (
+            <DataTable
+              columns={nomenclatureColumns(false)}
+              rows={blankRows}
+              empty={sourceStock.blanks.length === 0 ? "Заготовок нет" : filterEmpty}
               padded
               className="border-0"
               headerClassName={tableHeaderClassName}

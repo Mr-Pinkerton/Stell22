@@ -225,6 +225,14 @@ export function WarehouseView({ stock, initialDocs, mpStock, supplies }: Warehou
             rows: filteredProductionStock.products.map((r) => ({ name: r.name, quantity: r.quantity })),
           },
           {
+            name: "Заготовки",
+            columns: prodCols,
+            rows: (filteredProductionStock.blanks ?? []).map((r) => ({
+              name: r.name,
+              quantity: r.quantity,
+            })),
+          },
+          {
             name: "Детали",
             columns: [
               { header: "Название", key: "name", width: 28 },
