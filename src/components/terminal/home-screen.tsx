@@ -48,10 +48,11 @@ export function HomeScreen({ birthdaysToday, employee, onSelect }: HomeScreenPro
           return (
             <Card
               key={t.screen}
-              className="surface-card aspect-square ring-0 active:scale-[0.98] active:opacity-90"
+              className="surface-card aspect-square ring-0 has-[:active]:scale-[0.98] has-[:active]:opacity-90"
             >
-              <CardContent
-                className="flex h-full cursor-pointer flex-col items-center justify-center gap-4 p-4"
+              <button
+                type="button"
+                className="flex h-full w-full cursor-pointer flex-col items-center justify-center gap-4 rounded-xl border-0 bg-transparent p-4 text-inherit focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => onSelect(t.screen)}
               >
                 <span className="bg-muted text-muted-foreground flex size-16 items-center justify-center rounded-2xl [&_svg]:size-8 [&_svg]:stroke-[1.75]">
@@ -60,7 +61,7 @@ export function HomeScreen({ birthdaysToday, employee, onSelect }: HomeScreenPro
                 <span className="text-center text-xl font-semibold tracking-tight sm:text-2xl">
                   {t.title}
                 </span>
-              </CardContent>
+              </button>
             </Card>
           );
         })}
