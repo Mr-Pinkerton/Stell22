@@ -7,6 +7,7 @@ import {
 import { productStock } from "@/mocks/warehouse-fixtures";
 import { formatProductSku } from "@/lib/format";
 import { D } from "@/lib/cost";
+import { isReady } from "@/lib/detail-stock";
 import type { NomenclatureType, RailType, Sort, StockSnapshot } from "@/types/domain";
 
 export interface ProductionStockRow {
@@ -58,6 +59,7 @@ export function buildProductStockRows(
     .sort((a, b) => a.name.localeCompare(b.name, "ru"));
 }
 
+/** Строки из снимка терминала. Счётчики присадок могут пересекаться и не задают физическое «Всего». */
 export function buildDetailStockRows(
   snapshot: StockSnapshot = stockSnapshot,
 ): DetailStockRow[] {
@@ -86,6 +88,53 @@ export function buildDetailStockRows(
         pendingPrisadka > 0
           ? `готово ${ready}, на присадке ${pendingPrisadka}`
           : undefined,
+    });
+  }
+
+  return rows.sort((a, b) => a.name.localeCompare(b.name, "ru"));
+}
+
+/**
+ * Физический остаток деталей. Общий пул заготовок сюда не входит:
+ * одна заготовка — одна строка склада заготовок, а не сумма двух присадок.
+ */
+export function buildPhysicalDetailStockRows(
+  details: Array<{
+    id: string;
+    name: string;
+    prisadkaTorcevaya: boolean;
+    prisadkaPloskost: boolean;
+  }>,
+  stockRows: Array<{
+    detailId: string;
+    torcevayaDone: boolean;
+    ploskostDone: boolean;
+    quantity: number;
+  }>,
+): DetailStockRow[] {
+  const byDetail = new Map<string, typeof stockRows>();
+  for (const row of stockRows) {
+    if (row.quantity <= 0) continue;
+    const list = byDetail.get(row.detailId) ?? [];
+    list.push(row);
+    byDetail.set(row.detailId, list);
+  }
+
+  const rows: DetailStockRow[] = [];
+  for (const detail of details) {
+    let ready = 0;
+    let pendingPrisadka = 0;
+    for (const row of byDetail.get(detail.id) ?? []) {
+      if (isReady(detail, row.torcevayaDone, row.ploskostDone)) ready += row.quantity;
+      else pendingPrisadka += row.quantity;
+    }
+    if (ready === 0 && pendingPrisadka === 0) continue;
+    rows.push({
+      id: detail.id,
+      name: detail.name,
+      ready,
+      pendingPrisadka,
+      quantity: ready + pendingPrisadka,
     });
   }
 

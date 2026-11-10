@@ -96,7 +96,7 @@ function matchesProductRow(row: ProductionStockRow, search: string): boolean {
   return (row.sku ?? "").toLowerCase().includes(search);
 }
 
-/** Search по пяти видимым коллекциям; `blanks` не фильтруется (нет в UI). */
+/** Search по видимым коллекциям склада, включая заготовки. */
 export function filterWarehouseProductionStock<T extends WarehouseProductionStockSlice>(
   stock: T,
   search: string,
@@ -119,5 +119,6 @@ export function filterWarehouseProductionStock<T extends WarehouseProductionStoc
     fasteners: stock.fasteners.filter((row) => matchesProductionName(row, q)),
     packaging: stock.packaging.filter((row) => matchesProductionName(row, q)),
     other: stock.other.filter((row) => matchesProductionName(row, q)),
+    blanks: stock.blanks?.filter((row) => matchesProductionName(row, q)),
   };
 }

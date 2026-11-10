@@ -233,15 +233,14 @@ describe("filterWarehouseProductionStock", () => {
     expect(filterWarehouseProductionStock(productionStock, "перчат").other.map((r) => r.id)).toEqual(["o1"]);
   });
 
-  it("search применяется ко всем пяти visible collections", () => {
+  it("search применяется ко всем видимым коллекциям, включая заготовки", () => {
     const next = filterWarehouseProductionStock(productionStock, "полка");
     expect(next.products.map((r) => r.id)).toEqual(["p1"]);
     expect(next.details.map((r) => r.id)).toEqual(["d1"]);
     expect(next.fasteners).toEqual([]);
     expect(next.packaging).toEqual([]);
     expect(next.other).toEqual([]);
-    // blanks name contains «полка», but UI/export do not show blanks — same array ref
-    expect(next.blanks).toBe(productionStock.blanks);
+    expect(next.blanks?.map((row) => row.id)).toEqual(["b1"]);
   });
 
   it("пустой search возвращает те же строки; source не мутируется; blanks без изменений", () => {
