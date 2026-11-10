@@ -7,6 +7,7 @@ import {
   buildBatchSnapshots,
   buildCostDetailRows,
   buildCostProductRows,
+  type BatchCostSnapshot,
   declaredSortShares,
   detailMaterialCost,
   detailWorkCost,
@@ -328,7 +329,10 @@ describe("buildCostProductRows", () => {
     expect(r.material).toBeCloseTo(8.57, 2);
     // работа = dA(6.5) × 2 + упаковка(15) = 28
     expect(r.work).toBeCloseTo(28, 2);
-    // прямая = 8.5714 + 28 + крепёж(1.5×4=6) + упаковка-материал(35) = 77.5714
+    // крепёж 1.5×4 + упаковка-материал 35; в прямой уже было, теперь видно отдельно
+    expect(r.materialsExtra).toBeCloseTo(41, 2);
+    expect(r.material + r.work + r.materialsExtra).toBeCloseTo(r.direct, 2);
+    // прямая = 8.5714 + 28 + 41 = 77.5714
     expect(r.direct).toBeCloseTo(77.57, 2);
   });
 
@@ -337,6 +341,116 @@ describe("buildCostProductRows", () => {
     expect(r.overhead).toBeCloseTo(10, 2); // 100 / 10 шт
     expect(r.full).toBeCloseTo(r.direct + 10, 2);
     expect(r.directPct).toBe(100);
+  });
+});
+
+describe("buildCostProductRows — комплектующие в прямой", () => {
+  const rates = {
+    torcovkaSort1: D(0),
+    torcovkaSort2: D(0),
+    prisadkaTorcev: D(0),
+    prisadkaPlosk: D(0),
+    upakovka: D(60),
+  };
+  const shelfDetail = detail({ id: "rail", lengthM: 1, sort: "SORT1", materialId: "pine" });
+  const shelfBatch: Batch = {
+    id: "bShelf",
+    name: "Полка",
+    materialId: "pine",
+    sectionWidthMm: 50,
+    sectionHeightMm: 50,
+    purchaseCost: 1600,
+    totalCost: 1600,
+    priceSort1: 1,
+    priceSort2: 1,
+    status: "IN_WORK",
+    purchaseDate: "2026-11-01",
+  };
+  const snapshots = new Map<string, BatchCostSnapshot>([
+    [
+      "bShelf",
+      {
+        batchId: "bShelf",
+        areaM2: D(1),
+        pricePerM3Sort1: D(0),
+        pricePerM3Sort2: D(0),
+        costSort1: D(1600),
+        costSort2: D(0),
+        lengthSort1: D(1),
+        lengthSort2: D(0),
+      },
+    ],
+  ]);
+
+  function shelfRow(input: {
+    fastenerIds?: Product["fastenerIds"];
+    packagingId?: string | null;
+    extraIds?: string[];
+    nomenclature: NomenclatureItem[];
+    periodOverhead?: number;
+  }) {
+    const rows = buildCostProductRows({
+      products: [
+        {
+          id: "shelf",
+          name: "Полка",
+          materialId: "pine",
+          skuOzon: "OZ-SHELF",
+          skuWb: "WB-SHELF",
+          sort: "SORT1",
+          packagingId: input.packagingId ?? null,
+          status: "ACTIVE",
+          details: [{ detailId: "rail", quantity: 1 }],
+          fastenerIds: input.fastenerIds ?? [],
+          extraIds: input.extraIds ?? [],
+        },
+      ],
+      batches: [shelfBatch],
+      details: [shelfDetail],
+      employees: [],
+      nomenclature: input.nomenclature,
+      lines: [],
+      producedProductQty: { shelf: 1 },
+      periodOverhead: input.periodOverhead ?? 0,
+      rates,
+      snapshots,
+    });
+    return rows[0]!;
+  }
+
+  it("каноническая полка: 1600 + 60 + 22 = 1682 и 1682 + 100 = 1782", () => {
+    const r = shelfRow({
+      fastenerIds: [{ nomenclatureId: "screw", quantity: 2 }],
+      packagingId: "box",
+      extraIds: ["insert"],
+      periodOverhead: 100,
+      nomenclature: [
+        { id: "screw", name: "Шуруп", type: "FASTENER", unitPrice: 3, status: "ACTIVE" },
+        { id: "box", name: "Коробка", type: "PACKAGING", unitPrice: 5, status: "ACTIVE" },
+        { id: "insert", name: "Вкладыш", type: "OTHER", unitPrice: 11, status: "ACTIVE" },
+      ],
+    });
+
+    expect(r.material).toBe(1600);
+    expect(r.work).toBe(60);
+    expect(r.materialsExtra).toBe(22);
+    expect(r.material + r.work + r.materialsExtra).toBe(1682);
+    expect(r.direct).toBe(1682);
+    expect(r.overhead).toBe(100);
+    expect(r.direct + r.overhead).toBe(1782);
+    expect(r.full).toBe(1782);
+  });
+
+  it("нулевые комплектующие остаются нулём, прямая = материал + работа", () => {
+    const r = shelfRow({ nomenclature: [], periodOverhead: 100 });
+
+    expect(r.materialsExtra).toBe(0);
+    expect(r.material).toBe(1600);
+    expect(r.work).toBe(60);
+    expect(r.direct).toBe(1660);
+    expect(r.material + r.work + r.materialsExtra).toBe(r.direct);
+    expect(r.overhead).toBe(100);
+    expect(r.full).toBe(r.direct + r.overhead);
   });
 });
 
