@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { Decimal } from "decimal.js";
 import {
+  allocateWritableDealExtras,
+  assertDealExtraAllocatable,
+  DEAL_EXTRA_FROZEN_MIX,
   batchExtraShare,
   batchTotalCost,
   dealDeliveryExtra,
@@ -78,6 +81,179 @@ describe("batchExtraShare", () => {
 
   it("одна партия получает всю доставку", () => {
     expect(batchExtraShare(10_500, 150_000, 150_000, 1).toNumber()).toBe(10_500);
+  });
+});
+
+describe("allocateWritableDealExtras", () => {
+  function extras(dealExtra: string, batches: { id: string; purchaseCost: string; frozen?: boolean }[]) {
+    return allocateWritableDealExtras(
+      dealExtra,
+      batches.map((batch) => ({ ...batch, frozen: batch.frozen ?? false })),
+    );
+  }
+
+  function sumExtras(rows: { extra: Decimal }[]) {
+    return rows.reduce((sum, row) => sum.plus(row.extra), new Decimal(0)).toFixed(2);
+  }
+
+  it("три равные закупки сохраняют доплату 100.00", () => {
+    const rows = extras("100.00", [
+      { id: "b", purchaseCost: "10.00" },
+      { id: "a", purchaseCost: "10.00" },
+      { id: "c", purchaseCost: "10.00" },
+    ]);
+    expect(rows.map((row) => `${row.id}:${row.extra.toFixed(2)}`)).toEqual([
+      "a:33.33",
+      "b:33.33",
+      "c:33.34",
+    ]);
+    expect(sumExtras(rows)).toBe("100.00");
+  });
+
+  it("доплата 0.01 на две равные закупки не удваивается", () => {
+    const rows = extras("0.01", [
+      { id: "b", purchaseCost: "10.00" },
+      { id: "a", purchaseCost: "10.00" },
+    ]);
+    expect(rows.map((row) => row.extra.toFixed(2))).toEqual(["0.00", "0.01"]);
+    expect(sumExtras(rows)).toBe("0.01");
+  });
+
+  it("одна копейка на две нулевые закупки попадает только в последнюю партию", () => {
+    const rows = extras("0.01", [
+      { id: "z", purchaseCost: "0.00" },
+      { id: "a", purchaseCost: "0.00" },
+    ]);
+    expect(rows.map((row) => `${row.id}:${row.extra.toFixed(2)}`)).toEqual(["a:0.00", "z:0.01"]);
+    expect(sumExtras(rows)).toBe("0.01");
+  });
+
+  it("неравные веса 90000 и 30000 сохраняют доплату 100.01", () => {
+    const rows = extras("100.01", [
+      { id: "small", purchaseCost: "30000.00" },
+      { id: "large", purchaseCost: "90000.00" },
+    ]);
+    expect(sumExtras(rows)).toBe("100.01");
+    expect(rows.find((row) => row.id === "large")?.extra.toFixed(2)).toBe("75.00");
+    expect(rows.find((row) => row.id === "small")?.extra.toFixed(2)).toBe("25.01");
+  });
+
+  it("одна партия получает всю доплату", () => {
+    const rows = extras("10.50", [{ id: "only", purchaseCost: "150.00" }]);
+    expect(rows.map((row) => row.extra.toFixed(2))).toEqual(["10.50"]);
+  });
+
+  it("нулевая доплата даёт нули", () => {
+    const rows = extras("0.00", [
+      { id: "a", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "20.00" },
+    ]);
+    expect(rows.map((row) => row.extra.toFixed(2))).toEqual(["0.00", "0.00"]);
+  });
+
+  it("порядок входного списка не меняет доли", () => {
+    const first = extras("100.00", [
+      { id: "c", purchaseCost: "10.00" },
+      { id: "a", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+    ]);
+    const second = extras("100.00", [
+      { id: "b", purchaseCost: "10.00" },
+      { id: "c", purchaseCost: "10.00" },
+      { id: "a", purchaseCost: "10.00" },
+    ]);
+    expect(first.map((row) => `${row.id}:${row.extra.toFixed(2)}`)).toEqual(
+      second.map((row) => `${row.id}:${row.extra.toFixed(2)}`),
+    );
+  });
+
+  it("повтор того же входа даёт те же суммы", () => {
+    const input = [
+      { id: "a", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+    ];
+    expect(extras("0.01", input).map((row) => row.extra.toFixed(2))).toEqual(
+      extras("0.01", input).map((row) => row.extra.toFixed(2)),
+    );
+  });
+
+  it("положительная доплата на смесь замороженной и открытой партии отклоняется", () => {
+    const batches = [
+      { id: "frozen", purchaseCost: "10.00", frozen: true },
+      { id: "open", purchaseCost: "10.00" },
+    ];
+    expect(() => extras("100.00", batches)).toThrow(DEAL_EXTRA_FROZEN_MIX);
+    expect(() =>
+      assertDealExtraAllocatable("100.00", [
+        { id: "frozen", purchaseCost: "10.00", frozen: true },
+        { id: "open", purchaseCost: "10.00", frozen: false },
+      ]),
+    ).toThrow(DEAL_EXTRA_FROZEN_MIX);
+  });
+
+  it("нулевая доплата на смешанную сделку не отклоняется", () => {
+    const rows = extras("0.00", [
+      { id: "frozen", purchaseCost: "10.00", frozen: true },
+      { id: "open", purchaseCost: "10.00" },
+    ]);
+    expect(rows.map((row) => `${row.id}:${row.extra.toFixed(2)}`)).toEqual(["open:0.00"]);
+  });
+
+  it("сделка только из замороженных партий не отклоняется", () => {
+    const rows = extras("100.00", [
+      { id: "a", purchaseCost: "10.00", frozen: true },
+      { id: "b", purchaseCost: "10.00", frozen: true },
+    ]);
+    expect(rows).toEqual([]);
+  });
+
+  it("три строки одной партии считаются одним получателем", () => {
+    const rows = extras("20.10", [
+      { id: "b", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+    ]);
+    expect(rows.map((row) => `${row.id}:${row.extra.toFixed(2)}`)).toEqual(["b:20.10"]);
+    expect(sumExtras(rows)).toBe("20.10");
+  });
+
+  it("нулевая доплата на повторах одной партии остаётся нулём", () => {
+    const rows = extras("0.00", [
+      { id: "b", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+    ]);
+    expect(rows.map((row) => row.extra.toFixed(2))).toEqual(["0.00"]);
+  });
+
+  it("порядок повторяющихся строк не меняет доли разных партий", () => {
+    const forward = extras("0.01", [
+      { id: "b", purchaseCost: "10.00" },
+      { id: "a", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+    ]);
+    const backward = extras("0.01", [
+      { id: "a", purchaseCost: "10.00" },
+      { id: "b", purchaseCost: "10.00" },
+      { id: "a", purchaseCost: "10.00" },
+    ]);
+    expect(forward.map((row) => `${row.id}:${row.extra.toFixed(2)}`)).toEqual(["a:0.00", "b:0.01"]);
+    expect(backward.map((row) => `${row.id}:${row.extra.toFixed(2)}`)).toEqual(
+      forward.map((row) => `${row.id}:${row.extra.toFixed(2)}`),
+    );
+  });
+
+  it("две сделки на одну партию складывают доли без потери копейки", () => {
+    const first = extras("0.01", [
+      { id: "shared", purchaseCost: "10.00" },
+      { id: "other", purchaseCost: "10.00" },
+    ]);
+    const second = extras("0.05", [{ id: "shared", purchaseCost: "10.00" }]);
+    const shared = first
+      .find((row) => row.id === "shared")!
+      .extra.plus(second.find((row) => row.id === "shared")!.extra);
+    const other = first.find((row) => row.id === "other")!.extra;
+    expect(shared.plus(other).toFixed(2)).toBe("0.06");
   });
 });
 

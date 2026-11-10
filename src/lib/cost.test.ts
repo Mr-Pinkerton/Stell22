@@ -5,6 +5,7 @@ import {
   detailLaborCost,
   directProductCost,
   distributeBatchCost,
+  persistSortCosts,
   fullProductCost,
   isBatchCostMismatch,
   isSortRatioMismatch,
@@ -22,6 +23,103 @@ const area = sectionAreaM2(40, 20); // 0.0008 м²
 describe("sectionAreaM2", () => {
   it("переводит мм в м² (40×20 = 0.0008)", () => {
     expect(area.toNumber()).toBe(0.0008);
+  });
+});
+
+describe("persistSortCosts", () => {
+  it("не округляет 1.005 и 8.995 независимо", () => {
+    const stored = persistSortCosts({
+      totalCost: "10.00",
+      costSort1: "1.005",
+      costSort2: "8.995",
+      volumeSort1: "201",
+      volumeSort2: "1799",
+    });
+    expect(stored.costSort1.toFixed(2)).toBe("1.01");
+    expect(stored.costSort2.toFixed(2)).toBe("8.99");
+    expect(stored.costSort1.plus(stored.costSort2).toFixed(2)).toBe("10.00");
+  });
+
+  it("метры 201 и 1799 при C = 10.00 сходятся в хранимой сумме", () => {
+    const area = sectionAreaM2(1000, 1000);
+    const raw = distributeBatchCost({
+      totalCost: "10.00",
+      priceSort1: "1.00",
+      priceSort2: "1.00",
+      sectionAreaM2: area,
+      producedLengthSort1: 201,
+      producedLengthSort2: 1799,
+    });
+    const stored = persistSortCosts({
+      totalCost: "10.00",
+      costSort1: raw.costSort1,
+      costSort2: raw.costSort2,
+      volumeSort1: raw.volumeSort1,
+      volumeSort2: raw.volumeSort2,
+    });
+    expect(raw.costSort1.toFixed(3)).toBe("1.005");
+    expect(raw.costSort2.toFixed(3)).toBe("8.995");
+    expect(stored.costSort1.plus(stored.costSort2).toFixed(2)).toBe("10.00");
+    expect(stored.pricePerM3Sort1.toFixed(2)).toBe(stored.costSort1.div(raw.volumeSort1).toFixed(2));
+    expect(stored.pricePerM3Sort2.toFixed(2)).toBe(stored.costSort2.div(raw.volumeSort2).toFixed(2));
+  });
+
+  it("один сорт получает весь сохранённый C", () => {
+    const stored = persistSortCosts({
+      totalCost: "10.00",
+      costSort1: "10.00",
+      costSort2: "0",
+      volumeSort1: "4",
+      volumeSort2: "0",
+    });
+    expect(stored.costSort1.toFixed(2)).toBe("10.00");
+    expect(stored.costSort2.toFixed(2)).toBe("0.00");
+  });
+
+  it("оба сорта сохраняют пропорцию и остаток", () => {
+    const stored = persistSortCosts({
+      totalCost: "100.00",
+      costSort1: "33.333333",
+      costSort2: "66.666667",
+      volumeSort1: "1",
+      volumeSort2: "2",
+    });
+    expect(stored.costSort1.toFixed(2)).toBe("33.33");
+    expect(stored.costSort2.toFixed(2)).toBe("66.67");
+    expect(stored.costSort1.plus(stored.costSort2).toFixed(2)).toBe("100.00");
+  });
+
+  it("границы половины копейки не увеличивают сумму сверх C", () => {
+    const up = persistSortCosts({
+      totalCost: "10.00",
+      costSort1: "1.005",
+      costSort2: "8.995",
+      volumeSort1: "1",
+      volumeSort2: "1",
+    });
+    const down = persistSortCosts({
+      totalCost: "10.00",
+      costSort1: "1.004",
+      costSort2: "8.996",
+      volumeSort1: "1",
+      volumeSort2: "1",
+    });
+    expect(up.costSort1.plus(up.costSort2).toFixed(2)).toBe("10.00");
+    expect(down.costSort1.toFixed(2)).toBe("1.00");
+    expect(down.costSort2.toFixed(2)).toBe("9.00");
+  });
+
+  it("нулевой выпуск не распределяет C", () => {
+    const stored = persistSortCosts({
+      totalCost: "10.00",
+      costSort1: "0",
+      costSort2: "0",
+      volumeSort1: "0",
+      volumeSort2: "0",
+    });
+    expect(stored.costSort1.toFixed(2)).toBe("0.00");
+    expect(stored.costSort2.toFixed(2)).toBe("0.00");
+    expect(stored.pricePerM3Sort1.toFixed(2)).toBe("0.00");
   });
 });
 

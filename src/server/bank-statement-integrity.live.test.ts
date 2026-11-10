@@ -9,6 +9,7 @@ import { PrismaClient } from "@prisma/client";
 import { zipSync } from "fflate";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runDisposableMigrate } from "@/server/internal/disposable-migrate/guard";
+import { DEAL_EXTRA_FROZEN_MIX } from "@/lib/deal-cost";
 import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
 
 const gate = vi.hoisted(() => ({
@@ -596,6 +597,9 @@ describe.skipIf(!LIVE)("bank statement immutability and coverage on disposable P
   });
 
   it("O balances, deal totals, and frozen batch cost stay consistent", async () => {
+    // Положительная доплата на сделку, где есть и замороженная, и открытая
+    // партия, теперь отклоняется. Этот успешный путь держит замороженную
+    // партию вне такой доплаты: весь расход 3000 ложится на открытую.
     const material = await seed!.material.create({
       data: { name: `Порода ${runId}`, sectionWidthMm: 40, sectionHeightMm: 20 },
     });
@@ -630,7 +634,7 @@ describe.skipIf(!LIVE)("bank statement immutability and coverage on disposable P
     });
     const bank = await account(`Сделка банк ${runId}`, `407028100000${runId.slice(0, 8)}9`);
     const cash = await account(`Сделка касса ${runId}`, `408178100000${runId.slice(0, 8)}9`);
-    await createDeal({ name: `Сделка ${runId}`, batchNames: [openName, frozenName] });
+    await createDeal({ name: `Сделка ${runId}`, batchNames: [openName] });
     await createCashFlow({
       date: "2026-09-08",
       amount: 3000,
@@ -645,7 +649,7 @@ describe.skipIf(!LIVE)("bank statement immutability and coverage on disposable P
     const openBatch = await seed!.batch.findFirstOrThrow({ where: { name: openName } });
     const frozenBatch = await seed!.batch.findUniqueOrThrow({ where: { id: frozen.id } });
     const deal = await seed!.deal.findFirstOrThrow({ where: { name: `Сделка ${runId}` } });
-    expect(openBatch.totalCost.toFixed(2)).toBe("1500.00");
+    expect(openBatch.totalCost.toFixed(2)).toBe("3000.00");
     expect(frozenBatch.totalCost.toFixed(2)).toBe("1000.00");
     expect(deal.total.toFixed(2)).toBe("3000.00");
     const file = bankFile({
@@ -663,8 +667,129 @@ describe.skipIf(!LIVE)("bank statement immutability and coverage on disposable P
     const afterOpen = await seed!.batch.findUniqueOrThrow({ where: { id: openBatch.id } });
     const afterFrozen = await seed!.batch.findUniqueOrThrow({ where: { id: frozen.id } });
     expect(afterDeal.total.toFixed(2)).toBe("3000.00");
-    expect(afterOpen.totalCost.toFixed(2)).toBe("1500.00");
+    expect(afterOpen.totalCost.toFixed(2)).toBe("3000.00");
     expect(afterFrozen.totalCost.toFixed(2)).toBe("1000.00");
+    const bankSaved = await seed!.cashFlow.findUniqueOrThrow({ where: { id: bankRow.id } });
+    expect(bankSaved.amount.toFixed(2)).toBe("70.00");
+    expect(bankSaved.isTransfer).toBe(true);
+    expect(await seed!.setting.count({ where: { key: PRODUCTION_COST_FLOW_KEY } })).toBe(0);
+  });
+
+  it("O mixed frozen and open deal refuses a positive extra without writing", async () => {
+    // Операционное следствие: реальный расход, привязанный к сделке с
+    // замороженной и открытой партией, больше не проводится. До выкладки
+    // это нужно отдельно подтвердить владельцем.
+    const material = await seed!.material.create({
+      data: { name: `Порода смесь ${runId}`, sectionWidthMm: 40, sectionHeightMm: 20 },
+    });
+    const openName = `Открытая смесь ${runId}`;
+    const frozenName = `Замороженная смесь ${runId}`;
+    await seed!.batch.create({
+      data: {
+        name: openName,
+        materialId: material.id,
+        sectionWidthMm: 40,
+        sectionHeightMm: 20,
+        purchaseCost: 1000,
+        totalCost: 1000,
+        priceSort1: 0,
+        priceSort2: 0,
+        purchaseDate: new Date("2026-09-01T00:00:00.000Z"),
+      },
+    });
+    const frozen = await seed!.batch.create({
+      data: {
+        name: frozenName,
+        materialId: material.id,
+        sectionWidthMm: 40,
+        sectionHeightMm: 20,
+        purchaseCost: 1000,
+        totalCost: 1000,
+        priceSort1: 0,
+        priceSort2: 0,
+        purchaseDate: new Date("2026-09-01T00:00:00.000Z"),
+        frozenAt: new Date("2026-09-01T00:00:00.000Z"),
+      },
+    });
+    const historical = await seed!.batchCost.create({
+      data: {
+        batchId: frozen.id,
+        status: "FINAL",
+        volumeSort1: "1.000000",
+        volumeSort2: "0.000000",
+        costSort1: "1000.00",
+        costSort2: "0.00",
+        pricePerM3Sort1: "1000.00",
+        pricePerM3Sort2: "0.00",
+      },
+    });
+    const bank = await account(`Смесь банк ${runId}`, `407028100000${runId.slice(0, 8)}s`);
+    const cash = await account(`Смесь касса ${runId}`, `408178100000${runId.slice(0, 8)}t`);
+    await createDeal({ name: `Смесь ${runId}`, batchNames: [openName, frozenName] });
+    const openBatch = await seed!.batch.findFirstOrThrow({ where: { name: openName } });
+    const deal = await seed!.deal.findFirstOrThrow({ where: { name: `Смесь ${runId}` } });
+    const beforeFinal = await seed!.$queryRaw<Array<{ cost1: string; cost2: string; price1: string; price2: string }>>`
+      SELECT "costSort1"::text AS cost1, "costSort2"::text AS cost2,
+             "pricePerM3Sort1"::text AS price1, "pricePerM3Sort2"::text AS price2
+      FROM "BatchCost" WHERE id = ${historical.id}
+    `;
+    const before = {
+      flows: await seed!.cashFlow.count({ where: { accountId: { in: [cash.id, bank.id] } } }),
+      cashBalance: (await seed!.account.findUniqueOrThrow({ where: { id: cash.id } })).balance.toFixed(2),
+      bankBalance: (await seed!.account.findUniqueOrThrow({ where: { id: bank.id } })).balance.toFixed(2),
+      deal: deal.total.toFixed(2),
+      open: openBatch.totalCost.toFixed(2),
+      frozen: (await seed!.batch.findUniqueOrThrow({ where: { id: frozen.id } })).totalCost.toFixed(2),
+      events: await seed!.costEvent.count({ where: { batchId: { in: [openBatch.id, frozen.id] } } }),
+    };
+    expect(before).toEqual({
+      flows: 0,
+      cashBalance: "0.00",
+      bankBalance: "0.00",
+      deal: "2000.00",
+      open: "1000.00",
+      frozen: "1000.00",
+      events: 0,
+    });
+    await expect(createCashFlow({
+      date: "2026-09-08",
+      amount: 3000,
+      flowType: "EXPENSE",
+      accountName: cash.name,
+      counterpartyName: null,
+      description: "доплата смешанной сделки",
+      articleName: null,
+      dealId: deal.id,
+      dealName: deal.name,
+    })).rejects.toThrow(DEAL_EXTRA_FROZEN_MIX);
+    expect(await seed!.cashFlow.count({ where: { accountId: { in: [cash.id, bank.id] } } })).toBe(before.flows);
+    expect((await seed!.account.findUniqueOrThrow({ where: { id: cash.id } })).balance.toFixed(2)).toBe(before.cashBalance);
+    expect((await seed!.account.findUniqueOrThrow({ where: { id: bank.id } })).balance.toFixed(2)).toBe(before.bankBalance);
+    expect((await seed!.deal.findUniqueOrThrow({ where: { id: deal.id } })).total.toFixed(2)).toBe(before.deal);
+    expect((await seed!.batch.findUniqueOrThrow({ where: { id: openBatch.id } })).totalCost.toFixed(2)).toBe(before.open);
+    expect((await seed!.batch.findUniqueOrThrow({ where: { id: frozen.id } })).totalCost.toFixed(2)).toBe(before.frozen);
+    expect(await seed!.costEvent.count({ where: { batchId: { in: [openBatch.id, frozen.id] } } })).toBe(0);
+    const afterFinal = await seed!.$queryRaw<Array<{ cost1: string; cost2: string; price1: string; price2: string }>>`
+      SELECT "costSort1"::text AS cost1, "costSort2"::text AS cost2,
+             "pricePerM3Sort1"::text AS price1, "pricePerM3Sort2"::text AS price2
+      FROM "BatchCost" WHERE id = ${historical.id}
+    `;
+    expect(afterFinal).toEqual(beforeFinal);
+
+    const file = bankFile({
+      account: bank.accountNumber!,
+      start: "08.09.2026",
+      end: "08.09.2026",
+      opening: "0.00",
+      closing: "0.00",
+      docs: [{ number: "62", date: "08.09.2026", amount: "70.00", payer: bank.accountNumber!, payee: "40602810000000000062" }],
+    });
+    await importStatementInternal(file, "mixed-deal.txt");
+    const bankRow = await seed!.cashFlow.findFirstOrThrow({ where: { accountId: bank.id, importKey: { not: null } } });
+    await convertCashFlowToTransfer(bankRow.id, cash.id);
+    expect((await seed!.deal.findUniqueOrThrow({ where: { id: deal.id } })).total.toFixed(2)).toBe("2000.00");
+    expect((await seed!.batch.findUniqueOrThrow({ where: { id: openBatch.id } })).totalCost.toFixed(2)).toBe("1000.00");
+    expect((await seed!.batch.findUniqueOrThrow({ where: { id: frozen.id } })).totalCost.toFixed(2)).toBe("1000.00");
     const bankSaved = await seed!.cashFlow.findUniqueOrThrow({ where: { id: bankRow.id } });
     expect(bankSaved.amount.toFixed(2)).toBe("70.00");
     expect(bankSaved.isTransfer).toBe(true);
