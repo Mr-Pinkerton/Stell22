@@ -1,5 +1,11 @@
 import type { Prisma } from "@prisma/client";
-import { allocate, isReady, requiredPrisadki } from "@/lib/detail-stock";
+import {
+  allocate,
+  assertPackReadyQuantity,
+  isReady,
+  PACK_READY_SHORTAGE_MESSAGE,
+  requiredPrisadki,
+} from "@/lib/detail-stock";
 import { applyActivePrisadkaPicks, applyActiveUpakovkaPrepared } from "@/server/internal/cost-flow-downstream";
 import { isCostFlowActive } from "@/server/internal/cost-flow-state";
 import {
@@ -370,10 +376,9 @@ export async function applyUpakovkaPrepared(
         orderBy: { id: "asc" },
       })
     ).filter((r) => isReady(detail, r.torcevayaDone, r.ploskostDone));
-    const takes = allocate(
-      rows.map((r) => r.quantity),
-      needed,
-    );
+    const readyQuantities = rows.map((r) => r.quantity);
+    assertPackReadyQuantity(readyQuantities, needed);
+    const takes = allocate(readyQuantities, needed);
     for (let i = 0; i < rows.length; i++) {
       const take = takes[i];
       if (take <= 0) continue;
@@ -381,7 +386,7 @@ export async function applyUpakovkaPrepared(
         where: { id: rows[i].id, quantity: { gte: take } },
         data: { quantity: { decrement: take } },
       });
-      if (dec.count === 0) throw new Error("Недостаточно готовых деталей для упаковки");
+      if (dec.count === 0) throw new Error(PACK_READY_SHORTAGE_MESSAGE);
       await tx.operationDetailLine.create({
         data: {
           operationId,
