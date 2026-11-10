@@ -418,6 +418,8 @@ export interface CostProductRow {
   materialPct: number;
   work: number;
   workPct: number;
+  /** Крепёж, упаковка и «Разное». Уже входит в `direct`. */
+  materialsExtra: number;
   direct: number;
   directPct: number;
   overhead: number;
@@ -552,6 +554,7 @@ export function buildCostProductRows(params: {
       materialPct: pct(pd.material, pd.direct),
       work: pd.work.toDecimalPlaces(2).toNumber(),
       workPct: pct(pd.work, pd.direct),
+      materialsExtra: pd.materialsExtra.toDecimalPlaces(2).toNumber(),
       direct: pd.direct.toDecimalPlaces(2).toNumber(),
       directPct: 100,
       overhead: overhead.toDecimalPlaces(2).toNumber(),

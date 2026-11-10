@@ -176,6 +176,7 @@ function ProductCostRowGroup({
         className={cn(
           tableBodyRowClass,
           "cursor-pointer align-top",
+          row.materialsExtra !== 0 && "h-auto min-h-[49px]",
           striped && !expanded && "bg-muted/40",
           expanded && expandableExpandedSummaryClass,
           !expanded && "hover:bg-muted/50",
@@ -203,6 +204,11 @@ function ProductCostRowGroup({
         </TableCell>
         <TableCell className={cn(expandableSummaryCellClass, "text-center tabular-nums")}>
           {moneyWithPct(row.direct, row.directPct)}
+          {row.materialsExtra !== 0 ? (
+            <p className="text-muted-foreground mt-0.5 text-xs leading-tight font-normal whitespace-normal">
+              Комплектующие: {formatMoney(row.materialsExtra)}
+            </p>
+          ) : null}
         </TableCell>
         <TableCell className={cn(expandableSummaryCellClass, "text-center tabular-nums")}>
           {moneyWithPct(row.overhead, row.overheadPct)}

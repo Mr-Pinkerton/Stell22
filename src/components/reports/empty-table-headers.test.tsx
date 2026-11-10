@@ -6,6 +6,8 @@ import { ProductsTable } from "@/components/nomenclature/products-table";
 import { NestedTable, NestedTableCell } from "@/components/reports/expandable-table";
 import { ReportCostTab } from "@/components/reports/report-cost-tab";
 import { ReportPurchasesTab } from "@/components/reports/report-purchases-tab";
+import type { CostProductRow } from "@/lib/cost-report";
+import { formatMoney } from "@/lib/format";
 import type { PurchaseReportRow } from "@/mocks/report-fixtures";
 import { TableRow } from "@/components/ui/table";
 import type { Product } from "@/types/domain";
@@ -134,5 +136,57 @@ describe("empty table headers", () => {
     const { thead, tbody } = parts(view.container);
     expect(thead).toContain("Изделие");
     expect(tbody).toContain("Изделия за период не найдены");
+  });
+
+  it("shows комплектующие under direct when the amount is nonzero", async () => {
+    const user = userEvent.setup();
+    const row: CostProductRow = {
+      id: "shelf",
+      name: "Полка",
+      sku: "OZ",
+      material: 1600,
+      materialPct: 95,
+      work: 60,
+      workPct: 4,
+      materialsExtra: 22,
+      direct: 1682,
+      directPct: 100,
+      overhead: 100,
+      overheadPct: 6,
+      full: 1782,
+      details: [],
+    };
+    const view = render(<ReportCostTab details={[]} products={[row]} />);
+    await user.click(screen.getByRole("tab", { name: "Изделия" }));
+    const { thead } = parts(view.container);
+    expect(thead).toContain("Прямая");
+    expect(thead).not.toContain("Комплектующие");
+    const extras = screen.getByText(/Комплектующие:/);
+    expect(extras.textContent?.replace(/\s/g, " ")).toBe(
+      `Комплектующие: ${formatMoney(22).replace(/\s/g, " ")}`,
+    );
+  });
+
+  it("does not show a комплектующие line when extras are zero", async () => {
+    const user = userEvent.setup();
+    const row: CostProductRow = {
+      id: "shelf",
+      name: "Полка",
+      sku: "OZ",
+      material: 1600,
+      materialPct: 96,
+      work: 60,
+      workPct: 4,
+      materialsExtra: 0,
+      direct: 1660,
+      directPct: 100,
+      overhead: 100,
+      overheadPct: 6,
+      full: 1760,
+      details: [],
+    };
+    render(<ReportCostTab details={[]} products={[row]} />);
+    await user.click(screen.getByRole("tab", { name: "Изделия" }));
+    expect(screen.queryByText(/Комплектующие/)).toBeNull();
   });
 });

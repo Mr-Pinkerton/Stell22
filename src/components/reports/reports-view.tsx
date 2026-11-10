@@ -15,6 +15,7 @@ import { ReportCostTab } from "@/components/reports/report-cost-tab";
 import { ReportSalariesTab } from "@/components/reports/report-salaries-tab";
 import { ReportWasteTab } from "@/components/reports/report-waste-tab";
 import { exportXlsx } from "@/lib/export-xlsx";
+import { productCostXlsxSheet } from "@/lib/product-cost-sheet";
 import { XLSX_FMT } from "@/lib/xlsx-types";
 import { formatIsoDate } from "@/lib/format";
 import type { CostReport } from "@/server/cost";
@@ -152,27 +153,7 @@ export function ReportsView({
               status: r.costStatus === "PRELIMINARY" ? "Предварительно" : "Итог",
             })),
           },
-          {
-            name: "Себестоимость (изделия)",
-            columns: [
-              { header: "Изделие", key: "name", width: 28 },
-              { header: "Артикул", key: "sku" },
-              { header: "Материал", key: "material", numFmt: XLSX_FMT.money },
-              { header: "Работа", key: "work", numFmt: XLSX_FMT.money },
-              { header: "Прямая", key: "direct", numFmt: XLSX_FMT.money },
-              { header: "Накладные", key: "overhead", numFmt: XLSX_FMT.money },
-              { header: "Полная", key: "full", numFmt: XLSX_FMT.money },
-            ],
-            rows: cost.products.map((r) => ({
-              name: r.name,
-              sku: r.sku,
-              material: r.material,
-              work: r.work,
-              direct: r.direct,
-              overhead: r.overhead,
-              full: r.full,
-            })),
-          },
+          productCostXlsxSheet(cost.products),
           {
             name: "Зарплаты",
             columns: [
