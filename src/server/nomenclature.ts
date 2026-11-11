@@ -394,6 +394,13 @@ async function assertProductDetailsMaterial(v: ProductFormValues): Promise<void>
   if (wrong) throw new Error("Все детали изделия должны быть выбранного материала");
 }
 
+function assertPositiveIntegerQuantity(quantity: number, what: "детали" | "крепежа") {
+  // isSafeInteger отвергает NaN, Infinity и дробные значения без округления.
+  if (!Number.isSafeInteger(quantity) || quantity < 1) {
+    throw new Error(`Количество ${what} в составе должно быть целым числом не меньше 1`);
+  }
+}
+
 function validateProduct(v: ProductFormValues) {
   if (!v.name.trim()) throw new Error("Название изделия обязательно");
   if (!v.materialId) throw new Error("Укажите материал изделия");
@@ -402,8 +409,12 @@ function validateProduct(v: ProductFormValues) {
   // Одна деталь входит в изделие одной строкой (номер — часть самой детали).
   const seen = new Set<string>();
   for (const d of v.details) {
+    assertPositiveIntegerQuantity(d.quantity, "детали");
     if (seen.has(d.detailId)) throw new Error("Повторяющаяся деталь в составе изделия");
     seen.add(d.detailId);
+  }
+  for (const f of v.fasteners) {
+    assertPositiveIntegerQuantity(f.quantity, "крепежа");
   }
 }
 
