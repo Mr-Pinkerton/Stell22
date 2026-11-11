@@ -1,4 +1,4 @@
-import { businessCalendarDate, businessDateKey, calendarDateKey } from "@/lib/dates";
+import { businessCalendarDate, businessDateKey, startOfBusinessDay } from "@/lib/dates";
 import type { DashboardPeriod } from "@/lib/dashboard-period";
 import {
   buildStandardWeeksInPeriod,
@@ -309,15 +309,15 @@ export function buildWasteByDay(
 ): DashboardWasteDay[] {
   const byDay = new Map(source.torcovkaDays.map((d) => [d.date, d]));
   const days: DashboardWasteDay[] = [];
-  let cursor = new Date(period.start);
-  let i = 0;
-  while (cursor <= period.end && i < 14) {
-    const iso = calendarDateKey(cursor);
+  let cursor = startOfBusinessDay(businessCalendarDate(period.start));
+  const endKey = businessDateKey(businessCalendarDate(period.end));
+  for (;;) {
+    const iso = businessDateKey(cursor);
+    if (iso > endKey) break;
     const d = byDay.get(iso);
     const pct = d && d.takenM > 0 ? Math.round(((d.takenM - d.producedM) / d.takenM) * 100) : 0;
-    days.push({ date: iso.slice(8, 10) + "." + iso.slice(5, 7), pct: Math.max(0, pct) });
-    cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
-    i += 1;
+    days.push({ date: `${iso.slice(8, 10)}.${iso.slice(5, 7)}`, pct: Math.max(0, pct) });
+    cursor = new Date(cursor.getTime() + 86_400_000);
   }
   return days;
 }
