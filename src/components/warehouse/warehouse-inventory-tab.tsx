@@ -335,10 +335,13 @@ function DraftLineRow({
         <Input
           type="number"
           min={0}
+          step={1}
           value={line.actualQty}
           onChange={(e) => {
             const parsed = Number(e.target.value);
-            if (Number.isFinite(parsed) && parsed >= 0) onActualChange(parsed);
+            if (Number.isFinite(parsed) && Number.isInteger(parsed) && parsed >= 0) {
+              onActualChange(parsed);
+            }
           }}
           className="border-border mx-auto h-9 w-24 rounded-lg text-center tabular-nums"
         />
