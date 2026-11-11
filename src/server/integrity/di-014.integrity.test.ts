@@ -1,5 +1,12 @@
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
-vi.mock("@/server/session", () => ({ requireAdmin: async () => {} }));
+vi.mock("@/server/session", () => ({
+  requireAdmin: async () => ({
+    id: "integrity-admin",
+    name: "Admin",
+    email: "admin@test.local",
+    role: "ADMIN",
+  }),
+}));
 vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} }));
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";

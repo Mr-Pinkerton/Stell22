@@ -110,17 +110,24 @@ function valuesToData(v: EmployeeFormValues) {
 }
 
 export async function createEmployee(values: EmployeeFormValues): Promise<Employee> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   if (!values.fullName.trim()) throw new Error("ФИО обязательно");
   await assertActivePin(values.pin.trim()); // новый сотрудник всегда ACTIVE
 
-  const created = await prisma.employee.create({
-    data: { ...valuesToData(values), status: "ACTIVE" },
-  });
-  await writeChangeLog({
-    entity: "Employee",
-    entityId: created.id,
-    newValues: auditEmployee(created),
+  const created = await prisma.$transaction(async (tx) => {
+    const row = await tx.employee.create({
+      data: { ...valuesToData(values), status: "ACTIVE" },
+    });
+    await writeChangeLog(
+      {
+        entity: "Employee",
+        entityId: row.id,
+        userId: admin.id,
+        newValues: auditEmployee(row),
+      },
+      tx,
+    );
+    return row;
   });
   revalidatePath(EMPLOYEES_PATH);
   return serializeEmployee(created);
@@ -130,7 +137,7 @@ export async function updateEmployee(
   id: string,
   values: EmployeeFormValues,
 ): Promise<Employee> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   if (!values.fullName.trim()) throw new Error("ФИО обязательно");
 
   const before = await prisma.employee.findUnique({ where: { id } });
@@ -139,42 +146,60 @@ export async function updateEmployee(
   // будет при возврате в ACTIVE (restoreEmployee).
   if (before.status === "ACTIVE") await assertActivePin(values.pin.trim(), id);
 
-  const updated = await prisma.employee.update({
-    where: { id },
-    data: valuesToData(values),
-  });
-  await writeChangeLog({
-    entity: "Employee",
-    entityId: id,
-    oldValues: auditEmployee(before),
-    newValues: { ...auditEmployee(updated), pinChanged: before.pin !== updated.pin },
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.employee.update({
+      where: { id },
+      data: valuesToData(values),
+    });
+    await writeChangeLog(
+      {
+        entity: "Employee",
+        entityId: id,
+        userId: admin.id,
+        oldValues: auditEmployee(before),
+        newValues: { ...auditEmployee(row), pinChanged: before.pin !== row.pin },
+      },
+      tx,
+    );
+    return row;
   });
   revalidatePath(EMPLOYEES_PATH);
   return serializeEmployee(updated);
 }
 
-async function setStatus(id: string, status: "ACTIVE" | "ARCHIVED"): Promise<Employee> {
+async function setStatus(
+  id: string,
+  status: "ACTIVE" | "ARCHIVED",
+  userId: string,
+): Promise<Employee> {
   const before = await prisma.employee.findUnique({ where: { id } });
   if (!before) throw new Error("Сотрудник не найден");
 
-  const updated = await prisma.employee.update({ where: { id }, data: { status } });
-  await writeChangeLog({
-    entity: "Employee",
-    entityId: id,
-    oldValues: { status: before.status },
-    newValues: { status },
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.employee.update({ where: { id }, data: { status } });
+    await writeChangeLog(
+      {
+        entity: "Employee",
+        entityId: id,
+        userId,
+        oldValues: { status: before.status },
+        newValues: { status },
+      },
+      tx,
+    );
+    return row;
   });
   revalidatePath(EMPLOYEES_PATH);
   return serializeEmployee(updated);
 }
 
 export async function archiveEmployee(id: string): Promise<Employee> {
-  await requireAdmin();
-  return setStatus(id, "ARCHIVED");
+  const admin = await requireAdmin();
+  return setStatus(id, "ARCHIVED", admin.id);
 }
 
 export async function restoreEmployee(id: string): Promise<Employee> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   // Возврат в ACTIVE = сотрудник снова сможет войти в терминал по PIN, поэтому
   // формат и уникальность проверяем заново: пока он был в архиве, его PIN мог
   // достаться другому активному сотруднику.
@@ -185,11 +210,11 @@ export async function restoreEmployee(id: string): Promise<Employee> {
   if (!before) throw new Error("Сотрудник не найден");
   await assertActivePin(before.pin.trim(), id);
 
-  return setStatus(id, "ACTIVE");
+  return setStatus(id, "ACTIVE", admin.id);
 }
 
 export async function deleteEmployee(id: string): Promise<void> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const before = await prisma.employee.findUnique({
     where: { id },
     include: { _count: { select: { operations: true } } },
@@ -199,11 +224,17 @@ export async function deleteEmployee(id: string): Promise<void> {
     throw new Error("Нельзя удалить: есть производственные операции. Используйте «В архив».");
   }
 
-  await prisma.employee.delete({ where: { id } });
-  await writeChangeLog({
-    entity: "Employee",
-    entityId: id,
-    oldValues: { fullName: before.fullName, status: before.status },
+  await prisma.$transaction(async (tx) => {
+    await tx.employee.delete({ where: { id } });
+    await writeChangeLog(
+      {
+        entity: "Employee",
+        entityId: id,
+        userId: admin.id,
+        oldValues: { fullName: before.fullName, status: before.status },
+      },
+      tx,
+    );
   });
   revalidatePath(EMPLOYEES_PATH);
 }

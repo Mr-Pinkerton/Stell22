@@ -4,7 +4,12 @@ vi.mock("next/headers", () => ({
   headers: vi.fn(async () => new Headers()),
 }));
 vi.mock("@/server/session", () => ({
-  requireAdmin: async () => {},
+  requireAdmin: async () => ({
+    id: "integrity-admin",
+    name: "Admin",
+    email: "admin@test.local",
+    role: "ADMIN",
+  }),
   requireTerminalEmployee: async (expectedEmployeeId?: string) => ({
     id: expectedEmployeeId ?? "integrity-session-employee",
     fullName: "Integrity Employee",
