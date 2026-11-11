@@ -175,7 +175,7 @@ export async function getSalaryReport(scope?: Period | null): Promise<SalaryRepo
  * обновлённый отчёт.
  */
 export async function markEmployeePaid(employeeId: string): Promise<SalaryReportRow[]> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const unpaid = await prisma.productionOperation.findMany({
     where: { employeeId, isPaid: false, cancelledAt: null },
     select: { id: true },
@@ -216,6 +216,7 @@ export async function markEmployeePaid(employeeId: string): Promise<SalaryReport
       {
         entity: "Payment",
         entityId: payment.id,
+        userId: admin.id,
         newValues: { employeeId, amount, operations: opIds.length },
       },
       tx,

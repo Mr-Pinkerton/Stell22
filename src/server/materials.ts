@@ -47,7 +47,7 @@ export async function getMaterials(): Promise<Material[]> {
 }
 
 export async function createMaterial(values: MaterialFormValues): Promise<Material> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const name = values.name.trim();
   if (!name) throw new Error("Название материала обязательно");
   const { w, h } = requireSection(values);
@@ -58,16 +58,27 @@ export async function createMaterial(values: MaterialFormValues): Promise<Materi
   });
   if (clash) throw new Error(`Материал «${name} ${w}×${h}» уже существует`);
 
-  const created = await prisma.material.create({
-    data: { name, sectionWidthMm: w, sectionHeightMm: h, sortOrder: values.sortOrder ?? 0 },
+  const created = await prisma.$transaction(async (tx) => {
+    const row = await tx.material.create({
+      data: { name, sectionWidthMm: w, sectionHeightMm: h, sortOrder: values.sortOrder ?? 0 },
+    });
+    await writeChangeLog(
+      {
+        entity: "Material",
+        entityId: row.id,
+        userId: admin.id,
+        newValues: serialize(row),
+      },
+      tx,
+    );
+    return row;
   });
-  await writeChangeLog({ entity: "Material", entityId: created.id, newValues: serialize(created) });
   revalidatePath(PATH);
   return serialize(created);
 }
 
 export async function updateMaterial(id: string, values: MaterialFormValues): Promise<Material> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const name = values.name.trim();
   if (!name) throw new Error("Название материала обязательно");
 
@@ -80,51 +91,69 @@ export async function updateMaterial(id: string, values: MaterialFormValues): Pr
   });
   if (clash) throw new Error(`Материал «${name} ${w}×${h}» уже существует`);
 
-  const updated = await prisma.material.update({
-    where: { id },
-    data: {
-      name,
-      sectionWidthMm: w,
-      sectionHeightMm: h,
-      sortOrder: values.sortOrder ?? before.sortOrder,
-    },
-  });
-  await writeChangeLog({
-    entity: "Material",
-    entityId: id,
-    oldValues: serialize(before),
-    newValues: serialize(updated),
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.material.update({
+      where: { id },
+      data: {
+        name,
+        sectionWidthMm: w,
+        sectionHeightMm: h,
+        sortOrder: values.sortOrder ?? before.sortOrder,
+      },
+    });
+    await writeChangeLog(
+      {
+        entity: "Material",
+        entityId: id,
+        userId: admin.id,
+        oldValues: serialize(before),
+        newValues: serialize(row),
+      },
+      tx,
+    );
+    return row;
   });
   revalidatePath(PATH);
   return serialize(updated);
 }
 
-async function setStatus(id: string, status: "ACTIVE" | "ARCHIVED"): Promise<Material> {
+async function setStatus(
+  id: string,
+  status: "ACTIVE" | "ARCHIVED",
+  userId: string,
+): Promise<Material> {
   const before = await prisma.material.findUnique({ where: { id } });
   if (!before) throw new Error("Материал не найден");
-  const updated = await prisma.material.update({ where: { id }, data: { status } });
-  await writeChangeLog({
-    entity: "Material",
-    entityId: id,
-    oldValues: { status: before.status },
-    newValues: { status },
+  const updated = await prisma.$transaction(async (tx) => {
+    const row = await tx.material.update({ where: { id }, data: { status } });
+    await writeChangeLog(
+      {
+        entity: "Material",
+        entityId: id,
+        userId,
+        oldValues: { status: before.status },
+        newValues: { status },
+      },
+      tx,
+    );
+    return row;
   });
   revalidatePath(PATH);
   return serialize(updated);
 }
 
 export async function archiveMaterial(id: string): Promise<Material> {
-  await requireAdmin();
-  return setStatus(id, "ARCHIVED");
+  const admin = await requireAdmin();
+  return setStatus(id, "ARCHIVED", admin.id);
 }
 
 export async function restoreMaterial(id: string): Promise<Material> {
-  await requireAdmin();
-  return setStatus(id, "ACTIVE");
+  const admin = await requireAdmin();
+  return setStatus(id, "ACTIVE", admin.id);
 }
 
 export async function deleteMaterial(id: string): Promise<void> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const [batches, details, products, blanks] = await Promise.all([
     prisma.batch.count({ where: { materialId: id } }),
     prisma.detail.count({ where: { materialId: id } }),
@@ -137,11 +166,17 @@ export async function deleteMaterial(id: string): Promise<void> {
   const before = await prisma.material.findUnique({ where: { id } });
   if (!before) throw new Error("Материал не найден");
 
-  await prisma.material.delete({ where: { id } });
-  await writeChangeLog({
-    entity: "Material",
-    entityId: id,
-    oldValues: { name: before.name, status: before.status },
+  await prisma.$transaction(async (tx) => {
+    await tx.material.delete({ where: { id } });
+    await writeChangeLog(
+      {
+        entity: "Material",
+        entityId: id,
+        userId: admin.id,
+        oldValues: { name: before.name, status: before.status },
+      },
+      tx,
+    );
   });
   revalidatePath(PATH);
 }

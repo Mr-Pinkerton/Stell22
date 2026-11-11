@@ -1,5 +1,12 @@
 vi.mock("next/cache", () => ({ revalidatePath: () => {} }));
-vi.mock("@/server/session", () => ({ requireAdmin: async () => {} }));
+vi.mock("@/server/session", () => ({
+  requireAdmin: async () => ({
+    id: "integrity-admin",
+    name: "Admin",
+    email: "admin@test.local",
+    role: "ADMIN",
+  }),
+}));
 vi.mock("@/server/cost-queue", () => ({ enqueueRecalcBatchCosts: async () => {} }));
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +26,7 @@ import {
 import { isAccountConfirmed } from "@/lib/account-balance";
 import {
   createIntegrityClients,
+  ensureIntegrityAdminUser,
   ensureIntegritySchema,
   resetIntegrityFinance,
 } from "./harness";
@@ -44,6 +52,7 @@ describe.skipIf(!enabled)("DI-002 integrity", () => {
 
   beforeEach(async () => {
     await resetIntegrityFinance(prismaA);
+    await ensureIntegrityAdminUser(prismaA);
   });
 
   afterAll(async () => {

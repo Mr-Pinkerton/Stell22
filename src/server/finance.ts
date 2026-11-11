@@ -512,7 +512,7 @@ export async function updateAccount(
  * подтверждение обратно, если счёт завели по ошибке (не удаляя данные).
  */
 export async function setAccountConfirmed(id: string, confirmed: boolean): Promise<FinanceAccount> {
-  await requireAdmin();
+  const admin = await requireAdmin();
   const batchIds: string[] = [];
   await prisma.$transaction(async (tx) => {
     await lockAccountsThenDealsThenBatches(tx, [id], []);
@@ -529,8 +529,11 @@ export async function setAccountConfirmed(id: string, confirmed: boolean): Promi
     for (const dealId of dealIds) {
       batchIds.push(...(await syncDealInternal(dealId, tx)));
     }
+    await writeChangeLog(
+      { entity: "Account", entityId: id, userId: admin.id, newValues: { confirmed } },
+      tx,
+    );
   });
-  await writeChangeLog({ entity: "Account", entityId: id, newValues: { confirmed } });
   await afterTotalsCommit(batchIds);
   revalidatePath(SETTINGS_PATH);
   revalidatePath("/dashboard");
