@@ -376,7 +376,14 @@ export async function updateInventoryLineActual(
   actualQty: number,
 ): Promise<void> {
   await requireAdmin();
-  if (!(actualQty >= 0)) throw new Error("Некорректное количество");
+  if (
+    typeof actualQty !== "number" ||
+    !Number.isFinite(actualQty) ||
+    !Number.isInteger(actualQty) ||
+    actualQty < 0
+  ) {
+    throw new Error("Некорректное количество");
+  }
 
   await prisma.$transaction(async (tx) => {
     const existing = await tx.inventoryLine.findUnique({
