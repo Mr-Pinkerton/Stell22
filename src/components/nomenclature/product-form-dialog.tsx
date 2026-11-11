@@ -40,13 +40,37 @@ import {
 interface DraftFastener {
   id: string;
   nomenclatureId: string;
-  quantity: number;
+  quantity: string;
 }
 
 interface DraftProductDetail {
   id: string;
   detailId: string;
-  quantity: number;
+  quantity: string;
+}
+
+const DETAIL_QTY_ERROR = "Количество детали в составе должно быть целым числом не меньше 1";
+const FASTENER_QTY_ERROR = "Количество крепежа в составе должно быть целым числом не меньше 1";
+
+function parseBomQuantity(raw: string): { ok: true; value: number } | { ok: false; empty: boolean } {
+  if (raw === "") return { ok: false, empty: true };
+  if (!/^[1-9]\d*$/.test(raw)) return { ok: false, empty: false };
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) return { ok: false, empty: false };
+  return { ok: true, value };
+}
+
+function bomQuantityMessage(raw: string, revealEmpty: boolean, message: string): string | null {
+  const parsed = parseBomQuantity(raw);
+  if (parsed.ok) return null;
+  if (parsed.empty && !revealEmpty) return null;
+  return message;
+}
+
+function committedBomQuantity(raw: string): number {
+  const parsed = parseBomQuantity(raw);
+  if (!parsed.ok) throw new Error(DETAIL_QTY_ERROR);
+  return parsed.value;
 }
 
 interface ProductFormDialogProps {
@@ -107,7 +131,7 @@ function ProductFormBody({
       product?.fastenerIds.map((f) => ({
         id: nextId("f"),
         nomenclatureId: f.nomenclatureId,
-        quantity: f.quantity,
+        quantity: String(f.quantity),
       })) ?? [],
   );
   const [detailRows, setDetailRows] = useState<DraftProductDetail[]>(
@@ -115,7 +139,7 @@ function ProductFormBody({
       product?.details.map((d) => ({
         id: nextId("d"),
         detailId: d.detailId,
-        quantity: d.quantity,
+        quantity: String(d.quantity),
       })) ?? [],
   );
   const [extraIds, setExtraIds] = useState<Set<string>>(
@@ -123,6 +147,7 @@ function ProductFormBody({
   );
   const [draftDetailId, setDraftDetailId] = useState("");
   const [draftDetailQty, setDraftDetailQty] = useState("1");
+  const [draftQtyTouched, setDraftQtyTouched] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
 
   // Состав изделия — только детали выбранного материала и сорта (номера
@@ -147,21 +172,26 @@ function ProductFormBody({
     if (!first) return;
     setFastenerRows((rows) => [
       ...rows,
-      { id: nextId("f"), nomenclatureId: first.id, quantity: 1 },
+      { id: nextId("f"), nomenclatureId: first.id, quantity: "1" },
     ]);
   };
 
   const addDetailRow = () => {
     if (!sort || !draftDetailId) return;
-    const qty = Math.max(1, parseInt(draftDetailQty, 10) || 1);
     // Одна деталь входит одной строкой (номер — свойство самой детали).
     if (detailRows.some((r) => r.detailId === draftDetailId)) return;
+    const parsed = parseBomQuantity(draftDetailQty);
+    if (!parsed.ok) {
+      setDraftQtyTouched(true);
+      return;
+    }
     setDetailRows((rows) => [
       ...rows,
-      { id: nextId("d"), detailId: draftDetailId, quantity: qty },
+      { id: nextId("d"), detailId: draftDetailId, quantity: String(parsed.value) },
     ]);
     setDraftDetailId("");
     setDraftDetailQty("1");
+    setDraftQtyTouched(false);
   };
 
   const toggleExtra = (id: string, checked: boolean) => {
@@ -173,13 +203,18 @@ function ProductFormBody({
     });
   };
 
+  const quantitiesOk =
+    detailRows.every((row) => parseBomQuantity(row.quantity).ok) &&
+    fastenerRows.every((row) => parseBomQuantity(row.quantity).ok);
   const canSubmit =
     name.trim().length > 0 &&
     materialId.length > 0 &&
     skuOzon.trim().length > 0 &&
     skuWb.trim().length > 0 &&
     sort !== "" &&
+    quantitiesOk &&
     !pending;
+  const draftQtyMessage = bomQuantityMessage(draftDetailQty, draftQtyTouched, DETAIL_QTY_ERROR);
 
   const handleSubmit = async () => {
     // Проверяем sort первым — это сужает тип до Sort. Кнопка и так disabled при !canSubmit.
@@ -193,11 +228,11 @@ function ProductFormBody({
       packagingId: packagingId || null,
       details: detailRows.map((r) => ({
         detailId: r.detailId,
-        quantity: r.quantity,
+        quantity: committedBomQuantity(r.quantity),
       })),
       fasteners: fastenerRows.map((r) => ({
         nomenclatureId: r.nomenclatureId,
-        quantity: r.quantity,
+        quantity: committedBomQuantity(r.quantity),
       })),
       extraIds: Array.from(extraIds),
     });
@@ -335,7 +370,9 @@ function ProductFormBody({
 
               <FormSection title="Крепёж">
                 <div className="space-y-3">
-                  {fastenerRows.map((row) => (
+                  {fastenerRows.map((row) => {
+                    const quantityMessage = bomQuantityMessage(row.quantity, showErrors, FASTENER_QTY_ERROR);
+                    return (
                     <div key={row.id} className="flex flex-wrap items-end gap-2">
                       <Field id={`fast-${row.id}`} label="Позиция" className="min-w-[12rem] flex-1">
                         <Select
@@ -366,20 +403,30 @@ function ProductFormBody({
                           </SelectContent>
                         </Select>
                       </Field>
-                      <Field id={`fast-qty-${row.id}`} label="Кол-во" className="w-24">
+                      <Field
+                        id={`fast-qty-${row.id}`}
+                        label="Кол-во"
+                        className="w-full max-w-xs"
+                        invalid={quantityMessage != null}
+                      >
                         <Input
                           id={`fast-qty-${row.id}`}
                           type="number"
                           min={1}
-                          className={cn(fieldClass, "tabular-nums")}
+                          step={1}
+                          className={cn(fieldClass, "w-24 tabular-nums")}
                           value={row.quantity}
+                          aria-invalid={quantityMessage != null || undefined}
                           onChange={(e) => {
-                            const qty = Math.max(1, parseInt(e.target.value, 10) || 1);
+                            const quantity = e.target.value;
                             setFastenerRows((rows) =>
-                              rows.map((r) => (r.id === row.id ? { ...r, quantity: qty } : r)),
+                              rows.map((r) => (r.id === row.id ? { ...r, quantity } : r)),
                             );
                           }}
                         />
+                        {quantityMessage ? (
+                          <p className="text-destructive text-xs">{quantityMessage}</p>
+                        ) : null}
                       </Field>
                       <Button
                         type="button"
@@ -394,7 +441,8 @@ function ProductFormBody({
                         <Trash2 className="size-4" />
                       </Button>
                     </div>
-                  ))}
+                    );
+                  })}
                   <Button
                     type="button"
                     variant="brand"
@@ -500,15 +548,25 @@ function ProductFormBody({
                           </SelectContent>
                         </Select>
                       </Field>
-                      <Field id="prod-det-qty" label="Количество" className="w-24">
+                      <Field
+                        id="prod-det-qty"
+                        label="Количество"
+                        className="w-full max-w-xs"
+                        invalid={draftQtyMessage != null}
+                      >
                         <Input
                           id="prod-det-qty"
                           type="number"
                           min={1}
-                          className={cn(fieldClass, "tabular-nums")}
+                          step={1}
+                          className={cn(fieldClass, "w-24 tabular-nums")}
                           value={draftDetailQty}
+                          aria-invalid={draftQtyMessage != null || undefined}
                           onChange={(e) => setDraftDetailQty(e.target.value)}
                         />
+                        {draftQtyMessage ? (
+                          <p className="text-destructive text-xs">{draftQtyMessage}</p>
+                        ) : null}
                       </Field>
                       <Button
                         type="button"
@@ -524,11 +582,11 @@ function ProductFormBody({
 
                     {detailRows.length > 0 && (
                       <ul className="divide-border divide-y rounded-xl border">
-                        {detailRows.map((row) => (
-                          <li
-                            key={row.id}
-                            className="flex items-center gap-3 px-4 py-2.5 text-sm"
-                          >
+                        {detailRows.map((row) => {
+                          const quantityMessage = bomQuantityMessage(row.quantity, showErrors, DETAIL_QTY_ERROR);
+                          return (
+                          <li key={row.id} className="px-4 py-2.5 text-sm">
+                            <div className="flex items-center gap-3">
                             <span className="bg-muted inline-flex size-7 shrink-0 items-center justify-center rounded-md text-sm font-semibold tabular-nums">
                               {detailById.get(row.detailId)?.detailNumber ?? "?"}
                             </span>
@@ -538,13 +596,15 @@ function ProductFormBody({
                             <Input
                               type="number"
                               min={1}
+                              step={1}
                               className={cn(fieldClass, "h-9 w-20 tabular-nums")}
                               value={row.quantity}
+                              aria-invalid={quantityMessage != null || undefined}
                               onChange={(e) => {
-                                const qty = Math.max(1, parseInt(e.target.value, 10) || 1);
+                                const quantity = e.target.value;
                                 setDetailRows((rows) =>
                                   rows.map((r) =>
-                                    r.id === row.id ? { ...r, quantity: qty } : r,
+                                    r.id === row.id ? { ...r, quantity } : r,
                                   ),
                                 );
                               }}
@@ -561,8 +621,13 @@ function ProductFormBody({
                             >
                               <Trash2 className="size-4" />
                             </Button>
+                            </div>
+                            {quantityMessage ? (
+                              <p className="text-destructive mt-1 text-xs">{quantityMessage}</p>
+                            ) : null}
                           </li>
-                        ))}
+                          );
+                        })}
                       </ul>
                     )}
                   </>
