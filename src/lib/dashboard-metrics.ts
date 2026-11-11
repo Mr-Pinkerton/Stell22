@@ -310,7 +310,7 @@ export function buildWasteByDay(
   const byDay = new Map(source.torcovkaDays.map((d) => [d.date, d]));
   const days: DashboardWasteDay[] = [];
   let cursor = startOfBusinessDay(businessCalendarDate(period.start));
-  const endKey = businessDateKey(businessCalendarDate(period.end));
+  const endKey = businessDateKey(period.end);
   for (;;) {
     const iso = businessDateKey(cursor);
     if (iso > endKey) break;

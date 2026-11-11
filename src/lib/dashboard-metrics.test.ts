@@ -1,3 +1,6 @@
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createLocalDate } from "@/lib/dates";
 import { previousDashboardPeriod, resolveDashboardPeriod, type DashboardPeriod } from "@/lib/dashboard-period";
@@ -141,4 +144,61 @@ describe("график отхода покрывает каждый день п�
     expect(waste.at(-1)?.date).toBe("31.01");
   });
 });
+
+describe("конец периода отхода не зависит от зоны хоста", () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const script = `
+    import * as metricsNs from "./src/lib/dashboard-metrics.ts";
+    const metrics = metricsNs.buildWasteByDay ? metricsNs : metricsNs.default;
+    const waste = metrics.buildWasteByDay(
+      {
+        torcovkaDays: [
+          { date: "2026-11-01", takenM: 2, producedM: 1 },
+          { date: "2026-11-14", takenM: 4, producedM: 2 },
+        ],
+      },
+      {
+        mode: "month",
+        start: new Date("2026-10-31T21:00:00.000Z"),
+        end: new Date("2026-11-30T20:59:59.999Z"),
+      },
+    );
+    console.log(JSON.stringify({
+      length: waste.length,
+      first: waste[0],
+      second: waste[1],
+      day14: waste[13],
+      last: waste.at(-1),
+    }));
+  `;
+
+  function run(tz: string) {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", script],
+      { cwd: root, env: { ...process.env, TZ: tz }, encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    return JSON.parse(result.stdout) as {
+      length: number;
+      first: { date: string; pct: number };
+      second: { date: string; pct: number };
+      day14: { date: string; pct: number };
+      last: { date: string; pct: number };
+    };
+  }
+
+  it.each(["UTC", "Europe/Moscow", "Asia/Tokyo"])(
+    "%s: ноябрь 01.11–30.11, 30 дней",
+    (tz) => {
+      const out = run(tz);
+      expect(out.length).toBe(30);
+      expect(out.first).toEqual({ date: "01.11", pct: 50 });
+      expect(out.second).toEqual({ date: "02.11", pct: 0 });
+      expect(out.day14).toEqual({ date: "14.11", pct: 50 });
+      expect(out.last).toEqual({ date: "30.11", pct: 0 });
+    },
+  );
+});
+
 
