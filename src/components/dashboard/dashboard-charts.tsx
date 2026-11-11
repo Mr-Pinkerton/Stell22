@@ -200,7 +200,7 @@ export function DashboardChartsRow({
 
         <Card className="surface-card ring-0">
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">Выручка vs прошлый месяц</CardTitle>
+            <CardTitle className="text-base">Поступления vs прошлый месяц</CardTitle>
           </CardHeader>
           <CardContent>
             <RevenueLineChart data={revenue} />
