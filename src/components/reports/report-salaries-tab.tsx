@@ -47,6 +47,9 @@ const SALARY_HEADERS = [
   "",
 ] as const;
 
+const WEEK_FILTER_NOTE =
+  "Неделя фильтрует историю выплат. К выплате показан весь неоплаченный остаток.";
+
 const SALARY_DAY_HEADERS = ["Дата", "Часы", "Торцовка", "Присадка", "Упаковка", "Итого"];
 
 /** Сводная строка в селекте купюр — сумма по невыплаченным. */
@@ -120,6 +123,9 @@ export function ReportSalariesTab({
       <Card className={cn(tableSurfaceCardClass, "overflow-hidden")}>
         <CardContent className="p-0">
         <TableFilterSlot filters={filters} />
+        <p className="text-muted-foreground border-border border-b px-5 py-3 text-sm">
+          {WEEK_FILTER_NOTE}
+        </p>
         <ExpandableReportTable
           widths={expandableColWidths6}
           header={

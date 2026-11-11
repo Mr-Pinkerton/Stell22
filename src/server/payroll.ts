@@ -14,6 +14,7 @@ import {
 } from "@/server/internal/finance-operations";
 import { formatMoney } from "@/lib/format";
 import { operationEarning, operationRatesFromSnapshots } from "@/lib/payroll";
+import { listSalaryDays, paidHistoryRange } from "@/lib/salary-report";
 import { dayKey } from "@/lib/entries";
 import type { Period } from "@/lib/dates";
 import type { SalaryDayLine, SalaryReportRow } from "@/mocks/report-fixtures";
@@ -89,10 +90,7 @@ function aggregate(items: ComputedOp[]): { produced: number; total: number; days
     byDay.set(day, line);
   }
 
-  const days = [...byDay.values()]
-    .map((d) => ({ ...d, total: round2(d.total) }))
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .slice(0, 31);
+  const days = listSalaryDays([...byDay.values()]);
 
   return { produced, total: round2(total), days };
 }
@@ -142,8 +140,9 @@ export async function getSalaryReport(scope?: Period | null): Promise<SalaryRepo
   unpaidRows.sort((a, b) => b.total - a.total);
 
   // Выплаченные — по фактам выплат, ограничены периодом/неделей по дате выплаты.
+  const paidAt = paidHistoryRange(scope);
   const payments = await prisma.payment.findMany({
-    where: scope ? { paidAt: { gte: scope.start, lte: scope.end } } : undefined,
+    where: paidAt ? { paidAt } : undefined,
     include: { items: true },
     orderBy: { paidAt: "desc" },
   });
