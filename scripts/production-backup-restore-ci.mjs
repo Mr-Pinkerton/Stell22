@@ -1090,6 +1090,47 @@ try {
   );
   if (missingLeft !== "0") fail("missing role left tables behind");
 
+  const loginRun = `pbr${crypto.randomBytes(8).toString("hex")}`;
+  const loginPrepared = procedure(["prepare"], { ...env, STELL22_PBR_RUN: loginRun });
+  assertResult(loginPrepared, "PREPARED");
+  const loginContainer = field(loginPrepared.stdout ?? "", "CONTAINER");
+  const loginSeed = run(
+    "docker",
+    [
+      "exec",
+      "-i",
+      loginContainer,
+      "psql",
+      "-X",
+      "-U",
+      "stell22",
+      "-d",
+      "stell22_pbr_admin",
+      "-q",
+      "-v",
+      "ON_ERROR_STOP=1",
+      "-f",
+      "-",
+    ],
+    {
+      input:
+        "CREATE ROLE stell22_app WITH NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT LOGIN NOREPLICATION NOBYPASSRLS;\n",
+    },
+  );
+  if (loginSeed.status !== 0) fail("could not precreate login role");
+  const loginResult = procedure(
+    ["restore", packed.archive, trust, control, field(loginPrepared.stdout ?? "", "EVIDENCE_FILE")],
+    { ...env, STELL22_PBR_RUN: loginRun },
+  );
+  assertResult(loginResult, "REFUSED_ROLE");
+  const loginStill = psql(
+    loginContainer,
+    "stell22_pbr_admin",
+    "SELECT rolcanlogin FROM pg_roles WHERE rolname = 'stell22_app';",
+  );
+  if (loginStill !== "t") fail("existing login role was rewritten");
+
+  console.log("[production-backup-restore-ci] login-role=refused");
   console.log("[production-backup-restore-ci] roles=restored");
   console.log("[production-backup-restore-ci] missing-role=rolled-back");
   console.log("[production-backup-restore-ci] restore=verified");

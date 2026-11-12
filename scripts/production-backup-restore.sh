@@ -758,7 +758,7 @@ schema_fingerprints() {
 }
 
 assert_restore_roles() {
-  if ! restricted=$(psql_at "$ADMIN_DB" "SELECT count(*) FROM pg_catalog.pg_roles WHERE rolname IN ('stell22_migrator', 'stell22_app') AND NOT rolsuper"); then
+  if ! restricted=$(psql_at "$ADMIN_DB" "SELECT count(*) FROM pg_catalog.pg_roles WHERE rolname IN ('stell22_migrator', 'stell22_app') AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolinherit AND NOT rolcanlogin AND NOT rolreplication AND NOT rolbypassrls"); then
     finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
   fi
   restricted=$(printf '%s' "$restricted" | tr -d '[:space:]')

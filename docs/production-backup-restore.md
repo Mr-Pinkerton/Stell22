@@ -58,8 +58,9 @@ file.
    NOINHERIT NOLOGIN NOREPLICATION NOBYPASSRLS`. This lets `OWNER` and `GRANT`
    statements in the archive replay. It does not create a production login
    and it does not authorize role split. Any other missing role is still a
-   SQL error. After replay, a superuser among these two roles is
-   `REFUSED_ROLE` and the container is kept.
+   SQL error. If either role has login, superuser, createdb, createrole,
+   inherit, replication, or bypassrls, the result is `REFUSED_ROLE` and the
+   container is kept.
 7. Restore with one transaction and `ON_ERROR_STOP`. A SQL error that leaves
    no tables is `FAILED_RESTORE_SQL`. Leftover tables are `FAILED_PARTIAL`.
    The destination is kept for evidence. Nothing is dropped to hide that
