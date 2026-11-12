@@ -53,10 +53,19 @@ file.
    integrity database name, and the application container names. Data is
    on tmpfs, not on a named volume. Production volume names are refused.
 5. Refuse `stell22_pbr_dst` if it already exists.
-6. Restore with one transaction. A SQL error that leaves no tables is
-   `FAILED_RESTORE_SQL`. Leftover tables are `FAILED_PARTIAL`. The destination
-   is kept for evidence. Nothing is dropped to hide that state.
-7. Read the destination again in a separate `psql`. Compare table count,
+6. Inside that disposable server, create `stell22_migrator` and `stell22_app`
+   when they are absent. Both are `NOSUPERUSER NOCREATEDB NOCREATEROLE
+   NOINHERIT NOLOGIN NOREPLICATION NOBYPASSRLS`. This lets `OWNER` and `GRANT`
+   statements in the archive replay. It does not create a production login
+   and it does not authorize role split. Any other missing role is still a
+   SQL error. If either role has login, superuser, createdb, createrole,
+   inherit, replication, or bypassrls, the result is `REFUSED_ROLE` and the
+   container is kept.
+7. Restore with one transaction and `ON_ERROR_STOP`. A SQL error that leaves
+   no tables is `FAILED_RESTORE_SQL`. Leftover tables are `FAILED_PARTIAL`.
+   The destination is kept for evidence. Nothing is dropped to hide that
+   state.
+8. Read the destination again in a separate `psql`. Compare table count,
    constraint count, migration count, the SHA-256 of the ordered migration
    names, the column fingerprint, the constraint fingerprint, `P1_ROW`, and
    `P1_STATE`. The column fingerprint is ordinary public columns. It uses
@@ -74,7 +83,7 @@ file.
    `APPLIED` only when that single row has `finished_at` set, `rolled_back_at`
    empty, and `applied_steps_count` greater than zero. A failed or unfinished
    row stays `NOT_APPLIED`. Neither line is a P1 apply result.
-8. Print `RESULT=RESTORE_VERIFIED` only after that second read matches the
+9. Print `RESULT=RESTORE_VERIFIED` only after that second read matches the
    control file. Required digest keys include `column_fingerprint` and
    `constraint_fingerprint`. The control file contains counts and digests,
    not business rows.
