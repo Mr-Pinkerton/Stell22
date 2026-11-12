@@ -14,7 +14,11 @@
 #
 # RESTORE_VERIFIED means the isolated PostgreSQL 17 destination passed the
 # independent checks below. It does not authorize production restore, P1
-# apply, role split, or deploy. P1_ROW is whether that migration row exists.
+# apply, role split, or deploy. Before replay, this disposable server creates
+# stell22_migrator and stell22_app when they are absent. Both are NOSUPERUSER
+# and NOLOGIN. That only lets OWNER and GRANT statements in the archive
+# replay here. It does not create a production login. P1_ROW is whether that
+# migration row exists.
 # P1_STATE is APPLIED only when that one row finished and was not rolled
 # back. A failed or unfinished row is not applied.
 #
@@ -753,10 +757,49 @@ schema_fingerprints() {
   fi
 }
 
+assert_restore_roles() {
+  if ! restricted=$(psql_at "$ADMIN_DB" "SELECT count(*) FROM pg_catalog.pg_roles WHERE rolname IN ('stell22_migrator', 'stell22_app') AND NOT rolsuper"); then
+    finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+  fi
+  restricted=$(printf '%s' "$restricted" | tr -d '[:space:]')
+  if [ "$restricted" != "2" ]; then
+    finish 1 "RESULT=REFUSED_ROLE" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+  fi
+}
+
+ensure_restore_roles() {
+  if ! migrator=$(psql_at "$ADMIN_DB" "SELECT count(*) FROM pg_catalog.pg_roles WHERE rolname = 'stell22_migrator'"); then
+    finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+  fi
+  migrator=$(printf '%s' "$migrator" | tr -d '[:space:]')
+  if [ "$migrator" = "0" ]; then
+    if ! docker exec "$CONTAINER" \
+      psql -X -U stell22 -d "$ADMIN_DB" -q -v ON_ERROR_STOP=1 \
+      -c "CREATE ROLE stell22_migrator WITH NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOLOGIN NOREPLICATION NOBYPASSRLS" \
+      >"$(dirname "$EVIDENCE")/psql.err" 2>&1; then
+      finish 1 "RESULT=FAILED_RESTORE_SQL" "ROLLBACK=YES" "PUBLIC_TABLES=0" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+    fi
+  fi
+  if ! app=$(psql_at "$ADMIN_DB" "SELECT count(*) FROM pg_catalog.pg_roles WHERE rolname = 'stell22_app'"); then
+    finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+  fi
+  app=$(printf '%s' "$app" | tr -d '[:space:]')
+  if [ "$app" = "0" ]; then
+    if ! docker exec "$CONTAINER" \
+      psql -X -U stell22 -d "$ADMIN_DB" -q -v ON_ERROR_STOP=1 \
+      -c "CREATE ROLE stell22_app WITH NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOLOGIN NOREPLICATION NOBYPASSRLS" \
+      >"$(dirname "$EVIDENCE")/psql.err" 2>&1; then
+      finish 1 "RESULT=FAILED_RESTORE_SQL" "ROLLBACK=YES" "PUBLIC_TABLES=0" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
+    fi
+  fi
+  assert_restore_roles
+}
+
 restore_sql() {
   if destination_exists; then
     finish 1 "RESULT=REFUSED_POPULATED" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
   fi
+  ensure_restore_roles
   if ! psql_at "$ADMIN_DB" "CREATE DATABASE ${DEST_DB}" >/dev/null; then
     finish 1 "RESULT=UNCERTAIN" "EVIDENCE=KEPT" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE"
   fi
@@ -778,6 +821,7 @@ restore_sql() {
       *) finish 1 "RESULT=FAILED_PARTIAL" "EVIDENCE=KEPT" "PUBLIC_TABLES=$left" "CONTAINER=$CONTAINER" "EVIDENCE_FILE=$EVIDENCE" ;;
     esac
   fi
+  assert_restore_roles
 }
 
 load_controls() {

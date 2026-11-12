@@ -1005,6 +1005,93 @@ try {
   if (still.status !== 0 || !(still.stdout ?? "").includes(probeId))
     fail("failed cleanup removed the container");
 
+  const roleDir = posixTemp();
+  const roleName = "stell22_2026-10-28_03-00-01.sql.gz";
+  const roleSql = [
+    "-- PostgreSQL database dump",
+    `\\restrict stell22pbrtesttoken`,
+    `-- ${secretMarker}`,
+    "CREATE TABLE stell22_pbr_control (id integer PRIMARY KEY, n integer NOT NULL);",
+    "INSERT INTO stell22_pbr_control (id, n) VALUES (1, 1), (2, 2);",
+    "ALTER TABLE stell22_pbr_control OWNER TO stell22_migrator;",
+    "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE stell22_pbr_control TO stell22_app;",
+    "GRANT USAGE ON SCHEMA public TO stell22_app;",
+    'CREATE TABLE "_prisma_migrations" (id text PRIMARY KEY, migration_name text NOT NULL, finished_at timestamptz, rolled_back_at timestamptz, applied_steps_count integer NOT NULL);',
+    "ALTER TABLE \"_prisma_migrations\" OWNER TO stell22_migrator;",
+    "GRANT SELECT ON TABLE \"_prisma_migrations\" TO stell22_app;",
+    `INSERT INTO "_prisma_migrations" (id, migration_name, finished_at, rolled_back_at, applied_steps_count) VALUES ('m1', '${migrationName}', '2026-01-01 00:00:00+00', NULL, 1);`,
+    "\\unrestrict stell22pbrtesttoken",
+    "-- PostgreSQL database dump complete",
+    "",
+  ].join("\n");
+  const rolePacked = pack(roleDir, roleName, roleSql);
+  const roleTrust = trustFile(roleDir, roleName, rolePacked.digest, "synthetic-selector");
+  const roleControl = controls(roleDir, withSchema({
+    public_tables: "2",
+    public_constraints: "2",
+    migration_rows: "1",
+    migration_names_sha256: migrationSha,
+    p1_row: "ABSENT",
+    p1_applied: "NOT_APPLIED",
+    control_rows: "2",
+  }));
+  const roleRun = `pbr${crypto.randomBytes(8).toString("hex")}`;
+  const roleResult = procedure(["run", rolePacked.archive, roleTrust, roleControl], {
+    ...env,
+    STELL22_PBR_SHA256: rolePacked.digest,
+    STELL22_PBR_RUN: roleRun,
+  });
+  assertResult(roleResult, "RESTORE_VERIFIED");
+  const roleContainer = field(roleResult.stdout ?? "", "CONTAINER");
+  const roleFlags = psql(
+    roleContainer,
+    "stell22_pbr_admin",
+    "SELECT rolname || ':' || rolsuper::text || ':' || rolcanlogin::text FROM pg_roles WHERE rolname IN ('stell22_migrator', 'stell22_app') ORDER BY rolname;",
+  );
+  if (roleFlags !== "stell22_app:false:false\nstell22_migrator:false:false") {
+    fail("restore roles are not restricted");
+  }
+  const roleOwner = psql(
+    roleContainer,
+    "stell22_pbr_dst",
+    "SELECT pg_get_userbyid(c.relowner) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname = 'stell22_pbr_control';",
+  );
+  if (roleOwner !== "stell22_migrator") fail("table owner was not restored");
+  const roleGrant = psql(
+    roleContainer,
+    "stell22_pbr_dst",
+    "SELECT has_table_privilege('stell22_app', 'public.stell22_pbr_control', 'INSERT') AND has_schema_privilege('stell22_app', 'public', 'USAGE');",
+  );
+  if (roleGrant !== "t") fail("application grants were not restored");
+
+  const missingDir = posixTemp();
+  const missingName = "stell22_2026-10-28_03-00-02.sql.gz";
+  const missingSql = [
+    "-- PostgreSQL database dump",
+    "CREATE TABLE stell22_pbr_control (id integer PRIMARY KEY, n integer NOT NULL);",
+    "ALTER TABLE stell22_pbr_control OWNER TO stell22_absent;",
+    "-- PostgreSQL database dump complete",
+    "",
+  ].join("\n");
+  const missingPacked = pack(missingDir, missingName, missingSql);
+  const missingTrust = trustFile(missingDir, missingName, missingPacked.digest, "synthetic-selector");
+  const missingResult = procedure(["run", missingPacked.archive, missingTrust, roleControl], {
+    ...env,
+    STELL22_PBR_SHA256: missingPacked.digest,
+    STELL22_PBR_RUN: `pbr${crypto.randomBytes(8).toString("hex")}`,
+  });
+  assertResult(missingResult, "FAILED_RESTORE_SQL");
+  if (field(missingResult.stdout ?? "", "ROLLBACK") !== "YES") fail("missing role did not roll back");
+  const missingContainer = field(missingResult.stdout ?? "", "CONTAINER");
+  const missingLeft = psql(
+    missingContainer,
+    "stell22_pbr_dst",
+    "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p');",
+  );
+  if (missingLeft !== "0") fail("missing role left tables behind");
+
+  console.log("[production-backup-restore-ci] roles=restored");
+  console.log("[production-backup-restore-ci] missing-role=rolled-back");
   console.log("[production-backup-restore-ci] restore=verified");
   console.log("[production-backup-restore-ci] p1=separate");
   console.log("[production-backup-restore-ci] repeated=refused");

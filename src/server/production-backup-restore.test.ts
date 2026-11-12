@@ -231,6 +231,23 @@ afterAll(() => {
 });
 
 describe("production backup restore verification", () => {
+  it("creates disposable migrator and app roles without superuser and still refuses production containers", () => {
+    expect(scriptSource).toMatch(
+      /CREATE ROLE stell22_migrator WITH NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOLOGIN NOREPLICATION NOBYPASSRLS/,
+    );
+    expect(scriptSource).toMatch(
+      /CREATE ROLE stell22_app WITH NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOLOGIN NOREPLICATION NOBYPASSRLS/,
+    );
+    expect(scriptSource).toMatch(
+      /psql -X -U stell22 -d "\$DEST_DB" -q -v ON_ERROR_STOP=1 \$single -f -/,
+    );
+    expect(scriptSource).not.toMatch(/ON_ERROR_STOP=0/);
+    expect(scriptSource).not.toMatch(/\bSUPERUSER\b/);
+    expect(scriptSource).toMatch(
+      /grep -x -q -e stell22-db-prod -e stell22-app -e stell22-caddy/,
+    );
+  });
+
   it("parses as POSIX sh and does not call the production restore entry point", () => {
     const syntax = runShell('sh -n "$1"', [scriptPath]);
     expect(syntax.status).toBe(0);
