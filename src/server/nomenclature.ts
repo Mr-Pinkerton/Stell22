@@ -561,13 +561,22 @@ export async function restoreProduct(id: string): Promise<Product> {
 
 export async function deleteProduct(id: string): Promise<void> {
   await requireAdmin();
-  const [goals, costs, stock] = await Promise.all([
+  // Sale, Supply и ProductionOperation.productId — строки без внешнего ключа.
+  // Считаем их в том же чтении, что цели, себестоимость и склад, до транзакции
+  // удаления. Окно с одновременной записью продажи, поставки или операции этим
+  // не закрывается: для этого нужен FK или блокировка тех писателей.
+  const [goals, costs, stock, sales, supplies, operations] = await Promise.all([
     prisma.goal.count({ where: { productId: id } }),
     prisma.productCost.count({ where: { productId: id } }),
     prisma.productStock.count({ where: { productId: id } }),
+    prisma.sale.count({ where: { productId: id } }),
+    prisma.supply.count({ where: { productId: id } }),
+    prisma.productionOperation.count({ where: { productId: id } }),
   ]);
-  if (goals + costs + stock > 0) {
-    throw new Error("Нельзя удалить: изделие используется (цели/себестоимость/склад). Используйте «В архив».");
+  if (goals + costs + stock + sales + supplies + operations > 0) {
+    throw new Error(
+      "Нельзя удалить: изделие используется (цели/себестоимость/склад/продажи/поставки/производство). Используйте «В архив».",
+    );
   }
   const before = await prisma.product.findUnique({ where: { id } });
   if (!before) throw new Error("Изделие не найдено");
