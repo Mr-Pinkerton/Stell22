@@ -225,3 +225,6 @@ jobs:
 
       - name: Synthetic disposable restore
         run: node scripts/production-backup-restore-ci.mjs
+
+      - name: Disposable role bootstrap refusals
+        run: node scripts/db-role-bootstrap-ci.mjs
