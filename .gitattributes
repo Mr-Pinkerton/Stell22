@@ -5,3 +5,4 @@ docker/p1-oneshot/debs/*.deb binary
 docker/p1-oneshot/debs/SHA256SUMS text eol=lf
 docker/p1-oneshot/debs/PROVENANCE.txt text eol=lf
 scripts/admin-corrections-release.sh text eol=lf
+prisma/migrations/**/migration.sql text eol=lf
