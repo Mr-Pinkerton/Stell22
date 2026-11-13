@@ -148,6 +148,57 @@ describe("disposable statement migration operator", () => {
     ).toBe("STOP_VOLUME");
   });
 
+  it("refuses a 64-hex volume even when tmpfs is present", () => {
+    const blocked = {
+      ...identity(),
+      inspect: {
+        ...identity().inspect,
+        dataTmpfs: true,
+        mounts: [
+          { type: "tmpfs", destination: "/var/lib/postgresql/data", name: "" },
+          { type: "volume", destination: "/var/lib/docker/volumes/data", name: "d".repeat(64) },
+        ],
+      },
+    };
+    expect(assessDisposableIdentity(blocked)).toEqual({ ok: false, code: "STOP_VOLUME" });
+    let versionCalled = false;
+    let historyCalled = false;
+    let migrateCalled = false;
+    const result = runDisposableStatementMigration({
+      identity: blocked,
+      inventory: image,
+      readServerVersion: () => {
+        versionCalled = true;
+        return "170011";
+      },
+      readHistory: () => {
+        historyCalled = true;
+        return before;
+      },
+      confirmRole: () => "stell22_migrator",
+      migrate: () => {
+        migrateCalled = true;
+        return { status: 0 };
+      },
+    });
+    expect(result.code).toBe("STOP_VOLUME");
+    expect(versionCalled).toBe(false);
+    expect(historyCalled).toBe(false);
+    expect(migrateCalled).toBe(false);
+  });
+
+  it("admits official tmpfs evidence when no volume is mounted", () => {
+    const admitted = assessDisposableIdentity({
+      ...identity(),
+      inspect: {
+        ...identity().inspect,
+        dataTmpfs: true,
+        mounts: [{ type: "tmpfs", destination: "/var/lib/postgresql/data", name: "" }],
+      },
+    });
+    expect(admitted).toEqual({ ok: true, code: "DISPOSABLE_IDENTITY" });
+  });
+
   it("does not retry after an uncertain migration attempt", () => {
     const first = harness({ before, after: applied, migrate: () => { throw new Error("unknown"); } });
     expect(first.result).toMatchObject({ ok: false, code: "STOP_UNCERTAIN", attempted: true, retryMigration: "NO", schemaRestore: "NO" });

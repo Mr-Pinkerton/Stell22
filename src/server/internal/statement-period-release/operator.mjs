@@ -17,7 +17,6 @@ export const MIGRATOR_ROLE = "stell22_migrator";
 const RENAMED_DATABASE = /^p1as_[0-9a-f]{8}$/;
 const CONTAINER_NAME = /^stell22-pbr-[a-z0-9]{12,32}$/;
 const CONTAINER_ID = /^[0-9a-f]{64}$/;
-const ANON_VOLUME = /^[0-9a-f]{64}$/;
 const PRODUCTION_CONTAINERS = new Set(["stell22-db-prod", "stell22-app", "stell22-caddy", "stell22-db"]);
 const PERSISTENT_DATABASES = new Set(PERSISTENT_DATABASE_NAMES);
 const VOLUME_NAMES = new Set(["db-data", "caddy-data", "caddy-config"]);
@@ -118,9 +117,8 @@ export function assessDisposableIdentity(input) {
   const dataTmpfs = mounts.some((mount) => mount?.type === "tmpfs" && mount?.destination === "/var/lib/postgresql/data");
   if (inspect.dataTmpfs !== true && !dataTmpfs) return { ok: false, code: "STOP_VOLUME" };
   for (const mount of mounts) {
-    if (VOLUME_NAMES.has(mount?.name)) return { ok: false, code: "STOP_VOLUME" };
-    if (mount?.type === "volume" && !ANON_VOLUME.test(String(mount?.name ?? ""))) return { ok: false, code: "STOP_VOLUME" };
-    if (mount?.type !== "tmpfs" && mount?.type !== "volume") return { ok: false, code: "STOP_VOLUME" };
+    if (mount?.type === "volume" || VOLUME_NAMES.has(mount?.name)) return { ok: false, code: "STOP_VOLUME" };
+    if (mount?.type !== "tmpfs") return { ok: false, code: "STOP_VOLUME" };
   }
   return { ok: true, code: "DISPOSABLE_IDENTITY" };
 }
