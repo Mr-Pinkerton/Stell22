@@ -174,27 +174,17 @@ prove_container() {
   if ! mounts=$(docker inspect -f '{{range .Mounts}}{{.Type}}|{{.Name}}|{{.Destination}}{{println}}{{end}}' "$CONTAINER"); then
     finish 1 "RESULT=REFUSED_CONTAINER"
   fi
-  saw_data=0
   while IFS= read -r mount; do
     [ -n "$mount" ] || continue
     type=${mount%%|*}
     rest=${mount#*|}
     volname=${rest%%|*}
-    dest=${rest#*|}
     case "$volname" in
       db-data|caddy-data|caddy-config) finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER" ;;
     esac
     case "$type" in
-      tmpfs)
-        if [ "$dest" = "/var/lib/postgresql/data" ]; then
-          saw_data=1
-        fi
-        ;;
-      volume)
-        if ! hex64 "$volname"; then
-          finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER"
-        fi
-        ;;
+      tmpfs) ;;
+      volume) finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER" ;;
       *) finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER" ;;
     esac
   done <<EOF
@@ -204,12 +194,49 @@ EOF
     finish 1 "RESULT=REFUSED_CONTAINER"
   fi
   case "$tmpfs" in
-    *'"/var/lib/postgresql/data"'*"size=${TMPFS_SIZE}"*) saw_data=1 ;;
+    *'"/var/lib/postgresql/data"'*"size=${TMPFS_SIZE}"*) ;;
     *) finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER" ;;
   esac
-  if [ "$saw_data" -ne 1 ]; then
+  if ! pgdata=$(docker exec "$CONTAINER" sh -c 'readlink -f "${PGDATA:-/var/lib/postgresql/data}"'); then
+    finish 1 "RESULT=REFUSED_CONTAINER"
+  fi
+  pgdata=$(printf '%s' "$pgdata" | tr -d '[:space:]')
+  case "$pgdata" in
+    /var/lib/postgresql/data|/var/lib/postgresql/data/*) ;;
+    *) finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER" ;;
+  esac
+  if ! procmounts=$(docker exec "$CONTAINER" cat /proc/mounts); then
+    finish 1 "RESULT=REFUSED_CONTAINER"
+  fi
+  procmounts=$(printf '%s\n' "$procmounts" | tr -d '\r')
+  tmpfs_kb=$((TMPFS_SIZE / 1024))
+  best_len=0
+  best_mnt=""
+  best_type=""
+  best_opts=""
+  while IFS=' ' read -r _dev mnt fstype opts _rest; do
+    [ -n "${mnt:-}" ] || continue
+    case "$pgdata" in
+      "$mnt"|"$mnt"/*) ;;
+      *) continue ;;
+    esac
+    mlen=${#mnt}
+    if [ "$mlen" -gt "$best_len" ]; then
+      best_len=$mlen
+      best_mnt=$mnt
+      best_type=$fstype
+      best_opts=$opts
+    fi
+  done <<EOF
+$procmounts
+EOF
+  if [ "$best_mnt" != "/var/lib/postgresql/data" ] || [ "$best_type" != "tmpfs" ]; then
     finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER"
   fi
+  case "$best_opts" in
+    *"size=${tmpfs_kb}k"*|*"size=${TMPFS_SIZE}"*) ;;
+    *) finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER" ;;
+  esac
   if ! ports=$(docker inspect -f '{{json .NetworkSettings.Ports}}' "$CONTAINER"); then
     finish 1 "RESULT=REFUSED_CONTAINER"
   fi

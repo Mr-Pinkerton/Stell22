@@ -234,6 +234,92 @@ function refusePersistentStorage() {
   if (kept.stdout.trim() !== "1:false") fail("persistent storage was changed");
 }
 
+function startMarkedContainer(extraArgs) {
+  const runId = `pbr${crypto.randomBytes(8).toString("hex")}`;
+  const name = `stell22-pbr-${runId}`;
+  const created = run("docker", [
+    "run",
+    "-d",
+    "--name",
+    name,
+    "--network",
+    "none",
+    "--label",
+    `stell22.production-backup-restore=${runId}`,
+    "--label",
+    "stell22.pbr-owner=disposable",
+    "--memory",
+    "1073741824",
+    "--memory-swap",
+    "1073741824",
+    "--cpus",
+    "1",
+    "--pids-limit",
+    "128",
+    "--restart",
+    "no",
+    "-e",
+    "POSTGRES_HOST_AUTH_METHOD=trust",
+    "-e",
+    "POSTGRES_USER=stell22",
+    "-e",
+    "POSTGRES_PASSWORD=synthetic",
+    "-e",
+    "POSTGRES_DB=stell22_pbr_admin",
+    ...extraArgs,
+    image,
+  ]);
+  if (created.status !== 0) fail("storage postgres was not created");
+  const id = (created.stdout ?? "").trim();
+  containers.push(id);
+  waitReady(id);
+  const marker = psql(
+    id,
+    "stell22_pbr_admin",
+    [
+      "CREATE ROLE stell22_storage_marker NOLOGIN;",
+      "CREATE TABLE stell22_storage_marker (id integer PRIMARY KEY);",
+      "INSERT INTO stell22_storage_marker (id) VALUES (1);",
+      "",
+    ].join("\n"),
+  );
+  if (marker.status !== 0) fail("storage marker was not written");
+  const refused = bootstrap(id, {});
+  expectResult(refused, "REFUSED_PRODUCTION_CONTAINER");
+  const kept = psql(
+    id,
+    "stell22_pbr_admin",
+    "SELECT (SELECT count(*) FROM stell22_storage_marker) || ':' || (SELECT rolcanlogin::text FROM pg_roles WHERE rolname = 'stell22_storage_marker');\n",
+  );
+  if (kept.stdout.trim() !== "1:false") fail("storage marker changed");
+}
+
+function refusePgdataOutsideTmpfs() {
+  startMarkedContainer([
+    "--tmpfs",
+    "/var/lib/postgresql/data:rw,size=1073741824",
+    "--tmpfs",
+    "/var/lib/postgresql/outside:rw,size=1073741824",
+    "-e",
+    "PGDATA=/var/lib/postgresql/outside",
+  ]);
+}
+
+function refuseHexVolume() {
+  const volume = crypto.randomBytes(32).toString("hex");
+  const createdVolume = run("docker", ["volume", "create", volume]);
+  if (createdVolume.status !== 0) fail("hex volume was not created");
+  volumes.push(volume);
+  startMarkedContainer([
+    "--tmpfs",
+    "/var/lib/postgresql/data:rw,size=1073741824",
+    "-e",
+    "PGDATA=/var/lib/postgresql/hexdata",
+    "-v",
+    `${volume}:/var/lib/postgresql/hexdata`,
+  ]);
+}
+
 function refuseWrongState() {
   const id = startContainer();
   const refused = bootstrap(id, {});
@@ -400,11 +486,15 @@ try {
   const named = bootstrap("stell22-db", {});
   expectResult(named, "REFUSED_PRODUCTION_CONTAINER");
   refusePersistentStorage();
+  refusePgdataOutsideTmpfs();
+  refuseHexVolume();
   refuseWrongState();
   refusePartialLogin();
   archiveSuccess();
   console.log("[db-role-bootstrap-ci] production-authorization=refused");
   console.log("[db-role-bootstrap-ci] persistent-storage=refused");
+  console.log("[db-role-bootstrap-ci] pgdata-outside-tmpfs=refused");
+  console.log("[db-role-bootstrap-ci] hex-volume=refused");
   console.log("[db-role-bootstrap-ci] wrong-state=refused");
   console.log("[db-role-bootstrap-ci] partial-login=unchanged");
 } catch (error) {
