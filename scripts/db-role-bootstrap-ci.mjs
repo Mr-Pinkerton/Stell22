@@ -16,6 +16,7 @@ const image =
   "postgres:17-alpine@sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb";
 const confirm = "stell22-db-role-bootstrap-disposable-v1";
 const containers = [];
+const volumes = [];
 
 function fail(message) {
   console.error(`[db-role-bootstrap-ci] ${message}`);
@@ -153,6 +154,9 @@ function cleanup() {
   for (const id of containers.splice(0, containers.length)) {
     run("docker", ["rm", "-f", id]);
   }
+  for (const name of volumes.splice(0, volumes.length)) {
+    run("docker", ["volume", "rm", name]);
+  }
 }
 
 function staticContract() {
@@ -163,6 +167,71 @@ function staticContract() {
   const compose = readFileSync(path.join(root, "docker-compose.prod.yml"), "utf8");
   if (!compose.includes("postgresql://stell22_app:${APP_DB_PASSWORD}@")) fail("app database url changed");
   if (compose.includes("MIGRATOR_DB_PASSWORD")) fail("migrator credential is in the app compose");
+}
+
+function refusePersistentStorage() {
+  const runId = `pbr${crypto.randomBytes(8).toString("hex")}`;
+  const name = `stell22-pbr-${runId}`;
+  const volume = `stell22roleboot${crypto.randomBytes(4).toString("hex")}`;
+  const createdVolume = run("docker", ["volume", "create", volume]);
+  if (createdVolume.status !== 0) fail("persistent volume was not created");
+  volumes.push(volume);
+  const created = run("docker", [
+    "run",
+    "-d",
+    "--name",
+    name,
+    "--network",
+    "none",
+    "--label",
+    `stell22.production-backup-restore=${runId}`,
+    "--label",
+    "stell22.pbr-owner=disposable",
+    "--memory",
+    "1073741824",
+    "--memory-swap",
+    "1073741824",
+    "--cpus",
+    "1",
+    "--pids-limit",
+    "128",
+    "--restart",
+    "no",
+    "-e",
+    "POSTGRES_HOST_AUTH_METHOD=trust",
+    "-e",
+    "POSTGRES_USER=stell22",
+    "-e",
+    "POSTGRES_PASSWORD=synthetic",
+    "-e",
+    "POSTGRES_DB=stell22_pbr_admin",
+    "-v",
+    `${volume}:/var/lib/postgresql/data`,
+    image,
+  ]);
+  if (created.status !== 0) fail("persistent postgres was not created");
+  const id = (created.stdout ?? "").trim();
+  containers.push(id);
+  waitReady(id);
+  const marker = psql(
+    id,
+    "stell22_pbr_admin",
+    [
+      "CREATE ROLE stell22_storage_marker NOLOGIN;",
+      "CREATE TABLE stell22_storage_marker (id integer PRIMARY KEY);",
+      "INSERT INTO stell22_storage_marker (id) VALUES (1);",
+      "",
+    ].join("\n"),
+  );
+  if (marker.status !== 0) fail("storage marker was not written");
+  const refused = bootstrap(id, {});
+  expectResult(refused, "REFUSED_PRODUCTION_CONTAINER");
+  const kept = psql(
+    id,
+    "stell22_pbr_admin",
+    "SELECT (SELECT count(*) FROM stell22_storage_marker) || ':' || (SELECT rolcanlogin::text FROM pg_roles WHERE rolname = 'stell22_storage_marker');\n",
+  );
+  if (kept.stdout.trim() !== "1:false") fail("persistent storage was changed");
 }
 
 function refuseWrongState() {
@@ -330,10 +399,12 @@ try {
   expectResult(production, "REFUSED_PRODUCTION_AUTHORIZATION");
   const named = bootstrap("stell22-db", {});
   expectResult(named, "REFUSED_PRODUCTION_CONTAINER");
+  refusePersistentStorage();
   refuseWrongState();
   refusePartialLogin();
   archiveSuccess();
   console.log("[db-role-bootstrap-ci] production-authorization=refused");
+  console.log("[db-role-bootstrap-ci] persistent-storage=refused");
   console.log("[db-role-bootstrap-ci] wrong-state=refused");
   console.log("[db-role-bootstrap-ci] partial-login=unchanged");
 } catch (error) {

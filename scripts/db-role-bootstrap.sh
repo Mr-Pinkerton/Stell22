@@ -19,6 +19,7 @@ DEST_DB=stell22_pbr_dst
 ADMIN_DB=stell22_pbr_admin
 IMAGE_DIGEST=sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb
 IMAGE_REF="postgres:17-alpine@${IMAGE_DIGEST}"
+TMPFS_SIZE=1073741824
 P1_MIGRATION=20261010210000_psr_p3_s2_b_batch_receipt_provenance
 ABSENT_MIGRATION=20261105120000_statement_period_coverage
 EXPECTED_TABLES=56
@@ -168,6 +169,45 @@ prove_container() {
   fi
   net=$(printf '%s' "$net" | tr -d '[:space:]')
   if [ "$net" != "none" ]; then
+    finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER"
+  fi
+  if ! mounts=$(docker inspect -f '{{range .Mounts}}{{.Type}}|{{.Name}}|{{.Destination}}{{println}}{{end}}' "$CONTAINER"); then
+    finish 1 "RESULT=REFUSED_CONTAINER"
+  fi
+  saw_data=0
+  while IFS= read -r mount; do
+    [ -n "$mount" ] || continue
+    type=${mount%%|*}
+    rest=${mount#*|}
+    volname=${rest%%|*}
+    dest=${rest#*|}
+    case "$volname" in
+      db-data|caddy-data|caddy-config) finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER" ;;
+    esac
+    case "$type" in
+      tmpfs)
+        if [ "$dest" = "/var/lib/postgresql/data" ]; then
+          saw_data=1
+        fi
+        ;;
+      volume)
+        if ! hex64 "$volname"; then
+          finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER"
+        fi
+        ;;
+      *) finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER" ;;
+    esac
+  done <<EOF
+$mounts
+EOF
+  if ! tmpfs=$(docker inspect -f '{{json .HostConfig.Tmpfs}}' "$CONTAINER"); then
+    finish 1 "RESULT=REFUSED_CONTAINER"
+  fi
+  case "$tmpfs" in
+    *'"/var/lib/postgresql/data"'*"size=${TMPFS_SIZE}"*) saw_data=1 ;;
+    *) finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER" ;;
+  esac
+  if [ "$saw_data" -ne 1 ]; then
     finish 1 "RESULT=REFUSED_PRODUCTION_CONTAINER"
   fi
   if ! ports=$(docker inspect -f '{{json .NetworkSettings.Ports}}' "$CONTAINER"); then
