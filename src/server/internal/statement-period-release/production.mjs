@@ -16,7 +16,14 @@ export const INSPECTION_APP = "stell22-statement-inspect";
 export const ENTRYPOINT = "./docker-entrypoint-app-only.sh";
 export const MIGRATOR_ROLE = "stell22_migrator";
 
-const COMMANDS = new Set(["history-preflight", "history-post", "roles", "image", "writers"]);
+const COMMANDS = new Set([
+  "history-preflight",
+  "history-post",
+  "roles",
+  "image",
+  "writers-before",
+  "writers-after",
+]);
 
 function inventory() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -75,6 +82,10 @@ export function classifyRoles(text) {
   return "ROLES_OBSERVED";
 }
 
+function imageId(value) {
+  return /^sha256:[0-9a-f]{64}$/.test(value);
+}
+
 export function classifyImage(text) {
   const facts = parseLines(text);
   const entrypoint = facts.entrypoint ?? "";
@@ -84,10 +95,14 @@ export function classifyImage(text) {
   if (facts.migrationSha256 !== MIGRATION_SHA256 || facts.composeUser !== "stell22_app" || facts.migrateOnStart !== "0") {
     return "STOP_IMAGE";
   }
+  if (!imageId(facts.builtImageId) || !imageId(facts.legacyImageId) || facts.builtImageId === facts.legacyImageId) {
+    return "STOP_IMAGE";
+  }
   return "IMAGE_OBSERVED";
 }
 
-export function classifyWriters(text) {
+export function classifyWriters(text, phase) {
+  const beforeStop = phase === "before";
   const [sessionPart, processPart] = String(text).split(/\r?\nPROCESSES\r?\n/);
   const sessions = String(sessionPart ?? "").replace(/^SESSIONS\r?\n/, "");
   for (const raw of sessions.split(/\r?\n/)) {
@@ -96,7 +111,10 @@ export function classifyWriters(text) {
     const [user, applicationName, backendType] = line.split("|");
     if (backendType !== "client backend") continue;
     const inspection = user === "stell22" && applicationName === INSPECTION_APP;
-    if (!inspection) return "STOP_WRITER";
+    const appSession = user === "stell22_app";
+    if (beforeStop) {
+      if (!inspection && !appSession) return "STOP_WRITER";
+    } else if (!inspection) return "STOP_WRITER";
   }
   for (const raw of String(processPart ?? "").split(/\r?\n/)) {
     const line = raw.trim();
@@ -134,7 +152,8 @@ function main() {
   if (command === "history-preflight" || command === "history-post") printCode(classifyHistory(command, text));
   else if (command === "roles") printCode(classifyRoles(text));
   else if (command === "image") printCode(classifyImage(text));
-  else printCode(classifyWriters(text));
+  else if (command === "writers-before") printCode(classifyWriters(text, "before"));
+  else printCode(classifyWriters(text, "after"));
 }
 
 if (process.argv[1] && process.argv[1].endsWith("production.mjs")) main();
