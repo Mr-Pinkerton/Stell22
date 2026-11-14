@@ -1,6 +1,6 @@
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
@@ -148,11 +148,21 @@ function writeDocker(bin: string, root: string): void {
     "      *) printf '%s\\n' deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef ;;",
     "    esac ;;",
     "  ps)",
+    '    if [ -f "$root/fail-ps" ]; then exit 1; fi',
+    '    if [ -f "$root/fail-ps-later" ]; then',
+    "      n=0",
+    '      if [ -f "$root/ps-count" ]; then n=$(cat "$root/ps-count"); fi',
+    "      n=$((n + 1))",
+    '      printf "%s\\n" "$n" > "$root/ps-count"',
+    '      if [ "$n" -ge 2 ]; then exit 1; fi',
+    "    fi",
     '    if [ -f "$root/containers" ]; then cat "$root/containers"; fi ;;',
     "  volume)",
     "    sub=$1; shift",
     '    case "$sub" in',
-    '      ls) if [ -f "$root/volumes" ]; then cat "$root/volumes"; fi ;;',
+    '      ls)',
+    '        if [ -f "$root/fail-volume-ls" ]; then exit 1; fi',
+    '        if [ -f "$root/volumes" ]; then cat "$root/volumes"; fi ;;',
     '      create) printf "%s\\n" "$1" >> "$root/created-volumes"; printf "%s\\n" "$1" ;;',
     "      *) exit 1 ;;",
     "    esac ;;",
@@ -606,5 +616,53 @@ describe("beget production recovery operator", { timeout: 20000 }, () => {
     expect(resultOf(result)).toBe("UNCERTAIN");
     expect(result.stdout).toContain("CADDY_STARTED=NO");
     expect(readFileSync(toWin(`${ready.root}/docker.log`), "utf8")).not.toContain("stell22-app");
+  });
+
+  it("stops before Compose startup when docker ps fails", () => {
+    const ready = readyFixture();
+    writeText(`${ready.root}/fail-ps`, "1\n");
+    const result = invoke(harnessEnv(ready));
+    expect(resultOf(result)).toBe("REFUSED_DOCKER");
+    expect(result.stdout).toContain("APPLICATION_STARTED=NO");
+    expect(result.stdout).toContain("CADDY_STARTED=NO");
+    const log = readFileSync(toWin(`${ready.root}/docker.log`), "utf8");
+    expect(log).not.toContain(" up ");
+    expect(log).not.toContain("volume rm");
+    expect(existsSync(toWin(`${ready.root}/compose-ups`))).toBe(false);
+    expect(existsSync(toWin(`${ready.state}/beget-recovery.state`))).toBe(false);
+    expect(readFileSync(toWin(`${ready.root}/sql.log`), "utf8")).not.toContain("SELECT 1;");
+  });
+
+  it("stops before Compose startup when docker volume ls fails", () => {
+    const ready = readyFixture();
+    writeText(`${ready.root}/fail-volume-ls`, "1\n");
+    const result = invoke(harnessEnv(ready));
+    expect(resultOf(result)).toBe("REFUSED_DOCKER");
+    expect(result.stdout).toContain("APPLICATION_STARTED=NO");
+    const log = readFileSync(toWin(`${ready.root}/docker.log`), "utf8");
+    expect(log).not.toContain(" up ");
+    expect(log).not.toContain("volume rm");
+    expect(existsSync(toWin(`${ready.root}/compose-ups`))).toBe(false);
+    expect(existsSync(toWin(`${ready.state}/beget-recovery.state`))).toBe(false);
+    expect(readFileSync(toWin(`${ready.root}/sql.log`), "utf8")).not.toContain("SELECT 1;");
+  });
+
+  it("keeps the database when a post-start inventory fails", () => {
+    const ready = readyFixture();
+    writeText(`${ready.root}/fail-ps-later`, "1\n");
+    const result = invoke(harnessEnv(ready));
+    expect(resultOf(result)).toBe("UNCERTAIN");
+    expect(result.stdout).toContain("PHASE=CONTAINER");
+    expect(result.stdout).toContain("APPLICATION_STARTED=NO");
+    expect(result.stdout).toContain("CADDY_STARTED=NO");
+    expect(result.stdout).toContain("CLEANUP=NO");
+    expect(result.stdout).toContain("RETRY=NO");
+    expect(readFileSync(toWin(`${ready.state}/beget-recovery.state`), "utf8")).toContain("phase=CONTAINER");
+    expect(readFileSync(toWin(`${ready.root}/sql.log`), "utf8")).not.toContain("SELECT 1;");
+    const log = readFileSync(toWin(`${ready.root}/docker.log`), "utf8");
+    expect(log).toContain("up -d --no-deps --pull never --no-build db");
+    expect(log).not.toContain("volume rm");
+    expect(log).not.toContain("stell22-app");
+    expect(log).not.toContain("stell22-caddy");
   });
 });
