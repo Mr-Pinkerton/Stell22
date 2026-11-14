@@ -3,6 +3,8 @@
 # Default is refusal. This does not migrate 47 to 48, start the app, or start Caddy.
 # It does not call scripts/restore-db.sh or the disposable restore executors.
 # A partial database is kept. The next invocation refuses instead of retrying.
+# The database is the Compose service db: project stell22, volume stell22_db-data,
+# network stell22_default, container stell22-db-prod. App and Caddy stay stopped.
 set -eu
 umask 077
 
@@ -125,6 +127,26 @@ psql_at() {
   docker exec -i "$CONTAINER" psql -X -U stell22 -d "$DB" -q -v ON_ERROR_STOP=1 -At -c "$1"
 }
 
+compose_identity() {
+  project=$(docker inspect "$CONTAINER" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)
+  service=$(docker inspect "$CONTAINER" --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)
+  oneoff=$(docker inspect "$CONTAINER" --format '{{index .Config.Labels "com.docker.compose.oneoff"}}' 2>/dev/null || true)
+  running_image=$(docker inspect "$CONTAINER" --format '{{.Config.Image}}' 2>/dev/null || true)
+  mount=$(docker inspect "$CONTAINER" --format '{{range .Mounts}}{{.Name}} {{.Destination}}{{println}}{{end}}' 2>/dev/null || true)
+  net=$(docker inspect "$CONTAINER" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{println}}{{end}}' 2>/dev/null || true)
+  alias=$(docker inspect "$CONTAINER" --format '{{range $k, $v := .NetworkSettings.Networks}}{{range $v.Aliases}}{{.}}{{println}}{{end}}{{end}}' 2>/dev/null || true)
+  [ "$(trim "$project")" = "$COMPOSE_PROJECT" ] || return 1
+  [ "$(trim "$service")" = "db" ] || return 1
+  [ "$(trim "$oneoff")" = "False" ] || return 1
+  case "$(trim "$running_image")" in
+    "$IMAGE_REF"|"docker.io/library/$IMAGE_REF") ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "$mount" | grep -x -q -F "$VOLUME /var/lib/postgresql/data" || return 1
+  printf '%s\n' "$net" | grep -x -q -F "$NETWORK" || return 1
+  printf '%s\n' "$alias" | grep -x -q -F "db" || return 1
+}
+
 require_query() {
   got=$(trim "$1")
   want=$(trim "$2")
@@ -166,9 +188,10 @@ if [ "$mode" = "production" ]; then
   PROJECT=/root/Stell22
   BACKUP=/root/stell22-recovery/stell22_2026-10-28_03-00-01.sql.gz
   STATE_DIR=/root/stell22-recovery
+  COMPOSE_PROJECT=stell22
   VOLUME=stell22_db-data
   CONTAINER=stell22-db-prod
-  NETWORK=stell22-db-net
+  NETWORK=stell22_default
   WANT_TABLES=$PRODUCTION_TABLES
   WANT_CONSTRAINTS=$PRODUCTION_CONSTRAINTS
   WANT_MIGRATIONS=$PRODUCTION_MIGRATIONS
@@ -197,6 +220,7 @@ else
   PROJECT=${STELL22_BEGET_RECOVERY_PROJECT:-}
   BACKUP=${STELL22_BEGET_RECOVERY_BACKUP:-}
   STATE_DIR=${STELL22_BEGET_RECOVERY_STATE:-}
+  COMPOSE_PROJECT=${STELL22_BEGET_RECOVERY_COMPOSE_PROJECT:-}
   VOLUME=${STELL22_BEGET_RECOVERY_VOLUME:-}
   CONTAINER=${STELL22_BEGET_RECOVERY_CONTAINER:-}
   NETWORK=${STELL22_BEGET_RECOVERY_NETWORK:-}
@@ -216,11 +240,18 @@ else
     *) stop 1 "RESULT=REFUSED_CONTRACT" ;;
   esac
   case "$VOLUME" in
-    stell22-beget-harness-*) ;;
+    stell22-beget-harness_db-data) ;;
     *) stop 1 "RESULT=REFUSED_CONTRACT" ;;
   esac
+  case "$COMPOSE_PROJECT" in
+    stell22-beget-harness) ;;
+    *) stop 1 "RESULT=REFUSED_CONTRACT" ;;
+  esac
+  if [ "$VOLUME" != "${COMPOSE_PROJECT}_db-data" ] || [ "$NETWORK" != "${COMPOSE_PROJECT}_default" ]; then
+    stop 1 "RESULT=REFUSED_CONTRACT"
+  fi
   case "$NETWORK" in
-    stell22-beget-harness-*) ;;
+    stell22-beget-harness_default) ;;
     *) stop 1 "RESULT=REFUSED_CONTRACT" ;;
   esac
   if [ "$WANT_BACKUP_SHA" = "$BACKUP_SHA" ]; then
@@ -282,6 +313,9 @@ fi
 if ! command -v docker >/dev/null 2>&1 || ! docker version >/dev/null 2>&1; then
   stop 1 "RESULT=REFUSED_DOCKER"
 fi
+if ! docker compose version >/dev/null 2>&1; then
+  stop 1 "RESULT=REFUSED_DOCKER"
+fi
 
 if [ -f "$STATE_DIR/beget-recovery.state" ]; then
   existing=$(awk -F= '$1=="phase" { print $2; exit }' "$STATE_DIR/beget-recovery.state")
@@ -336,27 +370,41 @@ if ! digits "$free_bytes" || [ "$free_bytes" -lt "$MIN_FREE" ]; then
   stop 1 "RESULT=REFUSED_DISK"
 fi
 
-docker volume create "$VOLUME" >/dev/null
+compose_file="$ROOT/docker-compose.prod.yml"
+if ! grep -F -x "    image: ${IMAGE_REF}" "$compose_file" >/dev/null; then
+  stop 1 "RESULT=REFUSED_POSTGRES_IDENTITY"
+fi
+if ! grep -F -x "    container_name: stell22-db-prod" "$compose_file" >/dev/null; then
+  stop 1 "RESULT=REFUSED_COMPOSE"
+fi
+if grep -F -q '5432:5432' "$compose_file"; then
+  stop 1 "RESULT=REFUSED_PORT"
+fi
+
 write_phase VOLUME
-docker network create "$NETWORK" >/dev/null
-POSTGRES_PASSWORD="$POSTGRES_PW" docker run -d \
-  --name "$CONTAINER" \
-  --network "$NETWORK" \
-  --restart unless-stopped \
-  --memory 1280m \
-  --cpus 0.70 \
-  --label stell22.beget-recovery=initial \
-  -e POSTGRES_USER=stell22 \
-  -e POSTGRES_PASSWORD \
-  -e POSTGRES_DB=stell22 \
-  -v "$VOLUME:/var/lib/postgresql/data" \
-  "$IMAGE_REF" >/dev/null
+# The password stays in this process environment. --env-file /dev/null
+# keeps Compose from reading a project .env. Only the db service starts.
+if ! POSTGRES_PASSWORD="$POSTGRES_PW" docker compose \
+  -f "$compose_file" \
+  --project-directory "$ROOT" \
+  --project-name "$COMPOSE_PROJECT" \
+  --env-file /dev/null \
+  up -d --no-deps --pull never --no-build db
+then
+  stop 1 "RESULT=REFUSED_COMPOSE" "PHASE=VOLUME"
+fi
 write_phase CONTAINER
 ports=$(docker inspect "$CONTAINER" --format '{{json .HostConfig.PortBindings}}')
 case "$ports" in
   ""|"{}"|"null"|"<no value>") ;;
   *) stop 1 "RESULT=REFUSED_PORT" "PHASE=CONTAINER" ;;
 esac
+if ! compose_identity; then
+  stop 1 "RESULT=REFUSED_COMPOSE" "PHASE=CONTAINER"
+fi
+if printf '%s\n' "$(docker ps -a --format '{{.Names}}')" | grep -x -q -e stell22-app -e stell22-caddy; then
+  stop 1 "RESULT=REFUSED_WRITER" "PHASE=CONTAINER"
+fi
 
 ready=0
 attempt=0
@@ -478,14 +526,15 @@ if [ "$db_owner" != "stell22" ] || [ "$schema_owner" = "stell22_app" ] || [ "$sc
 fi
 
 probe="BEGIN; INSERT INTO public.\"_prisma_migrations\" (id, checksum, migration_name, started_at, applied_steps_count) VALUES ('writer_exclusion_probe', 'x', 'writer_exclusion_probe', NOW(), 0); ROLLBACK;"
+probe_line='ERROR:  42501: permission denied for table _prisma_migrations'
 probe_status=0
-PGPASSWORD="$APP_PW" docker exec -e PGPASSWORD -i "$CONTAINER" psql -X -U stell22_app -d "$DB" -v ON_ERROR_STOP=1 -c "$probe" >"$STATE_DIR/probe.out" 2>"$STATE_DIR/probe.err" || probe_status=$?
+PGPASSWORD="$APP_PW" docker exec -e PGPASSWORD -i "$CONTAINER" \
+  psql -X -U stell22_app -d "$DB" -v ON_ERROR_STOP=1 -v VERBOSITY=verbose \
+  -c "$probe" >"$STATE_DIR/probe.out" 2>"$STATE_DIR/probe.err" || probe_status=$?
 if [ "$probe_status" = "0" ]; then
-  rm -f "$STATE_DIR/probe.out" "$STATE_DIR/probe.err"
   stop 1 "RESULT=REFUSED_APP_DDL" "PHASE=ROLE"
 fi
-if ! grep -q '42501' "$STATE_DIR/probe.err"; then
-  rm -f "$STATE_DIR/probe.out" "$STATE_DIR/probe.err"
+if ! grep -x -F -q "$probe_line" "$STATE_DIR/probe.err"; then
   stop 1 "RESULT=UNCERTAIN" "PHASE=ROLE"
 fi
 rm -f "$STATE_DIR/probe.out" "$STATE_DIR/probe.err"

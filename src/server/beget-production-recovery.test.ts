@@ -10,6 +10,9 @@ const scriptPath = path.join(repoRoot, "scripts", "beget-production-recovery.sh"
 const scriptSource = readFileSync(scriptPath, "utf8");
 const productionBackupSha =
   scriptSource.match(/^BACKUP_SHA=([0-9a-f]{64})$/m)?.[1] ?? "";
+const imageDigest =
+  scriptSource.match(/^IMAGE_DIGEST=(sha256:[0-9a-f]{64})$/m)?.[1] ?? "";
+const imageRef = `postgres@${imageDigest}`;
 const APP_PW = "SyntheticAppPassword0000000001";
 const MIG_PW = "SyntheticMigratorPassword00002";
 const DB_PW = "SyntheticPostgresPassword00003";
@@ -153,6 +156,18 @@ function writeDocker(bin: string, root: string): void {
     '      create) printf "%s\\n" "$1" >> "$root/created-volumes"; printf "%s\\n" "$1" ;;',
     "      *) exit 1 ;;",
     "    esac ;;",
+    "  compose)",
+    "    sub=$1",
+    '    case "$sub" in',
+    "      version) exit 0 ;;",
+    "    esac",
+    '    text="$*"',
+    '    case "$text" in',
+    "      *' up -d --no-deps --pull never --no-build db')",
+    '        printf "%s\\n" up >> "$root/compose-ups"',
+    "        exit 0 ;;",
+    "      *) exit 1 ;;",
+    "    esac ;;",
     "  network)",
     "    sub=$1; shift",
     '    case "$sub" in',
@@ -161,7 +176,24 @@ function writeDocker(bin: string, root: string): void {
     "      *) exit 1 ;;",
     "    esac ;;",
     "  inspect)",
-    '    printf "%s\\n" "{}" ;;',
+    "    fmt=",
+    '    while [ $# -gt 0 ]; do',
+    '      case "$1" in',
+    "        --format) fmt=$2; shift 2 ;;",
+    "        *) shift ;;",
+    "      esac",
+    "    done",
+    '    case "$fmt" in',
+    "      '{{json .HostConfig.PortBindings}}') printf '%s\\n' '{}' ;;",
+    "      *'com.docker.compose.project'*) cat \"$root/compose-project\" ;;",
+    "      *'com.docker.compose.service'*) printf '%s\\n' db ;;",
+    "      *'com.docker.compose.oneoff'*) printf '%s\\n' False ;;",
+    "      *'.Config.Image'*) cat \"$root/compose-image\" ;;",
+    "      *'.Mounts'*) cat \"$root/compose-mount\" ;;",
+    "      *'.Aliases'*) printf '%s\\n' db ;;",
+    "      *'.NetworkSettings.Networks'*) cat \"$root/compose-network\" ;;",
+    "      *) exit 1 ;;",
+    "    esac ;;",
     "  exec)",
     '    all="$*"',
     "    sql=",
@@ -192,8 +224,22 @@ function writeDocker(bin: string, root: string): void {
     '        touch "$root/restored"; exit 0 ;;',
     '      *writer_exclusion_probe*)',
     '        if [ -f "$root/app-can-ddl" ]; then exit 0; fi',
-    '        printf "%s\\n" "ERROR:  permission denied (SQLSTATE 42501)" >&2',
-    "        exit 1 ;;",
+    '        if [ -f "$root/probe-unexpected" ]; then',
+    '          printf "%s\\n" "FATAL:  the database system is shutting down" >&2',
+    "          exit 2",
+    "        fi",
+    '        case "$all" in',
+    "          *VERBOSITY=verbose*)",
+    '            if [ -f "$root/probe-no-sqlstate" ]; then',
+    '              printf "%s\\n" "ERROR:  permission denied for table _prisma_migrations" >&2',
+    "              exit 1",
+    "            fi",
+    '            printf "%s\\n" "ERROR:  42501: permission denied for table _prisma_migrations" >&2',
+    "            exit 1 ;;",
+    "          *)",
+    '            printf "%s\\n" "ERROR:  permission denied for table _prisma_migrations" >&2',
+    "            exit 1 ;;",
+    "        esac ;;",
     '      *TRUNCATE*)',
     '        if [ -f "$root/bad-history" ]; then printf "%s\\n" no; else printf "%s\\n" yes; fi ;;',
     '      *has_schema_privilege*)',
@@ -268,6 +314,10 @@ function readyFixture(options?: { sql?: string; failRestore?: boolean }): Ready 
   writeText(`${root}/names`, names);
   writeText(`${root}/docker.log`, "");
   writeText(`${root}/sql.log`, "");
+  writeText(`${root}/compose-project`, "stell22-beget-harness\n");
+  writeText(`${root}/compose-image`, `${imageRef}\n`);
+  writeText(`${root}/compose-mount`, "stell22-beget-harness_db-data /var/lib/postgresql/data\n");
+  writeText(`${root}/compose-network`, "stell22-beget-harness_default\n");
   if (options?.failRestore) writeText(`${root}/fail-restore`, "1\n");
   writeDocker(bin, root);
   return {
@@ -299,9 +349,10 @@ function harnessEnv(ready: Ready, over: Record<string, string | undefined> = {})
     STELL22_BEGET_RECOVERY_BACKUP: ready.backup,
     STELL22_BEGET_RECOVERY_BACKUP_SHA: ready.backupSha,
     STELL22_BEGET_RECOVERY_STATE: ready.state,
-    STELL22_BEGET_RECOVERY_VOLUME: "stell22-beget-harness-volume",
+    STELL22_BEGET_RECOVERY_COMPOSE_PROJECT: "stell22-beget-harness",
+    STELL22_BEGET_RECOVERY_VOLUME: "stell22-beget-harness_db-data",
     STELL22_BEGET_RECOVERY_CONTAINER: "stell22-beget-harness-db",
-    STELL22_BEGET_RECOVERY_NETWORK: "stell22-beget-harness-net",
+    STELL22_BEGET_RECOVERY_NETWORK: "stell22-beget-harness_default",
     STELL22_BEGET_RECOVERY_POSTGRES_PASSWORD: DB_PW,
     STELL22_BEGET_RECOVERY_APP_PASSWORD: APP_PW,
     STELL22_BEGET_RECOVERY_MIGRATOR_PASSWORD: MIG_PW,
@@ -481,9 +532,79 @@ describe("beget production recovery operator", { timeout: 20000 }, () => {
     expect(log).not.toContain("prisma migrate");
     expect(log).not.toContain(" -p ");
     expect(log).not.toContain("--publish");
+    expect(log).toContain("--project-name stell22-beget-harness");
+    expect(log).toContain("up -d --no-deps --pull never --no-build db");
+    expect(log).not.toContain("volume rm");
+    expect(log).not.toContain("volume create");
+    expect(readFileSync(toWin(`${ready.root}/compose-ups`), "utf8").trim().split("\n")).toEqual(["up"]);
     expect(`${result.stdout}${result.stderr}`).not.toContain(DB_PW);
     expect(`${result.stdout}${result.stderr}`).not.toContain(APP_PW);
     expect(`${result.stdout}${result.stderr}`).not.toContain(MIG_PW);
     expect(`${result.stdout}${result.stderr}`).not.toContain(SENTINEL);
+  });
+
+  it("keeps the Compose db service on the pinned volume and digest", () => {
+    const compose = readFileSync(path.join(repoRoot, "docker-compose.prod.yml"), "utf8");
+    expect(imageRef).toBe("postgres@sha256:005c5c37db96c1e6652a79ea31f9886402fba81ac95dc2db897739121dd7f8f2");
+    expect(compose).toContain(`image: ${imageRef}`);
+    expect(compose).not.toContain("image: postgres:17-alpine");
+    expect(compose).toContain("container_name: stell22-db-prod");
+    expect(compose).toContain("db-data:/var/lib/postgresql/data");
+    expect(scriptSource).toContain("COMPOSE_PROJECT=stell22");
+    expect(scriptSource).toContain("VOLUME=stell22_db-data");
+    expect(scriptSource).toContain("NETWORK=stell22_default");
+    expect(scriptSource).toContain("up -d --no-deps --pull never --no-build db");
+    const ready = readyFixture();
+    writeText(`${ready.root}/volumes`, "stell22-beget-harness_db-data\n");
+    const result = invoke(harnessEnv(ready));
+    expect(resultOf(result)).toBe("REFUSED_EXISTING");
+    const log = readFileSync(toWin(`${ready.root}/docker.log`), "utf8");
+    expect(log).not.toContain(" up ");
+    expect(log).not.toContain("volume rm");
+    expect(log).not.toContain("volume create");
+  });
+
+  it("stops when the running database image digest does not match", () => {
+    const ready = readyFixture();
+    writeText(`${ready.root}/compose-image`, `postgres@sha256:${"ab".repeat(32)}\n`);
+    const result = invoke(harnessEnv(ready));
+    expect(resultOf(result)).toBe("REFUSED_COMPOSE");
+    expect(result.stdout).toContain("APPLICATION_STARTED=NO");
+    expect(result.stdout).toContain("CADDY_STARTED=NO");
+    expect(readFileSync(toWin(`${ready.root}/sql.log`), "utf8")).not.toContain("SELECT 1;");
+    expect(readFileSync(toWin(`${ready.root}/docker.log`), "utf8")).not.toContain("volume rm");
+  });
+
+  it("does not invent SQLSTATE unless psql verbosity is explicit", () => {
+    const ready = readyFixture();
+    const sql = "INSERT INTO public.\"_prisma_migrations\" VALUES ('writer_exclusion_probe')";
+    const quiet = runShell('"$1/docker" exec db psql -U stell22_app -d stell22 -c "$2"', [ready.bin, sql]);
+    expect(quiet.status).not.toBe(0);
+    expect(`${quiet.stdout}${quiet.stderr}`).not.toContain("42501");
+    expect(quiet.stderr).toContain("permission denied for table _prisma_migrations");
+    const verbose = runShell(
+      '"$1/docker" exec db psql -U stell22_app -d stell22 -v VERBOSITY=verbose -c "$2"',
+      [ready.bin, sql],
+    );
+    expect(verbose.status).not.toBe(0);
+    expect(verbose.stderr).toContain("ERROR:  42501: permission denied for table _prisma_migrations");
+  });
+
+  it("rejects a permission failure that does not carry SQLSTATE 42501", () => {
+    const ready = readyFixture();
+    writeText(`${ready.root}/probe-no-sqlstate`, "1\n");
+    const result = invoke(harnessEnv(ready));
+    expect(resultOf(result)).toBe("UNCERTAIN");
+    expect(result.stdout).toContain("APPLICATION_STARTED=NO");
+    expect(result.stdout).toContain("MIGRATION_47_48=NOT_APPLIED");
+  });
+
+  it("rejects an unexpected psql failure during the app write probe", () => {
+    const ready = readyFixture();
+    writeText(`${ready.root}/probe-unexpected`, "1\n");
+    const result = invoke(harnessEnv(ready));
+    expect(resultOf(result)).toBe("UNCERTAIN");
+    expect(result.stdout).toContain("CADDY_STARTED=NO");
+    expect(readFileSync(toWin(`${ready.root}/docker.log`), "utf8")).not.toContain("stell22-app");
   });
 });
