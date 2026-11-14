@@ -127,6 +127,25 @@ psql_at() {
   docker exec -i "$CONTAINER" psql -X -U stell22 -d "$DB" -q -v ON_ERROR_STOP=1 -At -c "$1"
 }
 
+inventory_names() {
+  docker ps -a --format '{{.Names}}' || return 1
+}
+
+inventory_volumes() {
+  docker volume ls --format '{{.Name}}' || return 1
+}
+
+refuse_app_containers() {
+  phase=$1
+  if ! names=$(inventory_names); then
+    stop 1 "RESULT=UNCERTAIN" "PHASE=$phase"
+  fi
+  if printf '%s\n' "$names" | grep -x -q -e stell22-app -e stell22-caddy; then
+    stop 1 "RESULT=REFUSED_WRITER" "PHASE=$phase"
+  fi
+  return 0
+}
+
 compose_identity() {
   project=$(docker inspect "$CONTAINER" --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)
   service=$(docker inspect "$CONTAINER" --format '{{index .Config.Labels "com.docker.compose.service"}}' 2>/dev/null || true)
@@ -348,9 +367,13 @@ if [ -z "$INDEX_DIGEST" ]; then
   stop 1 "RESULT=REFUSED_POSTGRES_IDENTITY"
 fi
 
-names=$(docker ps -a --format '{{.Names}}' || true)
+if ! names=$(inventory_names); then
+  stop 1 "RESULT=REFUSED_DOCKER"
+fi
 printf '%s\n' "$names" | grep -x -q -e stell22-db-prod -e stell22-db -e stell22-app -e stell22-caddy && stop 1 "RESULT=REFUSED_EXISTING"
-volumes=$(docker volume ls --format '{{.Name}}' || true)
+if ! volumes=$(inventory_volumes); then
+  stop 1 "RESULT=REFUSED_DOCKER"
+fi
 printf '%s\n' "$volumes" | grep -x -q -e db-data -e stell22_db-data -e caddy-data -e stell22_caddy-data -e caddy-config -e stell22_caddy-config && stop 1 "RESULT=REFUSED_EXISTING"
 if [ "$mode" = "harness" ]; then
   printf '%s\n' "$volumes" | grep -x -q -e "$VOLUME" && stop 1 "RESULT=REFUSED_EXISTING"
@@ -402,9 +425,7 @@ esac
 if ! compose_identity; then
   stop 1 "RESULT=REFUSED_COMPOSE" "PHASE=CONTAINER"
 fi
-if printf '%s\n' "$(docker ps -a --format '{{.Names}}')" | grep -x -q -e stell22-app -e stell22-caddy; then
-  stop 1 "RESULT=REFUSED_WRITER" "PHASE=CONTAINER"
-fi
+refuse_app_containers CONTAINER
 
 ready=0
 attempt=0
@@ -539,9 +560,7 @@ if ! grep -x -F -q "$probe_line" "$STATE_DIR/probe.err"; then
 fi
 rm -f "$STATE_DIR/probe.out" "$STATE_DIR/probe.err"
 
-if printf '%s\n' "$(docker ps -a --format '{{.Names}}')" | grep -x -q -e stell22-app -e stell22-caddy; then
-  stop 1 "RESULT=REFUSED_WRITER" "PHASE=ROLE"
-fi
+refuse_app_containers ROLE
 
 write_phase READY
 stop 0 \
