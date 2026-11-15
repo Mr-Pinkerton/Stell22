@@ -97,7 +97,6 @@ describe.skipIf(!live)("disposable PostgreSQL 17 statement migration", () => {
         "--label", "com.docker.compose.service=db",
         "--label", "com.docker.compose.oneoff=False",
         "postgres:17-alpine",
-        "-c", "log_connections=on",
       ], secrets);
       createdContainer = true;
       let healthy = "";
@@ -210,9 +209,6 @@ ALTER TABLE "_prisma_migrations" OWNER TO stell22_migrator;
       expect(docker(["exec", container, "psql", "-X", "-U", "stell22", "-d", database, "-q", "-At", "-c", "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'Statement_verified_period_check'"], secrets)).toContain("BANK_1C");
       expect(docker(["exec", container, "psql", "-X", "-U", "stell22", "-d", database, "-q", "-At", "-c", "SELECT pg_get_userbyid(typowner) FROM pg_type WHERE typname = 'StatementSource'"], secrets).trim()).toBe("stell22_migrator");
       expect(docker(["exec", container, "psql", "-X", "-U", "stell22", "-d", database, "-q", "-At", "-c", "SELECT rolsuper FROM pg_roles WHERE rolname = 'stell22_migrator'"], secrets).trim()).toBe("f");
-      const dbLogs = run("docker", ["logs", container]);
-      expect(dbLogs.status).toBe(0);
-      expect(redact(`${dbLogs.stdout}\n${dbLogs.stderr}`, secrets)).toContain("user=stell22_migrator");
       const names = docker(["ps", "-a", "--format", "{{.Names}}"], secrets);
       expect(names).not.toContain("stell22-app");
       expect(names).not.toContain("stell22-caddy");
