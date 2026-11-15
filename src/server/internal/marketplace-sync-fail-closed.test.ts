@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { userMovementActorFromAdmin } from "@/server/internal/inventory-movement-actor";
 
 const state = vi.hoisted(() => ({
@@ -78,6 +78,12 @@ import {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const actor = userMovementActorFromAdmin({ id: "user-1", name: "Проверка" });
+const DISPOSABLE_DATABASE_URL =
+  "postgresql://p1iso:secret@127.0.0.1:54321/p1iso_failclosed?schema=public";
+const originalEnv = {
+  NODE_ENV: process.env.NODE_ENV,
+  DATABASE_URL: process.env.DATABASE_URL,
+};
 
 function trackHttp<T>(fn: () => T): T {
   state.httpCalls += 1;
@@ -173,12 +179,23 @@ function fakeTx() {
 }
 
 beforeEach(() => {
+  const env = process.env as { NODE_ENV?: string; DATABASE_URL?: string };
+  env.NODE_ENV = "test";
+  env.DATABASE_URL = DISPOSABLE_DATABASE_URL;
   state.settings = [];
   state.transactions = 0;
   state.saleIds = [];
   state.productStockTouches = 0;
   state.httpCalls = 0;
   failingApis();
+});
+
+afterEach(() => {
+  const env = process.env as { NODE_ENV?: string; DATABASE_URL?: string };
+  if (originalEnv.NODE_ENV === undefined) delete env.NODE_ENV;
+  else env.NODE_ENV = originalEnv.NODE_ENV;
+  if (originalEnv.DATABASE_URL === undefined) delete env.DATABASE_URL;
+  else env.DATABASE_URL = originalEnv.DATABASE_URL;
 });
 
 describe("marketplace sync fail-closed", () => {

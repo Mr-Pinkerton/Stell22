@@ -63,7 +63,13 @@ function formatSyncedAt(iso: string | null): string {
 
 const salesDateDefault = getDefaultSalesDateFilterValue();
 
-export function SalesView({ data }: { data: SalesData }) {
+export function SalesView({
+  data,
+  syncFrozenMessage = null,
+}: {
+  data: SalesData;
+  syncFrozenMessage?: string | null;
+}) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [pending, startTransition] = useTransition();
@@ -107,11 +113,17 @@ export function SalesView({ data }: { data: SalesData }) {
     <>
       <PageHeader
         title="Продажи"
-        addLabel={pending ? "Синхронизация…" : "Синхронизировать с МП"}
-        onAdd={pending ? undefined : handleSync}
+        addLabel={!syncFrozenMessage && pending ? "Синхронизация…" : "Синхронизировать с МП"}
+        onAdd={syncFrozenMessage || pending ? undefined : handleSync}
+        addDisabled={Boolean(syncFrozenMessage)}
       />
 
       <div className="space-y-4">
+        {syncFrozenMessage ? (
+          <p role="status" className="text-muted-foreground text-sm">
+            {syncFrozenMessage}
+          </p>
+        ) : null}
         <div className="grid gap-4 sm:grid-cols-3">
           <KpiTile title="Продано" value={`${data.totalQty} шт`} hint={formatSyncedAt(data.lastSyncedAt)} />
           <KpiTile title="Выручка" value={formatMoney(data.totalRevenue)} />
@@ -148,9 +160,11 @@ export function SalesView({ data }: { data: SalesData }) {
             rows={visibleRows}
             empty={
               data.rows.length === 0
-                ? appliedAllTime
-                  ? "Продаж нет — нажмите «Синхронизировать с МП»"
-                  : "Нет продаж за выбранный период"
+                ? syncFrozenMessage
+                  ? "Продаж нет"
+                  : appliedAllTime
+                    ? "Продаж нет — нажмите «Синхронизировать с МП»"
+                    : "Нет продаж за выбранный период"
                 : "Нет строк по выбранным фильтрам"
             }
             padded

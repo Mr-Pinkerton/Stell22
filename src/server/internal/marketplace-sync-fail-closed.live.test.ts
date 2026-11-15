@@ -254,6 +254,8 @@ describe.skipIf(!LIVE)("marketplace sync fail-closed disposable database", () =>
   let productId = "";
   let actor = userMovementActorFromAdmin({ id: "pending", name: "Проверка" });
   let fetchCalls = 0;
+  let previousDatabaseUrl: string | undefined;
+  let databaseUrlOverridden = false;
 
   beforeAll(async () => {
     runId = randomBytes(4).toString("hex");
@@ -287,6 +289,9 @@ describe.skipIf(!LIVE)("marketplace sync fail-closed disposable database", () =>
       repositoryRoot: root,
     });
     harness.url = url;
+    previousDatabaseUrl = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = url;
+    databaseUrlOverridden = true;
     seed = new PrismaClient({ datasourceUrl: url });
     const user = await seed.user.create({
       data: { email: `mp-${runId}@example.invalid`, passwordHash: "not-a-password", name: "Проверка" },
@@ -336,6 +341,10 @@ describe.skipIf(!LIVE)("marketplace sync fail-closed disposable database", () =>
       }
     }
     vi.unstubAllGlobals();
+    if (databaseUrlOverridden) {
+      if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previousDatabaseUrl;
+    }
   });
 
   async function counts() {

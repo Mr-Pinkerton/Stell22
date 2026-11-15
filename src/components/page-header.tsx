@@ -7,6 +7,7 @@ interface PageHeaderProps {
   exporting?: boolean;
   addLabel?: string;
   onAdd?: () => void;
+  addDisabled?: boolean;
   onExport?: () => void;
 }
 
@@ -22,6 +23,7 @@ export function PageHeader({
   exporting,
   addLabel,
   onAdd,
+  addDisabled = false,
   onExport,
 }: PageHeaderProps) {
   return (
@@ -40,7 +42,7 @@ export function PageHeader({
           </Button>
         )}
         {addLabel && (
-          <Button className={actionButtonClass} onClick={onAdd}>
+          <Button className={actionButtonClass} onClick={onAdd} disabled={addDisabled}>
             <Plus />
             {addLabel}
           </Button>
