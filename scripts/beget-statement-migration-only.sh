@@ -144,7 +144,7 @@ query_to() {
   printf '%s\n' "$sql" > "$work/query.sql"
   set +e
   docker exec -i -e PGAPPNAME=stell22-statement-inspect "$CONTAINER" \
-    psql -X -U postgres -d "$DB" -q -v ON_ERROR_STOP=1 -At -f - \
+    psql -X -U stell22 -d "$DB" -q -v ON_ERROR_STOP=1 -At -f - \
     < "$work/query.sql" > "$out"
   query_status=$?
   set -e
@@ -359,9 +359,10 @@ if [ "$mode" = "production" ]; then
 fi
 printf '%s\n' "$mount" | grep -x -q -F "$VOLUME /var/lib/postgresql/data" || finish REFUSED_DOCKER 1
 printf '%s\n' "$net" | grep -x -q -F "$NETWORK" || finish REFUSED_DOCKER 1
-if [ "$(trim "$ports")" != "{}" ]; then
-  finish REFUSED_DOCKER 1
-fi
+case "$(trim "$ports")" in
+  "{}"|null) ;;
+  *) finish REFUSED_DOCKER 1 ;;
+esac
 
 work=$(mktemp -d)
 log="$STATE_DIR/beget-migration-only.log"
@@ -427,6 +428,9 @@ cp -a "$ROOT/prisma" "$work/prisma"
 cat > "$work/Dockerfile" <<'EOF'
 FROM node:22-bookworm-slim
 WORKDIR /app
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 RUN npm install prisma@6.19.3 --no-fund --no-audit
 COPY prisma ./prisma
 EOF
@@ -435,7 +439,7 @@ if [ "$mode" = "production" ]; then
 else
   image_tag=stell22-beget-migration-only-harness:candidate
 fi
-if ! docker build -t "$image_tag" -f "$work/Dockerfile" "$work" > "$log" 2>&1; then
+if ! DOCKER_BUILDKIT=0 docker build -t "$image_tag" -f "$work/Dockerfile" "$work" > "$log" 2>&1; then
   chmod 600 "$log" 2>/dev/null || true
   finish REFUSED_IMAGE 1 "DETAIL=build"
 fi

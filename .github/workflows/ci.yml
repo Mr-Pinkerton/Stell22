@@ -155,6 +155,50 @@ jobs:
       - name: Server Action manifest policy
         run: npm run security:manifest
 
+  statement-migration-only:
+    name: Disposable statement migration 47 to 48
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Pull disposable PostgreSQL 17 and migration base images
+        run: |
+          docker pull postgres:17-alpine
+          docker pull node:22-bookworm-slim
+
+      - name: Genuine disposable PostgreSQL 17 migration
+        env:
+          P1_DISPOSABLE_LIVE: "1"
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/beget-statement-migration-only.txt"
+          set +e
+          node scripts/vitest-run.mjs run --no-file-parallelism src/server/beget-statement-migration-only.live.test.ts | tee "$log"
+          status="${PIPESTATUS[0]}"
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "Disposable statement migration failed with exit ${status}." >&2
+            exit "$status"
+          fi
+          if grep -q 'skipped' "$log"; then
+            echo "Disposable statement migration reported a skipped test. A skip is not success." >&2
+            exit 1
+          fi
+
   restore-drill:
     name: Disposable restore drill
     runs-on: ubuntu-latest

@@ -135,6 +135,10 @@ function writeDocker(bin: string, root: string): void {
     "      *) exit 1 ;;",
     "    esac ;;",
     "  exec)",
+    '    case " $* " in',
+    '      *" -U stell22 "*) ;;',
+    "      *) exit 1 ;;",
+    "    esac",
     '    sql=$(cat)',
     '    printf "%s\\n" "$sql" >> "$root/sql.log"',
     '    case "$sql" in',
@@ -279,6 +283,12 @@ describe("beget statement migration-only operator", { timeout: 60_000 }, () => {
       [scriptPath],
     );
     expect(calls.stdout.trim()).toBe("0");
+    expect(scriptSource).toContain("psql -X -U stell22 ");
+    expect(scriptSource).not.toContain("-U postgres");
+    expect(scriptSource).toContain("prisma@6.19.3");
+    expect(scriptSource).toContain("openssl");
+    expect(readFileSync(path.join(repoRoot, "scripts", "beget-production-recovery.sh"), "utf8")).toContain("psql -X -U stell22 ");
+    expect(readFileSync(path.join(repoRoot, "docker-compose.prod.yml"), "utf8")).toContain("POSTGRES_USER: stell22");
     expect(scriptSource).toContain(MIGRATION_SHA256);
     expect(scriptSource).toContain("sha256:005c5c37db96c1e6652a79ea31f9886402fba81ac95dc2db897739121dd7f8f2");
     expect(scriptSource).toContain("OWNER_AUTHORIZES_BEGET_INITIAL_RECOVERY_20261028");
@@ -300,6 +310,29 @@ describe("beget statement migration-only operator", { timeout: 60_000 }, () => {
     expect(resultOf(release)).toBe("REFUSED_AUTHORIZATION");
     expect(`${recovery.stdout}${release.stdout}`).not.toContain(PASSWORD);
     expect(migrateCount(ready.root)).toBe(0);
+  });
+
+  it("rejects an administrative SQL user other than stell22", () => {
+    const ready = readyFixture();
+    const docker = `${ready.bin}/docker`;
+    const rejected = runShell(
+      'printf "%s\\n" "/* stell22-migration-history */" | "$1" exec -i db psql -X -U postgres -d db -f -',
+      [docker],
+    );
+    const migrator = runShell(
+      'printf "%s\\n" "/* stell22-migration-history */" | "$1" exec -i db psql -X -U stell22_migrator -d db -f -',
+      [docker],
+    );
+    const accepted = runShell(
+      'printf "%s\\n" "/* stell22-migration-history */" | "$1" exec -i db psql -X -U stell22 -d db -f -',
+      [docker],
+    );
+    expect(rejected.status).not.toBe(0);
+    expect(migrator.status).not.toBe(0);
+    expect(accepted.status).toBe(0);
+    expect(accepted.stdout).toContain("|t|f|1");
+    expect(rejected.stdout).toBe("");
+    expect(migrator.stdout).toBe("");
   });
 
   it("refuses the production phrase on a host that is not the accepted VPS", () => {
@@ -343,6 +376,11 @@ describe("beget statement migration-only operator", { timeout: 60_000 }, () => {
     expect(resultOf(productionName)).toBe("REFUSED_DOCKER");
     const productionImage = invoke(harnessEnv(ready, { STELL22_BEGET_MIGRATION_EXPECT_IMAGE: PRODUCTION_IMAGE }));
     expect(resultOf(productionImage)).toBe("REFUSED_DOCKER");
+    const removed = runShell('rm -f "$1"', [`${ready.root}/unhealthy`]);
+    expect(removed.status).toBe(0);
+    writeText(`${ready.root}/ports`, '{"5432/tcp":[{"HostPort":"5432"}]}\n');
+    const published = invoke(harnessEnv(ready));
+    expect(resultOf(published)).toBe("REFUSED_DOCKER");
     expect(migrateCount(ready.root)).toBe(0);
   });
 
