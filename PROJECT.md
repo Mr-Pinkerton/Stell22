@@ -1,6 +1,6 @@
 # Stell22 — Project Journal / Source of Truth
 
-Updated: 2026-10-27
+Updated: 2026-11-15
 
 This file answers three questions:
 
@@ -38,9 +38,38 @@ If sources conflict, verify the actual GitHub `main` and record the divergence.
 
 A Cursor/chat statement without a committed project artifact is not canonical.
 
-## 3.1 Current checkpoint — 2026-10-27
+## 3.0 Current checkpoint — 2026-11-15
 
-This section is the current command for production facts, closed tasks, and NEXT. The GitHub SHA below is the verified baseline at checkpoint preparation on 2026-10-27. It is not a permanent HEAD. Later sections that still say `CURRENT`, `ACTIVE MODE`, or `NEXT = PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01` are historical records. They are not a second current command. `audit/08.01` through `audit/08.62` are not rewritten.
+This section is the current recovery checkpoint. It does not authorize a production migration, deployment, application start, Caddy start, DNS change, marketplace sync, or `production_cost_flow`.
+
+GitHub facts independently verified by HEAD at the start of `STELL22-BEGET-STATEMENT-MIGRATION-ONLY-01`:
+
+| | |
+| --- | --- |
+| GitHub `main` | `4a51f83e0f85ad3caeaa8bd619ea706eecb5914c` |
+| Tree | `ab0f1fa6c98bb8ce05255f182cd91219aba3be59` |
+| CI | `43639275499` SUCCESS |
+
+VPS and database runtime facts below are Cursor-reported. HEAD has not independently verified them.
+
+| | |
+| --- | --- |
+| Initial restore | `RECOVERY_READY — CURSOR REPORTED` |
+| Recovery phase | `READY` |
+| Completed migrations | 47 |
+| Incomplete migrations | 0 |
+| Migration 48 `20261105120000_statement_period_coverage` | not applied |
+| Application | not started |
+| Caddy | not started |
+| Production freeze | still active |
+
+The migration-only operator in this change is `NOT DEPLOYED / NOT AUTHORIZED`. A green disposable test is not permission to migrate the recovered database.
+
+**NEXT = HEAD REVIEW** of branch `feat/stell22-beget-statement-migration-only-01`. That review is not a merge, a deployment, or a production migration.
+
+## 3.1 Checkpoint — 2026-10-27
+
+This section is the 2026-10-27 checkpoint. It is not the current command after the 2026-11-15 recovery checkpoint. The GitHub SHA below is the verified baseline at checkpoint preparation on 2026-10-27. It is not a permanent HEAD. Later sections that still say `CURRENT`, `ACTIVE MODE`, or `NEXT = PSR-P3-S2-B-ROLLOUT-GATE-RESOLUTION-01` are historical records. They are not a second current command. `audit/08.01` through `audit/08.62` are not rewritten.
 
 **GITHUB BASELINE != PRODUCTION SHA.** The baseline below was GitHub `main` when this checkpoint was prepared. It is not deployed on production.
 
