@@ -32,6 +32,7 @@ import {
   isWbConfigured,
   mergeWbNmIdMaps,
 } from "@/lib/wb-api";
+import { marketplaceSyncProductionFreeze } from "@/lib/marketplace-sync-production-freeze";
 import type { Marketplace } from "@/mocks/warehouse-fixtures";
 import {
   mapOzonPosting,
@@ -292,12 +293,17 @@ export type PersistMarketplaceSyncInput = {
 
 /**
  * SHADOW-capable marketplace persistence transaction.
+ * Production freeze is decided before this function touches the transaction.
  * Writer-facing gate is the first transactional coordination action.
  */
 export async function persistMarketplaceSyncInTransaction(
   tx: Prisma.TransactionClient,
   input: PersistMarketplaceSyncInput,
 ): Promise<{ deductedTotal: number; shortfallTotal: number; restoredTotal: number }> {
+  const freeze = marketplaceSyncProductionFreeze();
+  if (freeze.frozen) {
+    throw new Error(freeze.message);
+  }
   if (input.sources.wb !== "api" || input.sources.ozon !== "api") {
     throw new Error(MARKETPLACE_SYNC_STUB_REFUSED);
   }
@@ -414,11 +420,23 @@ export async function persistMarketplaceSyncInTransaction(
 /**
  * Синхронизация с маркетплейсами. Оба контура должны быть настроены.
  * Иначе запуск отклоняется до HTTP и до записи продаж, поставок и остатков.
- * Current contour is authenticated USER only. Capture actor outside the TX.
+ * Production runtime or the production database refuses before credentials,
+ * HTTP, transactions, and sync logs. Current contour is authenticated USER only.
+ * Capture actor outside the TX.
  */
 export async function syncMarketplacesAsUserInternal(
   actor: MovementActorSnapshot,
 ): Promise<SyncResult> {
+  const freeze = marketplaceSyncProductionFreeze();
+  if (freeze.frozen) {
+    return {
+      ok: false,
+      salesAdded: 0,
+      suppliesAdded: 0,
+      stockUpdated: 0,
+      error: freeze.message,
+    };
+  }
   const userActor = requireSupplyUserActor(actor);
   const userId = userActor.userId;
   const syncStarted = performance.now();

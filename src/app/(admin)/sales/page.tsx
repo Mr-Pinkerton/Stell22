@@ -1,4 +1,5 @@
 import { SalesView } from "@/components/sales/sales-view";
+import { marketplaceSyncProductionFreeze } from "@/lib/marketplace-sync-production-freeze";
 import { getSalesData } from "@/server/marketplace";
 import { salesPeriodFromParams } from "@/lib/sales-period";
 
@@ -12,5 +13,8 @@ export default async function SalesPage({
   const sp = await searchParams;
   const period = salesPeriodFromParams(sp);
   const data = await getSalesData(period);
-  return <SalesView data={data} />;
+  const freeze = marketplaceSyncProductionFreeze();
+  return (
+    <SalesView data={data} syncFrozenMessage={freeze.frozen ? freeze.message : null} />
+  );
 }
