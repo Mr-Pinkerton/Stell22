@@ -65,9 +65,14 @@ export function AutoRuleFormDialog({
     articleName &&
       !articles.some((item) => item.name === articleName && item.flowType === seed?.flowType),
   );
-  const dealUnavailable = Boolean(
-    dealName && !deals.some((item) => item.name === dealName),
-  );
+  const matchedDeal = dealName ? deals.find((item) => item.name === dealName) : undefined;
+  const dealNotice = !dealName
+    ? null
+    : !matchedDeal
+      ? "Сделка из операции недоступна в справочнике"
+      : matchedDeal.status !== "OPEN"
+        ? "Сделка из операции недоступна для нового правила"
+        : null;
 
   const handleSubmit = () => {
     const rule = autoRuleEditorToRule(draft);
@@ -108,7 +113,7 @@ export function AutoRuleFormDialog({
         keywordsInputId="auto-rule-dialog-keywords"
         articleInvalid={showErrors && !draft.articleName}
         articleUnavailable={articleUnavailable && !draft.articleName}
-        dealUnavailable={dealUnavailable && !draft.dealName}
+        dealNotice={draft.dealName ? null : dealNotice}
       />
     </FinanceFormDialog>
   );

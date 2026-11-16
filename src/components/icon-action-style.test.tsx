@@ -224,6 +224,7 @@ describe("compact icon action style", () => {
           rule={rule}
           articles={[]}
           counterparties={[]}
+          deals={[]}
           onChange={() => {}}
           onDelete={onDelete}
         />

@@ -6,6 +6,7 @@ import type {
   FinanceArticle,
   FinanceAutoRule,
   FinanceCounterparty,
+  FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { AutoRuleEditor } from "@/components/finance/auto-rule-editor";
 import { tableActionClass } from "@/components/nomenclature/form-shared";
@@ -15,6 +16,7 @@ interface AutoRuleInlineRowProps {
   rule: FinanceAutoRule;
   articles: FinanceArticle[];
   counterparties: FinanceCounterparty[];
+  deals: FinanceDeal[];
   highlighted?: boolean;
   onChange: (patch: Partial<FinanceAutoRule>) => void;
   onDelete: () => void;
@@ -24,6 +26,7 @@ export function AutoRuleInlineRow({
   rule,
   articles,
   counterparties,
+  deals,
   highlighted,
   onChange,
   onDelete,
@@ -39,6 +42,7 @@ export function AutoRuleInlineRow({
         value={rule}
         articles={articles}
         counterparties={counterparties}
+        deals={deals}
         onChange={onChange}
         className="min-w-0 flex-1"
       />

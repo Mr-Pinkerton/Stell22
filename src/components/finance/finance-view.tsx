@@ -737,6 +737,7 @@ export function FinanceView({ data }: { data: FinanceData }) {
             rules={autoRules}
             articles={articles}
             counterparties={counterparties}
+            deals={deals}
             highlightRuleId={highlightRuleId}
             onHighlightDone={() => setHighlightRuleId(null)}
             onRuleUpdate={(id, patch) =>

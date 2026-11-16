@@ -5,6 +5,7 @@ import type {
   FinanceArticle,
   FinanceAutoRule,
   FinanceCounterparty,
+  FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { scrollTableYClass } from "@/lib/scroll-classes";
 import { AutoRuleInlineRow } from "@/components/finance/auto-rule-inline-row";
@@ -14,6 +15,7 @@ interface FinanceAutoRulesTabProps {
   rules: FinanceAutoRule[];
   articles: FinanceArticle[];
   counterparties: FinanceCounterparty[];
+  deals: FinanceDeal[];
   highlightRuleId?: string | null;
   onHighlightDone?: () => void;
   onRuleUpdate?: (id: string, patch: Partial<FinanceAutoRule>) => void;
@@ -24,6 +26,7 @@ export function FinanceAutoRulesTab({
   rules,
   articles,
   counterparties,
+  deals,
   highlightRuleId,
   onHighlightDone,
   onRuleUpdate,
@@ -62,6 +65,7 @@ export function FinanceAutoRulesTab({
                     rule={rule}
                     articles={articles}
                     counterparties={counterparties}
+                    deals={deals}
                     highlighted={highlightRuleId === rule.id}
                     onChange={(patch) => onRuleUpdate?.(rule.id, patch)}
                     onDelete={() => onRuleDelete?.(rule.id)}

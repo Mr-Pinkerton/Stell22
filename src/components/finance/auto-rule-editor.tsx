@@ -89,8 +89,8 @@ interface AutoRuleEditorProps {
   articleInvalid?: boolean;
   /** В операции была статья, которой нет в справочнике этого типа. */
   articleUnavailable?: boolean;
-  /** В операции была сделка, которой нет в справочнике. */
-  dealUnavailable?: boolean;
+  /** Почему сделку операции нельзя назначить новому правилу. */
+  dealNotice?: string | null;
 }
 
 export function AutoRuleEditor({
@@ -103,14 +103,18 @@ export function AutoRuleEditor({
   keywordsInputId = "auto-rule-keywords",
   articleInvalid,
   articleUnavailable,
-  dealUnavailable,
+  dealNotice,
 }: AutoRuleEditorProps) {
   const rowArticles = articles.filter((a) => a.flowType === value.flowType);
 
   const counterpartyId =
     counterparties.find((c) => c.name === value.counterpartyName)?.id ?? "";
   const articleId = rowArticles.find((a) => a.name === value.articleName)?.id ?? "";
-  const dealId = deals?.find((d) => d.name === value.dealName)?.id ?? "";
+  const openDeals = deals?.filter((deal) => deal.status === "OPEN") ?? [];
+  const assignedClosedDeal =
+    deals?.find((deal) => deal.name === value.dealName && deal.status !== "OPEN") ?? null;
+  const dealId =
+    openDeals.find((deal) => deal.name === value.dealName)?.id ?? assignedClosedDeal?.id ?? "";
 
   return (
     <div
@@ -233,7 +237,8 @@ export function AutoRuleEditor({
           <Select
             value={dealId}
             onValueChange={(v) => {
-              const deal = deals.find((item) => item.id === v);
+              if (assignedClosedDeal && v === assignedClosedDeal.id) return;
+              const deal = openDeals.find((item) => item.id === v);
               onChange({ dealName: deal?.name ?? null });
             }}
           >
@@ -246,7 +251,16 @@ export function AutoRuleEditor({
               <SelectItem value="" className="cursor-pointer rounded-lg text-sm">
                 Не выбрана
               </SelectItem>
-              {deals.map((deal) => (
+              {assignedClosedDeal ? (
+                <SelectItem
+                  value={assignedClosedDeal.id}
+                  disabled
+                  className="cursor-pointer rounded-lg text-sm"
+                >
+                  {assignedClosedDeal.name}
+                </SelectItem>
+              ) : null}
+              {openDeals.map((deal) => (
                 <SelectItem
                   key={deal.id}
                   value={deal.id}
@@ -257,10 +271,8 @@ export function AutoRuleEditor({
               ))}
             </SelectContent>
           </Select>
-          {dealUnavailable ? (
-            <p className="text-muted-foreground basis-full text-xs">
-              Сделка из операции недоступна в справочнике
-            </p>
+          {dealNotice ? (
+            <p className="text-muted-foreground basis-full text-xs">{dealNotice}</p>
           ) : null}
         </>
       ) : null}
@@ -294,7 +306,7 @@ export function cashflowSeedToEditorState(
   directories: {
     articles: Pick<FinanceArticle, "name" | "flowType">[];
     counterparties: Pick<FinanceCounterparty, "name">[];
-    deals: Pick<FinanceDeal, "name">[];
+    deals: Pick<FinanceDeal, "name" | "status">[];
   },
 ): AutoRuleEditorState {
   const counterpartyName = seed.counterpartyName?.trim() || null;
@@ -317,7 +329,10 @@ export function cashflowSeedToEditorState(
         ? articleName
         : null,
     dealName:
-      dealName && directories.deals.some((item) => item.name === dealName) ? dealName : null,
+      dealName &&
+      directories.deals.some((item) => item.name === dealName && item.status === "OPEN")
+        ? dealName
+        : null,
   };
 }
 

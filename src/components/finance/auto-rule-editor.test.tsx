@@ -3,6 +3,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FinanceCashflowTab } from "@/components/finance/finance-cashflow-tab";
+import { FinanceAutoRulesTab } from "@/components/finance/finance-auto-rules-tab";
 import { cashflowSeedToEditorState } from "@/components/finance/auto-rule-editor";
 import type {
   FinanceArticle,
@@ -35,16 +36,13 @@ const articles: FinanceArticle[] = [
 
 const counterparties: FinanceCounterparty[] = [{ id: "cp", name: "ООО Проверка" }];
 
-const deals: FinanceDeal[] = [
-  {
-    id: "deal-1",
-    name: "Поставка",
-    status: "OPEN",
-    total: 1,
-    batchNames: [],
-    deliveryExtra: 0,
-  },
-];
+function deal(id: string, name: string, status: FinanceDeal["status"]): FinanceDeal {
+  return { id, name, status, total: 1, batchNames: [], deliveryExtra: 0 };
+}
+
+const deals: FinanceDeal[] = [deal("deal-1", "Поставка", "OPEN")];
+const shipment = deal("deal-2", "Отгрузка", "OPEN");
+const archivedDeal = deal("deal-closed", "Закрытая", "ARCHIVED");
 
 const directories = { articles, counterparties, deals };
 
@@ -104,6 +102,21 @@ describe("cashflow seed for a new auto rule", () => {
     expect(state.dealName).toBeNull();
     expect(articles.map((article) => article.name)).not.toContain("Чужая сделка");
   });
+
+  it("does not preselect a deal that is not open", () => {
+    const state = cashflowSeedToEditorState(
+      {
+        flowType: "EXPENSE",
+        counterpartyName: null,
+        description: "Оплата",
+        articleName: "Материалы",
+        dealName: "Закрытая",
+      },
+      { articles, counterparties, deals: [...deals, archivedDeal] },
+    );
+    expect(state.dealName).toBeNull();
+    expect(state.articleName).toBe("Материалы");
+  });
 });
 
 describe("DDS auto-rule create form", () => {
@@ -113,6 +126,7 @@ describe("DDS auto-rule create form", () => {
       onAutoRuleCreated?: (values: unknown) => void;
       onGoToRule?: (id: string) => void;
       autoRules?: FinanceAutoRule[];
+      deals?: FinanceDeal[];
     },
   ) {
     return render(
@@ -120,7 +134,7 @@ describe("DDS auto-rule create form", () => {
         rows={rows}
         articles={articles}
         counterparties={counterparties}
-        deals={deals}
+        deals={handlers?.deals ?? deals}
         autoRules={handlers?.autoRules ?? []}
         onEdit={() => {}}
         onDelete={() => {}}
@@ -316,5 +330,119 @@ describe("DDS auto-rule create form", () => {
     expect(within(dialog).getByLabelText("Сделка правила").textContent).toContain("Поставка");
     await user.click(within(dialog).getByRole("button", { name: "Сохранить" }));
     expect(onAutoRuleCreated).not.toHaveBeenCalled();
+  });
+
+  it("does not assign a closed deal and explains that it is unavailable", async () => {
+    renderTab(
+      [
+        row({
+          id: "closed-deal",
+          description: "Оплата закрытой сделки",
+          articleName: "Материалы",
+          dealName: "Закрытая",
+        }),
+      ],
+      { deals: [...deals, shipment, archivedDeal] },
+    );
+    const { dialog } = await openCreate("Оплата закрытой сделки");
+    expect(within(dialog).getByLabelText("Сделка правила").textContent).toContain("Не выбрана");
+    expect(dialog.textContent).toContain("Сделка из операции недоступна для нового правила");
+    expect(within(dialog).getByLabelText("Сделка правила").textContent).not.toContain("Закрытая");
+  });
+
+  it("offers only open deals in the new-rule list", async () => {
+    const { user, dialog } = await (async () => {
+      renderTab(
+        [row({ id: "list", description: "Список сделок", articleName: "Материалы" })],
+        { deals: [...deals, shipment, archivedDeal] },
+      );
+      return openCreate("Список сделок");
+    })();
+    await user.click(within(dialog).getByLabelText("Сделка правила"));
+    const options = (await screen.findAllByRole("option")).map((option) => option.textContent);
+    expect(options).toContain("Поставка");
+    expect(options).toContain("Отгрузка");
+    expect(options).not.toContain("Закрытая");
+  });
+});
+
+function savedRule(patch: Partial<FinanceAutoRule> = {}): FinanceAutoRule {
+  return {
+    id: "rule-1",
+    flowType: "EXPENSE",
+    counterpartyName: null,
+    logicOperator: "AND",
+    descriptionKeywords: "оплата",
+    articleName: "Материалы",
+    dealName: "Поставка",
+    ...patch,
+  };
+}
+
+describe("saved auto rule deal editor", () => {
+  const directory = [...deals, shipment, archivedDeal];
+
+  function renderRules(rule: FinanceAutoRule, onRuleUpdate = vi.fn()) {
+    render(
+      <FinanceAutoRulesTab
+        rules={[rule]}
+        articles={articles}
+        counterparties={counterparties}
+        deals={directory}
+        onRuleUpdate={onRuleUpdate}
+      />,
+    );
+    return onRuleUpdate;
+  }
+
+  it("shows an open deal and submits another open deal", async () => {
+    const onRuleUpdate = renderRules(savedRule());
+    expect(onRuleUpdate).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Сделка правила").textContent).toContain("Поставка");
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Сделка правила"));
+    await user.click(await screen.findByRole("option", { name: "Отгрузка" }));
+    expect(onRuleUpdate).toHaveBeenCalledWith("rule-1", { dealName: "Отгрузка" });
+  });
+
+  it("keeps a closed deal visible and out of new selections", async () => {
+    const onRuleUpdate = renderRules(savedRule({ dealName: "Закрытая" }));
+    expect(onRuleUpdate).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Сделка правила").textContent).toContain("Закрытая");
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Сделка правила"));
+    const closed = await screen.findByRole("option", { name: "Закрытая" });
+    expect(closed.getAttribute("aria-disabled")).toBe("true");
+    await user.click(closed);
+    expect(onRuleUpdate).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Сделка правила").textContent).toContain("Закрытая");
+    const enabled = screen
+      .getAllByRole("option")
+      .filter((option) => option.getAttribute("aria-disabled") !== "true")
+      .map((option) => option.textContent);
+    expect(enabled).toContain("Поставка");
+    expect(enabled).toContain("Отгрузка");
+    expect(enabled).not.toContain("Закрытая");
+  });
+
+  it("clears the saved deal", async () => {
+    const onRuleUpdate = renderRules(savedRule());
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Сделка правила"));
+    await user.click(await screen.findByRole("option", { name: "Не выбрана" }));
+    expect(onRuleUpdate).toHaveBeenCalledWith("rule-1", { dealName: null });
+  });
+
+  it("keeps the deal when another condition changes", async () => {
+    const onRuleUpdate = renderRules(savedRule({ dealName: "Закрытая" }));
+    const user = userEvent.setup();
+    const input = screen.getByRole("textbox");
+    await user.clear(input);
+    await user.type(input, "новые");
+    expect(onRuleUpdate).toHaveBeenCalled();
+    for (const [, patch] of onRuleUpdate.mock.calls) {
+      expect(patch).not.toHaveProperty("dealName");
+    }
+    expect(screen.getByLabelText("Сделка правила").textContent).toContain("Закрытая");
   });
 });
