@@ -612,7 +612,10 @@ export function FinanceView({ data }: { data: FinanceData }) {
                 toast.success(removed.length > 1 ? "Перевод удалён" : "Операция удалена");
               })
             }
-            onEdit={(row) => setEditingCashFlow(row)}
+            onEdit={(row) => {
+              if (row.source === "BANK") return;
+              setEditingCashFlow(row);
+            }}
             onConvertToTransfer={(row) => {
               setConvertRow(row);
               setConvertDialogOpen(true);
@@ -621,10 +624,11 @@ export function FinanceView({ data }: { data: FinanceData }) {
               run(async () => {
                 const res = await unlinkTransfer(id);
                 const removedSet = new Set(res.removedIds);
+                const released = new Map(res.released.map((row) => [row.id, row]));
                 setCashFlows((prev) =>
                   prev
                     .filter((r) => !removedSet.has(r.id))
-                    .map((r) => (r.id === res.updated.id ? res.updated : r)),
+                    .map((r) => released.get(r.id) ?? r),
                 );
                 toast.success("Перевод расцеплён");
               })

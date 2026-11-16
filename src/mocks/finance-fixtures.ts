@@ -74,6 +74,8 @@ export interface FinanceCashFlowRow {
   isTransfer?: boolean;
   /** Строка или её перевод входят в банковскую группу. Не путать с isAutoAssigned. */
   source?: "BANK" | "MANUAL";
+  /** Сама строка пришла из выписки. Встречная синтетическая нога — source BANK и false. */
+  bankDocument?: boolean;
   /** У перевода уже есть transferId. */
   pairedTransfer?: boolean;
 }
