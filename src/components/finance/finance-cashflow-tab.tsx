@@ -55,17 +55,13 @@ const stickyTheadClass = "[&_tr]:border-b";
 const stickyHeadRowClass = tableStickyHeadRowClass;
 
 const stickyDateRowClass =
-  "sticky top-[49px] z-10 bg-muted/95 hover:bg-muted/95 border-border/40 backdrop-blur-sm";
+  "sticky top-[49px] z-10 h-[49px] border-border/40 bg-muted hover:bg-muted";
 
 function rowHighlightClass(row: FinanceCashFlowRow) {
   return cn(
     row.isTransfer && "!bg-sky-500/8 hover:!bg-sky-500/12",
-    row.source !== "BANK" &&
-      !row.isTransfer &&
-      !row.isAutoAssigned &&
-      "!bg-amber-500/10 hover:!bg-amber-500/15",
-    row.source !== "BANK" &&
-      !row.isTransfer &&
+    !row.isTransfer && !row.isAutoAssigned && "!bg-amber-500/10 hover:!bg-amber-500/15",
+    !row.isTransfer &&
       row.dealId &&
       row.isAutoAssigned &&
       "!bg-violet-500/8 hover:!bg-violet-500/12",
@@ -208,11 +204,12 @@ export function FinanceCashflowTab({
                           key={row.id}
                           className={cn(
                             tableBodyRowClass,
+                            "relative z-0 !h-auto",
                             index % 2 === 1 && "bg-muted/40",
                             rowHighlightClass(row),
                           )}
                         >
-                          <TableCell className={cn(cellPad, "align-middle tabular-nums")}>
+                          <TableCell className={cn(cellPad, "max-w-0 align-top py-2 whitespace-normal tabular-nums")}>
                             <div>
                               <span
                                 className={cn(
@@ -223,11 +220,15 @@ export function FinanceCashflowTab({
                                 {row.flowType === "INCOME" ? "+" : "−"}
                                 {formatMoney(row.amount)}
                               </span>
-                              <p className="text-muted-foreground mt-0.5 text-xs font-normal">
+                              <p className="text-muted-foreground mt-0.5 text-xs font-normal break-words [overflow-wrap:anywhere]">
                                 {row.accountName}
-                                {bank ? (
+                                {row.bankDocument ? (
                                   <span className="ml-2 inline-flex rounded-full bg-slate-500/15 px-2 py-0.5 text-[11px] font-medium text-slate-700">
                                     Банк
+                                  </span>
+                                ) : row.source === "BANK" ? (
+                                  <span className="ml-2 inline-flex rounded-full bg-sky-500/15 px-2 py-0.5 text-[11px] font-medium text-sky-800">
+                                    Встречная
                                   </span>
                                 ) : (
                                   <span className="ml-2 inline-flex rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium">
@@ -237,14 +238,14 @@ export function FinanceCashflowTab({
                               </p>
                             </div>
                           </TableCell>
-                          {bank || row.isTransfer ? (
-                            <TableCell className={cn(cellPad, "align-middle text-center")}>
-                              <p className={transferMutedCellClass}>
-                                {row.counterpartyName ?? (row.isTransfer ? "Между счетами" : "—")}
+                          {row.isTransfer ? (
+                            <TableCell className={cn(cellPad, "max-w-0 align-top whitespace-normal text-center")}>
+                              <p className={cn(transferMutedCellClass, "break-words [overflow-wrap:anywhere]")}>
+                                {row.counterpartyName ?? "Между счетами"}
                               </p>
                             </TableCell>
                           ) : (
-                            <TableCell className={cn(cellPad, "align-middle text-center")}>
+                            <TableCell className={cn(cellPad, "max-w-0 align-top whitespace-normal py-2 text-center")}>
                               <CashflowCounterpartySelect
                                 row={row}
                                 counterparties={counterparties}
@@ -252,19 +253,23 @@ export function FinanceCashflowTab({
                               />
                             </TableCell>
                           )}
-                          <TableCell className={cn(cellPad, "align-middle text-center")}>
-                            <p className="mx-auto line-clamp-2 w-full whitespace-normal">
+                          <TableCell className={cn(cellPad, "max-w-0 overflow-hidden align-top whitespace-normal py-2 text-left")}>
+                            <p
+                              data-slot="dds-description"
+                              className="w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+                              title={row.description}
+                            >
                               {row.description}
                             </p>
                           </TableCell>
-                          {bank || row.isTransfer ? (
-                            <TableCell className={cn(cellPad, "align-middle")}>
-                              <p className={transferMutedCellClass}>
-                                {row.isTransfer ? "Между счетами" : (row.articleName ?? "—")}
+                          {row.isTransfer ? (
+                            <TableCell className={cn(cellPad, "max-w-0 align-top whitespace-normal")}>
+                              <p className={cn(transferMutedCellClass, "break-words [overflow-wrap:anywhere]")}>
+                                Между счетами
                               </p>
                             </TableCell>
                           ) : (
-                            <TableCell className={cn(cellPad, "align-middle text-center")}>
+                            <TableCell className={cn(cellPad, "max-w-0 align-top whitespace-normal py-2 text-center")}>
                               <CashflowArticleSelect
                                 row={row}
                                 articles={articles}
@@ -272,12 +277,14 @@ export function FinanceCashflowTab({
                               />
                             </TableCell>
                           )}
-                          {bank || row.isTransfer ? (
-                            <TableCell className={cn(cellPad, "align-middle")}>
-                              <p className={transferMutedCellClass}>{row.dealName ?? "—"}</p>
+                          {row.isTransfer ? (
+                            <TableCell className={cn(cellPad, "max-w-0 align-top whitespace-normal")}>
+                              <p className={cn(transferMutedCellClass, "break-words [overflow-wrap:anywhere]")}>
+                                —
+                              </p>
                             </TableCell>
                           ) : (
-                            <TableCell className={cn(cellPad, "align-middle text-center")}>
+                            <TableCell className={cn(cellPad, "max-w-0 align-top whitespace-normal py-2 text-center")}>
                               <CashflowDealSelect
                                 row={row}
                                 deals={deals}
@@ -285,9 +292,9 @@ export function FinanceCashflowTab({
                               />
                             </TableCell>
                           )}
-                          <TableCell className={cn(cellPad, "align-middle whitespace-nowrap text-center")}>
-                            <div className="flex shrink-0 items-center justify-center gap-0.5">
-                              {!bank && !row.isTransfer && (
+                          <TableCell className={cn(cellPad, "max-w-0 align-top whitespace-normal py-2 text-center")}>
+                            <div className="flex flex-wrap items-center justify-center gap-0.5">
+                              {!row.isTransfer && (
                                 <AutoRuleQuickButton
                                   hasRule={Boolean(matchedRule)}
                                   onClick={() =>
@@ -333,7 +340,7 @@ export function FinanceCashflowTab({
                                   <TooltipContent>Сделать переводом</TooltipContent>
                                 </Tooltip>
                               )}
-                              {paired && !bank && onUnlinkTransfer && (
+                              {paired && onUnlinkTransfer && (
                                 <Tooltip>
                                   <TooltipTrigger
                                     render={

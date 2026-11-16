@@ -250,6 +250,7 @@ function serCashFlow(
     isAutoAssigned: cf.isAutoAssigned,
     isTransfer: cf.isTransfer,
     pairedTransfer: cf.transferId != null,
+    bankDocument: isBankImportedOperation(cf),
     source: cashFlowSource({
       statementId: cf.statementId,
       importKey: cf.importKey,
@@ -933,10 +934,12 @@ export interface ReapplyAutoRulesResult {
 }
 
 /**
- * Массовое авторазнесение: прогоняет автоправила по уже импортированным
- * НЕразнесённым операциям (articleId IS NULL) и проставляет статью/сделку.
- * Запускается кнопкой после правки правил или импорта. Ручные операции с
- * выбранной статьёй не трогаются.
+ * Массовое авторазнесение: прогоняет автоправила по неразнесённым операциям
+ * (articleId IS NULL), включая импортированные банковские. Меняются только
+ * статья, сделка и признак авторазнесения. Сумма, дата, назначение, счёт и
+ * банковская идентичность не трогаются. Перевод и уже выбранная статья не
+ * перезаписываются. Вызов только с кнопки: создание правила, загрузка
+ * страницы и выкладка эту функцию не запускают.
  */
 export async function reapplyAutoRules(): Promise<ReapplyAutoRulesResult> {
   await requireAdmin();
@@ -960,7 +963,6 @@ export async function reapplyAutoRules(): Promise<ReapplyAutoRulesResult> {
           throw new LockSetChangedError();
         }
         if (current.isTransfer) return;
-        if (isBankImportedOperation(current)) return;
         if (current.articleId != null) return;
 
         const auto = await applyAutoRulesInternal({
@@ -1247,18 +1249,6 @@ export async function assignCashFlow(
       if (!sameSortedIds([current.accountId], [peek.accountId])) {
         throw new LockSetChangedError();
       }
-      if (isBankImportedOperation(current)) {
-        throw new Error("Импортированную банковскую операцию нельзя изменить");
-      }
-      if (current.transferId) {
-        const group = await tx.cashFlow.findMany({
-          where: { transferId: current.transferId },
-          select: { statementId: true, importKey: true },
-        });
-        if (transferGroupIsBankProtected(group)) {
-          throw new Error("Импортированную банковскую операцию нельзя изменить");
-        }
-      }
       if (
         current.isTransfer &&
         (patch.articleId !== undefined || patch.dealId !== undefined)
@@ -1465,22 +1455,25 @@ export async function convertCashFlowToTransfer(
 }
 
 /**
- * Расцепить перевод: вернуть операцию в обычный доход/расход. Сохраняем ногу из
- * банковской выписки (реальная операция), удаляем встречную (ручную/наличную).
- * Если ни одна нога не из выписки (перевод заведён формой) — сохраняем ту, по
- * которой вызвали. Сохранённая нога помечается «не разнесена». Возвращает id
- * удалённых строк и обновлённую операцию.
+ * Расцепить перевод: снять классификацию «перевод» и вернуть ноги в обычный
+ * доход/расход. Импортированные банковские ноги не удаляются и не меняют
+ * сумму, назначение, дату, счёт и связь с выпиской. Синтетическая встречная
+ * нога (без statementId и importKey) удаляется. Если перевод заведён формой
+ * и банковских ног нет — сохраняем ту, по которой вызвали, остальные удаляем.
+ * Сохранённые ноги помечаются «не разнесена».
  */
 export async function unlinkTransfer(
   id: string,
-): Promise<{ removedIds: string[]; updated: FinanceCashFlowRow }> {
+): Promise<{ removedIds: string[]; updated: FinanceCashFlowRow; released: FinanceCashFlowRow[] }> {
   await requireAdmin();
 
   let keepId = id;
   let removedIds: string[] = [];
+  let releasedIds: string[] = [];
   await retryOnLockSetChange(async () => {
     keepId = id;
     removedIds = [];
+    releasedIds = [];
     await prisma.$transaction(async (tx) => {
       const peek = await tx.cashFlow.findUnique({ where: { id } });
       if (!peek || !peek.isTransfer || !peek.transferId) throw new Error("Это не перевод");
@@ -1495,7 +1488,33 @@ export async function unlinkTransfer(
         throw new LockSetChangedError();
       }
       if (transferGroupIsBankProtected(legs)) {
-        throw new Error("Банковский перевод нельзя расцепить");
+        const imported = legs.filter((leg) => isBankImportedOperation(leg));
+        const synthetic = legs.filter((leg) => !isBankImportedOperation(leg));
+        if (imported.length === 0) {
+          throw new Error("Банковский перевод нельзя расцепить");
+        }
+        await lockDealsThenBatches(
+          tx,
+          legs.map((leg) => leg.dealId),
+        );
+        if (synthetic.length > 0) {
+          await tx.cashFlow.deleteMany({
+            where: { id: { in: synthetic.map((leg) => leg.id) } },
+          });
+        }
+        for (const leg of imported) {
+          await tx.cashFlow.update({
+            where: { id: leg.id },
+            data: { isTransfer: false, transferId: null, isAutoAssigned: false },
+          });
+        }
+        for (const dealId of sortedUniqueIds(legs.map((leg) => leg.dealId))) {
+          await syncDealInternal(dealId, tx);
+        }
+        keepId = imported.find((leg) => leg.id === id)?.id ?? imported[0]!.id;
+        removedIds = synthetic.map((leg) => leg.id);
+        releasedIds = imported.map((leg) => leg.id);
+        return;
       }
 
       await lockDealsThenBatches(
@@ -1507,6 +1526,7 @@ export async function unlinkTransfer(
       const removed = legs.filter((l) => l.id !== keep.id);
       keepId = keep.id;
       removedIds = removed.map((l) => l.id);
+      releasedIds = [keep.id];
 
       await tx.cashFlow.deleteMany({ where: { id: { in: removedIds } } });
       await tx.cashFlow.update({
@@ -1525,7 +1545,9 @@ export async function unlinkTransfer(
     newValues: { unlinkedTransfer: true },
   });
   revalidatePath(PATH);
-  return { removedIds, updated: await loadCashFlow(keepId) };
+  const released = await Promise.all(releasedIds.map((rowId) => loadCashFlow(rowId)));
+  const updated = released.find((row) => row.id === keepId) ?? (await loadCashFlow(keepId));
+  return { removedIds, updated, released };
 }
 
 // ============================ СДЕЛКИ → СЕБЕСТОИМОСТЬ =======================

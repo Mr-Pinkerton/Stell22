@@ -11,6 +11,7 @@ import { writeChangeLog } from "@/server/change-log";
 import { is1CStatement, parse1CStatement } from "@/lib/bank-statement-1c";
 import {
   cashFlowSource,
+  isBankImportedOperation,
   periodsOverlap,
   canonicalStatementDocument,
   statementContentIdentity,
@@ -150,6 +151,7 @@ function serCashFlow(cf: CashFlowWithRefs): FinanceCashFlowRow {
     dealId: cf.dealId,
     isAutoAssigned: cf.isAutoAssigned,
     isTransfer: cf.isTransfer,
+    bankDocument: isBankImportedOperation(cf),
     source: cashFlowSource({
       statementId: cf.statementId,
       importKey: cf.importKey,

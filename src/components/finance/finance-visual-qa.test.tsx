@@ -1,7 +1,7 @@
 /** @vitest-environment happy-dom */
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FinanceCashflowTab } from "@/components/finance/finance-cashflow-tab";
 import { FinanceStatementsTab } from "@/components/finance/finance-statements-tab";
 import type { AccountCoverageSummary } from "@/lib/bank-statement-integrity";
@@ -31,6 +31,7 @@ const rows: FinanceCashFlowRow[] = [
     id: "imported",
     date: "2026-09-01",
     source: "BANK",
+    bankDocument: true,
     accountName: "Расчётный Альфа",
     counterpartyName: "ООО Проверка",
     description: "Оплата поставки",
@@ -45,12 +46,29 @@ const rows: FinanceCashFlowRow[] = [
     id: "transfer",
     date: "2026-09-03",
     source: "BANK",
+    bankDocument: true,
     isTransfer: true,
     pairedTransfer: true,
     accountName: "Расчётный Бета",
     description: "Перевод с Альфа",
     flowType: "INCOME",
     amount: 800,
+  }),
+  row({
+    id: "synthetic",
+    date: "2026-09-03",
+    source: "BANK",
+    bankDocument: false,
+    isTransfer: true,
+    pairedTransfer: true,
+    accountName: "Касса",
+    description: "Синтетическая нога",
+    flowType: "EXPENSE",
+    amount: 800,
+  }),
+  row({
+    id: "long",
+    description: `Поставка${"ОченьДлинноеНазначение".repeat(8)} конец`,
   }),
   row({
     id: "unassigned",
@@ -95,21 +113,73 @@ describe("DDS table responsiveness", () => {
     const imported = screen.getByText("Оплата поставки").closest("tr");
     const manual = screen.getByText("Канцтовары офиса").closest("tr");
     const transfer = screen.getByText("Перевод с Альфа").closest("tr");
+    const synthetic = screen.getByText("Синтетическая нога").closest("tr");
     const unassigned = screen.getByText("Без статьи").closest("tr");
     const linked = screen.getByText("Привязана к сделке").closest("tr");
-    for (const line of [imported, manual, transfer, unassigned, linked]) {
+    const longText = `Поставка${"ОченьДлинноеНазначение".repeat(8)} конец`;
+    const longRow = screen.getByText(longText).closest("tr");
+    for (const line of [imported, manual, transfer, synthetic, unassigned, linked, longRow]) {
       expect(line?.querySelectorAll("td")).toHaveLength(6);
     }
+    expect(imported?.textContent).toContain("Банк");
     expect(imported?.querySelector('[aria-label="Сделать переводом"]')).toBeTruthy();
+    expect(imported?.querySelector('[aria-label="Автоправила нет"]')).toBeTruthy();
+    expect(imported?.textContent).toContain("Не разнесено");
     expect(imported?.querySelector('[aria-label="Изменить"]')).toBeNull();
+    expect(imported?.querySelector('[aria-label="Удалить"]')).toBeNull();
+    expect(synthetic?.textContent).toContain("Встречная");
+    expect(synthetic?.textContent).not.toContain("Банк");
+    expect(synthetic?.querySelector('[aria-label="Удалить"]')).toBeNull();
+    expect(synthetic?.querySelector('[aria-label="Изменить"]')).toBeNull();
+    expect(synthetic?.querySelector('[aria-label="Убрать перевод"]')).toBeTruthy();
     expect(manual?.querySelector('[aria-label="Изменить"]')).toBeTruthy();
     expect(manual?.querySelector('[aria-label="Удалить"]')).toBeTruthy();
     expect(manual?.querySelector('[aria-label="Автоправила нет"]')).toBeTruthy();
-    expect(transfer?.querySelector("button")).toBeNull();
+    expect(transfer?.querySelector('[aria-label="Убрать перевод"]')).toBeTruthy();
+    expect(transfer?.querySelector('[aria-label="Удалить"]')).toBeNull();
+    expect(transfer?.querySelector('[aria-label="Изменить"]')).toBeNull();
+    expect(transfer?.querySelector('[aria-label="Автоправила нет"]')).toBeNull();
     expect(unassigned?.querySelector('[aria-label="Автоправила нет"]')).toBeTruthy();
     expect(linked?.querySelector('[aria-label="Сделать переводом"]')).toBeTruthy();
+    const description = longRow?.querySelector("[data-slot=dds-description]");
+    expect(description?.textContent).toBe(longText);
+    expect(description?.getAttribute("title")).toBe(longText);
+    expect(description?.className).toMatch(/break-words/);
+    expect(description?.className).not.toMatch(/line-clamp/);
     const actions = manual?.lastElementChild;
-    expect(actions?.className).toMatch(/whitespace-nowrap/);
+    expect(actions?.className).not.toMatch(/whitespace-nowrap/);
+    expect(actions?.className).toMatch(/max-w-0/);
+    expect(longRow?.className).toMatch(/!h-auto/);
+  });
+
+  it("opens a prefilled rule from a bank row and an existing rule from a manual row", async () => {
+    const user = userEvent.setup();
+    const onGoToRule = vi.fn();
+    const onAutoRuleCreated = vi.fn();
+    render(
+      <FinanceCashflowTab
+        rows={rows}
+        articles={[{ id: "art", name: "Материалы", flowType: "EXPENSE", categoryName: "Закупки", isOverhead: false, parentId: null }]}
+        counterparties={[{ id: "cp", name: "ООО Проверка" }]}
+        deals={[]}
+        autoRules={[{
+          id: "rule-1",
+          flowType: "EXPENSE",
+          counterpartyName: null,
+          logicOperator: "AND",
+          descriptionKeywords: "Канцтовары",
+          articleName: "Материалы",
+          dealName: null,
+        }]}
+        onGoToRule={onGoToRule}
+        onAutoRuleCreated={onAutoRuleCreated}
+      />,
+    );
+    await user.click(screen.getByText("Оплата поставки").closest("tr")!.querySelector('[aria-label="Автоправила нет"]')!);
+    expect(screen.getByText("Добавить автоправило")).toBeTruthy();
+    expect(screen.getByDisplayValue("Оплата поставки")).toBeTruthy();
+    await user.click(screen.getByText("Канцтовары офиса").closest("tr")!.querySelector('[aria-label="Автоправило есть"]')!);
+    expect(onGoToRule).toHaveBeenCalledWith("rule-1");
   });
 });
 

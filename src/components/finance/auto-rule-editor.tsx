@@ -218,14 +218,16 @@ export function autoRuleEditorToRule(
   };
 }
 
-export function cashflowSeedToEditorState(
-  seed: { flowType: FinanceAutoRule["flowType"]; counterpartyName: string | null },
-): AutoRuleEditorState {
+export function cashflowSeedToEditorState(seed: {
+  flowType: FinanceAutoRule["flowType"];
+  counterpartyName: string | null;
+  description?: string;
+}): AutoRuleEditorState {
   return {
     flowType: seed.flowType,
     counterpartyName: seed.counterpartyName,
     logicOperator: "AND",
-    descriptionKeywords: null,
+    descriptionKeywords: seed.description?.trim() || null,
     articleName: null,
   };
 }

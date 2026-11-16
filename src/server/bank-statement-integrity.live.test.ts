@@ -10,7 +10,9 @@ import { zipSync } from "fflate";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runDisposableMigrate } from "@/server/internal/disposable-migrate/guard";
 import { DEAL_EXTRA_FROZEN_MIX } from "@/lib/deal-cost";
+import { financePeriodExpense } from "@/mocks/finance-fixtures";
 import { PRODUCTION_COST_FLOW_KEY } from "@/server/internal/cost-flow-state";
+import { getPeriodOverhead } from "@/server/internal/cost";
 
 const gate = vi.hoisted(() => ({
   admin: { id: "pending-admin", name: "Проверка", email: "bank@example.invalid", role: "ADMIN" as const },
@@ -399,7 +401,20 @@ describe.skipIf(!LIVE)("bank statement immutability and coverage on disposable P
     const expenseArticle = await seed!.article.create({
       data: { name: `Статья ${runId}`, flowType: "EXPENSE", categoryId: article.id },
     });
-    await expect(assignCashFlow(expense!.id, { articleId: expenseArticle.id })).rejects.toThrow(/нельзя изменить/);
+    const sourceOf = async (id: string) => {
+      const row = await seed!.cashFlow.findUniqueOrThrow({ where: { id } });
+      return {
+        amount: row.amount.toFixed(2),
+        date: row.date.toISOString().slice(0, 10),
+        accountId: row.accountId,
+        flowType: row.flowType,
+        description: row.description,
+        statementId: row.statementId,
+        importKey: row.importKey,
+      };
+    };
+    const expenseSource = await sourceOf(expense!.id);
+    const incomeSource = await sourceOf(income!.id);
     await expect(updateManualCashFlow(expense!.id, {
       date: "2026-09-02",
       amount: 1,
@@ -424,8 +439,22 @@ describe.skipIf(!LIVE)("bank statement immutability and coverage on disposable P
     })).rejects.toThrow(/нельзя изменить/);
     await expect(deleteCashFlow(expense!.id)).rejects.toThrow(/нельзя удалить/);
     await expect(deleteStatement(imported.statement.id)).rejects.toThrow(/нельзя удалить/);
+    expect(await sourceOf(expense!.id)).toEqual(expenseSource);
+    expect(await sourceOf(income!.id)).toEqual(incomeSource);
     expect(await seed!.cashFlow.count({ where: { statementId: imported.statement.id } })).toBe(2);
     expect(await seed!.statement.count({ where: { id: imported.statement.id } })).toBe(1);
+
+    const assigned = await assignCashFlow(expense!.id, { articleId: expenseArticle.id });
+    expect(assigned.articleName).toBe(expenseArticle.name);
+    expect(assigned.bankDocument).toBe(true);
+    expect(assigned.source).toBe("BANK");
+    expect(await sourceOf(expense!.id)).toEqual(expenseSource);
+    const replacement = await seed!.article.create({
+      data: { name: `Другая ${runId}`, flowType: "EXPENSE", categoryId: article.id },
+    });
+    const changed = await assignCashFlow(expense!.id, { articleId: replacement.id });
+    expect(changed.articleName).toBe(replacement.name);
+    expect(await sourceOf(expense!.id)).toEqual(expenseSource);
 
     await seed!.autoRule.create({
       data: {
@@ -435,27 +464,222 @@ describe.skipIf(!LIVE)("bank statement immutability and coverage on disposable P
         descriptionKeywords: "банк-расход",
       },
     });
-    await reapplyAutoRules();
-    const still = await seed!.cashFlow.findUniqueOrThrow({ where: { id: expense!.id } });
-    expect(still.articleId).toBeNull();
+    const preserved = await reapplyAutoRules();
+    expect(preserved.updated.map((row) => row.id)).not.toContain(expense!.id);
+    const stillManual = await seed!.cashFlow.findUniqueOrThrow({ where: { id: expense!.id } });
+    expect(stillManual.articleId).toBe(replacement.id);
+    expect(await sourceOf(expense!.id)).toEqual(expenseSource);
+
+    const incomeCategory = await seed!.articleCategory.create({ data: { name: `Приход ${runId}`, isOverhead: false } });
+    const incomeArticle = await seed!.article.create({
+      data: { name: `Приход статья ${runId}`, flowType: "INCOME", categoryId: incomeCategory.id },
+    });
+    const manualOpen = await createCashFlow({
+      date: "2026-09-01",
+      amount: 12,
+      flowType: "INCOME",
+      accountName: other.name,
+      counterpartyName: null,
+      description: "банк-приход вручную",
+      articleName: null,
+      dealId: null,
+      dealName: null,
+    });
+    await seed!.autoRule.create({
+      data: {
+        flowType: "INCOME",
+        articleId: incomeArticle.id,
+        logicOperator: "AND",
+        descriptionKeywords: "банк-приход",
+      },
+    });
+    const manualKept = await createCashFlow({
+      date: "2026-09-01",
+      amount: 13,
+      flowType: "INCOME",
+      accountName: other.name,
+      counterpartyName: null,
+      description: "банк-приход уже статья",
+      articleName: incomeArticle.name,
+      dealId: null,
+      dealName: null,
+    });
+    expect(await seed!.cashFlow.findUniqueOrThrow({ where: { id: manualOpen.id } })).toMatchObject({
+      articleId: null,
+    });
+    const reapplied = await reapplyAutoRules();
+    const reappliedIds = reapplied.updated.map((row) => row.id);
+    expect(reappliedIds).toContain(income!.id);
+    expect(reappliedIds).toContain(manualOpen.id);
+    expect(reappliedIds).not.toContain(manualKept.id);
+    expect(reappliedIds).not.toContain(expense!.id);
+    const incomeAfter = await seed!.cashFlow.findUniqueOrThrow({ where: { id: income!.id } });
+    expect(incomeAfter.articleId).toBe(incomeArticle.id);
+    expect(await sourceOf(income!.id)).toEqual(incomeSource);
+    const manualAfter = await seed!.cashFlow.findUniqueOrThrow({ where: { id: manualKept.id } });
+    expect(manualAfter.articleId).toBe(incomeArticle.id);
 
     const [sourceRow, otherRow] = await convertCashFlowToTransfer(expense!.id, other.id);
     const saved = await seed!.cashFlow.findUniqueOrThrow({ where: { id: expense!.id } });
-    expect(saved.amount.toFixed(2)).toBe("150.00");
-    expect(saved.date.toISOString().slice(0, 10)).toBe("2026-09-01");
-    expect(saved.accountId).toBe(expense!.accountId);
-    expect(saved.flowType).toBe("EXPENSE");
-    expect(saved.description).toBe("банк-расход");
-    expect(saved.statementId).toBe(expense!.statementId);
-    expect(saved.importKey).toBe(expense!.importKey);
+    expect(saved.amount.toFixed(2)).toBe(expenseSource.amount);
+    expect(saved.date.toISOString().slice(0, 10)).toBe(expenseSource.date);
+    expect(saved.accountId).toBe(expenseSource.accountId);
+    expect(saved.flowType).toBe(expenseSource.flowType);
+    expect(saved.description).toBe(expenseSource.description);
+    expect(saved.statementId).toBe(expenseSource.statementId);
+    expect(saved.importKey).toBe(expenseSource.importKey);
     expect(saved.isTransfer).toBe(true);
     expect(saved.transferId).toBeTruthy();
+    expect(saved.articleId).toBeNull();
     expect(sourceRow.source).toBe("BANK");
+    expect(sourceRow.bankDocument).toBe(true);
     expect(otherRow.source).toBe("BANK");
+    expect(otherRow.bankDocument).toBe(false);
+    const synthetic = await seed!.cashFlow.findUniqueOrThrow({ where: { id: otherRow.id } });
+    expect(synthetic.statementId).toBeNull();
+    expect(synthetic.importKey).toBeNull();
+    expect(synthetic.amount.toFixed(2)).toBe(expenseSource.amount);
     await expect(deleteCashFlow(saved.id)).rejects.toThrow(/нельзя удалить/);
     await expect(deleteCashFlow(otherRow.id)).rejects.toThrow(/нельзя удалить/);
-    await expect(unlinkTransfer(saved.id)).rejects.toThrow(/нельзя расцепить/);
-    expect(await seed!.cashFlow.count({ where: { transferId: saved.transferId } })).toBe(2);
+    const released = await unlinkTransfer(saved.id);
+    expect(released.removedIds).toEqual([synthetic.id]);
+    expect(released.released.map((row) => row.id)).toEqual([saved.id]);
+    const restored = await seed!.cashFlow.findUniqueOrThrow({ where: { id: saved.id } });
+    expect(restored.amount.toFixed(2)).toBe(expenseSource.amount);
+    expect(restored.description).toBe(expenseSource.description);
+    expect(restored.statementId).toBe(expenseSource.statementId);
+    expect(restored.importKey).toBe(expenseSource.importKey);
+    expect(restored.accountId).toBe(expenseSource.accountId);
+    expect(restored.isTransfer).toBe(false);
+    expect(restored.transferId).toBeNull();
+    expect(await seed!.cashFlow.count({ where: { id: synthetic.id } })).toBe(0);
+    expect(await seed!.cashFlow.count({ where: { statementId: imported.statement.id } })).toBe(2);
+    expect(await seed!.statement.count({ where: { id: imported.statement.id } })).toBe(1);
+    await expect(deleteCashFlow(saved.id)).rejects.toThrow(/нельзя удалить/);
+  });
+
+  it("assigns a bank deal and keeps a bank credit transfer out of expense and overhead", async () => {
+    const number = `407028100000${runId.slice(0, 8)}z`;
+    const bank = await account(`Классификация ${runId}`, number);
+    const cash = await account(`Классификация касса ${runId}`, `408178100000${runId.slice(0, 8)}q`);
+    const otherCash = await account(`Классификация касса 2 ${runId}`, `408178100000${runId.slice(0, 8)}r`);
+    const material = await seed!.material.create({
+      data: { name: `Порода класс ${runId}`, sectionWidthMm: 40, sectionHeightMm: 20 },
+    });
+    const batchName = `Партия класс ${runId}`;
+    const batch = await seed!.batch.create({
+      data: {
+        name: batchName,
+        materialId: material.id,
+        sectionWidthMm: 40,
+        sectionHeightMm: 20,
+        purchaseCost: 1000,
+        totalCost: 1000,
+        priceSort1: 0,
+        priceSort2: 0,
+        purchaseDate: new Date("2026-02-17T00:00:00.000Z"),
+      },
+    });
+    const deal = await createDeal({ name: `Сделка класс ${runId}`, batchNames: [batchName] });
+    const beforeDeal = (await seed!.deal.findUniqueOrThrow({ where: { id: deal.id } })).total.toFixed(2);
+    const beforeBatch = (await seed!.batch.findUniqueOrThrow({ where: { id: batch.id } })).totalCost.toFixed(2);
+    const overheadCategory = await seed!.articleCategory.create({
+      data: { name: `Накладные класс ${runId}`, isOverhead: true },
+    });
+    const overheadArticle = await seed!.article.create({
+      data: { name: `Цех класс ${runId}`, flowType: "EXPENSE", categoryId: overheadCategory.id },
+    });
+    const counterparty = await seed!.counterparty.create({ data: { name: `Контрагент класс ${runId}` } });
+    const day = { start: new Date("2026-02-17T00:00:00.000Z"), end: new Date("2026-02-17T23:59:59.999Z") };
+    expect((await getPeriodOverhead(day)).toFixed(2)).toBe("0.00");
+    const file = bankFile({
+      account: number,
+      start: "17.02.2026",
+      end: "17.02.2026",
+      opening: "0.00",
+      closing: "0.00",
+      docs: [
+        { number: "41", date: "17.02.2026", amount: "1800.00", payer: number, payee: "40602810000000000041", purpose: "цех-класс" },
+        { number: "42", date: "17.02.2026", amount: "30.00", payer: "40602810000000000042", payee: number, purpose: "приход-класс" },
+      ],
+    });
+    const imported = await importStatementInternal(file, "class.txt");
+    const rows = await seed!.cashFlow.findMany({ where: { statementId: imported.statement.id } });
+    const debit = rows.find((row) => row.flowType === "EXPENSE")!;
+    const credit = rows.find((row) => row.flowType === "INCOME")!;
+    const debitSource = {
+      amount: debit.amount.toFixed(2),
+      description: debit.description,
+      accountId: debit.accountId,
+      importKey: debit.importKey,
+      statementId: debit.statementId,
+    };
+    const classified = await assignCashFlow(debit.id, {
+      articleId: overheadArticle.id,
+      dealId: deal.id,
+      counterpartyId: counterparty.id,
+    });
+    expect(classified.dealId).toBe(deal.id);
+    expect(classified.articleName).toBe(overheadArticle.name);
+    expect(classified.counterpartyName).toBe(counterparty.name);
+    expect(classified.bankDocument).toBe(true);
+    const stored = await seed!.cashFlow.findUniqueOrThrow({ where: { id: debit.id } });
+    expect(stored.amount.toFixed(2)).toBe(debitSource.amount);
+    expect(stored.description).toBe(debitSource.description);
+    expect(stored.accountId).toBe(debitSource.accountId);
+    expect(stored.importKey).toBe(debitSource.importKey);
+    expect(stored.statementId).toBe(debitSource.statementId);
+    expect((await getPeriodOverhead(day)).toFixed(2)).toBe("1800.00");
+    const withDeal = (await seed!.deal.findUniqueOrThrow({ where: { id: deal.id } })).total.toFixed(2);
+    const withBatch = (await seed!.batch.findUniqueOrThrow({ where: { id: batch.id } })).totalCost.toFixed(2);
+    expect(withDeal).toBe("1800.00");
+    expect(withBatch).toBe("1800.00");
+
+    const changedDeal = await assignCashFlow(debit.id, { dealId: null });
+    expect(changedDeal.dealId).toBeNull();
+    expect((await seed!.deal.findUniqueOrThrow({ where: { id: deal.id } })).total.toFixed(2)).toBe(beforeDeal);
+    expect((await seed!.batch.findUniqueOrThrow({ where: { id: batch.id } })).totalCost.toFixed(2)).toBe(beforeBatch);
+    await assignCashFlow(debit.id, { dealId: deal.id });
+
+    const [debitRow, synthetic] = await convertCashFlowToTransfer(debit.id, cash.id);
+    expect(debitRow.isTransfer).toBe(true);
+    expect(debitRow.bankDocument).toBe(true);
+    expect(synthetic.bankDocument).toBe(false);
+    expect(synthetic.source).toBe("BANK");
+    const debitSaved = await seed!.cashFlow.findUniqueOrThrow({ where: { id: debit.id } });
+    expect(debitSaved.amount.toFixed(2)).toBe("1800.00");
+    expect(debitSaved.description).toBe("цех-класс");
+    expect(debitSaved.importKey).toBe(debitSource.importKey);
+    expect(debitSaved.articleId).toBeNull();
+    expect(debitSaved.dealId).toBeNull();
+    expect((await getPeriodOverhead(day)).toFixed(2)).toBe("0.00");
+    expect((await seed!.deal.findUniqueOrThrow({ where: { id: deal.id } })).total.toFixed(2)).toBe(beforeDeal);
+    expect((await seed!.batch.findUniqueOrThrow({ where: { id: batch.id } })).totalCost.toFixed(2)).toBe(beforeBatch);
+    const visible = (await getFinanceData()).cashFlows.filter(
+      (row) => row.accountId === bank.id || row.accountId === cash.id,
+    );
+    expect(financePeriodExpense(visible)).toBe(0);
+    expect(await seed!.cashFlow.count({ where: { transferId: debitSaved.transferId } })).toBe(2);
+    await expect(convertCashFlowToTransfer(debit.id, otherCash.id)).rejects.toThrow(/уже является переводом/);
+    expect(await seed!.cashFlow.count({ where: { accountId: bank.id } })).toBe(2);
+
+    const [creditRow, creditSynthetic] = await convertCashFlowToTransfer(credit.id, otherCash.id);
+    expect(creditRow.flowType).toBe("INCOME");
+    expect(creditRow.bankDocument).toBe(true);
+    expect(creditSynthetic.bankDocument).toBe(false);
+    expect(creditSynthetic.flowType).toBe("EXPENSE");
+    const creditSaved = await seed!.cashFlow.findUniqueOrThrow({ where: { id: credit.id } });
+    expect(creditSaved.amount.toFixed(2)).toBe("30.00");
+    expect(creditSaved.description).toBe("приход-класс");
+    expect(creditSaved.accountId).toBe(credit.accountId);
+    expect(creditSaved.statementId).toBe(credit.statementId);
+    expect(creditSaved.importKey).toBe(credit.importKey);
+    expect(creditSaved.isTransfer).toBe(true);
+    const syntheticStored = await seed!.cashFlow.findUniqueOrThrow({ where: { id: creditSynthetic.id } });
+    expect(syntheticStored.statementId).toBeNull();
+    expect(syntheticStored.importKey).toBeNull();
+    expect((await getPeriodOverhead(day)).toFixed(2)).toBe("0.00");
+    expect(await seed!.setting.count({ where: { key: PRODUCTION_COST_FLOW_KEY } })).toBe(0);
   });
 
   it("G manual amount, date, and account can change, and the row can be deleted", async () => {
@@ -865,6 +1089,24 @@ describe.skipIf(!LIVE)("bank statement immutability and coverage on disposable P
     expect(legs.every((leg) => leg.isTransfer)).toBe(true);
     expect(legs.find((leg) => leg.accountId === leftAccount.id)?.amount.toFixed(2)).toBe("100.00");
     expect(legs.find((leg) => leg.accountId === rightAccount.id)?.statementId).toBeTruthy();
+    const leftLeg = legs.find((leg) => leg.accountId === leftAccount.id)!;
+    const rightLeg = legs.find((leg) => leg.accountId === rightAccount.id)!;
+    const leftKey = leftLeg.importKey;
+    const rightKey = rightLeg.importKey;
+    const unlinked = await unlinkTransfer(source.id);
+    expect(unlinked.removedIds).toEqual([]);
+    const kept = await seed!.cashFlow.findMany({
+      where: { id: { in: [leftLeg.id, rightLeg.id] } },
+    });
+    expect(kept).toHaveLength(2);
+    expect(kept.every((leg) => leg.isTransfer === false && leg.transferId == null)).toBe(true);
+    expect(kept.find((leg) => leg.id === leftLeg.id)?.importKey).toBe(leftKey);
+    expect(kept.find((leg) => leg.id === rightLeg.id)?.importKey).toBe(rightKey);
+    expect(kept.find((leg) => leg.id === leftLeg.id)?.statementId).toBe(leftLeg.statementId);
+    expect(kept.find((leg) => leg.id === rightLeg.id)?.statementId).toBe(rightLeg.statementId);
+    expect(kept.find((leg) => leg.id === leftLeg.id)?.amount.toFixed(2)).toBe("100.00");
+    expect(kept.find((leg) => leg.id === rightLeg.id)?.amount.toFixed(2)).toBe("100.00");
+    expect(kept.find((leg) => leg.id === leftLeg.id)?.description).toBe(leftLeg.description);
 
     const ambiguousLeft = `407028100000${runId.slice(0, 8)}c`;
     const ambiguousRight = `407028100000${runId.slice(0, 8)}d`;
@@ -891,8 +1133,15 @@ describe.skipIf(!LIVE)("bank statement immutability and coverage on disposable P
     const ambDest = await seed!.account.findFirstOrThrow({ where: { accountNumber: ambiguousRight } });
     const ambSource = await seed!.cashFlow.findFirstOrThrow({ where: { accountId: ambSourceAccount.id } });
     await expect(convertCashFlowToTransfer(ambSource.id, ambDest.id)).rejects.toThrow(/только по сумме/);
+    const ambAfter = await seed!.cashFlow.findUniqueOrThrow({ where: { id: ambSource.id } });
+    expect(ambAfter.isTransfer).toBe(false);
+    expect(ambAfter.transferId).toBeNull();
+    expect(ambAfter.amount.toFixed(2)).toBe("40.00");
+    expect(ambAfter.description).toBe("Оплата");
+    expect(ambAfter.importKey).toBe(ambSource.importKey);
+    expect(ambAfter.statementId).toBe(ambSource.statementId);
+    expect(ambAfter.accountId).toBe(ambSource.accountId);
     expect(await seed!.cashFlow.count({ where: { accountId: ambDest.id } })).toBe(2);
-    expect(ambSource.isTransfer).toBe(false);
   });
 
   it("B–D a changed purpose or counterparty is an overlap, on every import path", async () => {
