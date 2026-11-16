@@ -27,7 +27,7 @@ export function AutoRuleQuickButton({ hasRule, onClick }: AutoRuleQuickButtonPro
             size="icon"
             className={cn(
               tableActionClass,
-              "text-xs font-bold",
+              "size-8 h-8 w-8 rounded-[50%] p-0 text-xs font-bold leading-none",
               hasRule && "bg-violet-500/10 text-violet-700",
             )}
             aria-label={hasRule ? "Автоправило есть" : "Автоправила нет"}

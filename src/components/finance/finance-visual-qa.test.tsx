@@ -150,6 +150,24 @@ describe("DDS table responsiveness", () => {
     expect(actions?.className).not.toMatch(/whitespace-nowrap/);
     expect(actions?.className).toMatch(/max-w-0/);
     expect(longRow?.className).toMatch(/!h-auto/);
+    const actionBar = manual?.querySelector("[data-slot=dds-actions]");
+    expect(actionBar?.className).toContain("justify-end");
+    expect(actionBar?.className).not.toContain("justify-center");
+    const auto = manual?.querySelector('[aria-label="Автоправила нет"]');
+    expect(auto?.className).toContain("rounded-[50%]");
+    expect(auto?.className).toContain("size-8");
+    expect(auto?.className).not.toContain("rounded-[8px]");
+    expect(auto?.textContent).toBe("А");
+    const edit = manual?.querySelector('[aria-label="Изменить"]');
+    expect(edit?.className).toContain("rounded-[8px]");
+    expect(edit?.className).not.toContain("rounded-full");
+    const dateRow = screen.getByText("01.09.2026").closest("tr");
+    expect(dateRow?.getAttribute("data-slot")).toBe("dds-date-row");
+    expect(dateRow?.className).toContain("sticky");
+    expect(dateRow?.className).toContain("top-[49px]");
+    expect(dateRow?.className).toContain("h-[30px]");
+    expect(dateRow?.className).not.toContain("h-[49px]");
+    expect(document.querySelector("th")?.className).toContain("h-[49px]");
   });
 
   it("opens a prefilled rule from a bank row and an existing rule from a manual row", async () => {

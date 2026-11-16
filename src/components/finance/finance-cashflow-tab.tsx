@@ -55,7 +55,7 @@ const stickyTheadClass = "[&_tr]:border-b";
 const stickyHeadRowClass = tableStickyHeadRowClass;
 
 const stickyDateRowClass =
-  "sticky top-[49px] z-10 h-[49px] border-border/40 bg-muted hover:bg-muted";
+  "sticky top-[49px] z-10 h-[30px] border-border/40 bg-muted hover:bg-muted";
 
 function rowHighlightClass(row: FinanceCashFlowRow) {
   return cn(
@@ -182,12 +182,12 @@ export function FinanceCashflowTab({
                 ) : (
                   groups.map((group) => (
                     <Fragment key={group.date}>
-                      <TableRow className={stickyDateRowClass}>
+                      <TableRow data-slot="dds-date-row" className={stickyDateRowClass}>
                         <TableCell
                           colSpan={COL_SPAN}
                           className={cn(
                             cellPad,
-                            "text-muted-foreground py-2 text-xs font-semibold tracking-wide uppercase",
+                            "text-muted-foreground h-[30px] py-0 align-middle text-xs font-semibold leading-[30px] tracking-wide uppercase",
                           )}
                         >
                           {formatIsoDate(group.date)}
@@ -292,8 +292,8 @@ export function FinanceCashflowTab({
                               />
                             </TableCell>
                           )}
-                          <TableCell className={cn(cellPad, "max-w-0 align-top whitespace-normal py-2 text-center")}>
-                            <div className="flex flex-wrap items-center justify-center gap-0.5">
+                          <TableCell className={cn(cellPad, "max-w-0 align-top whitespace-normal py-2 text-right")}>
+                            <div data-slot="dds-actions" className="flex flex-wrap items-center justify-end gap-0.5">
                               {!row.isTransfer && (
                                 <AutoRuleQuickButton
                                   hasRule={Boolean(matchedRule)}
@@ -397,6 +397,7 @@ export function FinanceCashflowTab({
         seed={ruleSeed}
         articles={articles}
         counterparties={counterparties}
+        deals={deals}
         onOpenChange={setRuleDialogOpen}
         onSubmit={onAutoRuleCreated}
       />

@@ -245,7 +245,14 @@ describe("compact icon action style", () => {
     expect(present.className).toContain("hover:bg-muted/60");
     expect(present.className).toContain("hover:text-foreground");
     expect(present.className).not.toContain("hover:bg-violet-500/20");
+    expect(present.className).toContain("rounded-[50%]");
+    expect(present.className).toContain("size-8");
+    expect(present.className).not.toContain("rounded-[8px]");
+    expect(present.textContent).toBe("А");
     expect(absent.className).toContain("hover:bg-muted/60");
+    expect(absent.className).toContain("rounded-[50%]");
+    expect(absent.className).not.toContain("rounded-[8px]");
+    expect(absent.textContent).toBe("А");
     await user.hover(present);
     expect(await screen.findAllByText("Автоправило есть — открыть")).toHaveLength(1);
   });

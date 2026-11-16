@@ -6,6 +6,7 @@ import type {
   FinanceAutoRule,
   FinanceCashFlowRow,
   FinanceCounterparty,
+  FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import {
@@ -31,8 +32,13 @@ interface AutoRuleFormDialogProps {
   seed?: FinanceCashFlowRow | null;
   articles: FinanceArticle[];
   counterparties: FinanceCounterparty[];
+  deals: FinanceDeal[];
   onOpenChange: (open: boolean) => void;
   onSubmit?: (values: AutoRuleFormValues) => void;
+}
+
+function trimmed(value: string | null | undefined): string | null {
+  return value?.trim() || null;
 }
 
 export function AutoRuleFormDialog({
@@ -40,16 +46,28 @@ export function AutoRuleFormDialog({
   seed,
   articles,
   counterparties,
+  deals,
   onOpenChange,
   onSubmit,
 }: AutoRuleFormDialogProps) {
   const [draft, setDraft] = useState<AutoRuleEditorState>(emptyAutoRuleEditorState);
   const [showErrors, setShowErrors] = useState(false);
+  const directories = { articles, counterparties, deals };
 
   if (useJustOpened(open)) {
-    setDraft(seed ? cashflowSeedToEditorState(seed) : emptyAutoRuleEditorState());
+    setDraft(seed ? cashflowSeedToEditorState(seed, directories) : emptyAutoRuleEditorState());
     setShowErrors(false);
   }
+
+  const articleName = trimmed(seed?.articleName);
+  const dealName = trimmed(seed?.dealName);
+  const articleUnavailable = Boolean(
+    articleName &&
+      !articles.some((item) => item.name === articleName && item.flowType === seed?.flowType),
+  );
+  const dealUnavailable = Boolean(
+    dealName && !deals.some((item) => item.name === dealName),
+  );
 
   const handleSubmit = () => {
     const rule = autoRuleEditorToRule(draft);
@@ -78,15 +96,19 @@ export function AutoRuleFormDialog({
       maxWidth="sm:max-w-3xl"
     >
       <p className="text-muted-foreground text-sm leading-relaxed">
-        Правило сработает при совпадении условий и назначит статью операции.
+        Правило сработает при совпадении условий и назначит статью и сделку. Статья и сделка —
+        результат правила, а не условие отбора.
       </p>
       <AutoRuleEditor
         value={draft}
         articles={articles}
         counterparties={counterparties}
+        deals={deals}
         onChange={(patch) => setDraft((prev) => ({ ...prev, ...patch }))}
         keywordsInputId="auto-rule-dialog-keywords"
         articleInvalid={showErrors && !draft.articleName}
+        articleUnavailable={articleUnavailable && !draft.articleName}
+        dealUnavailable={dealUnavailable && !draft.dealName}
       />
     </FinanceFormDialog>
   );
