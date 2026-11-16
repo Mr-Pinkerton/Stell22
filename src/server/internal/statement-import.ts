@@ -21,6 +21,12 @@ import {
 import { formatBalanceMismatchMessage } from "@/lib/format";
 import { statementImportKey } from "@/lib/statement-import";
 import {
+  DUPLICATE_STORED_OPERATIONS_MESSAGE,
+  findLegacyImportCollision,
+  incomingKeysAlreadyStored,
+  legacyImportCollisionMessage,
+} from "@/lib/legacy-statement-guard";
+import {
   retryOnceOnImportUnique,
   throwFriendlyAccountNumberBindConflict,
 } from "@/lib/prisma-unique-conflict";
@@ -355,6 +361,57 @@ export async function importStatementInternal(
         throw new Error(
           `Периоды выписок пересекаются: ${other.id} ${start}–${end} и новая ${statementStart}–${statementDate}`,
         );
+      }
+    }
+
+    const incomingKeys = parsed.documents.map((doc) => statementImportKey(doc));
+    const legacyStatements = await tx.statement.findMany({
+      where: {
+        accountId: account.id,
+        OR: [
+          { source: null },
+          { periodStart: null },
+          { periodEnd: null },
+          { contentKey: null },
+          { source: { not: "BANK_1C" } },
+        ],
+      },
+      select: { id: true, date: true },
+    });
+    const legacyIds = legacyStatements.map((row) => row.id);
+    const legacyFlowFilters: Prisma.CashFlowWhereInput[] = [
+      { statementId: null, importKey: { not: null } },
+    ];
+    if (legacyIds.length > 0) legacyFlowFilters.push({ statementId: { in: legacyIds } });
+    const legacyFlows = await tx.cashFlow.findMany({
+      where: { accountId: account.id, OR: legacyFlowFilters },
+      select: { id: true, date: true, importKey: true },
+    });
+    const collision = findLegacyImportCollision({
+      periodStart: statementStart,
+      periodEnd: statementDate,
+      incomingImportKeys: incomingKeys,
+      legacyStatements: legacyStatements.map((row) => ({ id: row.id, date: isoDay(row.date) })),
+      legacyCashFlows: legacyFlows.map((row) => ({
+        id: row.id,
+        date: isoDay(row.date),
+        importKey: row.importKey,
+      })),
+    });
+    if (collision) throw new Error(legacyImportCollisionMessage(collision));
+
+    if (incomingKeys.length > 0) {
+      const storedKeys = await tx.cashFlow.findMany({
+        where: { accountId: account.id, importKey: { in: incomingKeys } },
+        select: { importKey: true },
+      });
+      if (
+        incomingKeysAlreadyStored(
+          incomingKeys,
+          storedKeys.flatMap((row) => (row.importKey ? [row.importKey] : [])),
+        )
+      ) {
+        throw new Error(DUPLICATE_STORED_OPERATIONS_MESSAGE);
       }
     }
 

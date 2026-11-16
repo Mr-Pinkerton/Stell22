@@ -3,14 +3,15 @@
 import { useCallback, useMemo, useRef, useState, useTransition } from "react";
 import { ArrowLeftRight, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { getDefaultDateFilterValue, type DateFilterValue } from "@/components/date-filter";
+import { getDefaultDateFilterValue, selectDateFilterMonth, type DateFilterValue } from "@/components/date-filter";
 import type {
   FinanceArticle,
   FinanceAutoRule,
   FinanceCashFlowRow,
   FinanceDeal,
 } from "@/mocks/finance-fixtures";
-import { matchesDateFilter } from "@/lib/match-date-filter";
+import { matchesDateFilter, parseIsoDateLocal } from "@/lib/match-date-filter";
+import { latestRecordedCashFlowDate } from "@/lib/finance-freshness";
 import { computeAccountBalances, cashFlowBelongsInDds, isAccountConfirmed } from "@/lib/account-balance";
 import {
   type FinanceData,
@@ -209,6 +210,14 @@ export function FinanceView({ data }: { data: FinanceData }) {
     () => cashFlows.filter((row) => matchesDateFilter(row.date, dateFilter)),
     [cashFlows, dateFilter],
   );
+  const latestRecordedDate = useMemo(
+    () => latestRecordedCashFlowDate(cashFlows.map((row) => row.date)),
+    [cashFlows],
+  );
+  const showRecordedPeriod = useCallback(() => {
+    if (!latestRecordedDate) return;
+    setDateFilter(selectDateFilterMonth(parseIsoDateLocal(latestRecordedDate)));
+  }, [latestRecordedDate]);
 
   const visibleCashFlows = useMemo(
     () =>
@@ -583,6 +592,9 @@ export function FinanceView({ data }: { data: FinanceData }) {
               />
             }
             rows={visibleCashFlows}
+            periodOperationCount={periodCashFlows.length}
+            latestRecordedDate={latestRecordedDate}
+            onShowRecordedPeriod={showRecordedPeriod}
             articles={articles}
             counterparties={counterparties}
             deals={deals}
