@@ -106,7 +106,10 @@ describe("statement source labels and actions", () => {
 
     expect(within(rowByAccount("Банк с двумя выписками")).getByText("Банк")).toBeTruthy();
     expect(within(rowByAccount("Ручная заготовка")).getByText("Вручную")).toBeTruthy();
-    expect(within(rowByAccount("Неизвестный источник")).getByText("Источник неизвестен")).toBeTruthy();
+    const historical = rowByAccount("Неизвестный источник");
+    expect(within(historical).getByText("Историческая запись")).toBeTruthy();
+    expect(within(historical).getByText("Источник не установлен")).toBeTruthy();
+    expect(within(historical).queryByText("Банк")).toBeNull();
 
     expect(document.body.textContent).toContain(
       "За даты 03.09.2026, 04.09.2026 загружено по несколько выписок",
@@ -197,7 +200,7 @@ describe("statement source labels and actions", () => {
     expect(header.className).not.toContain("text-left");
 
     function sourceStack(row: HTMLElement) {
-      const stack = within(row).getByText(/^(Банк|Вручную|Источник неизвестен)$/).parentElement;
+      const stack = within(row).getByText(/^(Банк|Вручную|Историческая запись)$/).parentElement;
       if (!stack) throw new Error("source stack missing");
       return stack;
     }
@@ -233,5 +236,61 @@ describe("statement source labels and actions", () => {
     const one = rowByAccount("Банк с одной датой");
     const oneWarning = within(one).getByText("За 02.11.2026 загружено несколько выписок");
     expect(oneWarning.parentElement).toBe(sourceStack(one));
+  });
+
+  it("shows a null-source statement as an unverified historical record and keeps its operations", async () => {
+    const user = userEvent.setup();
+    const onLoadDetail = vi.fn(async () => [
+      {
+        id: "cf-legacy",
+        date: "2026-10-27",
+        amount: 1500,
+        flowType: "EXPENSE" as const,
+        accountName: "Исторический счёт",
+        counterpartyName: "ООО Архив",
+        description: "Сохранённая оплата",
+        articleName: null,
+        dealName: null,
+        dealId: null,
+        isAutoAssigned: false,
+      },
+    ]);
+    const onDelete = vi.fn();
+    render(
+      <FinanceStatementsTab
+        statements={[
+          statement({
+            id: "legacy-ops",
+            date: "2026-10-27",
+            accountName: "Исторический счёт",
+            source: null,
+            periodStart: null,
+            periodEnd: null,
+            periodStatus: "UNKNOWN",
+            operationsCount: 1,
+            uploaded: true,
+          }),
+        ]}
+        onLoadDetail={onLoadDetail}
+        onDelete={onDelete}
+      />,
+    );
+
+    const row = rowByAccount("Исторический счёт");
+    const text = row.textContent ?? "";
+    expect(text).toContain("Историческая запись");
+    expect(text).toContain("Источник не установлен");
+    expect(text).toContain("Период не установлен");
+    expect(text).toContain("Сохранённая дата: 27.10.2026");
+    expect(text).not.toContain("27.10.2026 — 27.10.2026");
+    expect(text).not.toContain("Банк");
+    expect(within(row).queryByRole("button", { name: "Откатить выписку" })).toBeNull();
+
+    await user.click(within(row).getByRole("button", { name: "Операции выписки" }));
+    expect(onLoadDetail).toHaveBeenCalledWith("legacy-ops");
+    expect(await screen.findByText("ООО Архив")).toBeTruthy();
+    expect(screen.getByText("Расход")).toBeTruthy();
+    expect(document.body.textContent?.replace(/\s/g, "")).toContain("1500₽");
+    expect(onDelete).not.toHaveBeenCalled();
   });
 });

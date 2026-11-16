@@ -77,6 +77,12 @@ const transferMutedCellClass = "text-muted-foreground/70 text-center text-sm";
 interface FinanceCashflowTabProps {
   filters?: React.ReactNode;
   rows: FinanceCashFlowRow[];
+  /** Операции выбранного периода до текстовых фильтров таблицы. */
+  periodOperationCount?: number;
+  /** Самая поздняя сохранённая дата среди всех операций, не только текущего фильтра. */
+  latestRecordedDate?: string | null;
+  /** Явный переход к периоду последней операции. Сам фильтр не переключается. */
+  onShowRecordedPeriod?: () => void;
   articles: FinanceArticle[];
   counterparties: FinanceCounterparty[];
   deals: FinanceDeal[];
@@ -93,6 +99,9 @@ interface FinanceCashflowTabProps {
 export function FinanceCashflowTab({
   filters,
   rows,
+  periodOperationCount,
+  latestRecordedDate = null,
+  onShowRecordedPeriod,
   articles,
   counterparties,
   deals,
@@ -148,7 +157,30 @@ export function FinanceCashflowTab({
                       colSpan={COL_SPAN}
                       className={cn(cellPad, "text-muted-foreground h-24 text-center")}
                     >
-                      Операций за период нет
+                      {(periodOperationCount ?? rows.length) === 0 ? (
+                        <div className="space-y-2">
+                          <p>Нет операций в выбранном периоде</p>
+                          {latestRecordedDate ? (
+                            <>
+                              <p>
+                                Последняя сохранённая операция: {formatIsoDate(latestRecordedDate)}
+                              </p>
+                              {onShowRecordedPeriod ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="h-8 rounded-lg px-3 text-xs"
+                                  onClick={onShowRecordedPeriod}
+                                >
+                                  Показать период с последней операцией
+                                </Button>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </div>
+                      ) : (
+                        "Нет операций по выбранным фильтрам"
+                      )}
                     </TableCell>
                   </TableRow>
                 ) : (

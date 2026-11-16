@@ -55,6 +55,7 @@ import {
   deleteDeal,
   deleteStatement,
   getFinanceData,
+  getStatementDetail,
   importStatement,
   reapplyAutoRules,
   unlinkTransfer,
@@ -62,6 +63,7 @@ import {
   updateManualCashFlow,
 } from "@/server/finance";
 import { importStatementInternal } from "@/server/internal/statement-import";
+import { statementImportKey } from "@/lib/statement-import";
 import { extractStatements } from "@/server/statement-mail";
 
 const LIVE = process.env.P1_DISPOSABLE_LIVE === "1";
@@ -1333,4 +1335,234 @@ describe.skipIf(!LIVE)("bank statement immutability and coverage on disposable P
     await deleteCashFlow(edited.id);
     expect(await seed!.cashFlow.count({ where: { id: edited.id } })).toBe(0);
   }, 20_000);
+
+  async function snapshotFinance(accountId: string) {
+    const account = await seed!.account.findUniqueOrThrow({ where: { id: accountId } });
+    return {
+      statements: await seed!.statement.count(),
+      flows: await seed!.cashFlow.count(),
+      parties: await seed!.counterparty.count(),
+      deals: await seed!.deal.count(),
+      logs: await seed!.changeLog.count(),
+      batches: await seed!.batch.count(),
+      balance: account.balance.toFixed(2),
+      opening: account.openingBalance.toFixed(2),
+      anchor: account.balanceAsOf?.toISOString() ?? null,
+      mismatch: account.balanceMismatch,
+      confirmed: account.confirmed,
+      bik: account.bik,
+    };
+  }
+
+  it("keeps a null-source statement and its operation, and refuses deletion", async () => {
+    const number = `407028100000${runId.slice(0, 8)}y`;
+    const owner = await account(`История ${runId}`, number);
+    const legacy = await seed!.statement.create({
+      data: {
+        date: new Date("2026-10-27T00:00:00.000Z"),
+        accountId: owner.id,
+      },
+    });
+    const flow = await seed!.cashFlow.create({
+      data: {
+        amount: "1500.00",
+        flowType: "EXPENSE",
+        accountId: owner.id,
+        statementId: legacy.id,
+        date: new Date("2026-10-27T00:00:00.000Z"),
+        description: "Сохранённая оплата",
+      },
+    });
+    await expect(deleteStatement(legacy.id)).rejects.toThrow(/нельзя удалить/);
+    const detail = await getStatementDetail(legacy.id);
+    expect(detail).toEqual([
+      expect.objectContaining({ id: flow.id, date: "2026-10-27", amount: 1500, description: "Сохранённая оплата" }),
+    ]);
+    const stored = await seed!.statement.findUniqueOrThrow({ where: { id: legacy.id } });
+    expect(stored.source).toBeNull();
+    expect(stored.periodStart).toBeNull();
+    expect(stored.periodEnd).toBeNull();
+    expect(stored.contentKey).toBeNull();
+    expect(await seed!.cashFlow.count({ where: { id: flow.id } })).toBe(1);
+  });
+
+  it("refuses an import whose period contains a historical statement date and writes nothing", async () => {
+    const number = `407028100000${runId.slice(0, 8)}t`;
+    const owner = await seed!.account.create({
+      data: {
+        name: `Дата выписки ${runId}`,
+        accountNumber: number,
+        confirmed: true,
+        openingBalance: "500.00",
+        balance: "500.00",
+        balanceAsOf: new Date("2026-11-01T00:00:00.000Z"),
+        bik: "044525104",
+      },
+    });
+    const legacy = await seed!.statement.create({
+      data: { date: new Date("2026-10-15T00:00:00.000Z"), accountId: owner.id },
+    });
+    const before = await snapshotFinance(owner.id);
+    await expect(importStatementInternal(bankFile({
+      account: number,
+      start: "01.10.2026",
+      end: "31.10.2026",
+      opening: "500.00",
+      closing: "490.00",
+      docs: [{
+        number: "501",
+        date: "20.10.2026",
+        amount: "10.00",
+        payer: number,
+        payee: "40602810999900000501",
+        payeeName: `Новый ${runId} t`,
+      }],
+    }), "legacy-date.txt")).rejects.toThrow(/непроверенную историю/);
+    expect(await snapshotFinance(owner.id)).toEqual(before);
+    expect(await seed!.statement.count({ where: { id: legacy.id } })).toBe(1);
+    expect(await seed!.cashFlow.count({ where: { accountId: owner.id } })).toBe(0);
+    expect(await seed!.counterparty.count({ where: { name: `Новый ${runId} t` } })).toBe(0);
+    const kept = await seed!.statement.findUniqueOrThrow({ where: { id: legacy.id } });
+    expect(kept.source).toBeNull();
+    expect(kept.periodStart).toBeNull();
+    expect(kept.contentKey).toBeNull();
+
+    const later = await importStatementInternal(bankFile({
+      account: number,
+      start: "01.11.2026",
+      end: "02.11.2026",
+      opening: "500.00",
+      closing: "500.00",
+      docs: [],
+    }), "after-legacy.txt");
+    expect(later.statement.source).toBe("BANK_1C");
+    expect(later.statement.periodStart).toBe("2026-11-01");
+    expect(later.statement.periodEnd).toBe("2026-11-02");
+    const stillLegacy = await seed!.statement.findUniqueOrThrow({ where: { id: legacy.id } });
+    expect(stillLegacy.source).toBeNull();
+    expect(stillLegacy.periodStart).toBeNull();
+    expect(stillLegacy.periodEnd).toBeNull();
+    expect(stillLegacy.contentKey).toBeNull();
+    expect(await seed!.cashFlow.count({ where: { statementId: legacy.id } })).toBe(0);
+  });
+
+  it("refuses an import that contains a linked historical operation date", async () => {
+    const number = `407028100000${runId.slice(0, 8)}u`;
+    const owner = await account(`Операция истории ${runId}`, number);
+    const legacy = await seed!.statement.create({
+      data: { date: new Date("2026-09-01T00:00:00.000Z"), accountId: owner.id },
+    });
+    const flow = await seed!.cashFlow.create({
+      data: {
+        amount: "20.00",
+        flowType: "EXPENSE",
+        accountId: owner.id,
+        statementId: legacy.id,
+        date: new Date("2026-10-20T00:00:00.000Z"),
+        description: "старая операция",
+      },
+    });
+    const before = await snapshotFinance(owner.id);
+    await expect(importStatementInternal(bankFile({
+      account: number,
+      start: "01.10.2026",
+      end: "31.10.2026",
+      opening: "0.00",
+      closing: "0.00",
+      docs: [{ number: "502", date: "21.10.2026", amount: "5.00", payer: number, payee: "40602810999900000502" }],
+    }), "legacy-flow.txt")).rejects.toThrow(/непроверенную историю/);
+    expect(await snapshotFinance(owner.id)).toEqual(before);
+    expect((await seed!.cashFlow.findUniqueOrThrow({ where: { id: flow.id } })).amount.toFixed(2)).toBe("20.00");
+    expect(await seed!.statement.count({ where: { accountId: owner.id } })).toBe(1);
+  });
+
+  it("refuses a legacy import key even when the stored operation date is outside the file", async () => {
+    const number = `407028100000${runId.slice(0, 8)}v`;
+    const payee = "40602810999900000777";
+    const owner = await account(`Ключ истории ${runId}`, number);
+    const key = statementImportKey({
+      docNumber: "777",
+      date: "2026-12-02",
+      amount: 10,
+      payerAccount: number,
+      payeeAccount: payee,
+    });
+    const legacy = await seed!.statement.create({
+      data: { date: new Date("2026-10-01T00:00:00.000Z"), accountId: owner.id },
+    });
+    const flow = await seed!.cashFlow.create({
+      data: {
+        amount: "10.00",
+        flowType: "EXPENSE",
+        accountId: owner.id,
+        statementId: legacy.id,
+        importKey: key,
+        date: new Date("2026-10-01T00:00:00.000Z"),
+        description: "старый ключ",
+      },
+    });
+    const before = await snapshotFinance(owner.id);
+    await expect(importStatementInternal(bankFile({
+      account: number,
+      start: "01.12.2026",
+      end: "05.12.2026",
+      opening: "0.00",
+      closing: "15.00",
+      docs: [
+        { number: "777", date: "02.12.2026", amount: "10.00", payer: number, payee },
+        { number: "778", date: "03.12.2026", amount: "5.00", payer: number, payee: "40602810999900000778" },
+      ],
+    }), "legacy-key.txt")).rejects.toThrow(/не доказывает/);
+    expect(await snapshotFinance(owner.id)).toEqual(before);
+    expect(await seed!.statement.count({ where: { accountId: owner.id } })).toBe(1);
+    expect(await seed!.cashFlow.count({ where: { accountId: owner.id } })).toBe(1);
+    expect((await seed!.cashFlow.findUniqueOrThrow({ where: { id: flow.id } })).importKey).toBe(key);
+  });
+
+  it("keeps an identical verified statement idempotent and imports a later non-overlapping period", async () => {
+    const number = `407028100000${runId.slice(0, 8)}w`;
+    const legacyOwner = await account(`Чужой архив ${runId}`, `407028100000${runId.slice(0, 8)}x`);
+    await seed!.statement.create({
+      data: { date: new Date("2026-12-01T00:00:00.000Z"), accountId: legacyOwner.id },
+    });
+    const file = bankFile({
+      account: number,
+      start: "01.12.2026",
+      end: "01.12.2026",
+      opening: "0.00",
+      closing: "10.00",
+      docs: [{ number: "801", date: "01.12.2026", amount: "10.00", payer: number, payee: "40602810999900000801" }],
+    });
+    const first = await importStatementInternal(file, "verified.txt");
+    const owner = await seed!.account.findFirstOrThrow({ where: { accountNumber: number } });
+    const second = await importStatementInternal(file, "verified-again.txt");
+    expect(second.importedCount).toBe(0);
+    expect(second.statement.id).toBe(first.statement.id);
+    expect(await seed!.statement.count({ where: { accountId: owner.id } })).toBe(1);
+    expect(await seed!.cashFlow.count({ where: { accountId: owner.id } })).toBe(1);
+
+    const later = await importStatementInternal(bankFile({
+      account: number,
+      start: "08.12.2026",
+      end: "08.12.2026",
+      opening: "10.00",
+      closing: "25.00",
+      docs: [{ number: "802", date: "08.12.2026", amount: "15.00", payer: number, payee: "40602810999900000802" }],
+    }), "later.txt");
+    expect(later.importedCount).toBe(1);
+    expect(later.statement.id).not.toBe(first.statement.id);
+    expect(later.statement.periodStart).toBe("2026-12-08");
+    expect(later.statement.periodEnd).toBe("2026-12-08");
+    expect(later.statement.source).toBe("BANK_1C");
+    const otherLegacy = await seed!.statement.findFirstOrThrow({ where: { accountId: legacyOwner.id } });
+    expect(otherLegacy.source).toBeNull();
+    expect(otherLegacy.periodStart).toBeNull();
+    expect(await seed!.cashFlow.count({ where: { accountId: owner.id } })).toBe(2);
+    const decemberCoverage = later.statementCoverage.find((row) => row.accountId === owner.id);
+    expect(decemberCoverage?.coveredRanges).toEqual([
+      { start: "2026-12-01", end: "2026-12-01" },
+      { start: "2026-12-08", end: "2026-12-08" },
+    ]);
+    expect(JSON.stringify(decemberCoverage?.coveredRanges)).not.toContain("2026-10-27");
+  });
 });

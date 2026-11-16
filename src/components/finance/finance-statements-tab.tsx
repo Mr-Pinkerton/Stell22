@@ -67,10 +67,24 @@ export function FinanceStatementsTab({
       key: "date",
       header: "Период",
       className: "tabular-nums font-medium",
-      render: (row) =>
-        row.periodStart && row.periodEnd
-          ? `${formatIsoDate(row.periodStart)} — ${formatIsoDate(row.periodEnd)}`
-          : "Период неизвестен",
+      render: (row) => {
+        if (row.periodStart && row.periodEnd) {
+          return `${formatIsoDate(row.periodStart)} — ${formatIsoDate(row.periodEnd)}`;
+        }
+        if (row.periodStatus === "UNKNOWN") {
+          return (
+            <div className="space-y-0.5">
+              <div>Период не установлен</div>
+              {row.date ? (
+                <div className="text-muted-foreground text-xs font-normal">
+                  Сохранённая дата: {formatIsoDate(row.date)}
+                </div>
+              ) : null}
+            </div>
+          );
+        }
+        return "Период неизвестен";
+      },
     },
     {
       key: "account",
@@ -100,12 +114,15 @@ export function FinanceStatementsTab({
       render: (row) => (
         <div className="flex flex-col items-start gap-1 text-left">
           <Badge variant={row.periodStatus === "VERIFIED" ? "secondary" : "outline"}>
-            {row.source === "BANK_1C"
+            {row.periodStatus === "VERIFIED" && row.source === "BANK_1C"
               ? "Банк"
-              : row.source === "MANUAL"
+              : row.source === "MANUAL" || row.periodStatus === "PLACEHOLDER"
                 ? "Вручную"
-                : "Источник неизвестен"}
+                : "Историческая запись"}
           </Badge>
+          {row.periodStatus === "UNKNOWN" && (
+            <span className="text-muted-foreground text-xs">Источник не установлен</span>
+          )}
           {(row.overlapDates?.length ?? 0) > 0 && (
             <span className="text-xs text-red-700">
               {severalStatementsLabel(row.overlapDates ?? [])}
