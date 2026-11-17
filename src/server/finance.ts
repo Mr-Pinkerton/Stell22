@@ -9,6 +9,7 @@ import { exactMoneyString } from "@/lib/decimal-input";
 import { throwFriendlyAccountNumberConflict } from "@/lib/prisma-unique-conflict";
 import { requireAdmin } from "@/server/session";
 import { importStatementInternal } from "@/server/internal/statement-import";
+import { resolveAutoRuleDealAssignment } from "@/server/internal/auto-rule-deal";
 import {
   applyAutoRulesInternal,
   lockAccountsThenDealsThenBatches,
@@ -227,6 +228,7 @@ function serAutoRule(r: AutoRuleWithRefs, dealNameById: Map<string, string>): Fi
     logicOperator: r.logicOperator === "OR" ? "OR" : "AND",
     descriptionKeywords: r.descriptionKeywords,
     articleName: r.article?.name ?? null,
+    dealId: r.dealId,
     dealName: r.dealId ? (dealNameById.get(r.dealId) ?? null) : null,
   };
 }
@@ -826,7 +828,8 @@ interface AutoRulePatch {
   flowType?: FinanceAutoRule["flowType"];
   counterpartyName?: string | null;
   articleName?: string | null;
-  dealName?: string | null;
+  /** undefined — не менять; null — снять; id — назначить эту открытую сделку. */
+  dealId?: string | null;
   logicOperator?: FinanceAutoRule["logicOperator"];
   descriptionKeywords?: string | null;
 }
@@ -859,11 +862,15 @@ async function resolveRuleRefs(patch: AutoRulePatch): Promise<AutoRuleResolved> 
       : null;
     data.articleId = art?.id ?? null;
   }
-  if (patch.dealName !== undefined) {
-    const deal = patch.dealName
-      ? await prisma.deal.findFirst({ where: { name: patch.dealName } })
+  if (patch.dealId !== undefined) {
+    const deal = patch.dealId
+      ? await prisma.deal.findUnique({
+          where: { id: patch.dealId },
+          select: { id: true, status: true },
+        })
       : null;
-    data.dealId = deal?.id ?? null;
+    const dealId = resolveAutoRuleDealAssignment(patch.dealId, deal);
+    if (dealId !== undefined) data.dealId = dealId;
   }
   return data;
 }
@@ -873,8 +880,11 @@ async function loadAutoRule(id: string): Promise<FinanceAutoRule> {
     where: { id },
     include: { counterparty: true, article: true },
   });
-  const dealName = rule.dealId
-    ? ((await prisma.deal.findUnique({ where: { id: rule.dealId } }))?.name ?? null)
+  const deal = rule.dealId
+    ? await prisma.deal.findUnique({
+        where: { id: rule.dealId },
+        select: { id: true, name: true },
+      })
     : null;
   return {
     id: rule.id,
@@ -883,7 +893,8 @@ async function loadAutoRule(id: string): Promise<FinanceAutoRule> {
     logicOperator: rule.logicOperator === "OR" ? "OR" : "AND",
     descriptionKeywords: rule.descriptionKeywords,
     articleName: rule.article?.name ?? null,
-    dealName,
+    dealId: deal?.id ?? rule.dealId,
+    dealName: deal?.name ?? null,
   };
 }
 
@@ -893,7 +904,7 @@ export async function createAutoRule(values: AutoRuleFormValues): Promise<Financ
     flowType: values.flowType,
     counterpartyName: values.counterpartyName,
     articleName: values.articleName,
-    dealName: values.dealName,
+    dealId: values.dealId,
     logicOperator: values.logicOperator,
     descriptionKeywords: values.descriptionKeywords,
   });

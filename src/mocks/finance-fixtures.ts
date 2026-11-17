@@ -90,6 +90,8 @@ export interface FinanceAutoRule {
   logicOperator: AutoRuleLogic;
   descriptionKeywords: string | null;
   articleName: string | null;
+  /** Точная сделка. Имя ниже — только подпись. */
+  dealId: string | null;
   dealName: string | null;
 }
 
@@ -244,6 +246,7 @@ export const financeAutoRules: FinanceAutoRule[] = [
     logicOperator: "AND",
     descriptionKeywords: null,
     articleName: "Закупка сырья",
+    dealId: null,
     dealName: null,
   },
   {
@@ -253,6 +256,7 @@ export const financeAutoRules: FinanceAutoRule[] = [
     logicOperator: "OR",
     descriptionKeywords: "доставка",
     articleName: "Доставка",
+    dealId: "deal-1",
     dealName: "Волочек 2419 + доставка",
   },
   {
@@ -262,6 +266,7 @@ export const financeAutoRules: FinanceAutoRule[] = [
     logicOperator: "AND",
     descriptionKeywords: "выплата",
     articleName: "Выручка МП",
+    dealId: null,
     dealName: null,
   },
   {
@@ -271,6 +276,7 @@ export const financeAutoRules: FinanceAutoRule[] = [
     logicOperator: "AND",
     descriptionKeywords: "электро",
     articleName: "Электроэнергия",
+    dealId: null,
     dealName: null,
   },
 ];
@@ -283,6 +289,7 @@ export function createEmptyAutoRule(): FinanceAutoRule {
     logicOperator: "AND",
     descriptionKeywords: null,
     articleName: null,
+    dealId: null,
     dealName: null,
   };
 }

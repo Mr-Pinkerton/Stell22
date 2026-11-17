@@ -10,6 +10,7 @@ function rule(overrides: Partial<FinanceAutoRule> = {}): FinanceAutoRule {
     logicOperator: "AND",
     descriptionKeywords: null,
     articleName: "Аренда",
+    dealId: null,
     dealName: null,
     ...overrides,
   };

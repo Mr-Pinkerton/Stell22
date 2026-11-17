@@ -6,6 +6,7 @@ import type {
   FinanceAutoRule,
   FinanceCashFlowRow,
   FinanceCounterparty,
+  FinanceDeal,
 } from "@/mocks/finance-fixtures";
 import { useJustOpened } from "@/hooks/use-just-opened";
 import {
@@ -23,6 +24,7 @@ export interface AutoRuleFormValues {
   logicOperator: FinanceAutoRule["logicOperator"];
   descriptionKeywords: string | null;
   articleName: string | null;
+  dealId: string | null;
   dealName: string | null;
 }
 
@@ -31,8 +33,13 @@ interface AutoRuleFormDialogProps {
   seed?: FinanceCashFlowRow | null;
   articles: FinanceArticle[];
   counterparties: FinanceCounterparty[];
+  deals: FinanceDeal[];
   onOpenChange: (open: boolean) => void;
   onSubmit?: (values: AutoRuleFormValues) => void;
+}
+
+function trimmed(value: string | null | undefined): string | null {
+  return value?.trim() || null;
 }
 
 export function AutoRuleFormDialog({
@@ -40,16 +47,29 @@ export function AutoRuleFormDialog({
   seed,
   articles,
   counterparties,
+  deals,
   onOpenChange,
   onSubmit,
 }: AutoRuleFormDialogProps) {
   const [draft, setDraft] = useState<AutoRuleEditorState>(emptyAutoRuleEditorState);
   const [showErrors, setShowErrors] = useState(false);
+  const directories = { articles, counterparties, deals };
 
   if (useJustOpened(open)) {
-    setDraft(seed ? cashflowSeedToEditorState(seed) : emptyAutoRuleEditorState());
+    setDraft(seed ? cashflowSeedToEditorState(seed, directories) : emptyAutoRuleEditorState());
     setShowErrors(false);
   }
+
+  const articleName = trimmed(seed?.articleName);
+  const articleUnavailable = Boolean(
+    articleName &&
+      !articles.some((item) => item.name === articleName && item.flowType === seed?.flowType),
+  );
+  const matchedDeal = seed?.dealId ? deals.find((item) => item.id === seed.dealId) : undefined;
+  const dealNotice =
+    matchedDeal && matchedDeal.status !== "OPEN"
+      ? "Сделка из операции недоступна для нового правила"
+      : null;
 
   const handleSubmit = () => {
     const rule = autoRuleEditorToRule(draft);
@@ -59,6 +79,7 @@ export function AutoRuleFormDialog({
       logicOperator: rule.logicOperator,
       descriptionKeywords: rule.descriptionKeywords,
       articleName: rule.articleName,
+      dealId: rule.dealId,
       dealName: rule.dealName,
     });
     onOpenChange(false);
@@ -78,15 +99,19 @@ export function AutoRuleFormDialog({
       maxWidth="sm:max-w-3xl"
     >
       <p className="text-muted-foreground text-sm leading-relaxed">
-        Правило сработает при совпадении условий и назначит статью операции.
+        Правило сработает при совпадении условий и назначит статью и сделку. Статья и сделка —
+        результат правила, а не условие отбора.
       </p>
       <AutoRuleEditor
         value={draft}
         articles={articles}
         counterparties={counterparties}
+        deals={deals}
         onChange={(patch) => setDraft((prev) => ({ ...prev, ...patch }))}
         keywordsInputId="auto-rule-dialog-keywords"
         articleInvalid={showErrors && !draft.articleName}
+        articleUnavailable={articleUnavailable && !draft.articleName}
+        dealNotice={draft.dealId ? null : dealNotice}
       />
     </FinanceFormDialog>
   );

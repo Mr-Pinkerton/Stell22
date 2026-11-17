@@ -493,6 +493,7 @@ export function FinanceView({ data }: { data: FinanceData }) {
             logicOperator: "AND",
             descriptionKeywords: null,
             articleName: null,
+            dealId: null,
             dealName: null,
           });
           setAutoRules((prev) => [rule, ...prev]);
@@ -737,6 +738,7 @@ export function FinanceView({ data }: { data: FinanceData }) {
             rules={autoRules}
             articles={articles}
             counterparties={counterparties}
+            deals={deals}
             highlightRuleId={highlightRuleId}
             onHighlightDone={() => setHighlightRuleId(null)}
             onRuleUpdate={(id, patch) =>
