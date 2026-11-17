@@ -216,6 +216,7 @@ describe("compact icon action style", () => {
       logicOperator: "AND",
       descriptionKeywords: "канц",
       articleName: null,
+      dealId: null,
       dealName: null,
     };
     render(

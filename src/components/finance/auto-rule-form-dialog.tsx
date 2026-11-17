@@ -24,6 +24,7 @@ export interface AutoRuleFormValues {
   logicOperator: FinanceAutoRule["logicOperator"];
   descriptionKeywords: string | null;
   articleName: string | null;
+  dealId: string | null;
   dealName: string | null;
 }
 
@@ -60,19 +61,15 @@ export function AutoRuleFormDialog({
   }
 
   const articleName = trimmed(seed?.articleName);
-  const dealName = trimmed(seed?.dealName);
   const articleUnavailable = Boolean(
     articleName &&
       !articles.some((item) => item.name === articleName && item.flowType === seed?.flowType),
   );
-  const matchedDeal = dealName ? deals.find((item) => item.name === dealName) : undefined;
-  const dealNotice = !dealName
-    ? null
-    : !matchedDeal
-      ? "Сделка из операции недоступна в справочнике"
-      : matchedDeal.status !== "OPEN"
-        ? "Сделка из операции недоступна для нового правила"
-        : null;
+  const matchedDeal = seed?.dealId ? deals.find((item) => item.id === seed.dealId) : undefined;
+  const dealNotice =
+    matchedDeal && matchedDeal.status !== "OPEN"
+      ? "Сделка из операции недоступна для нового правила"
+      : null;
 
   const handleSubmit = () => {
     const rule = autoRuleEditorToRule(draft);
@@ -82,6 +79,7 @@ export function AutoRuleFormDialog({
       logicOperator: rule.logicOperator,
       descriptionKeywords: rule.descriptionKeywords,
       articleName: rule.articleName,
+      dealId: rule.dealId,
       dealName: rule.dealName,
     });
     onOpenChange(false);
@@ -113,7 +111,7 @@ export function AutoRuleFormDialog({
         keywordsInputId="auto-rule-dialog-keywords"
         articleInvalid={showErrors && !draft.articleName}
         articleUnavailable={articleUnavailable && !draft.articleName}
-        dealNotice={draft.dealName ? null : dealNotice}
+        dealNotice={draft.dealId ? null : dealNotice}
       />
     </FinanceFormDialog>
   );

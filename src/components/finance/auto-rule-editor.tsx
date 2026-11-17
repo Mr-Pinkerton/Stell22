@@ -72,6 +72,7 @@ export type AutoRuleEditorState = Pick<
   | "logicOperator"
   | "descriptionKeywords"
   | "articleName"
+  | "dealId"
   | "dealName"
 >;
 
@@ -111,10 +112,9 @@ export function AutoRuleEditor({
     counterparties.find((c) => c.name === value.counterpartyName)?.id ?? "";
   const articleId = rowArticles.find((a) => a.name === value.articleName)?.id ?? "";
   const openDeals = deals?.filter((deal) => deal.status === "OPEN") ?? [];
-  const assignedClosedDeal =
-    deals?.find((deal) => deal.name === value.dealName && deal.status !== "OPEN") ?? null;
-  const dealId =
-    openDeals.find((deal) => deal.name === value.dealName)?.id ?? assignedClosedDeal?.id ?? "";
+  const assignedDeal = deals?.find((deal) => deal.id === value.dealId) ?? null;
+  const assignedClosedDeal = assignedDeal && assignedDeal.status !== "OPEN" ? assignedDeal : null;
+  const dealLabel = assignedDeal?.name ?? (value.dealId ? value.dealName : null);
 
   return (
     <div
@@ -235,17 +235,24 @@ export function AutoRuleEditor({
         <>
           <span className={autoRuleLabelClass}>то сделка</span>
           <Select
-            value={dealId}
+            value={value.dealId ?? ""}
             onValueChange={(v) => {
               if (assignedClosedDeal && v === assignedClosedDeal.id) return;
+              if (!v) {
+                onChange({ dealId: null, dealName: null });
+                return;
+              }
               const deal = openDeals.find((item) => item.id === v);
-              onChange({ dealName: deal?.name ?? null });
+              if (!deal) return;
+              onChange({ dealId: deal.id, dealName: deal.name });
             }}
           >
-            <SelectTrigger aria-label="Сделка правила" className={autoRuleCompactSelectClass}>
-              <SelectValue placeholder="Не выбрана">
-                {value.dealName ?? "Не выбрана"}
-              </SelectValue>
+            <SelectTrigger
+              aria-label="Сделка правила"
+              data-deal-id={value.dealId ?? ""}
+              className={autoRuleCompactSelectClass}
+            >
+              <SelectValue placeholder="Не выбрана">{dealLabel ?? "Не выбрана"}</SelectValue>
             </SelectTrigger>
             <SelectContent {...formSelectContentProps}>
               <SelectItem value="" className="cursor-pointer rounded-lg text-sm">
@@ -291,6 +298,7 @@ export function autoRuleEditorToRule(
     logicOperator: value.logicOperator,
     descriptionKeywords: value.descriptionKeywords?.trim() || null,
     articleName: value.articleName,
+    dealId: value.dealId,
     dealName: value.dealName,
   };
 }
@@ -301,17 +309,21 @@ export function cashflowSeedToEditorState(
     counterpartyName: string | null;
     description?: string | null;
     articleName?: string | null;
+    dealId?: string | null;
     dealName?: string | null;
   },
   directories: {
     articles: Pick<FinanceArticle, "name" | "flowType">[];
     counterparties: Pick<FinanceCounterparty, "name">[];
-    deals: Pick<FinanceDeal, "name" | "status">[];
+    deals: Pick<FinanceDeal, "id" | "name" | "status">[];
   },
 ): AutoRuleEditorState {
   const counterpartyName = seed.counterpartyName?.trim() || null;
   const articleName = seed.articleName?.trim() || null;
-  const dealName = seed.dealName?.trim() || null;
+  const deal = seed.dealId
+    ? directories.deals.find((item) => item.id === seed.dealId)
+    : undefined;
+  const openDeal = deal?.status === "OPEN" ? deal : null;
   return {
     flowType: seed.flowType,
     counterpartyName:
@@ -328,11 +340,8 @@ export function cashflowSeedToEditorState(
       )
         ? articleName
         : null,
-    dealName:
-      dealName &&
-      directories.deals.some((item) => item.name === dealName && item.status === "OPEN")
-        ? dealName
-        : null,
+    dealId: openDeal?.id ?? null,
+    dealName: openDeal?.name ?? null,
   };
 }
 
@@ -343,6 +352,7 @@ export function emptyAutoRuleEditorState(): AutoRuleEditorState {
     logicOperator: "AND",
     descriptionKeywords: null,
     articleName: null,
+    dealId: null,
     dealName: null,
   };
 }

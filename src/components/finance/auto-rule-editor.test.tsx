@@ -71,7 +71,8 @@ describe("cashflow seed for a new auto rule", () => {
         counterpartyName: "ООО Проверка",
         description: "  Оплата поставки  ",
         articleName: "Материалы",
-        dealName: "Поставка",
+        dealId: "deal-1",
+        dealName: "Чужое имя",
       },
       directories,
     );
@@ -81,6 +82,7 @@ describe("cashflow seed for a new auto rule", () => {
       logicOperator: "AND",
       descriptionKeywords: "Оплата поставки",
       articleName: "Материалы",
+      dealId: "deal-1",
       dealName: "Поставка",
     });
   });
@@ -92,28 +94,35 @@ describe("cashflow seed for a new auto rule", () => {
         counterpartyName: null,
         description: "   ",
         articleName: "Материалы",
-        dealName: "Чужая сделка",
+        dealId: "missing",
+        dealName: "Поставка",
       },
       directories,
     );
     expect(state.counterpartyName).toBeNull();
     expect(state.descriptionKeywords).toBeNull();
     expect(state.articleName).toBeNull();
+    expect(state.dealId).toBeNull();
     expect(state.dealName).toBeNull();
-    expect(articles.map((article) => article.name)).not.toContain("Чужая сделка");
   });
 
-  it("does not preselect a deal that is not open", () => {
+  it("does not preselect an archived deal when an open deal has the same name", () => {
     const state = cashflowSeedToEditorState(
       {
         flowType: "EXPENSE",
         counterpartyName: null,
         description: "Оплата",
         articleName: "Материалы",
-        dealName: "Закрытая",
+        dealId: "deal-closed",
+        dealName: "Поставка",
       },
-      { articles, counterparties, deals: [...deals, archivedDeal] },
+      {
+        articles,
+        counterparties,
+        deals: [...deals, deal("deal-closed", "Поставка", "ARCHIVED")],
+      },
     );
+    expect(state.dealId).toBeNull();
     expect(state.dealName).toBeNull();
     expect(state.articleName).toBe("Материалы");
   });
@@ -163,6 +172,7 @@ describe("DDS auto-rule create form", () => {
           counterpartyName: "ООО Проверка",
           description: "Оплата поставки",
           articleName: "Материалы",
+          dealId: "deal-1",
           dealName: "Поставка",
         }),
       ],
@@ -187,6 +197,7 @@ describe("DDS auto-rule create form", () => {
       logicOperator: "AND",
       descriptionKeywords: "Оплата поставки",
       articleName: "Материалы",
+      dealId: "deal-1",
       dealName: "Поставка",
     });
   });
@@ -200,6 +211,7 @@ describe("DDS auto-rule create form", () => {
         counterpartyName: "ООО Проверка",
         description: "Оплата от клиента",
         articleName: "Продажи",
+        dealId: "deal-1",
         dealName: "Поставка",
       }),
     ]);
@@ -236,15 +248,15 @@ describe("DDS auto-rule create form", () => {
         id: "gone",
         description: "Без справочника",
         articleName: "Удалённая статья",
-        dealName: "Удалённая сделка",
+        dealId: "missing-deal",
+        dealName: "Поставка",
       }),
     ]);
     const { dialog } = await openCreate("Без справочника");
     expect(dialog.textContent).toContain("Статья из операции недоступна в справочнике");
-    expect(dialog.textContent).toContain("Сделка из операции недоступна в справочнике");
+    expect(dialog.textContent).not.toContain("Сделка из операции недоступна");
     expect(within(dialog).getByLabelText("Статья правила").textContent).not.toContain("Удалённая статья");
-    expect(within(dialog).getByLabelText("Сделка правила").textContent).not.toContain("Удалённая сделка");
-    expect(dialog.textContent).not.toContain("Удалённая статья");
+    expect(within(dialog).getByLabelText("Сделка правила").getAttribute("data-deal-id")).toBe("");
   });
 
   it("navigates to an existing rule and does not open a second create form", async () => {
@@ -264,6 +276,7 @@ describe("DDS auto-rule create form", () => {
             logicOperator: "AND",
             descriptionKeywords: "Канцтовары",
             articleName: "Материалы",
+            dealId: null,
             dealName: null,
           },
         ],
@@ -282,6 +295,7 @@ describe("DDS auto-rule create form", () => {
         description: "Первая операция",
         counterpartyName: "ООО Проверка",
         articleName: "Материалы",
+        dealId: "deal-1",
         dealName: "Поставка",
       }),
       row({
@@ -314,6 +328,7 @@ describe("DDS auto-rule create form", () => {
           description: "Исходное назначение",
           counterpartyName: "ООО Проверка",
           articleName: "Материалы",
+          dealId: "deal-1",
           dealName: "Поставка",
         }),
       ],
@@ -339,15 +354,17 @@ describe("DDS auto-rule create form", () => {
           id: "closed-deal",
           description: "Оплата закрытой сделки",
           articleName: "Материалы",
-          dealName: "Закрытая",
+          dealId: "deal-closed",
+          dealName: "Поставка",
         }),
       ],
-      { deals: [...deals, shipment, archivedDeal] },
+      { deals: [...deals, shipment, deal("deal-closed", "Поставка", "ARCHIVED")] },
     );
     const { dialog } = await openCreate("Оплата закрытой сделки");
-    expect(within(dialog).getByLabelText("Сделка правила").textContent).toContain("Не выбрана");
+    const dealField = within(dialog).getByLabelText("Сделка правила");
+    expect(dealField.textContent).toContain("Не выбрана");
+    expect(dealField.getAttribute("data-deal-id")).toBe("");
     expect(dialog.textContent).toContain("Сделка из операции недоступна для нового правила");
-    expect(within(dialog).getByLabelText("Сделка правила").textContent).not.toContain("Закрытая");
   });
 
   it("offers only open deals in the new-rule list", async () => {
@@ -374,6 +391,7 @@ function savedRule(patch: Partial<FinanceAutoRule> = {}): FinanceAutoRule {
     logicOperator: "AND",
     descriptionKeywords: "оплата",
     articleName: "Материалы",
+    dealId: "deal-1",
     dealName: "Поставка",
     ...patch,
   };
@@ -402,12 +420,16 @@ describe("saved auto rule deal editor", () => {
     const user = userEvent.setup();
     await user.click(screen.getByLabelText("Сделка правила"));
     await user.click(await screen.findByRole("option", { name: "Отгрузка" }));
-    expect(onRuleUpdate).toHaveBeenCalledWith("rule-1", { dealName: "Отгрузка" });
+    expect(onRuleUpdate).toHaveBeenCalledWith("rule-1", {
+      dealId: "deal-2",
+      dealName: "Отгрузка",
+    });
   });
 
   it("keeps a closed deal visible and out of new selections", async () => {
-    const onRuleUpdate = renderRules(savedRule({ dealName: "Закрытая" }));
+    const onRuleUpdate = renderRules(savedRule({ dealId: "deal-closed", dealName: "Закрытая" }));
     expect(onRuleUpdate).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Сделка правила").getAttribute("data-deal-id")).toBe("deal-closed");
     expect(screen.getByLabelText("Сделка правила").textContent).toContain("Закрытая");
     const user = userEvent.setup();
     await user.click(screen.getByLabelText("Сделка правила"));
@@ -430,19 +452,43 @@ describe("saved auto rule deal editor", () => {
     const user = userEvent.setup();
     await user.click(screen.getByLabelText("Сделка правила"));
     await user.click(await screen.findByRole("option", { name: "Не выбрана" }));
-    expect(onRuleUpdate).toHaveBeenCalledWith("rule-1", { dealName: null });
+    expect(onRuleUpdate).toHaveBeenCalledWith("rule-1", { dealId: null, dealName: null });
   });
 
   it("keeps the deal when another condition changes", async () => {
-    const onRuleUpdate = renderRules(savedRule({ dealName: "Закрытая" }));
+    const onRuleUpdate = renderRules(savedRule({ dealId: "deal-closed", dealName: "Закрытая" }));
     const user = userEvent.setup();
     const input = screen.getByRole("textbox");
     await user.clear(input);
     await user.type(input, "новые");
     expect(onRuleUpdate).toHaveBeenCalled();
     for (const [, patch] of onRuleUpdate.mock.calls) {
+      expect(patch).not.toHaveProperty("dealId");
       expect(patch).not.toHaveProperty("dealName");
     }
-    expect(screen.getByLabelText("Сделка правила").textContent).toContain("Закрытая");
+    expect(screen.getByLabelText("Сделка правила").getAttribute("data-deal-id")).toBe("deal-closed");
+  });
+
+  it("selects the second open deal when two deals share a name", async () => {
+    const twin = deal("deal-twin", "Поставка", "OPEN");
+    const onRuleUpdate = vi.fn();
+    render(
+      <FinanceAutoRulesTab
+        rules={[savedRule({ dealId: null, dealName: null })]}
+        articles={articles}
+        counterparties={counterparties}
+        deals={[deals[0]!, twin]}
+        onRuleUpdate={onRuleUpdate}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Сделка правила"));
+    const options = await screen.findAllByRole("option", { name: "Поставка" });
+    expect(options).toHaveLength(2);
+    await user.click(options[1]!);
+    expect(onRuleUpdate).toHaveBeenCalledWith("rule-1", {
+      dealId: "deal-twin",
+      dealName: "Поставка",
+    });
   });
 });

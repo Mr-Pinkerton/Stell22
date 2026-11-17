@@ -493,6 +493,7 @@ export function FinanceView({ data }: { data: FinanceData }) {
             logicOperator: "AND",
             descriptionKeywords: null,
             articleName: null,
+            dealId: null,
             dealName: null,
           });
           setAutoRules((prev) => [rule, ...prev]);

@@ -187,6 +187,7 @@ describe("DDS table responsiveness", () => {
           logicOperator: "AND",
           descriptionKeywords: "Канцтовары",
           articleName: "Материалы",
+          dealId: null,
           dealName: null,
         }]}
         onGoToRule={onGoToRule}
