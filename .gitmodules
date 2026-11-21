@@ -1,0 +1,3 @@
+[submodule ".head/global-governance"]
+	path = .head/global-governance
+	url = https://github.com/Mr-Pinkerton/head-governance.git
