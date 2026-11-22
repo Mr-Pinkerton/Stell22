@@ -1,0 +1,10 @@
+[Unit]
+Description=Stell22 offsite backup failure health report
+Documentation=file:/root/Stell22/docs/offsite-backup.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/Stell22
+EnvironmentFile=-/etc/stell22/offsite-backup.env
+ExecStart=/bin/sh /root/Stell22/scripts/offsite-backup-health.sh
+UMask=0077
