@@ -23,7 +23,10 @@ scripts/backup-db.sh          локальный producer, без замены
     |
 age, только публичный recipient, до сети
     |
-Yandex Object Storage         приватный bucket, If-None-Match
+проверка bucket: versioning, Object Lock COMPLIANCE >= 90 дней,
+нет lifecycle deletion
+    |
+Selectel S3, пул ru-6, Москва  приватный bucket, If-None-Match
     |
 повторное скачивание ciphertext и сравнение SHA-256
     |
@@ -32,6 +35,8 @@ manifest
 success marker                публикуется последним
     |
 health-check и внешняя проверка
+    |
+еженедельная копия на SSD в РФ, отдельным компьютером
 ```
 
 Producer остаётся `scripts/backup-db.sh`: отдельный код выхода `pg_dump`, непустой plain SQL, gzip, `gzip -t`, SHA-256, публикация sidecar и затем архива, запрет перезаписи, `RETENTION SUSPENDED`. Orchestrator — `scripts/offsite-backup.sh`. Он не вызывает клиент базы и не подменяет producer.
@@ -71,9 +76,9 @@ Producer остаётся `scripts/backup-db.sh`: отдельный код вы
 
 | Имя | Смысл |
 | --- | --- |
-| `OFFSITE_ENDPOINT` | Только `https://storage.yandexcloud.net` |
-| `OFFSITE_BUCKET` | Приватный bucket |
-| `OFFSITE_REGION` | `ru-central1` |
+| `OFFSITE_ENDPOINT` | Только `https://s3.ru-6.storage.selcloud.ru` |
+| `OFFSITE_BUCKET` | Приватный bucket в пуле ru-6 |
+| `OFFSITE_REGION` | Только `ru-6` |
 | `OFFSITE_PREFIX` | `stell22/offsite/v1` |
 | `OFFSITE_AGE_RECIPIENT` | Публичный recipient |
 | `OFFSITE_BACKUP_DIR` | Каталог локальных архивов producer |
@@ -87,11 +92,34 @@ Producer остаётся `scripts/backup-db.sh`: отдельный код вы
 
 `STELL22_OFFSITE_TEST_HOOKS=1` работает только вместе с `OFFSITE_ENVIRONMENT=synthetic`. На сервере это запрещено. `OFFSITE_ENVIRONMENT=production` такой режим отвергает.
 
+## Selectel и территория РФ
+
+Единственное облачное хранилище этого пакета — Selectel S3, пул `ru-6` (Москва). Endpoint и region заданы точно. Другой endpoint, другой пул Selectel и зарубежный region отвергаются до сети с `REASON=configuration`. Произвольный endpoint не конфигурируется.
+
+Порядок подготовки аккаунта, когда его отдельно разрешат. Этот документ его не выполняет:
+
+1. Отдельный аккаунт Selectel, не аккаунт Beget и не место хранения приватного ключа age.
+2. Бакет в пуле `ru-6`. Versioning включён. Object Lock включён: это WORM. Default retention — `COMPLIANCE`, не короче 90 дней.
+3. Публичный ACL не ставить. Lifecycle deletion не включать: ни Expiration, ни удаление неактуальных версий.
+4. Отдельный ключ доступа только на этот бакет.
+
+Перед первым `PutObject` каждого запуска orchestrator читает конфигурацию бакета:
+
+- `GetBucketVersioning` — статус `Enabled`;
+- `GetObjectLockConfiguration` — lock включён, режим `COMPLIANCE`, `Days` не меньше 90 или `Years` не меньше 1;
+- `GetBucketLifecycleConfiguration` — конфигурации нет, либо в ней нет правил удаления.
+
+`GOVERNANCE`, выключенный lock, suspended versioning, retention короче 90 дней, ошибка чтения и любое lifecycle-удаление дают `REASON=bucket-protection`. Объекты не пишутся. `OFFSITE_VERIFIED` не выдаётся. Уже лежащие объекты не переписываются и не удаляются.
+
 ## IAM
 
-Отдельный аккаунт Yandex Cloud, отдельный приватный bucket, отдельный ключ доступа. Публичный ACL не ставить.
+Минимальные действия ключа producer:
 
-Минимальные действия: `s3:PutObject` и `s3:GetObject` на `stell22/offsite/v1/*`, плюс `s3:ListBucket` на этот prefix, если внешняя проверка перечисляет ключи. `s3:DeleteObject`, `s3:PutBucketAcl` и публичная политика не выдаются. Lifecycle deletion не включается.
+- `s3:PutObject` и `s3:GetObject` на `stell22/offsite/v1/*`;
+- `s3:ListBucket` на этот prefix, чтобы отсутствие объекта отличалось от отказа в доступе;
+- `s3:GetBucketVersioning`, `s3:GetObjectLockConfiguration` и `s3:GetLifecycleConfiguration` на бакет.
+
+`s3:DeleteObject`, `s3:PutBucketAcl`, `s3:PutLifecycleConfiguration`, `s3:BypassGovernanceRetention` и смена Object Lock этому ключу не выдаются.
 
 ## Шифрование и ключи
 
@@ -168,7 +196,7 @@ Cutover, когда его отдельно разрешат: в одном ок
 | Код | REASON |
 | --- | --- |
 | 0 | `OFFSITE_VERIFIED` |
-| 10 | `configuration` |
+| 10 | `configuration`, либо `bucket-protection` |
 | 11 | `missing-tool:...` |
 | 12 | `low-disk` |
 | 13 | `concurrent` |
@@ -219,12 +247,30 @@ Stdout — строки `STATUS=`, `REASON=`, `BACKUP_DATE=`, `ARCHIVE_SHA256=`,
 
 `RETENTION SUSPENDED` в `scripts/backup-db.sh` не изменён. S3 lifecycle deletion не включается. Неизвестные и частичные объекты не удаляются. Удаление на production возможно только отдельным решением после доказанного restore verification.
 
+## Копия на SSD
+
+Независимая копия лежит на съёмном SSD, который физически остаётся в РФ и не подключён к production VPS постоянно. Автоматического доступа к накопителю нет. Еженедельно оператор на отдельном компьютере, не на VPS, монтирует SSD сам и запускает:
+
+```sh
+OFFSITE_SSD_ROOT=/mnt/stell22-ssd \
+OFFSITE_SSD_DATES='2026-11-16 2026-11-22' \
+sh scripts/offsite-ssd-export.sh
+```
+
+Даты перечисляются явно. Скрипт берёт только дни, у которых удалённые `SUCCESS`, `manifest.json` и `archive.age` уже прошли ту же проверку, что и offsite pipeline. Для каждого такого дня он сверяет SHA-256 ciphertext и копирует три объекта в `$OFFSITE_SSD_ROOT/daily/YYYY-MM-DD/`.
+
+Повтор того же содержимого ничего не меняет. Другие байты по тому же пути останавливают запуск с `REASON=destination-mismatch` и не перезаписывают файл. Отсутствующий день из заданного списка даёт `REASON=incomplete-set`. Успех скрипта — `STATUS=SSD_COPIED`. Это не `OFFSITE_VERIFIED` и не `RESTORE_VERIFIED`.
+
+Приватный ключ age на SSD не кладётся. Если в окружении есть `AGE_SECRET_KEY` или `OFFSITE_AGE_IDENTITY`, скрипт завершается с `REASON=private-key-refused` и ничего не скачивает. Удаления объектов в Selectel и на SSD нет.
+
+Коды этого скрипта: `10` — `configuration`, `bucket-protection` или `private-key-refused`; `20` — `remote-get-failure`; `21` — `destination-mismatch` или `remote-checksum-mismatch`; `31` — `incomplete-set`; `0` — `SSD_COPIED`.
+
 ## Disaster recovery
 
 Это порядок для человека после отдельного разрешения. Новый production restore здесь не реализован. `scripts/restore-db.sh` не меняется и остаётся отключённым. `scripts/production-backup-restore.sh` не ослабляется. На production Docker и production volume эта инструкция не выполняется.
 
-1. Потерян Beget VPS. Bucket в отдельном аккаунте Yandex Object Storage этим фактом не уничтожается.
-2. С рабочей машины вне VPS открыть приватный bucket и взять `daily/YYYY-MM-DD/SUCCESS`, `manifest.json` и `archive.age` нужного дня. Не брать объект без marker как успешную копию.
+1. Потерян Beget VPS. Бакет Selectel ru-6 в отдельном аккаунте и недельная копия на SSD этим фактом не уничтожаются.
+2. С рабочей машины вне VPS открыть приватный bucket или каталог SSD и взять `daily/YYYY-MM-DD/SUCCESS`, `manifest.json` и `archive.age` нужного дня. Не брать объект без marker как успешную копию.
 3. Посчитать SHA-256 скачанного `archive.age` и сверить с `ciphertextSha256` в marker и manifest. Размер тоже должен совпасть.
 4. Приватный ключ age взять из независимого хранилища. Не копировать его на восстановленный VPS «навсегда» и не класть в git.
 5. Расшифровать в изолированной среде: `age -d -i key.txt -o archive.sql.gz archive.age`.
@@ -241,4 +287,4 @@ Stdout — строки `STATUS=`, `REASON=`, `BACKUP_DATE=`, `ARCHIVE_SHA256=`,
 
 ## Что этот пакет не делает
 
-Не читает и не пишет production DB. Не ставит cron и systemd на сервер. Не ходит в настоящий Yandex Object Storage. Не кладёт секреты. Не деплоит приложение. Не меняет `production_cost_flow`, маркетплейсы, банк, ДДС и инвентарь.
+Не читает и не пишет production DB. Не ставит cron и systemd на сервер. Не создаёт бакет Selectel и не выпускает ключи. Не кладёт секреты. Не деплоит приложение. Не меняет `production_cost_flow`, маркетплейсы, банк, ДДС и инвентарь.

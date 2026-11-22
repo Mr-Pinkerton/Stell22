@@ -172,6 +172,12 @@ type RunOptions = {
   sleepSeconds?: string;
   hooks?: boolean;
   externalLocation?: string;
+  endpoint?: string;
+  region?: string;
+  lockMode?: string;
+  ssdDates?: string;
+  ssdRoot?: string;
+  privateKey?: boolean;
 };
 
 function logPaths(options: RunOptions) {
@@ -202,9 +208,9 @@ function buildEnv(options: RunOptions): NodeJS.ProcessEnv {
     PATHEXT: process.env.PATHEXT,
     TMP: process.env.TMP,
     TEMP: process.env.TEMP,
-    OFFSITE_ENDPOINT: "https://storage.yandexcloud.net",
+    OFFSITE_ENDPOINT: options.endpoint ?? "https://s3.ru-6.storage.selcloud.ru",
     OFFSITE_BUCKET: BUCKET,
-    OFFSITE_REGION: "ru-central1",
+    OFFSITE_REGION: options.region ?? "ru-6",
     OFFSITE_PREFIX: PREFIX,
     OFFSITE_BACKUP_DIR: options.backupDir,
     OFFSITE_STATE_DIR: options.stateDir,
@@ -214,7 +220,11 @@ function buildEnv(options: RunOptions): NodeJS.ProcessEnv {
     OFFSITE_LOOKBACK_DAYS: "3",
     AWS_ACCESS_KEY_ID: "test-access-key",
     AWS_SECRET_ACCESS_KEY: SECRET,
-    AWS_DEFAULT_REGION: "ru-central1",
+    AWS_DEFAULT_REGION: options.region ?? "ru-6",
+    STELL22_LOCK_MODE: options.lockMode ?? "",
+    OFFSITE_SSD_DATES: options.ssdDates ?? "",
+    OFFSITE_SSD_ROOT: options.ssdRoot ?? "",
+    ...(options.privateKey ? { AGE_SECRET_KEY: PRIVATE_KEY } : {}),
     STELL22_DECOY_PRIVATE: PRIVATE_KEY,
     DATABASE_URL: `postgres://stell22:${DB_PASSWORD}@127.0.0.1/stell22`,
     DOCKER_HOST: "unix:///tmp/stell22-offsite-no-such.sock",
@@ -396,23 +406,54 @@ describe("daily offsite backup", { timeout: 60_000 }, () => {
       'if [ "${1:-}" != "s3api" ]; then echo "refusing $*" >&2; exit 97; fi',
       "sub=$2",
       "shift 2",
-      "bucket= key= body= endpoint= match= dest=",
+      "bucket= key= body= endpoint= match= dest= region=",
       'while [ $# -gt 0 ]; do',
       '  case "$1" in',
       "    --bucket) bucket=$2; shift 2 ;;",
       "    --key) key=$2; shift 2 ;;",
       "    --body) body=$2; shift 2 ;;",
       "    --endpoint-url) endpoint=$2; shift 2 ;;",
-      "    --region) shift 2 ;;",
+      "    --region) region=$2; shift 2 ;;",
       "    --if-none-match) match=$2; shift 2 ;;",
       "    --content-type) shift 2 ;;",
       '    -*) echo "bad aws arg $1" >&2; exit 97 ;;',
       "    *) dest=$1; shift ;;",
       "  esac",
       "done",
-      'if [ "$endpoint" != "https://storage.yandexcloud.net" ]; then echo "bad endpoint" >&2; exit 97; fi',
+      'if [ "$endpoint" != "https://s3.ru-6.storage.selcloud.ru" ]; then echo "bad endpoint" >&2; exit 97; fi',
+      'if [ "$region" != "ru-6" ]; then echo "bad region" >&2; exit 97; fi',
+      'lock=${STELL22_LOCK_MODE:-ok}',
       'store="$root/$bucket/$key"',
       'case "$sub" in',
+      "  get-bucket-versioning)",
+      '    case "$lock" in',
+      "      versioning-error) echo 'versioning access denied' >&2; exit 1 ;;",
+      "      no-versioning) printf '%s\\n' '{\"Status\":\"Suspended\"}' ;;",
+      "      versioning-missing) printf '%s\\n' '{}' ;;",
+      "      *) printf '%s\\n' '{\"Status\":\"Enabled\"}' ;;",
+      "    esac",
+      "    ;;",
+      "  get-object-lock-configuration)",
+      '    case "$lock" in',
+      "      lock-error) echo 'lock access denied' >&2; exit 1 ;;",
+      "      no-lock) echo 'ObjectLockConfigurationNotFoundError' >&2; exit 1 ;;",
+      '      governance) printf \'%s\\n\' \'{"ObjectLockConfiguration":{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"GOVERNANCE","Days":90}}}}\' ;;',
+      '      short-retention) printf \'%s\\n\' \'{"ObjectLockConfiguration":{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"COMPLIANCE","Days":89}}}}\' ;;',
+      '      no-retention) printf \'%s\\n\' \'{"ObjectLockConfiguration":{"ObjectLockEnabled":"Enabled"}}\' ;;',
+      '      *) printf \'%s\\n\' \'{"ObjectLockConfiguration":{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"COMPLIANCE","Days":90}}}}\' ;;',
+      "    esac",
+      "    ;;",
+      "  get-bucket-lifecycle-configuration)",
+      '    case "$lock" in',
+      "      lifecycle-error) echo 'lifecycle access denied' >&2; exit 1 ;;",
+      '      lifecycle-delete) printf \'%s\\n\' \'{"Rules":[{"Expiration":{"Days":30}}]}\' ;;',
+      "      *) echo 'NoSuchLifecycleConfiguration' >&2; exit 1 ;;",
+      "    esac",
+      "    ;;",
+      "  delete-object|delete-bucket)",
+      '    echo "delete refused" >&2',
+      "    exit 97",
+      "    ;;",
       "  put-object)",
       '    if [ "$match" != "*" ]; then echo "missing if-none-match" >&2; exit 97; fi',
       '    case "$key:$fail" in',
@@ -533,6 +574,13 @@ describe("daily offsite backup", { timeout: 60_000 }, () => {
     expect(result.ageLog).not.toContain("2099");
     expect(result.awsLog.match(/put-object/g)?.length).toBe(3);
     expect(result.awsLog).toContain("--if-none-match *");
+    expect(result.awsLog).toContain("https://s3.ru-6.storage.selcloud.ru");
+    expect(result.awsLog).toContain("--region ru-6");
+    expect(result.awsLog).toContain("get-bucket-versioning");
+    expect(result.awsLog).toContain("get-object-lock-configuration");
+    expect(result.awsLog).toContain("get-bucket-lifecycle-configuration");
+    expect(result.awsLog).not.toContain("delete-object");
+    expect(result.awsLog).not.toContain("storage.yandexcloud.net");
     const cipher = readPosix(objectPath(dirs.awsRoot, dayKey("archive.age")));
     expect(cipher.startsWith("age-mock-v1\n")).toBe(true);
     expect(cipher).not.toContain(SENTINEL);
@@ -1072,7 +1120,7 @@ describe("daily offsite backup", { timeout: 60_000 }, () => {
       [
         "set -eu",
         ". scripts/offsite-backup-lib.sh",
-        "offsite_aws s3api head-object --bucket stell22-offsite-test --key missing/object --endpoint-url https://storage.yandexcloud.net --region ru-central1",
+        "offsite_aws s3api head-object --bucket stell22-offsite-test --key missing/object --endpoint-url https://s3.ru-6.storage.selcloud.ru --region ru-6",
         "printf '%s\\n' \"AWS_RC=$AWS_RC\"",
         "false",
         "printf '%s\\n' STILL_RUNNING",
@@ -1239,5 +1287,164 @@ describe("daily offsite backup", { timeout: 60_000 }, () => {
       }
       await finished;
     }
+  });
+
+  it("refuses an endpoint that is not Selectel ru-6", () => {
+    const dirs = freshDirs();
+    const result = runOffsite("scripts/offsite-backup.sh", {
+      ...dirs,
+      hooks: true,
+      endpoint: "https://storage.yandexcloud.net",
+    });
+    expect(result.status).toBe(10);
+    expect(field(result.stdout, "STATUS")).toBe("FAILED");
+    expect(field(result.stdout, "REASON")).toBe("configuration");
+    expect(field(result.stdout, "RESTORE_VERIFIED")).toBe("0");
+    expect(result.stdout).not.toContain("STATUS=OFFSITE_VERIFIED");
+    expect(result.awsLog).not.toContain("put-object");
+    expect(result.awsLog).not.toContain("get-bucket-versioning");
+    expectLegacy(dirs.backupDir);
+  });
+
+  it.each(["us-east-1", "eu-central-1", "ru-central1", "ru-1", "ru-7"])(
+    "refuses region %s",
+    (region) => {
+      const dirs = freshDirs();
+      const result = runOffsite("scripts/offsite-backup.sh", { ...dirs, hooks: true, region });
+      expect(result.status).toBe(10);
+      expect(field(result.stdout, "REASON")).toBe("configuration");
+      expect(result.stdout).not.toContain("STATUS=OFFSITE_VERIFIED");
+      expect(result.awsLog).not.toContain("put-object");
+      expectLegacy(dirs.backupDir);
+    },
+  );
+
+  it.each([
+    "no-versioning",
+    "versioning-missing",
+    "versioning-error",
+    "no-lock",
+    "lock-error",
+    "governance",
+    "short-retention",
+    "no-retention",
+    "lifecycle-delete",
+    "lifecycle-error",
+  ])("refuses bucket protection mode %s before upload", (lockMode) => {
+    const dirs = freshDirs();
+    const result = runOffsite("scripts/offsite-backup.sh", { ...dirs, hooks: true, lockMode });
+    expect(result.status).toBe(10);
+    expect(field(result.stdout, "STATUS")).toBe("FAILED");
+    expect(field(result.stdout, "REASON")).toBe("bucket-protection");
+    expect(field(result.stdout, "RESTORE_VERIFIED")).toBe("0");
+    expect(result.stdout).not.toContain("STATUS=OFFSITE_VERIFIED");
+    expect(result.awsLog).not.toContain("put-object");
+    expect(result.awsLog).not.toContain("delete-object");
+    expect(posixExists(objectPath(dirs.awsRoot, dayKey("SUCCESS")))).toBe(false);
+    expectLegacy(dirs.backupDir);
+  });
+
+  it("retries a matching object without overwrite or deletion", () => {
+    const dirs = freshDirs();
+    const first = runOffsite("scripts/offsite-backup.sh", {
+      ...dirs,
+      hooks: true,
+      awsFail: "marker-put",
+    });
+    expect(first.status).toBe(23);
+    const cipher = readPosix(objectPath(dirs.awsRoot, dayKey("archive.age")));
+    const second = runOffsite("scripts/offsite-backup.sh", {
+      ...dirs,
+      hooks: true,
+      awsLog: `${dirs.stateDir}/aws-retry.log`,
+      producerLog: `${dirs.stateDir}/producer-retry.log`,
+    });
+    expect(second.status).toBe(0);
+    expect(field(second.stdout, "STATUS")).toBe("OFFSITE_VERIFIED");
+    expect(second.awsLog).toContain("--if-none-match *");
+    expect(second.awsLog).not.toContain("delete-object");
+    expect(readPosix(objectPath(dirs.awsRoot, dayKey("archive.age")))).toBe(cipher);
+    expect(readPosix(objectPath(dirs.awsRoot, dayKey("SUCCESS")))).toContain("status=OFFSITE_VERIFIED");
+  });
+
+  it("copies a verified day onto an independent directory and refuses overwrite", () => {
+    const dirs = freshDirs();
+    const created = runOffsite("scripts/offsite-backup.sh", { ...dirs, hooks: true });
+    expect(created.status).toBe(0);
+    const ssd = makePosixTemp(testTemps);
+    const copied = runOffsite("scripts/offsite-ssd-export.sh", {
+      ...dirs,
+      ssdDates: DAY,
+      ssdRoot: ssd,
+      awsLog: `${dirs.stateDir}/aws-ssd.log`,
+    });
+    expect(copied.status).toBe(0);
+    expect(field(copied.stdout, "STATUS")).toBe("SSD_COPIED");
+    expect(field(copied.stdout, "RESTORE_VERIFIED")).toBe("0");
+    expect(copied.stdout).not.toContain("STATUS=OFFSITE_VERIFIED");
+    const remoteCipher = readPosix(objectPath(dirs.awsRoot, dayKey("archive.age")));
+    expect(readPosix(`${ssd}/daily/${DAY}/archive.age`)).toBe(remoteCipher);
+    expect(readPosix(`${ssd}/daily/${DAY}/manifest.json`)).toBe(
+      readPosix(objectPath(dirs.awsRoot, dayKey("manifest.json"))),
+    );
+    expect(readPosix(`${ssd}/daily/${DAY}/SUCCESS`)).toContain("status=OFFSITE_VERIFIED");
+    expect(copied.awsLog).not.toContain("put-object");
+    expect(copied.awsLog).not.toContain("delete-object");
+    expect(copied.combined).not.toContain(PRIVATE_KEY);
+
+    const again = runOffsite("scripts/offsite-ssd-export.sh", {
+      ...dirs,
+      ssdDates: DAY,
+      ssdRoot: ssd,
+      awsLog: `${dirs.stateDir}/aws-ssd-again.log`,
+    });
+    expect(again.status).toBe(0);
+    expect(readPosix(`${ssd}/daily/${DAY}/archive.age`)).toBe(remoteCipher);
+
+    runShell('printf %s different > "$1"', [`${ssd}/daily/${DAY}/archive.age`]);
+    const refused = runOffsite("scripts/offsite-ssd-export.sh", {
+      ...dirs,
+      ssdDates: DAY,
+      ssdRoot: ssd,
+      awsLog: `${dirs.stateDir}/aws-ssd-refuse.log`,
+    });
+    expect(refused.status).not.toBe(0);
+    expect(field(refused.stdout, "REASON")).toBe("destination-mismatch");
+    expect(readPosix(`${ssd}/daily/${DAY}/archive.age`)).toBe("different");
+    expect(refused.awsLog).not.toContain("delete-object");
+  });
+
+  it("fails the SSD set when a selected date has no success marker", () => {
+    const dirs = freshDirs();
+    const created = runOffsite("scripts/offsite-backup.sh", { ...dirs, hooks: true });
+    expect(created.status).toBe(0);
+    const ssd = makePosixTemp(testTemps);
+    const result = runOffsite("scripts/offsite-ssd-export.sh", {
+      ...dirs,
+      ssdDates: `${DAY} 2026-11-21`,
+      ssdRoot: ssd,
+      awsLog: `${dirs.stateDir}/aws-ssd-gap.log`,
+    });
+    expect(result.status).not.toBe(0);
+    expect(field(result.stdout, "REASON")).toBe("incomplete-set");
+    expect(result.stdout).not.toContain("STATUS=SSD_COPIED");
+    expect(posixExists(`${ssd}/daily/2026-11-21/SUCCESS`)).toBe(false);
+    expect(result.awsLog).not.toContain("delete-object");
+  });
+
+  it("refuses to export when a private age key is present", () => {
+    const dirs = freshDirs();
+    const ssd = makePosixTemp(testTemps);
+    const result = runOffsite("scripts/offsite-ssd-export.sh", {
+      ...dirs,
+      ssdDates: DAY,
+      ssdRoot: ssd,
+      privateKey: true,
+    });
+    expect(result.status).toBe(10);
+    expect(field(result.stdout, "REASON")).toBe("private-key-refused");
+    expect(result.combined).not.toContain(PRIVATE_KEY);
+    expect(result.awsLog).not.toContain("get-object");
+    expect(posixExists(`${ssd}/daily/${DAY}/archive.age`)).toBe(false);
   });
 });

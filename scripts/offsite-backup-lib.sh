@@ -39,7 +39,7 @@ offsite_prepare() {
   umask 077
   OFFSITE_ENDPOINT=${OFFSITE_ENDPOINT:-}
   OFFSITE_BUCKET=${OFFSITE_BUCKET:-}
-  OFFSITE_REGION=${OFFSITE_REGION:-ru-central1}
+  OFFSITE_REGION=${OFFSITE_REGION:-ru-6}
   OFFSITE_PREFIX=${OFFSITE_PREFIX:-}
   OFFSITE_AGE_RECIPIENT=${OFFSITE_AGE_RECIPIENT:-}
   OFFSITE_BACKUP_DIR=${OFFSITE_BACKUP_DIR:-}
@@ -50,7 +50,10 @@ offsite_prepare() {
   OFFSITE_LOOKBACK_DAYS=${OFFSITE_LOOKBACK_DAYS:-40}
   OFFSITE_RUN_MAX_SECONDS=${OFFSITE_RUN_MAX_SECONDS:-21600}
 
-  if [ "$OFFSITE_ENDPOINT" != "https://storage.yandexcloud.net" ]; then
+  if [ "$OFFSITE_ENDPOINT" != "https://s3.ru-6.storage.selcloud.ru" ]; then
+    offsite_die FAILED configuration 10
+  fi
+  if [ "$OFFSITE_REGION" != "ru-6" ]; then
     offsite_die FAILED configuration 10
   fi
   case "$OFFSITE_BUCKET" in
@@ -156,6 +159,94 @@ offsite_prepare() {
   export AWS_PAGER=
   export AWS_CLI_AUTO_PROMPT=off
   export AWS_DEFAULT_REGION="$OFFSITE_REGION"
+  offsite_require_bucket_protection
+}
+
+offsite_compact_json() {
+  tr -d '[:space:]'
+}
+
+offsite_json_number() {
+  _json=$1
+  _key=$2
+  printf '%s' "$_json" | awk -v key="$_key" '
+    {
+      needle = "\"" key "\":"
+      n = index($0, needle)
+      if (n == 0) exit 0
+      s = substr($0, n + length(needle))
+      if (match(s, /^[0-9]+/)) print substr(s, RSTART, RLENGTH)
+    }
+  '
+}
+
+offsite_require_bucket_protection() {
+  offsite_aws s3api get-bucket-versioning \
+    --bucket "$OFFSITE_BUCKET" \
+    --endpoint-url "$OFFSITE_ENDPOINT" \
+    --region "$OFFSITE_REGION"
+  if [ "$AWS_RC" -ne 0 ]; then
+    offsite_die FAILED bucket-protection 10
+  fi
+  _versioning=$(offsite_compact_json < "$AWS_OUT")
+  case "$_versioning" in
+    *'"Status":"Enabled"'*) ;;
+    *) offsite_die FAILED bucket-protection 10 ;;
+  esac
+  case "$_versioning" in
+    *'"Status":"Suspended"'*) offsite_die FAILED bucket-protection 10 ;;
+  esac
+
+  offsite_aws s3api get-object-lock-configuration \
+    --bucket "$OFFSITE_BUCKET" \
+    --endpoint-url "$OFFSITE_ENDPOINT" \
+    --region "$OFFSITE_REGION"
+  if [ "$AWS_RC" -ne 0 ]; then
+    offsite_die FAILED bucket-protection 10
+  fi
+  _lock=$(offsite_compact_json < "$AWS_OUT")
+  case "$_lock" in
+    *'"ObjectLockEnabled":"Enabled"'*) ;;
+    *) offsite_die FAILED bucket-protection 10 ;;
+  esac
+  case "$_lock" in
+    *'"Mode":"COMPLIANCE"'*) ;;
+    *) offsite_die FAILED bucket-protection 10 ;;
+  esac
+  case "$_lock" in
+    *'"Mode":"GOVERNANCE"'*) offsite_die FAILED bucket-protection 10 ;;
+  esac
+  _days=$(offsite_json_number "$_lock" Days)
+  _years=$(offsite_json_number "$_lock" Years)
+  if [ -n "$_days" ]; then
+    if [ "$_days" -lt 90 ]; then
+      offsite_die FAILED bucket-protection 10
+    fi
+  elif [ -n "$_years" ]; then
+    if [ "$_years" -lt 1 ]; then
+      offsite_die FAILED bucket-protection 10
+    fi
+  else
+    offsite_die FAILED bucket-protection 10
+  fi
+
+  offsite_aws s3api get-bucket-lifecycle-configuration \
+    --bucket "$OFFSITE_BUCKET" \
+    --endpoint-url "$OFFSITE_ENDPOINT" \
+    --region "$OFFSITE_REGION"
+  if [ "$AWS_RC" -ne 0 ]; then
+    _err=$(offsite_aws_err_text)
+    case "$_err" in
+      *NoSuchLifecycleConfiguration*|*NoSuchLifecycle*) return 0 ;;
+      *) offsite_die FAILED bucket-protection 10 ;;
+    esac
+  fi
+  _life=$(offsite_compact_json < "$AWS_OUT")
+  case "$_life" in
+    *Expiration*|*ExpiredObjectDeleteMarker*|*NoncurrentVersionExpiration*)
+      offsite_die FAILED bucket-protection 10
+      ;;
+  esac
 }
 
 offsite_decimal() {
