@@ -91,11 +91,13 @@ function removeTemps(bucket: string[]): void {
 
 function holdLock(stateDir: string, epoch: number): void {
   const lock = `${stateDir}/offsite.lock`;
-  const created = runShell(': > "$1" && mkdir "$1.lockdir"', [lock]);
+  const created = runShell('if [ ! -e "$1" ]; then : > "$1"; fi && mkdir "$1.lockdir"', [lock]);
   if (created.status !== 0) {
     throw new Error(created.stderr || "cannot hold the offsite lock");
   }
-  utimesSync(toWin(lock), epoch, epoch);
+  writeFileSync(path.join(toWin(stateDir), "offsite-run.started"), `${epoch}\n`, "utf8");
+  const fresh = Math.floor(Date.now() / 1000);
+  utimesSync(toWin(lock), fresh, fresh);
 }
 
 function relocateVerifiedDay(awsRoot: string, from: string, to: string): void {
@@ -154,6 +156,7 @@ type RunOptions = {
   producerMode?: string;
   awsFail?: string;
   ageFail?: boolean;
+  ageMode?: string;
   dateMode?: "ok" | "utc";
   lowDisk?: boolean;
   recipient?: string;
@@ -219,7 +222,7 @@ function buildEnv(options: RunOptions): NodeJS.ProcessEnv {
     STELL22_AWS_ROOT: options.awsRoot,
     STELL22_AWS_FAIL: options.awsFail ?? "",
     STELL22_AGE_LOG: ageLog,
-    STELL22_AGE_FAIL: options.ageFail ? "1" : "",
+    STELL22_AGE_FAIL: options.ageMode ?? (options.ageFail ? "1" : ""),
     STELL22_OFFSITE_DATE_MODE: options.dateMode ?? "ok",
     STELL22_OFFSITE_CLOCK: options.clock ?? "0400",
     STELL22_OFFSITE_EPOCH: options.epoch ?? "1763776801",
@@ -350,10 +353,6 @@ describe("daily offsite backup", { timeout: 60_000 }, () => {
     writeExec(mockBin, "age", [
       "set -eu",
       'printf \'%s\\n\' "$*" >> "${STELL22_AGE_LOG:?}"',
-      'if [ "${STELL22_AGE_FAIL:-}" = "1" ]; then',
-      '  echo "age forced failure" >&2',
-      "  exit 1",
-      "fi",
       "recipient=",
       "out=",
       "input=",
@@ -370,6 +369,18 @@ describe("daily offsite backup", { timeout: 60_000 }, () => {
       "esac",
       'case "$recipient" in',
       '  *SECRET*) echo "refusing secret" >&2; exit 1 ;;',
+      "esac",
+      'case "${STELL22_AGE_FAIL:-}" in',
+      "  1)",
+      '    echo "age forced failure" >&2',
+      "    exit 1",
+      "    ;;",
+      "  partial)",
+      '    if [ -z "$out" ]; then echo "missing output" >&2; exit 1; fi',
+      "    printf '%s\\n' 'partial-ciphertext' > \"$out\"",
+      '    echo "age interrupted" >&2',
+      "    exit 1",
+      "    ;;",
       "esac",
       "{",
       "  printf '%s\\n' 'age-mock-v1'",
@@ -449,6 +460,7 @@ describe("daily offsite backup", { timeout: 60_000 }, () => {
       "  mode=ok",
       "fi",
       'case "$mode" in',
+      "  fail) exit 1 ;;",
       "  ok)",
       `    printf 'fixture %s\\n' '${SENTINEL}' | gzip -c > "$dir/$name"`,
       '    (CDPATH= cd "$dir" && sha256sum "$name" > "$name.sha256")',
@@ -647,8 +659,9 @@ describe("daily offsite backup", { timeout: 60_000 }, () => {
     expect(posixExists(objectPath(dirs.awsRoot, dayKey("SUCCESS")))).toBe(false);
     const before = readPosix(objectPath(dirs.awsRoot, dayKey("archive.age")));
     const health = runOffsite("scripts/offsite-backup-health.sh", { ...dirs, hooks: true });
-    expect(health.status).toBe(31);
-    expect(field(health.stdout, "STATUS")).toBe("INCOMPLETE");
+    expect(health.status).toBe(32);
+    expect(field(health.stdout, "STATUS")).toBe("FAILED");
+    expect(field(health.stdout, "REASON")).toBe("marker-failure");
     const second = runOffsite("scripts/offsite-backup.sh", {
       ...dirs,
       hooks: true,
@@ -1076,5 +1089,155 @@ describe("daily offsite backup", { timeout: 60_000 }, () => {
     expect(result.stdout).toContain("AWS_RC=1");
     expect(result.stdout ?? "").not.toContain("STILL_RUNNING");
     expect(`${result.stdout ?? ""}\n${result.stderr ?? ""}`).not.toContain("STATUS=OFFSITE_VERIFIED");
+  });
+
+  it("reports today's failure instead of yesterday's verified copy", () => {
+    const dirs = freshDirs();
+    const yesterday = "2026-11-21";
+    const created = runOffsite("scripts/offsite-backup.sh", { ...dirs, hooks: true });
+    expect(created.status).toBe(0);
+    relocateVerifiedDay(dirs.awsRoot, DAY, yesterday);
+    const removed = runShell(
+      'rm -rf "$1" && rm -f "$2/attempts/$3.env" "$4/$5" "$4/$5.sha256"',
+      [
+        objectPath(dirs.awsRoot, `${PREFIX}/daily/${DAY}`),
+        dirs.stateDir,
+        DAY,
+        dirs.backupDir,
+        ARCHIVE,
+      ],
+    );
+    expect(removed.status).toBe(0);
+    const failed = runOffsite("scripts/offsite-backup.sh", {
+      ...dirs,
+      hooks: true,
+      producerMode: "fail",
+      clock: "0310",
+      producerLog: `${dirs.stateDir}/producer-fail.log`,
+      awsLog: `${dirs.stateDir}/aws-fail.log`,
+    });
+    expect(failed.status).toBe(14);
+    expect(field(failed.stdout, "REASON")).toBe("producer-failure");
+    const health = runOffsite("scripts/offsite-backup-health.sh", { ...dirs, clock: "0310" });
+    expect(health.status).toBe(32);
+    expect(field(health.stdout, "STATUS")).toBe("FAILED");
+    expect(field(health.stdout, "REASON")).toBe("producer-failure");
+    expect(field(health.stdout, "BACKUP_DATE")).toBe(DAY);
+    expect(health.stdout).not.toContain("STATUS=OFFSITE_VERIFIED");
+    expect(readPosix(objectPath(dirs.awsRoot, `${PREFIX}/daily/${yesterday}/SUCCESS`))).toContain(
+      "status=OFFSITE_VERIFIED",
+    );
+    const retried = runOffsite("scripts/offsite-backup.sh", {
+      ...dirs,
+      hooks: true,
+      clock: "0310",
+      producerLog: `${dirs.stateDir}/producer-retry.log`,
+      awsLog: `${dirs.stateDir}/aws-retry.log`,
+    });
+    expect(retried.status).toBe(0);
+    expect(field(retried.stdout, "STATUS")).toBe("OFFSITE_VERIFIED");
+    const after = runOffsite("scripts/offsite-backup-health.sh", { ...dirs, clock: "0310" });
+    expect(after.status).toBe(0);
+    expect(field(after.stdout, "STATUS")).toBe("OFFSITE_VERIFIED");
+    expect(field(after.stdout, "BACKUP_DATE")).toBe(DAY);
+    expect(readPosix(objectPath(dirs.awsRoot, `${PREFIX}/daily/${yesterday}/SUCCESS`))).toContain(
+      "status=OFFSITE_VERIFIED",
+    );
+    expectLegacy(dirs.backupDir);
+  });
+
+  it("retries encryption after a partial age output without publishing it", () => {
+    const dirs = freshDirs();
+    const legacy = readPosix(`${dirs.backupDir}/stell22_2099-01-01_00-00-00.sql.gz`);
+    const failed = runOffsite("scripts/offsite-backup.sh", { ...dirs, hooks: true, ageMode: "partial" });
+    expect(failed.status).toBe(17);
+    expect(field(failed.stdout, "REASON")).toBe("encryption-failure");
+    expect(failed.awsLog).not.toContain("put-object");
+    expect(posixExists(`${dirs.stateDir}/work/${DAY}/archive.age`)).toBe(false);
+    const leftovers = runShell(
+      'find "$1" -type f \\( -name archive.age -o -name "cipher.*" \\)',
+      [`${dirs.stateDir}/work`],
+    );
+    expect(leftovers.stdout.trim()).toBe("");
+    expect(readPosix(`${dirs.backupDir}/stell22_2099-01-01_00-00-00.sql.gz`)).toBe(legacy);
+    const localArchive = readPosix(`${dirs.backupDir}/${ARCHIVE}`);
+    const retried = runOffsite("scripts/offsite-backup.sh", {
+      ...dirs,
+      hooks: true,
+      producerLog: `${dirs.stateDir}/producer-retry.log`,
+      awsLog: `${dirs.stateDir}/aws-retry.log`,
+    });
+    expect(retried.status).toBe(0);
+    expect(field(retried.stdout, "STATUS")).toBe("OFFSITE_VERIFIED");
+    expect(retried.producerLog).toBe("");
+    expect(retried.awsLog).toContain("put-object");
+    expect(readPosix(`${dirs.backupDir}/${ARCHIVE}`)).toBe(localArchive);
+    expect(readPosix(`${dirs.backupDir}/stell22_2099-01-01_00-00-00.sql.gz`)).toBe(legacy);
+    const remote = readPosix(objectPath(dirs.awsRoot, dayKey("archive.age")));
+    const again = runOffsite("scripts/offsite-backup.sh", {
+      ...dirs,
+      hooks: true,
+      producerLog: `${dirs.stateDir}/producer-again.log`,
+      awsLog: `${dirs.stateDir}/aws-again.log`,
+    });
+    expect(again.status).toBe(0);
+    expect(field(again.stdout, "ALREADY")).toBe("1");
+    expect(again.awsLog).not.toContain("put-object");
+    expect(readPosix(objectPath(dirs.awsRoot, dayKey("archive.age")))).toBe(remote);
+  });
+
+  it("keeps the lock owner's start time when a contender is refused", async () => {
+    const dirs = freshDirs();
+    const holder = spawn("sh", ["scripts/offsite-backup.sh"], {
+      cwd: repoRoot,
+      env: buildEnv({
+        ...dirs,
+        hooks: true,
+        producerMode: "sleep",
+        sleepSeconds: "20",
+        epoch: "1000",
+      }),
+    });
+    const finished = new Promise<number>((resolve) => {
+      holder.on("exit", (code) => resolve(code ?? 1));
+    });
+    const started = `${dirs.stateDir}/offsite-run.started`;
+    try {
+      let seen = false;
+      for (let i = 0; i < 50; i += 1) {
+        if (posixExists(started) && readPosix(started).trim() === "1000") {
+          seen = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      expect(seen).toBe(true);
+      const contender = runOffsite("scripts/offsite-backup.sh", {
+        ...dirs,
+        hooks: true,
+        epoch: "200000",
+        producerLog: `${dirs.stateDir}/producer-contender.log`,
+        awsLog: `${dirs.stateDir}/aws-contender.log`,
+      });
+      expect(contender.status).toBe(13);
+      expect(field(contender.stdout, "REASON")).toBe("concurrent");
+      expect(contender.producerLog).toBe("");
+      expect(readPosix(started).trim()).toBe("1000");
+      expect(holder.exitCode).toBeNull();
+      const health = runOffsite("scripts/offsite-backup-health.sh", { ...dirs, epoch: "200000" });
+      expect(health.status).toBe(35);
+      expect(field(health.stdout, "STATUS")).toBe("FAILED");
+      expect(field(health.stdout, "REASON")).toBe("run-exceeded");
+      expect(health.stdout).not.toContain("STATUS=OFFSITE_VERIFIED");
+      expect(health.stdout).not.toContain("STATUS=RUNNING");
+      expect(readPosix(started).trim()).toBe("1000");
+      expect(holder.exitCode).toBeNull();
+      expect(posixExists(`${dirs.stateDir}/offsite.lock.lockdir`)).toBe(true);
+    } finally {
+      if (holder.exitCode === null) {
+        holder.kill();
+      }
+      await finished;
+    }
   });
 });

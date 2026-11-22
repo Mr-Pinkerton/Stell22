@@ -496,11 +496,21 @@ EOF
   printf '%s\n' "[offsite] stage=BACKUP_CREATED" >&2
 }
 
+offsite_mark_run_started() {
+  if [ "${STELL22_OFFSITE_LOCK_HELD:-}" != "1" ]; then
+    offsite_die FAILED concurrent 13
+  fi
+  _stamp="$OFFSITE_STATE_DIR/offsite-run.started"
+  _tmp=$(mktemp "$OFFSITE_STATE_DIR/offsite-run.XXXXXX") || offsite_die FAILED configuration 10
+  printf '%s\n' "$NOW_EPOCH" > "$_tmp"
+  mv "$_tmp" "$_stamp" || offsite_die FAILED configuration 10
+}
+
 offsite_encrypt() {
   _work="$OFFSITE_STATE_DIR/work/$BACKUP_DATE"
-  mkdir -p "$_work"
+  mkdir -p "$_work" || offsite_die FAILED encryption-failure 17
   CIPHER_PATH="$_work/archive.age"
-  if [ -n "${ATTEMPT_CIPHER_SHA:-}" ] && [ -f "$CIPHER_PATH" ]; then
+  if [ -n "${ATTEMPT_CIPHER_SHA:-}" ] && [ -f "$CIPHER_PATH" ] && [ ! -L "$CIPHER_PATH" ]; then
     _have=$(offsite_sha256 "$CIPHER_PATH")
     _have_size=$(offsite_size "$CIPHER_PATH")
     if [ "$_have" = "$ATTEMPT_CIPHER_SHA" ] && [ "$_have_size" = "$ATTEMPT_CIPHER_SIZE" ]; then
@@ -510,20 +520,32 @@ offsite_encrypt() {
     fi
     offsite_die FAILED encryption-failure 17
   fi
-  if [ -e "$CIPHER_PATH" ]; then
+  if [ -n "${ATTEMPT_CIPHER_SHA:-}" ] && [ -e "$CIPHER_PATH" ]; then
     offsite_die FAILED encryption-failure 17
   fi
-  if ! age -r "$OFFSITE_AGE_RECIPIENT" -o "$CIPHER_PATH" "$LOCAL_ARCHIVE_PATH"; then
+  _tmp=$(mktemp "$_work/cipher.XXXXXX") || offsite_die FAILED encryption-failure 17
+  if ! age -r "$OFFSITE_AGE_RECIPIENT" -o "$_tmp" "$LOCAL_ARCHIVE_PATH"; then
+    rm -f "$_tmp"
     offsite_die FAILED encryption-failure 17
   fi
-  if [ ! -s "$CIPHER_PATH" ]; then
+  if [ ! -f "$_tmp" ] || [ -L "$_tmp" ] || [ ! -s "$_tmp" ]; then
+    rm -f "$_tmp"
     offsite_die FAILED encryption-failure 17
   fi
-  CIPHER_SHA=$(offsite_sha256 "$CIPHER_PATH")
-  CIPHER_SIZE=$(offsite_size "$CIPHER_PATH")
+  CIPHER_SHA=$(offsite_sha256 "$_tmp")
+  CIPHER_SIZE=$(offsite_size "$_tmp")
   if [ "$CIPHER_SHA" = "$LOCAL_ARCHIVE_SHA" ]; then
+    rm -f "$_tmp"
     offsite_die FAILED encryption-failure 17
   fi
+  if [ -e "$CIPHER_PATH" ] && [ -n "${ATTEMPT_CIPHER_SHA:-}" ]; then
+    rm -f "$_tmp"
+    offsite_die FAILED encryption-failure 17
+  fi
+  mv "$_tmp" "$CIPHER_PATH" || {
+    rm -f "$_tmp"
+    offsite_die FAILED encryption-failure 17
+  }
   ATTEMPT_CIPHER_SHA=$CIPHER_SHA
   ATTEMPT_CIPHER_SIZE=$CIPHER_SIZE
   ATTEMPT_STAGE=encrypted
@@ -828,8 +850,9 @@ offsite_health_main() {
   fi
   set -e
   if [ "$_lock_rc" -ne 0 ]; then
-    offsite_report_running "$_lock"
+    offsite_report_running
   fi
+  offsite_health_current_failure
   if offsite_latest_verified_date; then
     offsite_require_fresh_copy
     printf '%s\n' \
@@ -867,6 +890,25 @@ offsite_health_main() {
   exit 30
 }
 
+offsite_health_current_failure() {
+  if [ ! -f "$OFFSITE_STATE_DIR/last-run.env" ]; then
+    return 0
+  fi
+  _reason=$(awk -F= '$1 == "reason" { print substr($0, 8); exit }' "$OFFSITE_STATE_DIR/last-run.env")
+  _status=$(awk -F= '$1 == "status" { print substr($0, 8); exit }' "$OFFSITE_STATE_DIR/last-run.env")
+  _date=$(awk -F= '$1 == "backup_date" { print substr($0, 13); exit }' "$OFFSITE_STATE_DIR/last-run.env")
+  if [ "$_date" != "$BACKUP_DATE" ]; then
+    return 0
+  fi
+  case "$_status" in
+    FAILED|INCOMPLETE)
+      printf '%s\n' "STATUS=FAILED" "BACKUP_DATE=$BACKUP_DATE" "REASON=${_reason:-failed}" "RESTORE_VERIFIED=0"
+      exit 32
+      ;;
+  esac
+  return 0
+}
+
 offsite_emit_visibility() {
   if [ -n "${OFFSITE_REPORT_VISIBILITY:-}" ]; then
     printf '%s\n' "VPS_LOSS_VISIBILITY=$OFFSITE_REPORT_VISIBILITY"
@@ -895,17 +937,16 @@ offsite_require_fresh_copy() {
 }
 
 offsite_report_running() {
-  _lock_file=$1
-  _mtime=$(stat -c %Y "$_lock_file" 2>/dev/null || true)
-  _mtime=$(offsite_decimal "$_mtime") || {
+  _started=$(cat "$OFFSITE_STATE_DIR/offsite-run.started" 2>/dev/null || true)
+  _started=$(offsite_decimal "$_started") || {
     printf '%s\n' "STATUS=FAILED" "BACKUP_DATE=$BACKUP_DATE" "REASON=run-unmeasured" "RESTORE_VERIFIED=0"
     exit 35
   }
   _now_epoch=$(offsite_decimal "$NOW_EPOCH") || offsite_die FAILED timezone 24
-  if [ "$_now_epoch" -lt "$_mtime" ]; then
+  if [ "$_now_epoch" -lt "$_started" ]; then
     _held=0
   else
-    _held=$((_now_epoch - _mtime))
+    _held=$((_now_epoch - _started))
   fi
   _limit=$(offsite_decimal "$OFFSITE_RUN_MAX_SECONDS") || offsite_die FAILED configuration 10
   if [ "$_held" -gt "$_limit" ]; then

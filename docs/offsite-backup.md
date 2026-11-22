@@ -80,7 +80,7 @@ Producer остаётся `scripts/backup-db.sh`: отдельный код вы
 | `OFFSITE_STATE_DIR` | Состояние попыток, не замена архивов |
 | `OFFSITE_MIN_FREE_KB` | Минимум свободного места до старта |
 | `OFFSITE_MAX_AGE_HOURS` | Порог свежести подтверждённой копии, по умолчанию 36 |
-| `OFFSITE_RUN_MAX_SECONDS` | Допустимая длительность занятого lock, по умолчанию 21600. Превышение не останавливает процесс |
+| `OFFSITE_RUN_MAX_SECONDS` | Допустимая длительность попытки после захвата lock, по умолчанию 21600. Отсчёт пишет только владелец lock. Превышение не останавливает процесс |
 | `OFFSITE_GRACE_HHMM` | После 03:00, по умолчанию `0330` |
 | `AWS_ACCESS_KEY_ID` | Только в окружении процесса при activation |
 | `AWS_SECRET_ACCESS_KEY` | То же. Скрипт его не печатает |
@@ -120,6 +120,8 @@ stell22/offsite/v1/daily/YYYY-MM-DD/manifest.json
 stell22/offsite/v1/daily/YYYY-MM-DD/SUCCESS
 ```
 
+`age` пишет во временный файл каталога попытки. Конечный локальный `archive.age` публикуется только после ненулевого ciphertext, checksum и размера. Обрыв `age` удаляет этот временный файл и не оставляет частичный ciphertext под конечным именем. Уже подтверждённый ciphertext не перезаписывается.
+
 Имя локального архива `stell22_YYYY-MM-DD_HH-MM-SS.sql.gz` записано внутри manifest. Orchestrator берёт путь только из строки `BACKUP SUCCESS` текущего запуска и сверяет, что этого файла не было до запуска. Самый новый файл в каталоге не выбирается. Чужой или частичный архив (sidecar без архива) успехом не считается.
 
 `PutObject` всегда с `If-None-Match: *`. Существующий ключ не перезаписывается. Повторная попытка продолжается только если скачанные байты совпали с локальным SHA-256 и размером. Иначе состояние `INCOMPLETE` / mismatch, объект остаётся как был.
@@ -133,7 +135,7 @@ Marker пишется последним и только после провер
 - Уже проверенный marker этого дня: выход 0, `ALREADY=1`, producer не запускается, объекты не перезаписываются.
 - Обрыв до marker: локальный архив и совпавший ciphertext сохраняются, запись продолжается с того же ключа только при совпадении байтов.
 - Чужие байты по тому же ключу: остановка, без overwrite и без ложного успеха.
-- Параллельный запуск: второй процесс не берёт `flock` и выходит с `REASON=concurrent`.
+- Параллельный запуск: второй процесс не берёт `flock`, не меняет отметку старта владельца и выходит с `REASON=concurrent`.
 
 ## Scheduler
 
@@ -188,11 +190,11 @@ Stdout — строки `STATUS=`, `REASON=`, `BACKUP_DATE=`, `ARCHIVE_SHA256=`,
 
 ## Мониторинг
 
-`scripts/offsite-backup-health.sh` читает последний подтверждённый marker, его возраст, полноту contract, пропуск сегодняшнего окна после `OFFSITE_GRACE_HHMM` и `last-run.env`.
+`scripts/offsite-backup-health.sh` сначала читает `last-run.env` текущей московской даты. `FAILED` или `INCOMPLETE` этой даты возвращается сразу, даже если вчерашний marker ещё `OFFSITE_VERIFIED`. Вчерашняя копия при этом остаётся. После успешного повтора статус снова `OFFSITE_VERIFIED`. Дальше проверяются свежий marker, его возраст и пропуск окна после `OFFSITE_GRACE_HHMM`. Длительность `RUNNING` считается от `offsite-run.started`, который записывает только процесс, уже взявший lock.
 
 | Код | STATUS |
 | --- | --- |
-| 0 | `OFFSITE_VERIFIED`, либо `RUNNING`, пока lock моложе `OFFSITE_RUN_MAX_SECONDS` |
+| 0 | `OFFSITE_VERIFIED`, либо `RUNNING`, пока отметка владельца lock моложе `OFFSITE_RUN_MAX_SECONDS` |
 | 30 | `MISSING_BACKUP` (`missing` или `missed`) |
 | 31 | `INCOMPLETE` или `BACKUP_CREATED` |
 | 32 | `FAILED` с reason последнего запуска |

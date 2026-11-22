@@ -19,7 +19,9 @@ SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 if [ "${STELL22_OFFSITE_LOCK_HELD:-}" != "1" ]; then
   offsite_prepare
   _lock="$OFFSITE_STATE_DIR/offsite.lock"
-  : > "$_lock"
+  if [ ! -e "$_lock" ]; then
+    : > "$_lock"
+  fi
   export STELL22_OFFSITE_LOCK_HELD=1
   set +e
   flock -n "$_lock" sh "$0" "$@"
@@ -33,4 +35,5 @@ fi
 
 trap ' _status=$?; if [ "$_status" -eq 1 ]; then trap - EXIT; printf "%s\n" "STATUS=FAILED" "REASON=unexpected-exit" "RESTORE_VERIFIED=0"; exit 10; fi' EXIT
 offsite_prepare
+offsite_mark_run_started
 offsite_run
