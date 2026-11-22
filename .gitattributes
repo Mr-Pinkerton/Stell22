@@ -10,6 +10,7 @@ scripts/offsite-backup-lib.sh text eol=lf
 scripts/offsite-backup-health.sh text eol=lf
 scripts/offsite-backup-external-check.sh text eol=lf
 scripts/offsite-backup-retention-plan.sh text eol=lf
+scripts/offsite-ssd-export.sh text eol=lf
 deploy/systemd/*.service text eol=lf
 deploy/systemd/*.timer text eol=lf
 deploy/offsite-backup.env.example text eol=lf
