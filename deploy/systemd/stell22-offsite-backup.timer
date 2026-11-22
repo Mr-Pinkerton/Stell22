@@ -1,0 +1,13 @@
+[Unit]
+Description=Stell22 offsite backup at 03:00 Europe/Moscow
+Documentation=file:/root/Stell22/docs/offsite-backup.md
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 Europe/Moscow
+Persistent=true
+RandomizedDelaySec=0
+AccuracySec=1us
+Unit=stell22-offsite-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=Stell22 daily offsite PostgreSQL backup
+Documentation=file:/root/Stell22/docs/offsite-backup.md
+OnFailure=stell22-offsite-backup-onfailure.service
+# Do not enable this unit while the legacy crontab still runs backup-db.sh.
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/Stell22
+EnvironmentFile=-/etc/stell22/offsite-backup.env
+ExecStart=/bin/sh /root/Stell22/scripts/offsite-backup.sh
+TimeoutStartSec=6h
+Nice=10
+UMask=0077
+# No Restart. A failed run stays failed until the next calendar start or an
+# operator starts this unit again. The script holds an exclusive flock.

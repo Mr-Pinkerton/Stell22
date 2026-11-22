@@ -5,4 +5,13 @@ docker/p1-oneshot/debs/*.deb binary
 docker/p1-oneshot/debs/SHA256SUMS text eol=lf
 docker/p1-oneshot/debs/PROVENANCE.txt text eol=lf
 scripts/admin-corrections-release.sh text eol=lf
+scripts/offsite-backup.sh text eol=lf
+scripts/offsite-backup-lib.sh text eol=lf
+scripts/offsite-backup-health.sh text eol=lf
+scripts/offsite-backup-external-check.sh text eol=lf
+scripts/offsite-backup-retention-plan.sh text eol=lf
+deploy/systemd/*.service text eol=lf
+deploy/systemd/*.timer text eol=lf
+deploy/offsite-backup.env.example text eol=lf
+docs/offsite-backup.md text eol=lf
 prisma/migrations/**/migration.sql text eol=lf
