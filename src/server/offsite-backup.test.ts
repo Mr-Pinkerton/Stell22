@@ -1,5 +1,5 @@
 import { spawn, spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -86,6 +86,49 @@ function removeTemps(bucket: string[]): void {
       continue;
     }
     runShell('rm -rf "$1"', [dir]);
+  }
+}
+
+function holdLock(stateDir: string, epoch: number): void {
+  const lock = `${stateDir}/offsite.lock`;
+  const created = runShell(': > "$1" && mkdir "$1.lockdir"', [lock]);
+  if (created.status !== 0) {
+    throw new Error(created.stderr || "cannot hold the offsite lock");
+  }
+  utimesSync(toWin(lock), epoch, epoch);
+}
+
+function relocateVerifiedDay(awsRoot: string, from: string, to: string): void {
+  const fromDir = objectPath(awsRoot, `${PREFIX}/daily/${from}`);
+  const toDir = objectPath(awsRoot, `${PREFIX}/daily/${to}`);
+  const copied = runShell('mkdir -p "$2" && cp "$1/archive.age" "$2/archive.age"', [fromDir, toDir]);
+  if (copied.status !== 0) {
+    throw new Error(copied.stderr || "cannot copy the verified archive");
+  }
+  const manifest = readPosix(`${fromDir}/manifest.json`).replaceAll(
+    `"backupDate": "${from}"`,
+    `"backupDate": "${to}"`,
+  );
+  writeFileSync(path.join(toWin(toDir), "manifest.json"), manifest, "utf8");
+  const digest = runShell('sha256sum "$1"', [`${toDir}/manifest.json`]);
+  if (digest.status !== 0) {
+    throw new Error(digest.stderr || "cannot hash the relocated manifest");
+  }
+  const manifestSha = digest.stdout.trim().split(/\s+/)[0] ?? "";
+  const marker = readPosix(`${fromDir}/SUCCESS`)
+    .replaceAll(`backupDate=${from}`, `backupDate=${to}`)
+    .replace(/^manifestSha256=.*$/m, `manifestSha256=${manifestSha}`);
+  writeFileSync(path.join(toWin(toDir), "SUCCESS"), marker, "utf8");
+}
+
+function dropLocalEvidence(dirs: { backupDir: string; stateDir: string }): void {
+  const removed = runShell('rm -f "$1/$2" "$3/last-run.env" && rm -rf "$3/attempts" "$3/work"', [
+    dirs.backupDir,
+    ARCHIVE,
+    dirs.stateDir,
+  ]);
+  if (removed.status !== 0) {
+    throw new Error(removed.stderr || "cannot drop local backup evidence");
   }
 }
 
@@ -879,5 +922,159 @@ describe("daily offsite backup", { timeout: 60_000 }, () => {
     if (viaWsl.status === 0) {
       expect(`${viaWsl.stdout}\n${viaWsl.stderr}`).toContain("03:00:00");
     }
+  });
+
+  it("calculates month, year, February, and 08/09 dates in dash", () => {
+    const lib = readFileSync(path.join(repoRoot, "scripts/offsite-backup-lib.sh"), "utf8");
+    expect(lib).not.toContain("10#");
+    const dirs = freshDirs();
+    const probe = `${dirs.stateDir}/calendar.sh`;
+    writeFileSync(
+      toWin(probe),
+      [
+        "set -eu",
+        ". scripts/offsite-backup-lib.sh",
+        "offsite_prev_day 2026-03-01",
+        "offsite_prev_day 2024-03-01",
+        "offsite_prev_day 1900-03-01",
+        "offsite_prev_day 2000-03-01",
+        "offsite_prev_day 2026-01-01",
+        "offsite_prev_day 2026-05-01",
+        "offsite_prev_day 2026-08-01",
+        "offsite_prev_day 2026-09-01",
+        "offsite_prev_day 2026-08-09",
+        "offsite_prev_day 2026-09-08",
+        "offsite_prev_day 2026-10-01",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const result = spawnSync("sh", ["-c", 'dash "$1"', "sh", probe], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(
+      [
+        "2026-02-28",
+        "2024-02-29",
+        "1900-02-28",
+        "2000-02-29",
+        "2025-12-31",
+        "2026-04-30",
+        "2026-07-31",
+        "2026-08-31",
+        "2026-08-08",
+        "2026-09-07",
+        "2026-09-30",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("rejects a missed Moscow day after grace without claiming verification", () => {
+    const dirs = freshDirs();
+    const created = runOffsite("scripts/offsite-backup.sh", { ...dirs, hooks: true });
+    expect(created.status).toBe(0);
+    relocateVerifiedDay(dirs.awsRoot, DAY, "2026-11-21");
+    const removed = runShell('rm -rf "$1"', [objectPath(dirs.awsRoot, `${PREFIX}/daily/${DAY}`)]);
+    expect(removed.status).toBe(0);
+    dropLocalEvidence(dirs);
+    const external = runOffsite("scripts/offsite-backup-external-check.sh", {
+      ...dirs,
+      clock: "0400",
+      externalLocation: "independent",
+    });
+    expect(external.status).toBe(30);
+    expect(field(external.stdout, "STATUS")).toBe("MISSING_BACKUP");
+    expect(field(external.stdout, "REASON")).toBe("missed");
+    expect(external.stdout).not.toContain("STATUS=OFFSITE_VERIFIED");
+    expect(field(external.stdout, "VPS_LOSS_VISIBILITY")).toBe("independent");
+  });
+
+  it("rejects an old confirmed copy from the external check", () => {
+    const dirs = freshDirs();
+    const created = runOffsite("scripts/offsite-backup.sh", { ...dirs, hooks: true, epoch: "1000" });
+    expect(created.status).toBe(0);
+    dropLocalEvidence(dirs);
+    const external = runOffsite("scripts/offsite-backup-external-check.sh", {
+      ...dirs,
+      epoch: String(1000 + 10 * 3600),
+      maxAge: "1",
+      externalLocation: "independent",
+    });
+    expect(external.status).toBe(33);
+    expect(field(external.stdout, "STATUS")).toBe("MISSING_BACKUP");
+    expect(field(external.stdout, "REASON")).toBe("stale");
+    expect(external.stdout).not.toContain("STATUS=OFFSITE_VERIFIED");
+    expect(field(external.stdout, "VPS_LOSS_VISIBILITY")).toBe("independent");
+  });
+
+  it("accepts a fresh remote copy without local VPS evidence", () => {
+    const dirs = freshDirs();
+    const created = runOffsite("scripts/offsite-backup.sh", { ...dirs, hooks: true });
+    expect(created.status).toBe(0);
+    dropLocalEvidence(dirs);
+    const external = runOffsite("scripts/offsite-backup-external-check.sh", {
+      ...dirs,
+      externalLocation: "independent",
+    });
+    expect(external.status).toBe(0);
+    expect(field(external.stdout, "STATUS")).toBe("OFFSITE_VERIFIED");
+    expect(field(external.stdout, "BACKUP_DATE")).toBe(DAY);
+    expect(field(external.stdout, "VPS_LOSS_VISIBILITY")).toBe("independent");
+    expect(external.stdout).not.toContain("STATUS=MISSING_BACKUP");
+  });
+
+  it("treats a lock held within the time limit as running", () => {
+    const dirs = freshDirs();
+    holdLock(dirs.stateDir, 1763776801);
+    const health = runOffsite("scripts/offsite-backup-health.sh", { ...dirs, epoch: "1763776801" });
+    expect(health.status).toBe(0);
+    expect(field(health.stdout, "STATUS")).toBe("RUNNING");
+    expect(field(health.stdout, "REASON")).toBe("in-progress");
+    expect(health.stdout).not.toContain("STATUS=OFFSITE_VERIFIED");
+    expect(posixExists(`${dirs.stateDir}/offsite.lock.lockdir`)).toBe(true);
+    expect(posixExists(`${dirs.stateDir}/offsite.lock`)).toBe(true);
+  });
+
+  it("rejects a lock held longer than the allowed duration", () => {
+    const dirs = freshDirs();
+    holdLock(dirs.stateDir, 1763776801 - 100000);
+    const health = runOffsite("scripts/offsite-backup-health.sh", { ...dirs, epoch: "1763776801" });
+    expect(health.status).toBe(35);
+    expect(field(health.stdout, "STATUS")).toBe("FAILED");
+    expect(field(health.stdout, "REASON")).toBe("run-exceeded");
+    expect(health.stdout).not.toContain("STATUS=OFFSITE_VERIFIED");
+    expect(health.stdout).not.toContain("STATUS=RUNNING");
+    expect(posixExists(`${dirs.stateDir}/offsite.lock.lockdir`)).toBe(true);
+    expect(posixExists(`${dirs.stateDir}/offsite.lock`)).toBe(true);
+  });
+
+  it("restores errexit after an allowed aws failure", () => {
+    const dirs = freshDirs();
+    const probe = `${dirs.stateDir}/errexit.sh`;
+    writeFileSync(
+      toWin(probe),
+      [
+        "set -eu",
+        ". scripts/offsite-backup-lib.sh",
+        "offsite_aws s3api head-object --bucket stell22-offsite-test --key missing/object --endpoint-url https://storage.yandexcloud.net --region ru-central1",
+        "printf '%s\\n' \"AWS_RC=$AWS_RC\"",
+        "false",
+        "printf '%s\\n' STILL_RUNNING",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const result = spawnSync("sh", ["-c", 'dash "$1"', "sh", probe], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: buildEnv(dirs),
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain("AWS_RC=1");
+    expect(result.stdout ?? "").not.toContain("STILL_RUNNING");
+    expect(`${result.stdout ?? ""}\n${result.stderr ?? ""}`).not.toContain("STATUS=OFFSITE_VERIFIED");
   });
 });

@@ -79,7 +79,8 @@ Producer остаётся `scripts/backup-db.sh`: отдельный код вы
 | `OFFSITE_BACKUP_DIR` | Каталог локальных архивов producer |
 | `OFFSITE_STATE_DIR` | Состояние попыток, не замена архивов |
 | `OFFSITE_MIN_FREE_KB` | Минимум свободного места до старта |
-| `OFFSITE_MAX_AGE_HOURS` | Порог health, по умолчанию 36 |
+| `OFFSITE_MAX_AGE_HOURS` | Порог свежести подтверждённой копии, по умолчанию 36 |
+| `OFFSITE_RUN_MAX_SECONDS` | Допустимая длительность занятого lock, по умолчанию 21600. Превышение не останавливает процесс |
 | `OFFSITE_GRACE_HHMM` | После 03:00, по умолчанию `0330` |
 | `AWS_ACCESS_KEY_ID` | Только в окружении процесса при activation |
 | `AWS_SECRET_ACCESS_KEY` | То же. Скрипт его не печатает |
@@ -191,14 +192,17 @@ Stdout — строки `STATUS=`, `REASON=`, `BACKUP_DATE=`, `ARCHIVE_SHA256=`,
 
 | Код | STATUS |
 | --- | --- |
-| 0 | `OFFSITE_VERIFIED` или `RUNNING` |
+| 0 | `OFFSITE_VERIFIED`, либо `RUNNING`, пока lock моложе `OFFSITE_RUN_MAX_SECONDS` |
 | 30 | `MISSING_BACKUP` (`missing` или `missed`) |
 | 31 | `INCOMPLETE` или `BACKUP_CREATED` |
 | 32 | `FAILED` с reason последнего запуска |
 | 33 | `MISSING_BACKUP` / `stale` |
 | 34 | внешняя проверка отказалась работать как проверка с самого VPS |
+| 35 | `FAILED` / `run-exceeded` или `run-unmeasured`. Процесс backup не останавливается |
 
-Проверка на VPS не видит гибель самого VPS. Для этого есть `scripts/offsite-backup-external-check.sh`. Его нужно будет запускать с другой машины. `OFFSITE_EXTERNAL_LOCATION=vps` завершается отказом. Реальный внешний мониторинг в этой задаче не настраивается.
+`scripts/offsite-backup-external-check.sh` применяет тот же предел возраста и то же окно текущего московского дня. Устаревшая или пропущенная копия даёт `MISSING_BACKUP` и ненулевой код. `OFFSITE_VERIFIED` в этом случае не печатается. Проверка читает только удалённые marker, manifest и ciphertext.
+
+Проверка на VPS не видит гибель самого VPS. Внешнюю проверку нужно запускать с другой машины. `OFFSITE_EXTERNAL_LOCATION=vps` завершается отказом. Реальный внешний мониторинг в этой задаче не настраивается.
 
 ## Retention
 

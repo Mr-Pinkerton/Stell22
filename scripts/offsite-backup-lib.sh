@@ -48,6 +48,7 @@ offsite_prepare() {
   OFFSITE_MAX_AGE_HOURS=${OFFSITE_MAX_AGE_HOURS:-36}
   OFFSITE_GRACE_HHMM=${OFFSITE_GRACE_HHMM:-0330}
   OFFSITE_LOOKBACK_DAYS=${OFFSITE_LOOKBACK_DAYS:-40}
+  OFFSITE_RUN_MAX_SECONDS=${OFFSITE_RUN_MAX_SECONDS:-21600}
 
   if [ "$OFFSITE_ENDPOINT" != "https://storage.yandexcloud.net" ]; then
     offsite_die FAILED configuration 10
@@ -69,6 +70,9 @@ offsite_prepare() {
     ""|/) offsite_die FAILED configuration 10 ;;
   esac
   case "$OFFSITE_MIN_FREE_KB" in
+    ""|*[!0-9]*) offsite_die FAILED configuration 10 ;;
+  esac
+  case "$OFFSITE_RUN_MAX_SECONDS" in
     ""|*[!0-9]*) offsite_die FAILED configuration 10 ;;
   esac
   case "$OFFSITE_AGE_RECIPIENT" in
@@ -154,13 +158,28 @@ offsite_prepare() {
   export AWS_DEFAULT_REGION="$OFFSITE_REGION"
 }
 
+offsite_decimal() {
+  _n=$1
+  while :; do
+    case "$_n" in
+      ""|*[!0-9]*) return 1 ;;
+      0) break ;;
+      0*) _n=${_n#0} ;;
+      *) break ;;
+    esac
+  done
+  printf '%s\n' "$_n"
+}
+
 offsite_prev_day() {
   _y=${1%%-*}
   _rest=${1#*-}
   _m=${_rest%%-*}
   _d=${_rest#*-}
-  _d=$((10#$_d - 1))
-  _m=$((10#$_m))
+  _d=$(offsite_decimal "$_d") || return 1
+  _m=$(offsite_decimal "$_m") || return 1
+  _y=$(offsite_decimal "$_y") || return 1
+  _d=$((_d - 1))
   if [ "$_d" -lt 1 ]; then
     _m=$((_m - 1))
     if [ "$_m" -lt 1 ]; then
@@ -201,10 +220,16 @@ offsite_success_key() {
 offsite_aws() {
   AWS_OUT=$(mktemp "$OFFSITE_STATE_DIR/aws-out.XXXXXX")
   AWS_ERR=$(mktemp "$OFFSITE_STATE_DIR/aws-err.XXXXXX")
+  _aws_errexit=0
+  case $- in
+    *e*) _aws_errexit=1 ;;
+  esac
   set +e
   aws "$@" >"$AWS_OUT" 2>"$AWS_ERR"
   AWS_RC=$?
-  set +e
+  if [ "$_aws_errexit" -eq 1 ]; then
+    set -e
+  fi
 }
 
 offsite_aws_err_text() {
@@ -803,26 +828,10 @@ offsite_health_main() {
   fi
   set -e
   if [ "$_lock_rc" -ne 0 ]; then
-    printf '%s\n' "STATUS=RUNNING" "BACKUP_DATE=$BACKUP_DATE" "REASON=in-progress" "RESTORE_VERIFIED=0"
-    exit 0
+    offsite_report_running "$_lock"
   fi
   if offsite_latest_verified_date; then
-    _age=$(( (NOW_EPOCH - VERIFIED_EPOCH) / 3600 ))
-    if [ "$NOW_EPOCH" -lt "$VERIFIED_EPOCH" ]; then
-      offsite_die FAILED timezone 24
-    fi
-    if [ "$_age" -gt "$OFFSITE_MAX_AGE_HOURS" ]; then
-      printf '%s\n' "STATUS=MISSING_BACKUP" "BACKUP_DATE=$LATEST_DATE" "REASON=stale" "AGE_HOURS=$_age" "RESTORE_VERIFIED=0"
-      exit 33
-    fi
-    _clock=${CLOCK_HHMM#0}
-    _clock=${_clock#0}
-    _grace=${OFFSITE_GRACE_HHMM#0}
-    _grace=${_grace#0}
-    if [ "$LATEST_DATE" != "$BACKUP_DATE" ] && [ "$_clock" -ge "$_grace" ]; then
-      printf '%s\n' "STATUS=MISSING_BACKUP" "BACKUP_DATE=$BACKUP_DATE" "REASON=missed" "RESTORE_VERIFIED=0"
-      exit 30
-    fi
+    offsite_require_fresh_copy
     printf '%s\n' \
       "STATUS=OFFSITE_VERIFIED" \
       "BACKUP_DATE=$LATEST_DATE" \
@@ -858,21 +867,73 @@ offsite_health_main() {
   exit 30
 }
 
+offsite_emit_visibility() {
+  if [ -n "${OFFSITE_REPORT_VISIBILITY:-}" ]; then
+    printf '%s\n' "VPS_LOSS_VISIBILITY=$OFFSITE_REPORT_VISIBILITY"
+  fi
+}
+
+offsite_require_fresh_copy() {
+  _now_epoch=$(offsite_decimal "$NOW_EPOCH") || offsite_die FAILED timezone 24
+  _verified_epoch=$(offsite_decimal "$VERIFIED_EPOCH") || offsite_die FAILED timezone 24
+  if [ "$_now_epoch" -lt "$_verified_epoch" ]; then
+    offsite_die FAILED timezone 24
+  fi
+  _age=$(( (_now_epoch - _verified_epoch) / 3600 ))
+  if [ "$_age" -gt "$OFFSITE_MAX_AGE_HOURS" ]; then
+    printf '%s\n' "STATUS=MISSING_BACKUP" "BACKUP_DATE=$LATEST_DATE" "REASON=stale" "AGE_HOURS=$_age" "RESTORE_VERIFIED=0"
+    offsite_emit_visibility
+    exit 33
+  fi
+  _clock=$(offsite_decimal "$CLOCK_HHMM") || offsite_die FAILED timezone 24
+  _grace=$(offsite_decimal "$OFFSITE_GRACE_HHMM") || offsite_die FAILED timezone 24
+  if [ "$LATEST_DATE" != "$BACKUP_DATE" ] && [ "$_clock" -ge "$_grace" ]; then
+    printf '%s\n' "STATUS=MISSING_BACKUP" "BACKUP_DATE=$BACKUP_DATE" "REASON=missed" "RESTORE_VERIFIED=0"
+    offsite_emit_visibility
+    exit 30
+  fi
+}
+
+offsite_report_running() {
+  _lock_file=$1
+  _mtime=$(stat -c %Y "$_lock_file" 2>/dev/null || true)
+  _mtime=$(offsite_decimal "$_mtime") || {
+    printf '%s\n' "STATUS=FAILED" "BACKUP_DATE=$BACKUP_DATE" "REASON=run-unmeasured" "RESTORE_VERIFIED=0"
+    exit 35
+  }
+  _now_epoch=$(offsite_decimal "$NOW_EPOCH") || offsite_die FAILED timezone 24
+  if [ "$_now_epoch" -lt "$_mtime" ]; then
+    _held=0
+  else
+    _held=$((_now_epoch - _mtime))
+  fi
+  _limit=$(offsite_decimal "$OFFSITE_RUN_MAX_SECONDS") || offsite_die FAILED configuration 10
+  if [ "$_held" -gt "$_limit" ]; then
+    printf '%s\n' "STATUS=FAILED" "BACKUP_DATE=$BACKUP_DATE" "REASON=run-exceeded" "AGE_SECONDS=$_held" "RESTORE_VERIFIED=0"
+    exit 35
+  fi
+  printf '%s\n' "STATUS=RUNNING" "BACKUP_DATE=$BACKUP_DATE" "REASON=in-progress" "AGE_SECONDS=$_held" "RESTORE_VERIFIED=0"
+  exit 0
+}
+
 offsite_external_main() {
   if [ "${OFFSITE_EXTERNAL_LOCATION:-independent}" = "vps" ]; then
     printf '%s\n' "STATUS=REFUSED" "REASON=vps-cannot-detect-own-loss" "VPS_LOSS_VISIBILITY=none" "RESTORE_VERIFIED=0"
     exit 34
   fi
+  OFFSITE_REPORT_VISIBILITY=independent
   if ! offsite_latest_verified_date; then
     printf '%s\n' "STATUS=MISSING_BACKUP" "REASON=missing" "VPS_LOSS_VISIBILITY=independent" "RESTORE_VERIFIED=0"
     exit 30
   fi
+  offsite_require_fresh_copy
   printf '%s\n' \
     "STATUS=OFFSITE_VERIFIED" \
     "BACKUP_DATE=$LATEST_DATE" \
     "CIPHERTEXT_SHA256=$VERIFIED_CIPHER_SHA" \
     "ARCHIVE_SHA256=$VERIFIED_ARCHIVE_SHA" \
     "VPS_LOSS_VISIBILITY=independent" \
+    "AGE_HOURS=$_age" \
     "RESTORE_VERIFIED=0"
   exit 0
 }
