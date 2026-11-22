@@ -23,8 +23,7 @@ scripts/backup-db.sh          локальный producer, без замены
     |
 age, только публичный recipient, до сети
     |
-проверка bucket: versioning, Object Lock COMPLIANCE >= 90 дней,
-нет lifecycle deletion
+проверка bucket: versioning Enabled, Object Lock COMPLIANCE >= 90 дней
     |
 Selectel S3, пул ru-6, Москва  приватный bucket, If-None-Match
     |
@@ -103,23 +102,46 @@ Producer остаётся `scripts/backup-db.sh`: отдельный код вы
 3. Публичный ACL не ставить. Lifecycle deletion не включать: ни Expiration, ни удаление неактуальных версий.
 4. Отдельный ключ доступа только на этот бакет.
 
-Перед первым `PutObject` каждого запуска orchestrator читает конфигурацию бакета:
+Перед первым `PutObject` каждого запуска orchestrator читает только поддерживаемые Selectel S3 вызовы:
 
 - `GetBucketVersioning` — статус `Enabled`;
-- `GetObjectLockConfiguration` — lock включён, режим `COMPLIANCE`, `Days` не меньше 90 или `Years` не меньше 1;
-- `GetBucketLifecycleConfiguration` — конфигурации нет, либо в ней нет правил удаления.
+- `get-object-lock-configuration` — Object Lock включён, режим `COMPLIANCE`, `Days` не меньше 90 или `Years` не меньше 1.
 
-`GOVERNANCE`, выключенный lock, suspended versioning, retention короче 90 дней, ошибка чтения и любое lifecycle-удаление дают `REASON=bucket-protection`. Объекты не пишутся. `OFFSITE_VERIFIED` не выдаётся. Уже лежащие объекты не переписываются и не удаляются.
+`GOVERNANCE`, выключенный lock, suspended versioning, retention короче 90 дней и ошибка чтения дают `REASON=bucket-protection`. Объекты не пишутся. `OFFSITE_VERIFIED` не выдаётся. Уже лежащие объекты не переписываются и не удаляются.
+
+Bucket Lifecycle через S3 API Selectel не поддерживает. Источник: таблица совместимости [S3 API Selectel](https://docs.selectel.ru/en/api/object-storage-s3/), строка Bucket Lifecycle. Вызов чтения lifecycle удалён и не заменён фиктивной проверкой. Runtime не доказывает, что автоматическое удаление выключено.
+
+### Control-plane preflight перед activation
+
+Activation не разрешается, пока этот preflight не выполнен отдельно и его результат не записан. Скрипт его не выполняет и не обращается к новому внешнему API.
+
+Оператор в панели Selectel подтверждает для этого бакета:
+
+- пул `ru-6`, Москва;
+- versioning включён;
+- Object Lock включён, default retention `COMPLIANCE`, не короче 90 дней;
+- автоматическое удаление по сроку жизни выключено: нет правила, которое удаляет объекты или неактуальные версии.
+
+Пока этой записи нет, activation не начинается.
 
 ## IAM
 
-Минимальные действия ключа producer:
+Политика бакета Selectel устроена так: что не разрешено, то запрещено. Источник: [bucket policy Selectel](https://docs.selectel.ru/en/s3/buckets/bucket-policy/about-bucket-policy/). Producer получает отдельный Allow и не получает `Action *`.
 
-- `s3:PutObject` и `s3:GetObject` на `stell22/offsite/v1/*`;
-- `s3:ListBucket` на этот prefix, чтобы отсутствие объекта отличалось от отказа в доступе;
-- `s3:GetBucketVersioning`, `s3:GetObjectLockConfiguration` и `s3:GetLifecycleConfiguration` на бакет.
+Действия над бакетом, resource `arn:aws:s3:::stell22-offsite-backups`:
 
-`s3:DeleteObject`, `s3:PutBucketAcl`, `s3:PutLifecycleConfiguration`, `s3:BypassGovernanceRetention` и смена Object Lock этому ключу не выдаются.
+- `s3:GetBucketVersioning`;
+- `s3:GetBucketObjectLockConfiguration`;
+- `s3:ListBucket` с условием `s3:prefix` = `stell22/offsite/v1/`, чтобы отсутствие объекта отличалось от отказа в доступе.
+
+Действия над объектами, resource `arn:aws:s3:::stell22-offsite-backups/stell22/offsite/v1/*`:
+
+- `s3:PutObject`;
+- `s3:GetObject`.
+
+Ресурс бакета не покрывает объекты. Ресурс объектов не покрывает чтение конфигурации бакета. Эти две группы не смешиваются.
+
+Этому ключу не выдаются `s3:DeleteObject`, `s3:DeleteObjectVersion`, `s3:PutBucketVersioning`, `s3:PutBucketObjectLockConfiguration`, `s3:BypassGovernanceRetention` и расширенные admin permissions. `s3:GetBucketObjectLockConfiguration` разрешает только чтение статуса lock, не его смену.
 
 ## Шифрование и ключи
 
@@ -245,11 +267,15 @@ Stdout — строки `STATUS=`, `REASON=`, `BACKUP_DATE=`, `ARCHIVE_SHA256=`,
 
 Для дат старше 30 новейших ежедневных оставляется новейшая дата каждого месяца, не больше 12 месяцев. Остальные подтверждённые даты — `CANDIDATE`. `--delete` и `--apply` выходят с `DELETION_SUSPENDED` и ничего не стирают.
 
-`RETENTION SUSPENDED` в `scripts/backup-db.sh` не изменён. S3 lifecycle deletion не включается. Неизвестные и частичные объекты не удаляются. Удаление на production возможно только отдельным решением после доказанного restore verification.
+`RETENTION SUSPENDED` в `scripts/backup-db.sh` не изменён. Автоудаление по сроку жизни выключается в control-plane preflight; runtime это не проверяет. Неизвестные и частичные объекты не удаляются. Удаление на production возможно только отдельным решением после доказанного restore verification.
 
 ## Копия на SSD
 
-Независимая копия лежит на съёмном SSD, который физически остаётся в РФ и не подключён к production VPS постоянно. Автоматического доступа к накопителю нет. Еженедельно оператор на отдельном компьютере, не на VPS, монтирует SSD сам и запускает:
+Независимая копия лежит на съёмном SSD, который физически остаётся в РФ и не подключён к production VPS постоянно. Автоматического доступа к накопителю нет. Еженедельно оператор на отдельном компьютере, не на VPS, монтирует SSD сам.
+
+Перед запуском оператор отдельно подтверждает, что `OFFSITE_SSD_ROOT` — каталог на этом смонтированном SSD и что диск физически находится в РФ. Скрипт этот факт не проверяет и не доказывает.
+
+Затем оператор запускает:
 
 ```sh
 OFFSITE_SSD_ROOT=/mnt/stell22-ssd \
@@ -257,9 +283,11 @@ OFFSITE_SSD_DATES='2026-11-16 2026-11-22' \
 sh scripts/offsite-ssd-export.sh
 ```
 
-Даты перечисляются явно. Скрипт берёт только дни, у которых удалённые `SUCCESS`, `manifest.json` и `archive.age` уже прошли ту же проверку, что и offsite pipeline. Для каждого такого дня он сверяет SHA-256 ciphertext и копирует три объекта в `$OFFSITE_SSD_ROOT/daily/YYYY-MM-DD/`.
+Даты перечисляются явно. Для каждого дня скрипт сначала проверяет удалённый контракт `SUCCESS`, manifest и ciphertext. Затем объект скачивается во временный файл внутри `$OFFSITE_SSD_ROOT/daily/YYYY-MM-DD/` на той же файловой системе, что и конечный путь. SHA-256 считается по скачанным байтам. Конечное имя появляется одним POSIX `ln` и только если этого имени ещё нет. Временный файл после публикации или отказа удаляется. `SUCCESS` публикуется последним.
 
-Повтор того же содержимого ничего не меняет. Другие байты по тому же пути останавливают запуск с `REASON=destination-mismatch` и не перезаписывают файл. Отсутствующий день из заданного списка даёт `REASON=incomplete-set`. Успех скрипта — `STATUS=SSD_COPIED`. Это не `OFFSITE_VERIFIED` и не `RESTORE_VERIFIED`.
+Повтор тех же байтов ничего не меняет. Другие байты по конечному имени останавливают запуск с `REASON=destination-mismatch` и не перезаписывают файл. Symlink на конечном имени не считается доверенной копией и не читается вместо файла. Отсутствующий день из заданного списка даёт `REASON=incomplete-set`.
+
+Прерванный запуск не оставляет недописанный объект под конечным именем и не удаляет уже опубликованные файлы. Повтор после этого безопасен. Успех скрипта — `STATUS=SSD_COPIED`. Это не `OFFSITE_VERIFIED` и не `RESTORE_VERIFIED`.
 
 Приватный ключ age на SSD не кладётся. Если в окружении есть `AGE_SECRET_KEY` или `OFFSITE_AGE_IDENTITY`, скрипт завершается с `REASON=private-key-refused` и ничего не скачивает. Удаления объектов в Selectel и на SSD нет.
 

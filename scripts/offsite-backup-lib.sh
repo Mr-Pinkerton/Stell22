@@ -229,24 +229,6 @@ offsite_require_bucket_protection() {
   else
     offsite_die FAILED bucket-protection 10
   fi
-
-  offsite_aws s3api get-bucket-lifecycle-configuration \
-    --bucket "$OFFSITE_BUCKET" \
-    --endpoint-url "$OFFSITE_ENDPOINT" \
-    --region "$OFFSITE_REGION"
-  if [ "$AWS_RC" -ne 0 ]; then
-    _err=$(offsite_aws_err_text)
-    case "$_err" in
-      *NoSuchLifecycleConfiguration*|*NoSuchLifecycle*) return 0 ;;
-      *) offsite_die FAILED bucket-protection 10 ;;
-    esac
-  fi
-  _life=$(offsite_compact_json < "$AWS_OUT")
-  case "$_life" in
-    *Expiration*|*ExpiredObjectDeleteMarker*|*NoncurrentVersionExpiration*)
-      offsite_die FAILED bucket-protection 10
-      ;;
-  esac
 }
 
 offsite_decimal() {
@@ -819,6 +801,7 @@ offsite_verify_marker_file() {
   fi
   VERIFIED_ARCHIVE_SHA=$_asha
   VERIFIED_CIPHER_SHA=$_csha
+  VERIFIED_MANIFEST_SHA=$_msha
   VERIFIED_EPOCH=$_epoch
   VERIFIED_ARCHIVE_NAME=$_aname
   return 0
@@ -850,6 +833,7 @@ offsite_verify_remote_success() {
   if ! offsite_verify_marker_file "$_marker" "$_date"; then
     return 1
   fi
+  VERIFIED_MARKER_SHA=$(offsite_sha256 "$_marker")
   return 0
 }
 
