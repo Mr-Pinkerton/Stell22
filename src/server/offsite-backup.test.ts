@@ -492,6 +492,7 @@ describe("daily offsite backup", { timeout: 60_000 }, () => {
       "    printf '%s\\n' '{\"ETag\": \"not-a-sha256\"}'",
       "    ;;",
       "  head-object)",
+      '    if [ "$fail" = "head-denied" ]; then echo "403 AccessDenied" >&2; exit 1; fi',
       '    if [ ! -e "$store" ]; then echo "404 Not Found" >&2; exit 1; fi',
       '    if [ "$fail" = "head" ]; then echo "head forced" >&2; exit 1; fi',
       '    size=$(wc -c < "$store" | tr -d \'[:space:]\')',
@@ -1533,6 +1534,36 @@ describe("daily offsite backup", { timeout: 60_000 }, () => {
     expect(doc).not.toContain("get-bucket-lifecycle-configuration");
     expect(doc).toContain("Activation не разрешается");
     expect(doc).toContain("Runtime не доказывает");
+    expect(doc).toContain("s3:ListBucket` на весь этот bucket, без условия `s3:prefix`");
+    expect(doc).not.toContain("s3:prefix` =");
+    expect(doc).toContain("404` или `NoSuchKey`");
+    expect(doc).toContain("403` или `AccessDenied`");
+    expect(doc).toContain("При отказе `PutObject` не выполнять");
+    expect(doc).toContain("exFAT этим способом публикации не поддерживается");
+    expect(doc).toContain("тестовых файлах, не на архивах");
+  });
+
+  it("treats HeadObject 404 as absence and refuses 403 before upload", () => {
+    const missing = freshDirs();
+    const absent = runOffsite("scripts/offsite-backup.sh", { ...missing, hooks: true });
+    expect(absent.status).toBe(0);
+    expect(field(absent.stdout, "STATUS")).toBe("OFFSITE_VERIFIED");
+    expect(absent.awsLog).toContain("head-object");
+    expect(absent.awsLog).toContain("put-object");
+
+    const deniedDirs = freshDirs();
+    const denied = runOffsite("scripts/offsite-backup.sh", {
+      ...deniedDirs,
+      hooks: true,
+      awsFail: "head-denied",
+    });
+    expect(denied.status).toBe(31);
+    expect(field(denied.stdout, "STATUS")).toBe("INCOMPLETE");
+    expect(field(denied.stdout, "REASON")).toBe("incomplete");
+    expect(denied.stdout).not.toContain("STATUS=OFFSITE_VERIFIED");
+    expect(denied.awsLog).toContain("head-object");
+    expect(denied.awsLog).not.toContain("put-object");
+    expect(posixExists(objectPath(deniedDirs.awsRoot, dayKey("SUCCESS")))).toBe(false);
   });
 
   it("removes an interrupted SSD download and retries without a partial name", () => {
